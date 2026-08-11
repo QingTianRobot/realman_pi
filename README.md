@@ -3,6 +3,13 @@
 ROS 2 Humble description package and RViz 2 Docker environment for RealMan
 RM65 robots.
 
+## Documentation
+
+Project documentation: https://qingtianrobot.github.io/realman_pi/
+
+The VitePress source is stored in `website/` and deployed to GitHub Pages by
+`.github/workflows/deploy-pages.yml`.
+
 ## Supported models
 
 - `RM65-B` (default)
@@ -42,6 +49,26 @@ source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-select rm65_description
 source install/setup.bash
 ros2 launch rm65_description display.launch.py
+```
+
+## Website development
+
+```bash
+cd website
+npm ci
+npm run dev
+```
+
+Production build output is written to `website/docs/.vitepress/dist`.
+
+## Repository structure
+
+```text
+realman_pi/
+├── .github/workflows/    GitHub Pages deployment
+├── docker/               ROS 2 Humble RViz image
+├── src/                  ROS 2 workspace source
+└── website/              VitePress documentation site
 ```
 
 ## Model source

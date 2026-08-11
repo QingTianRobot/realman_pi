@@ -12,3 +12,9 @@ src/.codex/
 
 .idea/
 .vscode/
+
+website/node_modules/
+website/docs/.vitepress/cache/
+website/docs/.vitepress/dist/
+website/playwright-report/
+website/test-results/

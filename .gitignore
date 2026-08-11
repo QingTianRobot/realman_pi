@@ -1,0 +1,14 @@
+build/
+install/
+log/
+
+**/__pycache__/
+*.py[cod]
+
+.agents/
+.codex/
+src/.agents/
+src/.codex/
+
+.idea/
+.vscode/

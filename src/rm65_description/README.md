@@ -1,0 +1,48 @@
+# RM65 ROS 2 description
+
+This package contains the converted RealMan RM65 URDF assets as one ROS 2
+Humble `ament_cmake` package.
+
+Supported `model` values:
+
+- `RM65-6F`
+- `RM65-6FB`
+- `RM65-B`
+- `RM65-B-V`
+- `RM65-6FB-V`
+
+After building and sourcing the workspace, launch RViz 2 with:
+
+```bash
+ros2 launch rm65_description display.launch.py
+```
+
+## Docker (ROS 2 Humble)
+
+Run these commands from the `realman_pi` workspace root, which contains
+`docker-compose.yml`:
+
+```bash
+docker compose build rm65_rviz
+docker compose run --rm rm65_rviz
+```
+
+The Compose service mounts the active X11/XWayland authorization cookie from
+`$XAUTHORITY`. On a regular Xorg session where that variable is empty, set it
+before starting the container:
+
+```bash
+export XAUTHORITY="$HOME/.Xauthority"
+```
+
+The Compose service uses `ROS_DOMAIN_ID=65` by default so a standalone model
+does not consume another robot's `/robot_description` or TF data. To connect
+to an existing ROS 2 graph, set the same domain ID when starting the service:
+
+```bash
+ROS_DOMAIN_ID=0 RM65_MODEL=RM65-B docker compose run --rm rm65_rviz
+```
+
+The default model is `RM65-B`. Every converted URDF has one complete TF tree
+rooted at `world`, followed by `base_link` and all arm links. RViz displays the
+TF tree together with the robot model.

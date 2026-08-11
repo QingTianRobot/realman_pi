@@ -40,6 +40,7 @@ test("homepage renders the RM65 model without layout overflow", async ({ page },
 
   const layout = await page.evaluate(() => {
     const signal = document.querySelector(".signal-band")?.getBoundingClientRect();
+    const readout = document.querySelector(".model-readout")?.getBoundingClientRect();
     const actions = [...document.querySelectorAll<HTMLElement>(".rm-action")];
     return {
       viewportHeight: window.innerHeight,
@@ -47,12 +48,19 @@ test("homepage renders the RM65 model without layout overflow", async ({ page },
       viewportWidth: window.innerWidth,
       signalTop: signal?.top ?? Number.POSITIVE_INFINITY,
       actionsFit: actions.every((action) => action.scrollWidth <= action.clientWidth + 1),
+      readoutFits:
+        readout !== undefined &&
+        readout.left >= 0 &&
+        readout.right <= window.innerWidth &&
+        readout.top >= 0 &&
+        readout.bottom <= window.innerHeight,
     };
   });
 
   expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
   expect(layout.signalTop).toBeLessThan(layout.viewportHeight);
   expect(layout.actionsFit).toBe(true);
+  expect(layout.readoutFits).toBe(true);
 
   await page.screenshot({ path: testInfo.outputPath("homepage.png"), fullPage: true });
 });

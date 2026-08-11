@@ -100,7 +100,6 @@
   min-width: 0;
   min-height: 0;
   overflow: hidden;
-  transform: translateX(16%);
 }
 
 .robot-viewport canvas {
@@ -108,6 +107,7 @@
   width: 100%;
   height: 100%;
   outline: none;
+  transform: translateX(16%);
 }
 
 .model-readout {
@@ -121,6 +121,7 @@
   font-size: 11px;
   line-height: 1;
   text-transform: uppercase;
+  white-space: nowrap;
 }
 
 .viewer-state {
@@ -458,8 +459,11 @@
   }
 
   .robot-viewport {
-    transform: translate(22%, 8%);
     opacity: 0.74;
+  }
+
+  .robot-viewport canvas {
+    transform: translate(22%, 8%);
   }
 
   .hero-copy {
@@ -501,8 +505,11 @@
   }
 
   .robot-viewport {
-    transform: translate(0, 20%);
     opacity: 0.72;
+  }
+
+  .robot-viewport canvas {
+    transform: translate(0, 20%);
   }
 
   .hero-copy {

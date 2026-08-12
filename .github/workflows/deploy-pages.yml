@@ -5,6 +5,10 @@ on:
     branches: [main]
     paths:
       - "website/**"
+      # The website build reads these authoritative robot inputs to regenerate its viewer assets.
+      - "config/ros/three_robots.yaml"
+      - "src/rm65_description/urdf/**"
+      - "src/rm65_description/meshes/**"
       - ".github/workflows/deploy-pages.yml"
   workflow_dispatch:
 

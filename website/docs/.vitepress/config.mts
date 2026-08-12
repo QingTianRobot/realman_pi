@@ -1,4 +1,8 @@
+import { dirname, resolve } from "node:path";
+import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitepress";
+
+const configDirectory = dirname(fileURLToPath(import.meta.url));
 
 export default defineConfig({
   lang: "zh-CN",
@@ -9,6 +13,10 @@ export default defineConfig({
   lastUpdated: true,
   sitemap: {
     hostname: "https://qingtianrobot.github.io/realman_pi/",
+  },
+  vite: {
+    // Generated model assets stay ignored; sync-three-robots.mjs rebuilds them from root config/ before each run.
+    publicDir: resolve(configDirectory, "cache/public"),
   },
   head: [
     ["meta", { name: "theme-color", content: "#f2f4f1" }],

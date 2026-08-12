@@ -1,4 +1,7 @@
+import { readFile } from "node:fs/promises";
+import { resolve } from "node:path";
 import { expect, test, type Locator } from "@playwright/test";
+import YAML from "yaml";
 
 async function canvasChecksum(locator: Locator) {
   return locator.evaluate((element: HTMLCanvasElement) => {
@@ -21,13 +24,15 @@ async function canvasChecksum(locator: Locator) {
   });
 }
 
-test("homepage renders the RM65 model without layout overflow", async ({ page }, testInfo) => {
+test("homepage renders the configured three-arm scene without layout overflow", async ({ page }, testInfo) => {
   await page.goto("./");
   await expect(page.getByRole("heading", { level: 1, name: "RealMan RM65" })).toBeVisible();
 
   const viewer = page.locator(".robot-viewport");
   await expect(viewer).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
-  await expect(viewer).toHaveAttribute("data-mesh-count", /^(?:[7-9]|[1-9][0-9]+)$/);
+  await expect(viewer).toHaveAttribute("data-robot-count", "3");
+  await expect(viewer).toHaveAttribute("data-root-frame", "world");
+  await expect(viewer).toHaveAttribute("data-mesh-count", /^(?:2[1-9]|[3-9][0-9]+)$/);
   const canvas = viewer.locator("canvas");
   await expect(canvas).toBeVisible();
   await page.waitForTimeout(500);
@@ -62,7 +67,36 @@ test("homepage renders the RM65 model without layout overflow", async ({ page },
   expect(layout.actionsFit).toBe(true);
   expect(layout.readoutFits).toBe(true);
 
+  await expect(page.getByText("l / m / r", { exact: false }).first()).toBeVisible();
+  await expect(page.getByText("config/ros/three_robots.yaml", { exact: false }).first()).toBeVisible();
+
   await page.screenshot({ path: testInfo.outputPath("homepage.png"), fullPage: true });
+});
+
+test("generated web layout matches the authoritative three-arm transforms", async ({ request }) => {
+  const response = await request.get("three-robots.json");
+  expect(response.ok()).toBe(true);
+  const layout = await response.json();
+  const source = YAML.parse(await readFile(resolve("../config/ros/three_robots.yaml"), "utf8"));
+
+  expect(layout.source).toBe("config/ros/three_robots.yaml");
+  expect(layout.rootFrame).toBe(source.robots.l.parent_frame);
+  expect(layout.defaultJointPosition).toBe(source.settings.default_joint_position);
+  for (const robot of layout.robots) {
+    const expected = source.robots[robot.id];
+    expect(robot.model).toBe(expected.model);
+    expect(robot.namespace).toBe(expected.namespace);
+    expect(robot.framePrefix).toBe(expected.frame_prefix);
+    expect(robot.parentFrame).toBe(expected.parent_frame);
+    expect(robot.transform).toEqual({
+      x: expected.x,
+      y: expected.y,
+      z: expected.z,
+      roll: expected.roll,
+      pitch: expected.pitch,
+      yaw: expected.yaw,
+    });
+  }
 });
 
 test("documentation routes render", async ({ page }) => {

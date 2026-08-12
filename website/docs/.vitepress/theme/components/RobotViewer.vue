@@ -1,10 +1,33 @@
 <script setup lang="ts">
 import { onBeforeUnmount, onMounted, ref } from "vue";
 
+type RobotConfig = {
+  id: "l" | "m" | "r";
+  model: string;
+  expectedMeshCount: number;
+  transform: {
+    x: number;
+    y: number;
+    z: number;
+    roll: number;
+    pitch: number;
+    yaw: number;
+  };
+};
+
+type LayoutConfig = {
+  rootFrame: string;
+  defaultJointPosition: number;
+  robots: RobotConfig[];
+};
+
 const canvas = ref<HTMLCanvasElement | null>(null);
 const viewport = ref<HTMLElement | null>(null);
 const state = ref<"loading" | "ready" | "error">("loading");
 const meshCount = ref(0);
+const robotCount = ref(0);
+const modelNames = ref("");
+const rootFrame = ref("world");
 
 let dispose: (() => void) | undefined;
 
@@ -12,6 +35,14 @@ onMounted(async () => {
   if (!canvas.value || !viewport.value) return;
 
   try {
+    const base = import.meta.env.BASE_URL;
+    const response = await fetch(`${base}three-robots.json`);
+    if (!response.ok) throw new Error(`Failed to load generated robot config: ${response.status}`);
+    const config = (await response.json()) as LayoutConfig;
+    robotCount.value = config.robots.length;
+    modelNames.value = [...new Set(config.robots.map((robot) => robot.model))].join(" / ");
+    rootFrame.value = config.rootFrame;
+
     const THREE = await import("three");
     const [{ OrbitControls }, { default: URDFLoader }] = await Promise.all([
       import("three/examples/jsm/controls/OrbitControls.js"),
@@ -39,10 +70,10 @@ onMounted(async () => {
     controls.enableDamping = true;
     controls.dampingFactor = 0.055;
     controls.enablePan = false;
-    controls.minDistance = 0.65;
-    controls.maxDistance = 3.2;
+    controls.minDistance = 0.8;
+    controls.maxDistance = 8;
     controls.autoRotate = !window.matchMedia("(prefers-reduced-motion: reduce)").matches;
-    controls.autoRotateSpeed = 0.55;
+    controls.autoRotateSpeed = 0.42;
 
     scene.add(new THREE.HemisphereLight(0xf6faf8, 0x354248, 2.4));
     const keyLight = new THREE.DirectionalLight(0xffffff, 4.2);
@@ -54,7 +85,7 @@ onMounted(async () => {
     rimLight.position.set(-2.4, 1.8, 2.2);
     scene.add(rimLight);
 
-    const grid = new THREE.GridHelper(2.8, 14, 0x718087, 0xb8c0bd);
+    const grid = new THREE.GridHelper(5.4, 27, 0x718087, 0xb8c0bd);
     grid.rotation.x = Math.PI / 2;
     grid.position.z = -0.002;
     const gridMaterial = grid.material as InstanceType<typeof THREE.Material> & {
@@ -66,87 +97,109 @@ onMounted(async () => {
     scene.add(grid);
 
     const loader = new URDFLoader();
-    const base = import.meta.env.BASE_URL;
     loader.packages = {
       rm65_description: `${base}models/rm65_description`,
     };
+    const robotsGroup = new THREE.Group();
+    scene.add(robotsGroup);
+
+    const robotColors: Record<RobotConfig["id"], number[]> = {
+      l: [0x2c8c8f, 0x42a7a4, 0x236d72, 0x9cc8c5, 0xc0d5d0, 0x1c5b61, 0x6e9e9b],
+      m: [0xc76a3e, 0xe18750, 0xa94e2e, 0xe1b092, 0xc7d1cc, 0x86402b, 0xf0c39e],
+      r: [0x48565b, 0x647277, 0x344146, 0x9ca8a5, 0xc8d0cd, 0x273338, 0x7e8b8c],
+    };
+    const loadedRobots = await Promise.all(
+      config.robots.map(async (robotConfig) => {
+        const robot = await loader.loadAsync(`${base}models/${robotConfig.model}.urdf`);
+        robot.position.set(
+          robotConfig.transform.x,
+          robotConfig.transform.y,
+          robotConfig.transform.z,
+        );
+        robot.rotation.set(
+          robotConfig.transform.roll,
+          robotConfig.transform.pitch,
+          robotConfig.transform.yaw,
+          "ZYX",
+        );
+        robot.setJointValues({
+          joint_1: config.defaultJointPosition,
+          joint_2: config.defaultJointPosition,
+          joint_3: config.defaultJointPosition,
+          joint_4: config.defaultJointPosition,
+          joint_5: config.defaultJointPosition,
+          joint_6: config.defaultJointPosition,
+        });
+        robotsGroup.add(robot);
+        return { robot, config: robotConfig };
+      }),
+    );
 
     let modelTimer = 0;
-    loader.load(
-      `${base}models/RM65-B.urdf`,
-      (robot) => {
-        robot.setJointValue("joint_1", 0.28);
-        robot.setJointValue("joint_2", -0.62);
-        robot.setJointValue("joint_3", 1.02);
-        robot.setJointValue("joint_4", 0.35);
-        robot.setJointValue("joint_5", 0.52);
-        robot.setJointValue("joint_6", -0.24);
+    const prepareModels = (attempt = 0) => {
+      const meshes = loadedRobots.flatMap(({ robot }) => {
+        const robotMeshes: InstanceType<typeof THREE.Mesh>[] = [];
+        robot.traverse((object) => {
+          if (object instanceof THREE.Mesh) robotMeshes.push(object);
+        });
+        return robotMeshes;
+      });
 
-        scene.add(robot);
+      const expectedMeshCount = config.robots.reduce((total, robot) => total + robot.expectedMeshCount, 0);
+      if (meshes.length < expectedMeshCount) {
+        if (attempt >= 160) {
+          state.value = "error";
+          return;
+        }
+        modelTimer = window.setTimeout(() => prepareModels(attempt + 1), 50);
+        return;
+      }
 
-        const prepareModel = (attempt = 0) => {
-          const meshes: InstanceType<typeof THREE.Mesh>[] = [];
-          robot.traverse((object) => {
-            if (object instanceof THREE.Mesh) meshes.push(object);
-          });
-
-          if (meshes.length < 7) {
-            if (attempt >= 120) {
-              state.value = "error";
-              return;
-            }
-            modelTimer = window.setTimeout(() => prepareModel(attempt + 1), 50);
-            return;
-          }
-
-          const colors = [0xcbd2cf, 0x17707b, 0xd5dbd8, 0x3c4b50, 0xc75e35, 0xb9c2bf, 0x17646d];
-          Object.values(robot.links).forEach((link, index) => {
-            link.traverse((object) => {
-              if (!(object instanceof THREE.Mesh)) return;
-              const source = Array.isArray(object.material) ? object.material[0] : object.material;
-              const material = new THREE.MeshStandardMaterial({
-                color: colors[index % colors.length],
-                metalness: 0.2,
-                roughness: 0.58,
-                side: source?.side ?? THREE.FrontSide,
-              });
-              object.material = material;
-              object.castShadow = true;
-              object.receiveShadow = true;
+      loadedRobots.forEach(({ robot, config: robotConfig }) => {
+        const colors = robotColors[robotConfig.id];
+        Object.values(robot.links).forEach((link, index) => {
+          link.traverse((object) => {
+            if (!(object instanceof THREE.Mesh)) return;
+            const source = Array.isArray(object.material) ? object.material[0] : object.material;
+            object.material = new THREE.MeshStandardMaterial({
+              color: colors[index % colors.length],
+              metalness: 0.2,
+              roughness: 0.58,
+              side: source?.side ?? THREE.FrontSide,
             });
+            object.castShadow = true;
+            object.receiveShadow = true;
           });
+        });
+      });
 
-          robot.updateMatrixWorld(true);
-          const bounds = new THREE.Box3().setFromObject(robot);
-          const center = bounds.getCenter(new THREE.Vector3());
-          robot.position.set(-center.x, -center.y, -bounds.min.z);
-          robot.updateMatrixWorld(true);
+      robotsGroup.updateMatrixWorld(true);
+      const bounds = new THREE.Box3().setFromObject(robotsGroup);
+      const center = bounds.getCenter(new THREE.Vector3());
+      const size = bounds.getSize(new THREE.Vector3());
+      const maxDimension = Math.max(size.x, size.y, size.z);
+      const focusHeight = Math.max(bounds.min.z + size.z * 0.48, 0.24);
+      controls.target.set(center.x, center.y, focusHeight);
+      camera.position.set(
+        center.x + maxDimension * 1.12,
+        center.y - maxDimension * 1.48,
+        focusHeight + maxDimension * 0.78,
+      );
+      camera.lookAt(controls.target);
+      controls.maxDistance = Math.max(8, maxDimension * 3.2);
 
-          const fittedBounds = new THREE.Box3().setFromObject(robot);
-          const size = fittedBounds.getSize(new THREE.Vector3());
-          const maxDimension = Math.max(size.x, size.y, size.z);
-          const focusHeight = Math.max(size.z * 0.46, 0.26);
-          controls.target.set(0, 0, focusHeight);
-          camera.position.set(maxDimension * 1.45, -maxDimension * 1.75, maxDimension * 1.15);
-          camera.lookAt(controls.target);
+      meshCount.value = meshes.length;
+      state.value = "ready";
+    };
 
-          meshCount.value = meshes.length;
-          state.value = "ready";
-        };
-
-        prepareModel();
-      },
-      undefined,
-      () => {
-        state.value = "error";
-      },
-    );
+    prepareModels();
 
     const resize = () => {
       const { width, height } = host.getBoundingClientRect();
       if (width === 0 || height === 0) return;
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
+      camera.zoom = width <= 640 ? 0.82 : 1;
       camera.updateProjectionMatrix();
     };
     const resizeObserver = new ResizeObserver(resize);
@@ -183,13 +236,20 @@ onBeforeUnmount(() => dispose?.());
 </script>
 
 <template>
-  <div ref="viewport" class="robot-viewport" :data-state="state" :data-mesh-count="meshCount">
-    <canvas ref="canvas" aria-label="RM65-B URDF 三维模型" role="img" />
+  <div
+    ref="viewport"
+    class="robot-viewport"
+    :data-state="state"
+    :data-mesh-count="meshCount"
+    :data-robot-count="robotCount"
+    :data-root-frame="rootFrame"
+  >
+    <canvas ref="canvas" aria-label="基于配置的 RM65 三机械臂 URDF 三维模型" role="img" />
     <div class="model-readout" aria-hidden="true">
-      <span>RM65-B</span>
-      <span>URDF / LIVE</span>
+      <span>{{ modelNames || "RM65" }} / {{ robotCount ? "L / M / R" : "..." }}</span>
+      <span>{{ state === "ready" ? "CONFIG / LIVE" : "CONFIG / LOADING" }}</span>
     </div>
-    <p v-if="state === 'loading'" class="viewer-state">正在加载模型</p>
+    <p v-if="state === 'loading'" class="viewer-state">正在加载三机械臂模型</p>
     <p v-else-if="state === 'error'" class="viewer-state viewer-error">模型预览暂不可用</p>
   </div>
 </template>

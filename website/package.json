@@ -3,8 +3,9 @@
   "private": true,
   "type": "module",
   "scripts": {
-    "dev": "vitepress dev docs",
-    "build": "vitepress build docs",
+    "sync-assets": "node scripts/sync-three-robots.mjs",
+    "dev": "npm run sync-assets && vitepress dev docs",
+    "build": "npm run sync-assets && vitepress build docs",
     "preview": "vitepress preview docs",
     "test:e2e": "playwright test"
   },
@@ -15,6 +16,7 @@
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
-    "vitepress": "1.6.4"
+    "vitepress": "1.6.4",
+    "yaml": "^2.8.1"
   }
 }

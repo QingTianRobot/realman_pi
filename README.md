@@ -16,14 +16,14 @@ Load the optional project helpers from any Zsh session:
 
 ```zsh
 source /path/to/realman_pi/functions.zsh
-realman_help
+rm65_project_help
 ```
 
-The functions locate the repository root from `functions.zsh`, so they keep
-working after changing directories. Common commands include `realman_rviz`,
-`realman_three_rviz`, `realman_bringup`, `realman_bringup_remote`,
-`realman_colcon_build`, and `realman_deploy`. The direct Docker, colcon, npm,
-and SSH commands below remain available when additional options are required.
+The functions use prefixes to separate responsibilities: `rm65_project_*`,
+`rm65_docker_*`, `rm65_ros_*`, `rm65_web_*`, and `rm65_deploy_*`. They locate
+the repository root from `functions.zsh`, so they keep working after changing
+directories. The direct Docker, colcon, npm, and SSH commands below remain
+available when additional options are required.
 
 ## Supported models
 
@@ -82,6 +82,20 @@ Another ROS 2 Humble host on the same network and domain can publish
 Bringup enables ROS 2's official colored rcutils output and writes each run to
 `logs/YYYYMMDD_HHMMSS/`. ROS 2 creates node log files such as
 `xbox_controller_node_<pid>_<timestamp>.log` in that directory.
+
+### Standalone Xbox controller test
+
+To test the physical controller without starting robot TF or RViz, use the
+dedicated service:
+
+```bash
+docker compose build xbox_controller_test
+REALMAN_JOY_DEVICE=/dev/input/by-id/usb-Xbox_Controller-event-joystick \
+  docker compose run --rm xbox_controller_test
+```
+
+The terminal should show the Xbox input node startup and entries such as
+`button[0] a PRESSED` and `button[0] a RELEASED` when A is pressed and released.
 
 ### Three-arm layout
 

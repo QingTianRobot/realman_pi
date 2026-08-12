@@ -1,35 +1,35 @@
 # Source this file from any directory to load realman_pi development helpers:
 #   source /path/to/realman_pi/functions.zsh
 
-typeset -g REALMAN_PROJECT_ROOT="${${(%):-%N}:A:h}"
+typeset -g RM65_PROJECT_ROOT="${${(%):-%N}:A:h}"
 
-_realman_require_command() {
+_rm65_require_command() {
   emulate -L zsh
   local command_name="$1"
 
   if ! command -v "$command_name" >/dev/null 2>&1; then
-    print -u2 -r -- "realman_pi: required command not found: ${command_name}"
+    print -u2 -r -- "rm65: required command not found: ${command_name}"
     return 127
   fi
 }
 
-_realman_compose() {
+_rm65_compose() {
   emulate -L zsh
-  _realman_require_command docker || return
+  _rm65_require_command docker || return
 
   if ! command docker compose version >/dev/null 2>&1; then
-    print -u2 -r -- "realman_pi: Docker Compose v2 is required"
+    print -u2 -r -- "rm65: Docker Compose v2 is required"
     return 127
   fi
 
-  (cd -- "$REALMAN_PROJECT_ROOT" && command docker compose "$@")
+  (cd -- "$RM65_PROJECT_ROOT" && command docker compose "$@")
 }
 
-realman_cd() {
-  cd -- "$REALMAN_PROJECT_ROOT"
+rm65_project_cd() {
+  cd -- "$RM65_PROJECT_ROOT"
 }
 
-realman_build() {
+rm65_docker_build() {
   emulate -L zsh
   local -a services
 
@@ -39,37 +39,42 @@ realman_build() {
     services=("$@")
   fi
 
-  _realman_compose build "${services[@]}"
+  _rm65_compose build "${services[@]}"
 }
 
-realman_rviz() {
+rm65_docker_rviz() {
   emulate -L zsh
   local model="${1:-${RM65_MODEL:-RM65-B}}"
 
   if (( $# > 1 )); then
-    print -u2 -r -- "usage: realman_rviz [model]"
+    print -u2 -r -- "usage: rm65_docker_rviz [model]"
     return 2
   fi
 
-  (export RM65_MODEL="$model"; _realman_compose run --rm rm65_rviz)
+  (export RM65_MODEL="$model"; _rm65_compose run --rm rm65_rviz)
 }
 
-realman_three_rviz() {
+rm65_docker_three_rviz() {
   emulate -L zsh
-  _realman_compose run --rm rm65_three_rviz
+  _rm65_compose run --rm rm65_three_rviz
 }
 
-realman_bringup() {
+rm65_docker_xbox_test() {
   emulate -L zsh
-  _realman_compose run --rm realman_bringup
+  _rm65_compose run --rm xbox_controller_test
 }
 
-realman_bringup_remote() {
+rm65_docker_bringup() {
   emulate -L zsh
-  _realman_compose run --rm realman_bringup_remote
+  _rm65_compose run --rm realman_bringup
 }
 
-realman_colcon_build() {
+rm65_docker_bringup_remote() {
+  emulate -L zsh
+  _rm65_compose run --rm realman_bringup_remote
+}
+
+rm65_ros_build() {
   emulate -L zsh
   local humble_setup
 
@@ -78,61 +83,68 @@ realman_colcon_build() {
   done
 
   if [[ ! -r "$humble_setup" ]]; then
-    print -u2 -r -- "realman_pi: ROS 2 Humble setup not found under /opt/ros/humble"
+    print -u2 -r -- "rm65: ROS 2 Humble setup not found under /opt/ros/humble"
     return 1
   fi
 
   (
-    cd -- "$REALMAN_PROJECT_ROOT" || return
+    cd -- "$RM65_PROJECT_ROOT" || return
     source "$humble_setup"
-    _realman_require_command colcon || return
+    _rm65_require_command colcon || return
     command colcon build --symlink-install --packages-up-to realman_bringup "$@"
   )
 }
 
-realman_web_build() {
+rm65_web_build() {
   emulate -L zsh
-  _realman_require_command npm || return
-  (cd -- "$REALMAN_PROJECT_ROOT/website" && command npm run build)
+  _rm65_require_command npm || return
+  (cd -- "$RM65_PROJECT_ROOT/website" && command npm run build)
 }
 
-realman_web_test() {
+rm65_web_test() {
   emulate -L zsh
-  _realman_require_command npm || return
-  (cd -- "$REALMAN_PROJECT_ROOT/website" && command npm run test:e2e)
+  _rm65_require_command npm || return
+  (cd -- "$RM65_PROJECT_ROOT/website" && command npm run test:e2e)
 }
 
-realman_deploy() {
+rm65_deploy_update() {
   emulate -L zsh
   local host="${REALMAN_PRODUCTION_HOST:-realman_local}"
   local remote_dir="${REALMAN_PRODUCTION_DIR:-/home/administrator/realman_pi}"
   local quoted_remote_dir
 
   if [[ "$host" == -* || "$host" == *$'\n'* || "$remote_dir" == *$'\n'* ]]; then
-    print -u2 -r -- "realman_pi: invalid production host or directory"
+    print -u2 -r -- "rm65: invalid production host or directory"
     return 2
   fi
 
-  _realman_require_command ssh || return
+  _rm65_require_command ssh || return
   quoted_remote_dir="${(q)remote_dir}"
 
   command ssh "$host" \
     "cd -- ${quoted_remote_dir} && git fetch origin main && git merge --ff-only origin/main && git status --short --branch && git log -1 --oneline"
 }
 
-realman_help() {
+rm65_project_help() {
   print -r -- "realman_pi Zsh functions"
   print -r -- ""
-  print -r -- "  realman_cd                         Change to the repository root"
-  print -r -- "  realman_build [service ...]        Build Compose services (default: realman_bringup)"
-  print -r -- "  realman_rviz [model]               Run the single-arm RViz viewer"
-  print -r -- "  realman_three_rviz                 Run the configured three-arm RViz scene"
-  print -r -- "  realman_bringup                    Run robots, RViz, Joy, and Xbox input"
-  print -r -- "  realman_bringup_remote             Run the headless remote-debug target"
-  print -r -- "  realman_colcon_build [args ...]    Build through realman_bringup with Humble"
-  print -r -- "  realman_web_build                  Build the VitePress website"
-  print -r -- "  realman_web_test                   Run the website Playwright tests"
-  print -r -- "  realman_deploy                     Fast-forward main on the production host"
+  print -r -- "Project:"
+  print -r -- "  rm65_project_cd                    Change to the repository root"
+  print -r -- "  rm65_project_help                 Show this grouped command list"
+  print -r -- "Docker:"
+  print -r -- "  rm65_docker_build [service ...]    Build Compose services"
+  print -r -- "  rm65_docker_rviz [model]           Run the single-arm RViz viewer"
+  print -r -- "  rm65_docker_three_rviz             Run the configured three-arm RViz scene"
+  print -r -- "  rm65_docker_xbox_test              Test only the physical Xbox input chain"
+  print -r -- "  rm65_docker_bringup                Run robots, RViz, Joy, and Xbox input"
+  print -r -- "  rm65_docker_bringup_remote         Run the headless remote-debug target"
+  print -r -- "ROS:"
+  print -r -- "  rm65_ros_build [args ...]           Build through realman_bringup with Humble"
+  print -r -- "Website:"
+  print -r -- "  rm65_web_build                     Build the VitePress website"
+  print -r -- "  rm65_web_test                      Run the website Playwright tests"
+  print -r -- "Deployment:"
+  print -r -- "  rm65_deploy_update                 Fast-forward main on the production host"
   print -r -- ""
   print -r -- "Runtime variables: RM65_MODEL, RM65_USE_GUI, RM65_USE_RVIZ,"
   print -r -- "REALMAN_JOY_DEVICE, ROS_DOMAIN_ID, REALMAN_PRODUCTION_HOST,"

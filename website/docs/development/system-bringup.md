@@ -80,6 +80,7 @@ realman_bringup/system.launch.py
 | --- | --- | --- | --- |
 | `realman_bringup` | 完整本地系统 | 需要 `DISPLAY`、`XAUTHORITY` | 默认映射 `${REALMAN_JOY_DEVICE:-/dev/input/event0}` |
 | `realman_bringup_remote` | 远程/headless 调试 | 不需要 X11 | 不映射设备，不启动 Joy 驱动 |
+| `xbox_controller_test` | 独立手柄测试 | 不需要 X11 | 默认映射 `${REALMAN_JOY_DEVICE:-/dev/input/event0}` |
 
 完整本地启动：
 
@@ -123,7 +124,7 @@ ssh realman_local \
 
 ```zsh
 source /path/to/realman_pi/functions.zsh
-realman_deploy
+rm65_deploy_update
 ```
 
 默认主机是 `realman_local`，默认目录是 `/home/administrator/realman_pi`。其他环境可用

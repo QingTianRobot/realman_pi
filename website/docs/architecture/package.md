@@ -105,4 +105,7 @@ Compose 使用 host network 和 host IPC，并挂载两个只读/受限的显示
 
 `realman_bringup` 把实体手柄的 Linux event 设备映射到容器内 `/dev/input/event0`。`realman_bringup_remote` 不启动设备驱动和 GUI，只保留 ROS 节点供远程 Joy 发布者调试。设备和按键契约见 [Xbox 手柄输入](../development/xbox-controller)，系统组合方式见[系统 Bringup](../development/system-bringup)。
 
+`xbox_controller_test` 是独立的实体手柄验证服务，只启动 `/input/joy_node` 和
+`/input/xbox_controller`，不创建机械臂、TF 或 RViz 节点。
+
 Bringup 同时设置 `RCUTILS_COLORIZED_OUTPUT=1` 和 `ROS_LOG_DIR`。每次运行在宿主机 `logs/YYYYMMDD_HHMMSS/` 下保存 ROS 2 官方日志；官方文件名包含节点名、进程号和时间戳。日志规范由项目 skill `.agents/skills/ros2-logging-conventions/SKILL.md` 维护。

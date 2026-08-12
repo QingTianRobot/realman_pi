@@ -97,3 +97,21 @@ services:
       - start_joy_driver:=false
       - use_gui:=false
       - use_rviz:=false
+
+  # Standalone Xbox validation. This starts only the SDL Joy publisher and the
+  # C++ button logger, so a controller can be tested without RViz or robot TF.
+  xbox_controller_test:
+    <<: *realman-common
+    devices:
+      # Prefer a stable host by-id *-event-joystick path when available.
+      - ${REALMAN_JOY_DEVICE:-/dev/input/event0}:/dev/input/event0
+    command:
+      - ros2
+      - launch
+      - realman_bringup
+      - system.launch.py
+      - start_robots:=false
+      - start_joy_driver:=true
+      - start_controller:=true
+      - use_gui:=false
+      - use_rviz:=false

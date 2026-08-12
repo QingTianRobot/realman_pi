@@ -103,6 +103,34 @@ REALMAN_JOY_DEVICE=/dev/input/by-id/usb-Xbox_Controller-event-joystick \
 
 Compose 把主机设备映射为容器 `/dev/input/event0`，因此 `device_id=0` 保持确定。运行 Docker 的用户必须有该 event 设备的 input 权限。
 
+## 独立实体手柄测试
+
+`xbox_controller_test` 是不启动机械臂、TF 或 RViz 的专用测试服务。它只启动
+`game_controller_node` 和 `xbox_controller_node`，用于确认实体设备能否发布
+`/input/joy` 以及 C++ 节点能否输出按键边沿。
+
+```bash
+docker compose build xbox_controller_test
+REALMAN_JOY_DEVICE=/dev/input/by-id/usb-Xbox_Controller-event-joystick \
+  docker compose run --rm xbox_controller_test
+```
+
+没有 `DISPLAY` 或 `XAUTHORITY` 也可以运行。按下并释放 A 键时，终端应看到：
+
+```text
+button[0] a PRESSED
+button[0] a RELEASED
+```
+
+检查手柄是否被 Joy 驱动识别：
+
+```bash
+ros2 topic echo /input/joy sensor_msgs/msg/Joy
+```
+
+该测试服务沿用 `config/ros/xbox_controller.yaml`，运行日志仍写入
+`logs/YYYYMMDD_HHMMSS/`。测试结束使用 `Ctrl-C`，容器会随 `--rm` 删除。
+
 ## 无设备验证
 
 启动只包含 C++ 输入处理节点的 headless 进程：

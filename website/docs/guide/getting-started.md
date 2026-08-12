@@ -39,22 +39,24 @@ export XAUTHORITY="$HOME/.Xauthority"
 
 ```zsh
 source /path/to/realman_pi/functions.zsh
-realman_help
+rm65_project_help
 ```
 
 | 函数 | 等价用途 |
 | --- | --- |
-| `realman_build [service ...]` | 构建指定 Compose 服务；默认构建完整 Bringup |
-| `realman_rviz [model]` | 启动单臂 RViz，型号默认 `RM65-B` |
-| `realman_three_rviz` | 启动配置驱动的三臂 RViz |
-| `realman_bringup` | 启动三臂、RViz、Joy 和 Xbox 输入 |
-| `realman_bringup_remote` | 启动远程 headless 目标 |
-| `realman_colcon_build` | 使用本机 Humble 构建到 `realman_bringup` |
-| `realman_web_build` / `realman_web_test` | 构建或测试文档网站 |
-| `realman_deploy` | 在生产端对 `main` 执行安全快进更新 |
+| `rm65_docker_build [service ...]` | 构建指定 Compose 服务 |
+| `rm65_docker_rviz [model]` | 启动单臂 RViz，型号默认 `RM65-B` |
+| `rm65_docker_three_rviz` | 启动配置驱动的三臂 RViz |
+| `rm65_docker_xbox_test` | 只启动实体手柄输入链路 |
+| `rm65_docker_bringup` | 启动三臂、RViz、Joy 和 Xbox 输入 |
+| `rm65_docker_bringup_remote` | 启动远程 headless 目标 |
+| `rm65_ros_build` | 使用本机 Humble 构建到 `realman_bringup` |
+| `rm65_web_build` / `rm65_web_test` | 构建或测试文档网站 |
+| `rm65_deploy_update` | 在生产端对 `main` 执行安全快进更新 |
 
 这些函数不会自动写入 `~/.zshrc`，也不会隐藏底层参数。需要函数未覆盖的 Compose、
-colcon 或 launch 选项时，继续使用本页的原始命令。
+colcon 或 launch 选项时，继续使用本页的原始命令。`rm65_docker_xbox_test` 不启动
+三臂和 RViz，适合先验证实体手柄是否能产生 Joy 消息和按键日志。
 
 ## Docker 启动
 

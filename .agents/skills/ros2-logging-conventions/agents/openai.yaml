@@ -1,0 +1,4 @@
+interface:
+  display_name: "ROS 2 日志规范"
+  short_description: "统一 ROS 2 彩色日志与按节点文件"
+  default_prompt: "使用 $ros2-logging-conventions 检查并实现 ROS 2 节点日志规范。"

@@ -64,6 +64,10 @@ Another ROS 2 Humble host on the same network and domain can publish
 `sensor_msgs/msg/Joy` on `/input/joy`. Both hosts must use
 `ROS_LOCALHOST_ONLY=0`, and the network firewall must permit DDS UDP traffic.
 
+Bringup enables ROS 2's official colored rcutils output and writes each run to
+`logs/YYYYMMDD_HHMMSS/`. ROS 2 creates node log files such as
+`xbox_controller_node_<pid>_<timestamp>.log` in that directory.
+
 ### Three-arm layout
 
 The repository-root `config/ros/three_robots.yaml` is the authoritative layout

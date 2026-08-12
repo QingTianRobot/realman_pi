@@ -14,9 +14,12 @@ x-realman-common: &realman-common
     ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-65}
     ROS_LOCALHOST_ONLY: "0"
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
+    REALMAN_LOG_ROOT: /opt/rm65_ws/logs
   volumes:
     # Runtime config edits take effect on the next launch without rebuilding.
     - ./config:/opt/rm65_ws/config:ro
+    # Keep ROS 2's timestamped run directories and node log files on the host.
+    - ./logs:/opt/rm65_ws/logs
   stdin_open: true
   tty: true
 
@@ -26,6 +29,7 @@ x-rm65-rviz-common: &rm65-rviz-common
     ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-65}
     ROS_LOCALHOST_ONLY: "0"
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
+    REALMAN_LOG_ROOT: /opt/rm65_ws/logs
     # Forward the active desktop display and force software rendering to avoid
     # host/container OpenGL driver mismatches.
     DISPLAY: ${DISPLAY:-}
@@ -34,6 +38,7 @@ x-rm65-rviz-common: &rm65-rviz-common
     XAUTHORITY: /tmp/.Xauthority
   volumes:
     - ./config:/opt/rm65_ws/config:ro
+    - ./logs:/opt/rm65_ws/logs
     - /tmp/.X11-unix:/tmp/.X11-unix:rw
     # /dev/null keeps headless service selection parseable without X11. Graphical
     # services still require XAUTHORITY to point to the active session's file.

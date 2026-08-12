@@ -101,3 +101,5 @@ Compose 使用 host network 和 host IPC，并挂载两个只读/受限的显示
 容器默认设置 `ROS_DOMAIN_ID=65` 和 `ROS_LOCALHOST_ONLY=0`。使用 host network 后，同一网络中的 Humble 主机可以加入该 ROS 图进行远程调试；主机防火墙必须允许 DDS UDP 流量。带 RViz 的服务额外设置 `QT_X11_NO_MITSHM=1` 和 `LIBGL_ALWAYS_SOFTWARE=1`，降低主机与容器的 OpenGL 驱动冲突概率。
 
 `realman_bringup` 把实体手柄的 Linux event 设备映射到容器内 `/dev/input/event0`。`realman_bringup_remote` 不启动设备驱动和 GUI，只保留 ROS 节点供远程 Joy 发布者调试。具体接口和命令见 [Xbox 输入与统一 Bringup](../development/xbox-controller-bringup)。
+
+Bringup 同时设置 `RCUTILS_COLORIZED_OUTPUT=1` 和 `ROS_LOG_DIR`。每次运行在宿主机 `logs/YYYYMMDD_HHMMSS/` 下保存 ROS 2 官方日志；官方文件名包含节点名、进程号和时间戳。日志规范由项目 skill `.agents/skills/ros2-logging-conventions/SKILL.md` 维护。

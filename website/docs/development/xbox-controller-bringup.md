@@ -52,6 +52,20 @@ Bringup 使用 `game_controller_node`，由 SDL 映射库提供稳定索引。`0
 
 Docker 把根 `config/` 只读挂载到 `/opt/rm65_ws/config`，并通过 `REALMAN_CONFIG_ROOT` 让 launch 读取它；修改配置后重启容器即可生效。本地安装则读取 `realman_bringup` 安装目录中的配置副本，需要重新构建包。
 
+## ROS 2 日志
+
+Bringup 使用 ROS 2 官方日志接口和 rcutils 环境变量：
+
+| 环境变量 | 行为 |
+| --- | --- |
+| `RCUTILS_COLORIZED_OUTPUT=1` | 为终端日志启用官方彩色输出，不在业务代码中手写 ANSI 颜色码 |
+| `ROS_LOG_DIR` | 指向本次运行的时间目录 |
+| `REALMAN_LOG_ROOT` | 指定时间目录的根路径，Docker 默认为 `/opt/rm65_ws/logs` |
+
+每次启动 `realman_bringup` 都创建 `logs/YYYYMMDD_HHMMSS/`。ROS 2/rcutils 在其中生成官方节点日志，例如 `xbox_controller_node_<pid>_<timestamp>.log`。文件名包含节点名、进程号和生成时间，避免三臂中同名节点互相覆盖。Docker 将宿主机 `./logs` 挂载到容器日志根目录；`realman_bringup_remote` 也保留该挂载。
+
+ROS 节点的打印必须使用 `RCLCPP_*` 或 ROS 2 官方 Python/launch 日志接口。禁止使用 `printf`、`std::cout`、`std::cerr` 或 shell 重定向伪造节点日志。
+
 ## Bringup 接口
 
 ```bash
@@ -120,6 +134,12 @@ colcon test-result --verbose
 ```
 
 `button_state_tracker_test` 覆盖按下/释放边沿、未知按钮命名，以及 Joy 按钮数组缩短时生成释放事件。端到端验证还应使用上述模拟消息观察实际 ROS 日志。
+
+日志验证命令：
+
+```bash
+find logs -maxdepth 2 -type f -name '*.log' -print
+```
 
 ## 已知边界
 

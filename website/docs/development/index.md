@@ -15,6 +15,8 @@ description: realman_pi 功能契约、实现边界、配置来源和验证方�
 | [三臂配置驱动可视化](./three-arm-visualization) | ROS 2 三臂命名空间、完整 TF、RViz 2 和 Web 三维场景的数据流 | `config/ros/three_robots.yaml` |
 | [Xbox 输入与统一 Bringup](./xbox-controller-bringup) | C++ 按键边沿、`/input/joy`、系统启动开关和远程调试 | `config/ros/xbox_controller.yaml` |
 
+ROS 节点日志统一遵守项目 skill [`ros2-logging-conventions`](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/ros2-logging-conventions/SKILL.md)：官方 ROS 2 打印接口、彩色 rcutils 输出、时间目录和节点日志文件。
+
 ## 文档完成标准
 
 一个功能只有在以下内容保持一致后才算完成：

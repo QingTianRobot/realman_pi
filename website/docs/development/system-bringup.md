@@ -96,6 +96,43 @@ ROS_DOMAIN_ID=65 docker compose run --rm realman_bringup_remote
 
 所有服务使用 host network、`ROS_LOCALHOST_ONLY=0` 和默认 `ROS_DOMAIN_ID=65`。远程主机必须使用相同域；DDS 自动发现还要求网络允许组播和 UDP。跨网段部署需要额外的 DDS discovery 配置。
 
+## 生产端代码部署
+
+生产主机通过开发机的 SSH 别名 `realman_local` 访问，仓库固定检出到
+`/home/administrator/realman_pi`。主机地址和密钥只保存在开发机的
+`~/.ssh/config`，不写入仓库。
+
+首次检出：
+
+```bash
+ssh realman_local \
+  "git clone https://github.com/QingTianRobot/realman_pi.git \
+  /home/administrator/realman_pi"
+```
+
+后续生产更新只接受 `main` 的快进更新，避免在生产目录自动合并分叉历史：
+
+```bash
+ssh realman_local \
+  "cd /home/administrator/realman_pi && \
+  git fetch origin main && \
+  git merge --ff-only origin/main"
+```
+
+部署后核对工作树和实际版本：
+
+```bash
+ssh realman_local \
+  "cd /home/administrator/realman_pi && \
+  git status --short --branch && \
+  git log -1 --format='%H %s'"
+```
+
+生产主机必须预先安装 Git、Docker Engine 和 Docker Compose v2。代码同步不等于
+容器已部署；缺少 `docker` 或 `docker compose` 时，应先完成运行时安装，再执行本页
+的 headless Bringup 命令。生产目录中出现未提交修改时停止更新并先确认修改归属，
+不要使用 `git reset --hard` 覆盖现场文件。
+
 ## 配置解析
 
 Docker 设置 `REALMAN_CONFIG_ROOT=/opt/rm65_ws/config` 并只读挂载根 `config/`，因此修改 YAML 后重启容器即可生效，不需要重建镜像。本地安装没有该环境变量时，从 `realman_bringup` 的 package share 读取构建时安装的配置副本。

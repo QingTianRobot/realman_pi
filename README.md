@@ -10,6 +10,21 @@ Project documentation: https://qingtianrobot.github.io/realman_pi/
 The VitePress source is stored in `website/` and deployed to GitHub Pages by
 `.github/workflows/deploy-pages.yml`.
 
+## Zsh helper functions
+
+Load the optional project helpers from any Zsh session:
+
+```zsh
+source /path/to/realman_pi/functions.zsh
+realman_help
+```
+
+The functions locate the repository root from `functions.zsh`, so they keep
+working after changing directories. Common commands include `realman_rviz`,
+`realman_three_rviz`, `realman_bringup`, `realman_bringup_remote`,
+`realman_colcon_build`, and `realman_deploy`. The direct Docker, colcon, npm,
+and SSH commands below remain available when additional options are required.
+
 ## Supported models
 
 - `RM65-B` (default)
@@ -131,6 +146,7 @@ realman_pi/
 │   ├── driver/           C++ operator input packages
 │   ├── realman_bringup/  Top-level launch orchestration
 │   └── rm65_description/ Robot descriptions, TF, and RViz launch
+├── functions.zsh         Optional Zsh development and deployment helpers
 └── website/              VitePress documentation site
 ```
 

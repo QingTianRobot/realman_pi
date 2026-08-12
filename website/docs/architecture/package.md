@@ -40,6 +40,7 @@ realman_pi/
 │   ├── package.json
 │   └── playwright.config.ts
 ├── docker-compose.yml
+├── functions.zsh                 # 可选 Zsh 开发与部署函数
 └── README.md
 ```
 

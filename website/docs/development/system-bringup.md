@@ -119,6 +119,17 @@ ssh realman_local \
   git merge --ff-only origin/main"
 ```
 
+加载根目录 Zsh 函数后可以使用同一流程的快捷入口：
+
+```zsh
+source /path/to/realman_pi/functions.zsh
+realman_deploy
+```
+
+默认主机是 `realman_local`，默认目录是 `/home/administrator/realman_pi`。其他环境可用
+`REALMAN_PRODUCTION_HOST` 和 `REALMAN_PRODUCTION_DIR` 覆盖；函数仍只执行
+`fetch` 和 `merge --ff-only`，不会覆盖生产端未提交文件。
+
 部署后核对工作树和实际版本：
 
 ```bash

@@ -32,6 +32,30 @@ export XAUTHORITY="$HOME/.Xauthority"
 带 RViz 的 Compose 服务会把 `XAUTHORITY` 指向的文件只读挂载到容器中。该路径必须存在并且当前用户可读。`realman_bringup_remote` 不创建 Qt 窗口，可以在没有 `DISPLAY` 和 `XAUTHORITY` 的远程终端运行。
 :::
 
+## Zsh 快捷函数
+
+根目录 `functions.zsh` 提供可选的开发与运行函数。在 Zsh 中加载一次即可从任意
+目录调用：
+
+```zsh
+source /path/to/realman_pi/functions.zsh
+realman_help
+```
+
+| 函数 | 等价用途 |
+| --- | --- |
+| `realman_build [service ...]` | 构建指定 Compose 服务；默认构建完整 Bringup |
+| `realman_rviz [model]` | 启动单臂 RViz，型号默认 `RM65-B` |
+| `realman_three_rviz` | 启动配置驱动的三臂 RViz |
+| `realman_bringup` | 启动三臂、RViz、Joy 和 Xbox 输入 |
+| `realman_bringup_remote` | 启动远程 headless 目标 |
+| `realman_colcon_build` | 使用本机 Humble 构建到 `realman_bringup` |
+| `realman_web_build` / `realman_web_test` | 构建或测试文档网站 |
+| `realman_deploy` | 在生产端对 `main` 执行安全快进更新 |
+
+这些函数不会自动写入 `~/.zshrc`，也不会隐藏底层参数。需要函数未覆盖的 Compose、
+colcon 或 launch 选项时，继续使用本页的原始命令。
+
 ## Docker 启动
 
 克隆仓库并构建镜像：

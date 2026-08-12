@@ -64,3 +64,25 @@ ros2 run tf2_tools view_frames
 ```
 
 RViz 配置已经将 Fixed Frame 设置为 `world`，并启用了 TF 与 RobotModel 显示项。
+
+## 三机械臂 TF 树
+
+三臂模式给每个 URDF frame 添加机器人前缀，然后用配置中的静态变换接入同一个全局 `world`：
+
+```text
+world
+├── l/world -> l/base_link -> l/link_1 -> ... -> l/link_6
+├── m/world -> m/base_link -> m/link_1 -> ... -> m/link_6
+└── r/world -> r/base_link -> r/link_1 -> ... -> r/link_6
+```
+
+ROS 节点和 topic 使用 `/l`、`/m`、`/r` 命名空间；TF frame 使用 `l/`、`m/`、
+`r/` 前缀。这两个隔离层分别避免节点/topic 重名和 TF frame 重名。
+
+检查三台机械臂末端：
+
+```bash
+ros2 run tf2_ros tf2_echo world l/link_6
+ros2 run tf2_ros tf2_echo world m/link_6
+ros2 run tf2_ros tf2_echo world r/link_6
+```

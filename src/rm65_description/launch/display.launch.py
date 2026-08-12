@@ -24,7 +24,7 @@ def _launch_nodes(context):
 
     package_share = Path(get_package_share_directory("rm65_description"))
     urdf_path = package_share / "urdf" / f"{model}.urdf"
-    rviz_config = package_share / "rviz" / "rm65.rviz"
+    rviz_config = package_share / "config" / "rviz" / "rm65.rviz"
     robot_description = urdf_path.read_text(encoding="utf-8")
 
     return [

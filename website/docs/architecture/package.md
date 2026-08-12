@@ -13,14 +13,16 @@ description: realman_pi 的网站、Docker 环境、ROS 2 描述包和运行节�
 ├── .github/
 │   └── workflows/
 │       └── deploy-pages.yml       # GitHub Pages 自动部署
+├── config/
+│   ├── docker/                    # Compose 与 Humble 镜像配置
+│   ├── ros/                       # 三机械臂 TF 布局
+│   └── rviz/                      # 单臂和三臂显示配置
 ├── docker/
-│   ├── ros2-humble-rviz.Dockerfile
-│   └── ros_entrypoint.sh
+│   └── ros_entrypoint.sh          # 容器运行入口脚本
 ├── src/
 │   └── rm65_description/          # ROS 2 ament_cmake 包
 │       ├── launch/
 │       ├── meshes/
-│       ├── rviz/
 │       └── urdf/
 ├── website/                       # VitePress 文档站
 │   ├── docs/
@@ -39,9 +41,11 @@ description: realman_pi 的网站、Docker 环境、ROS 2 描述包和运行节�
 | 路径 | 用途 |
 | --- | --- |
 | `launch/display.launch.py` | 校验型号并启动三个可视化节点 |
+| `launch/three_robots.launch.py` | 从根配置创建 `/l`、`/m`、`/r` 三组节点与 TF |
 | `urdf/*.urdf` | 五个型号的机器人描述与完整 TF 关系 |
 | `meshes/<model>/*.STL` | 每个 link 的视觉与碰撞网格 |
-| `rviz/rm65.rviz` | Fixed Frame、视角、RobotModel 与 TF 配置 |
+| `config/ros/three_robots.yaml` | 三台机械臂的位置、朝向、型号和命名配置 |
+| `config/rviz/*.rviz` | Fixed Frame、视角、RobotModel 与 TF 配置 |
 | `CMakeLists.txt` | 安装 launch、URDF、mesh 与 RViz 资源 |
 | `package.xml` | Humble 运行依赖和 ament 包元数据 |
 

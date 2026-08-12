@@ -70,6 +70,38 @@ RM65-6FB-V
 
 无效型号会在启动阶段直接报错，并输出完整的可选列表。
 
+## 三机械臂启动
+
+三机械臂环境使用根目录 `config/ros/three_robots.yaml` 作为唯一布局配置：
+
+```bash
+docker compose build rm65_three_rviz
+docker compose run --rm rm65_three_rviz
+```
+
+默认使用以下名称和布局：
+
+| 名称 | ROS 命名空间 | TF 前缀 | X 位置 | yaw | 朝向 |
+| --- | --- | --- | ---: | ---: | --- |
+| 左臂 `l` | `/l` | `l/` | `-1.0` | `0` | 正向 |
+| 中臂 `m` | `/m` | `m/` | `0.0` | `π` | 反向 |
+| 右臂 `r` | `/r` | `r/` | `1.0` | `0` | 正向 |
+
+修改 YAML 中的 `x`、`y`、`z`、`roll`、`pitch`、`yaw` 后重启容器即可，
+无需重建镜像。每台机械臂也可以独立选择五个受支持的 RM65 型号。
+
+本地工作空间使用：
+
+```bash
+ros2 launch rm65_description three_robots.launch.py
+```
+
+默认使用无窗口的 `joint_state_publisher`。需要交互调节关节时可启动三个命名空间下的 GUI：
+
+```bash
+RM65_USE_GUI=true docker compose run --rm rm65_three_rviz
+```
+
 ## ROS 域设置
 
 独立查看器默认使用 `ROS_DOMAIN_ID=65`，避免读取同一网络中其他机器人发布的 `/robot_description` 和 TF。

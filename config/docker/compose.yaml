@@ -1,0 +1,48 @@
+# Runtime services for the RM65 ROS 2 Humble visualizers. The repository-root
+# docker-compose.yml includes this file so standard `docker compose` commands
+# continue to work while substantive configuration stays under config/.
+x-rm65-rviz-common: &rm65-rviz-common
+  image: rm65-humble-rviz:local
+  build:
+    context: .
+    dockerfile: config/docker/ros2-humble-rviz.Dockerfile
+  network_mode: host
+  ipc: host
+  environment:
+    # Forward the active desktop display and force software rendering to avoid
+    # host/container OpenGL driver mismatches.
+    DISPLAY: ${DISPLAY}
+    LIBGL_ALWAYS_SOFTWARE: ${LIBGL_ALWAYS_SOFTWARE:-1}
+    QT_X11_NO_MITSHM: "1"
+    # Domain 65 isolates the standalone viewer from unrelated ROS 2 graphs.
+    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-65}
+    XAUTHORITY: /tmp/.Xauthority
+  volumes:
+    - /tmp/.X11-unix:/tmp/.X11-unix:rw
+    - ${XAUTHORITY:?XAUTHORITY must point to the active X11 authority file}:/tmp/.Xauthority:ro
+    # Mount the authoritative root configuration read-only so TF layout edits
+    # take effect on the next container start without rebuilding the image.
+    - ./config:/opt/rm65_ws/install/rm65_description/share/rm65_description/config:ro
+  stdin_open: true
+  tty: true
+
+services:
+  # Existing single-arm viewer, retained for model inspection.
+  rm65_rviz:
+    <<: *rm65-rviz-common
+    command:
+      - ros2
+      - launch
+      - rm65_description
+      - display.launch.py
+      - model:=${RM65_MODEL:-RM65-B}
+
+  # Three-arm environment using the l, m, and r namespaces and TF prefixes.
+  rm65_three_rviz:
+    <<: *rm65-rviz-common
+    command:
+      - ros2
+      - launch
+      - rm65_description
+      - three_robots.launch.py
+      - use_gui:=${RM65_USE_GUI:-false}

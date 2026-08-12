@@ -1,0 +1,49 @@
+# Three RM65 layout used by three_robots.launch.py.
+#
+# Coordinates are expressed in metres and angles in radians. The global
+# `world` frame is the RViz Fixed Frame. Positive X points to the right side
+# of the layout; positive Y points toward the rear of the workspace.
+robots:
+  # Left and right arms use the same forward-facing orientation.
+  l:
+    model: RM65-B
+    namespace: l
+    frame_prefix: l/
+    parent_frame: world
+    x: -1.0
+    y: 0.0
+    z: 0.0
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+
+  # The middle arm faces backward relative to the left and right arms.
+  m:
+    model: RM65-B
+    namespace: m
+    frame_prefix: m/
+    parent_frame: world
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    roll: 0.0
+    pitch: 0.0
+    yaw: 3.141592653589793
+
+  r:
+    model: RM65-B
+    namespace: r
+    frame_prefix: r/
+    parent_frame: world
+    x: 1.0
+    y: 0.0
+    z: 0.0
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0
+
+# Shared launch behavior. Keep these values here so a deployment can change
+# initial joint posture or the RViz display without editing Python launch code.
+settings:
+  default_joint_position: 0.0
+  rviz_config: three_robots.rviz

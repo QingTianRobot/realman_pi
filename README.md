@@ -33,6 +33,30 @@ docker compose build rm65_rviz
 docker compose run --rm rm65_rviz
 ```
 
+### Three-arm layout
+
+The repository-root `config/ros/three_robots.yaml` is the authoritative layout
+for the left (`l`), middle (`m`), and right (`r`) robots. The default layout
+places the arms at X positions `-1.0`, `0.0`, and `1.0` metres. Left and right
+face the same direction; middle uses yaw `pi` and faces the opposite direction.
+
+```bash
+docker compose build rm65_three_rviz
+docker compose run --rm rm65_three_rviz
+```
+
+Each robot has both a ROS namespace and a collision-free TF prefix:
+
+```text
+/l  -> l/world -> l/base_link -> ... -> l/link_6
+/m  -> m/world -> m/base_link -> ... -> m/link_6
+/r  -> r/world -> r/base_link -> ... -> r/link_6
+```
+
+All three prefixed trees attach to the global `world` frame using the transforms
+from `config/ros/three_robots.yaml`. Edit that file and restart the container to
+change positions, orientations, or per-arm RM65 models; rebuilding is not needed.
+
 Select another model with `RM65_MODEL`:
 
 ```bash
@@ -66,7 +90,8 @@ Production build output is written to `website/docs/.vitepress/dist`.
 ```text
 realman_pi/
 ├── .github/workflows/    GitHub Pages deployment
-├── docker/               ROS 2 Humble RViz image
+├── config/               Annotated Docker, ROS, TF, and RViz configuration
+├── docker/               Container entrypoint scripts
 ├── src/                  ROS 2 workspace source
 └── website/              VitePress documentation site
 ```

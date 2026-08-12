@@ -18,7 +18,7 @@ description: Xbox Series 手柄的 SDL 设备接入、Joy 消息、C++ 按键边
 | `ButtonStateTracker` | 与 ROS 解耦的状态比较逻辑，供节点和单元测试复用 |
 
 ```text
-/dev/input/event0
+/dev/input/*-event-joystick
       │
       ▼
 /input/joy_node (`game_controller_node`)
@@ -101,7 +101,9 @@ REALMAN_JOY_DEVICE=/dev/input/by-id/usb-Xbox_Controller-event-joystick \
   docker compose run --rm realman_bringup
 ```
 
-Compose 把主机设备映射为容器 `/dev/input/event0`，因此 `device_id=0` 保持确定。运行 Docker 的用户必须有该 event 设备的 input 权限。
+Compose 把主机 `/dev/input` 目录只读映射到容器，并允许 input event 字符设备被读取。
+`wait_for_joy_device:=true` 会在设备不存在时持续轮询，设备出现后才启动
+`game_controller_node`。运行 Docker 的用户必须有 input 设备访问权限。
 
 ## 独立实体手柄测试
 
@@ -129,7 +131,9 @@ ros2 topic echo /input/joy sensor_msgs/msg/Joy
 ```
 
 该测试服务沿用 `config/ros/xbox_controller.yaml`，运行日志仍写入
-`logs/YYYYMMDD_HHMMSS/`。测试结束使用 `Ctrl-C`，容器会随 `--rm` 删除。
+`logs/YYYYMMDD_HHMMSS/`。设备不存在时会保持等待；测试结束使用 `Ctrl-C`，容器会随
+`--rm` 删除。默认扫描 `/dev/input/by-id/*-event-joystick` 和
+`/dev/input/by-path/*-event-joystick`；也可以用 `REALMAN_JOY_DEVICE` 指定路径或 glob。
 
 ## 无设备验证
 

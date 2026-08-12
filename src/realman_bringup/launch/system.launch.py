@@ -1,14 +1,36 @@
 import os
+import time
 from datetime import datetime
+from glob import glob
 from pathlib import Path
 
 from ament_index_python.packages import get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, IncludeLaunchDescription, SetEnvironmentVariable
+from launch.actions import (
+    DeclareLaunchArgument,
+    IncludeLaunchDescription,
+    OpaqueFunction,
+    SetEnvironmentVariable,
+    TimerAction,
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
+from launch.logging import get_logger
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+
+def _device_paths(device_path):
+    if device_path == "auto":
+        return (
+            glob("/dev/input/by-id/*-event-joystick")
+            + glob("/dev/input/by-path/*-event-joystick")
+        )
+    return glob(device_path)
+
+
+def _device_available(device_path):
+    return any(Path(path).exists() for path in _device_paths(device_path))
 
 
 def generate_launch_description():
@@ -32,6 +54,50 @@ def generate_launch_description():
     start_controller = LaunchConfiguration("start_controller")
     use_gui = LaunchConfiguration("use_gui")
     use_rviz = LaunchConfiguration("use_rviz")
+    wait_for_joy_device = LaunchConfiguration("wait_for_joy_device")
+    joy_device_path = LaunchConfiguration("joy_device_path")
+    joy_poll_interval = LaunchConfiguration("joy_poll_interval")
+    logger = get_logger("realman_bringup")
+    wait_state = {"last_log_time": 0.0}
+
+    def start_joy_driver(context):
+        device_path = joy_device_path.perform(context)
+        joy_node = Node(
+            package="joy",
+            executable="game_controller_node",
+            namespace="input",
+            name="joy_node",
+            output="screen",
+            parameters=[str(controller_config)],
+        )
+
+        if wait_for_joy_device.perform(context).lower() != "true":
+            return [joy_node]
+
+        if _device_available(device_path):
+            logger.info(f"Joystick device found: {device_path}")
+            return [joy_node]
+
+        now = time.monotonic()
+        if now - wait_state["last_log_time"] >= 5.0:
+            logger.info(
+                f"Waiting for joystick device '{device_path}'. "
+                "The launch will keep polling until it appears."
+            )
+            wait_state["last_log_time"] = now
+
+        try:
+            poll_interval = max(0.1, float(joy_poll_interval.perform(context)))
+        except ValueError:
+            logger.error("joy_poll_interval must be a positive number; using 1.0")
+            poll_interval = 1.0
+
+        return [
+            TimerAction(
+                period=poll_interval,
+                actions=[OpaqueFunction(function=start_joy_driver)],
+            )
+        ]
 
     return LaunchDescription(
         [
@@ -62,6 +128,21 @@ def generate_launch_description():
                 default_value="true",
                 description="Start RViz 2 with the three-arm display configuration.",
             ),
+            DeclareLaunchArgument(
+                "wait_for_joy_device",
+                default_value="false",
+                description="Keep polling until the configured joystick device appears.",
+            ),
+            DeclareLaunchArgument(
+                "joy_device_path",
+                default_value=os.environ.get("REALMAN_JOY_DEVICE", "auto"),
+                description="Joystick path, glob, or auto to scan /dev/input.",
+            ),
+            DeclareLaunchArgument(
+                "joy_poll_interval",
+                default_value="1.0",
+                description="Seconds between joystick device checks.",
+            ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(str(three_robots_launch)),
                 condition=IfCondition(start_robots),
@@ -72,15 +153,6 @@ def generate_launch_description():
                 }.items(),
             ),
             Node(
-                package="joy",
-                executable="game_controller_node",
-                namespace="input",
-                name="joy_node",
-                output="screen",
-                condition=IfCondition(start_joy_driver),
-                parameters=[str(controller_config)],
-            ),
-            Node(
                 package="xbox_controller_driver",
                 executable="xbox_controller_node",
                 namespace="input",
@@ -88,6 +160,10 @@ def generate_launch_description():
                 output="screen",
                 condition=IfCondition(start_controller),
                 parameters=[str(controller_config)],
+            ),
+            OpaqueFunction(
+                function=start_joy_driver,
+                condition=IfCondition(start_joy_driver),
             ),
         ]
     )

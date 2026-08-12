@@ -53,8 +53,8 @@ docker compose run --rm rm65_rviz
 ### Unified bringup with an Xbox controller
 
 `realman_bringup` starts the three-arm scene, RViz 2, the ROS 2
-`game_controller_node`, and the C++ Xbox input node. The controller defaults to
-the host's `/dev/input/event0`:
+`game_controller_node`, and the C++ Xbox input node. The service scans the
+host's `*-event-joystick` devices and waits if the controller is not connected:
 
 ```bash
 docker compose build realman_bringup
@@ -62,7 +62,7 @@ docker compose run --rm realman_bringup
 ```
 
 Press and release events are printed by `/input/xbox_controller`. Set
-`REALMAN_JOY_DEVICE` when Linux exposes the controller at another path:
+`REALMAN_JOY_DEVICE` to use a specific device path or glob:
 
 ```bash
 REALMAN_JOY_DEVICE=/dev/input/by-id/usb-Xbox_Controller-event-joystick \
@@ -96,6 +96,9 @@ REALMAN_JOY_DEVICE=/dev/input/by-id/usb-Xbox_Controller-event-joystick \
 
 The terminal should show the Xbox input node startup and entries such as
 `button[0] a PRESSED` and `button[0] a RELEASED` when A is pressed and released.
+If the controller is not connected yet, the service keeps polling the
+`*-event-joystick` devices under `/dev/input` and starts the Joy driver when the
+controller appears.
 
 ### Three-arm layout
 

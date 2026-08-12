@@ -37,8 +37,11 @@ ros2 launch realman_bringup system.launch.py \
 | `start_controller` | `true` | `/input/xbox_controller`，处理 Joy 按键边沿 |
 | `use_gui` | `false` | 每台机械臂使用 `joint_state_publisher_gui` |
 | `use_rviz` | `true` | 使用三臂 RViz 配置启动 `rviz2` |
+| `wait_for_joy_device` | `false` | 输入设备不存在时持续轮询；Docker 输入服务设为 `true` |
+| `joy_device_path` | `${REALMAN_JOY_DEVICE:-auto}` | 设备路径、glob，或自动扫描 `/dev/input` |
+| `joy_poll_interval` | `1.0` | 轮询间隔，单位秒，最小 `0.1` |
 
-启动参数只决定节点是否创建，不修改 TF 位姿、机器人型号或手柄参数。
+启动参数只决定节点是否创建和设备等待策略，不修改 TF 位姿、机器人型号或手柄参数。
 
 ## 节点编排
 
@@ -78,9 +81,9 @@ realman_bringup/system.launch.py
 
 | Compose 服务 | 用途 | 显示环境 | 实体手柄 |
 | --- | --- | --- | --- |
-| `realman_bringup` | 完整本地系统 | 需要 `DISPLAY`、`XAUTHORITY` | 默认映射 `${REALMAN_JOY_DEVICE:-/dev/input/event0}` |
+| `realman_bringup` | 完整本地系统 | 需要 `DISPLAY`、`XAUTHORITY` | 等待并读取 `${REALMAN_JOY_DEVICE:-auto}` |
 | `realman_bringup_remote` | 远程/headless 调试 | 不需要 X11 | 不映射设备，不启动 Joy 驱动 |
-| `xbox_controller_test` | 独立手柄测试 | 不需要 X11 | 默认映射 `${REALMAN_JOY_DEVICE:-/dev/input/event0}` |
+| `xbox_controller_test` | 独立手柄测试 | 不需要 X11 | 等待并读取 `${REALMAN_JOY_DEVICE:-auto}` |
 
 完整本地启动：
 
@@ -215,6 +218,7 @@ find logs -maxdepth 2 -type f -name '*.log' -print
 | 症状 | 优先检查 |
 | --- | --- |
 | remote 服务解析时要求 X11 | 使用最新 Compose；headless 服务不应依赖 `DISPLAY` 或 `XAUTHORITY` |
+| 手柄未连接时服务退出 | 使用带 `wait_for_joy_device:=true` 的输入服务；它会持续等待设备出现 |
 | 远程主机看不到节点/TF | `ROS_DOMAIN_ID`、`ROS_LOCALHOST_ONLY`、DDS UDP、组播和防火墙 |
 | 日志没有落在项目目录 | `REALMAN_LOG_ROOT` 是否可写，宿主 `logs/` 是否正确挂载 |
 | RViz/GUI 报 Qt/X11 错误 | 图形服务需要有效 `DISPLAY`、`XAUTHORITY` 和 `/tmp/.X11-unix` |

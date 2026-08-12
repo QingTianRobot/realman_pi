@@ -153,7 +153,7 @@ docker compose build realman_bringup
 docker compose run --rm realman_bringup
 ```
 
-默认映射主机 `/dev/input/event0`。建议使用稳定的 `by-id` event 路径覆盖：
+服务会自动扫描主机的 `*-event-joystick` 设备；建议使用稳定的 `by-id` event 路径覆盖：
 
 ```bash
 REALMAN_JOY_DEVICE=/dev/input/by-id/usb-Xbox_Controller-event-joystick \

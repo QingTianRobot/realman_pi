@@ -15,6 +15,8 @@ x-realman-common: &realman-common
     ROS_LOCALHOST_ONLY: "0"
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
+    # The launch file scans this path/glob and waits when it is not present.
+    REALMAN_JOY_DEVICE: ${REALMAN_JOY_DEVICE:-auto}
   volumes:
     # Runtime config edits take effect on the next launch without rebuilding.
     - ./config:/opt/rm65_ws/config:ro
@@ -30,6 +32,7 @@ x-rm65-rviz-common: &rm65-rviz-common
     ROS_LOCALHOST_ONLY: "0"
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
+    REALMAN_JOY_DEVICE: ${REALMAN_JOY_DEVICE:-auto}
     # Forward the active desktop display and force software rendering to avoid
     # host/container OpenGL driver mismatches.
     DISPLAY: ${DISPLAY:-}
@@ -73,15 +76,24 @@ services:
   # Full system bringup with three arms, RViz 2, and a physical Xbox controller.
   realman_bringup:
     <<: *rm65-rviz-common
-    devices:
-      # SDL reads Linux event devices. A by-id *-event-joystick path is preferred
-      # on the host; it is exposed as event0 so device_id=0 remains deterministic.
-      - ${REALMAN_JOY_DEVICE:-/dev/input/event0}:/dev/input/event0
+    volumes:
+      - ./config:/opt/rm65_ws/config:ro
+      - ./logs:/opt/rm65_ws/logs
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-/dev/null}:/tmp/.Xauthority:ro
+      - ./config:/opt/rm65_ws/install/rm65_description/share/rm65_description/config:ro
+      # Keep the directory mounted so a controller can be plugged in after the
+      # container starts. The launch file waits for the selected device.
+      - /dev/input:/dev/input:ro
+    device_cgroup_rules:
+      # Linux input event devices use character-device major 13.
+      - "c 13:* r"
     command:
       - ros2
       - launch
       - realman_bringup
       - system.launch.py
+      - wait_for_joy_device:=true
       - use_gui:=${RM65_USE_GUI:-false}
       - use_rviz:=${RM65_USE_RVIZ:-true}
 
@@ -102,9 +114,13 @@ services:
   # C++ button logger, so a controller can be tested without RViz or robot TF.
   xbox_controller_test:
     <<: *realman-common
-    devices:
-      # Prefer a stable host by-id *-event-joystick path when available.
-      - ${REALMAN_JOY_DEVICE:-/dev/input/event0}:/dev/input/event0
+    volumes:
+      - ./config:/opt/rm65_ws/config:ro
+      - ./logs:/opt/rm65_ws/logs
+      # Keep the directory mounted so the controller can be connected later.
+      - /dev/input:/dev/input:ro
+    device_cgroup_rules:
+      - "c 13:* r"
     command:
       - ros2
       - launch
@@ -113,5 +129,6 @@ services:
       - start_robots:=false
       - start_joy_driver:=true
       - start_controller:=true
+      - wait_for_joy_device:=true
       - use_gui:=false
       - use_rviz:=false

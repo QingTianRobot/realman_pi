@@ -2,7 +2,8 @@
 # game_controller_node uses SDL's mapping database for stable button indices.
 /input/joy_node:
   ros__parameters:
-    # Docker exposes the selected Linux event device as the only SDL controller.
+    # Docker exposes /dev/input; the bringup launch waits for a joystick event
+    # device before starting SDL, while this parameter selects the first one.
     device_id: 0
     # Ignore small analogue stick drift. Valid values are in the normalized [0, 1] range.
     deadzone: 0.10

@@ -26,7 +26,9 @@ world -> base_link -> link_1 -> link_2 -> link_3 -> link_4 -> link_5 -> link_6
 
 ## Run with Docker
 
-The active desktop session must provide both `DISPLAY` and `XAUTHORITY`.
+Graphical RViz services require the active desktop session to provide both
+`DISPLAY` and `XAUTHORITY`. The headless `realman_bringup_remote` service does
+not require either variable.
 
 ```bash
 docker compose build rm65_rviz

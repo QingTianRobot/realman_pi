@@ -82,7 +82,7 @@ Compose 默认把主机 `${REALMAN_JOY_DEVICE:-/dev/input/event0}` 映射为容�
 
 ## 远程与无设备调试
 
-所有容器使用 host network、`ROS_LOCALHOST_ONLY=0` 和默认 `ROS_DOMAIN_ID=65`。在机器人端启动无 GUI、无本地手柄的目标：
+所有容器使用 host network、`ROS_LOCALHOST_ONLY=0` 和默认 `ROS_DOMAIN_ID=65`。在机器人端启动无 GUI、无本地手柄的目标；该服务不需要设置 `DISPLAY` 或 `XAUTHORITY`：
 
 ```bash
 ROS_DOMAIN_ID=65 docker compose run --rm realman_bringup_remote

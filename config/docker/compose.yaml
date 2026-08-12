@@ -28,14 +28,16 @@ x-rm65-rviz-common: &rm65-rviz-common
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     # Forward the active desktop display and force software rendering to avoid
     # host/container OpenGL driver mismatches.
-    DISPLAY: ${DISPLAY}
+    DISPLAY: ${DISPLAY:-}
     LIBGL_ALWAYS_SOFTWARE: ${LIBGL_ALWAYS_SOFTWARE:-1}
     QT_X11_NO_MITSHM: "1"
     XAUTHORITY: /tmp/.Xauthority
   volumes:
     - ./config:/opt/rm65_ws/config:ro
     - /tmp/.X11-unix:/tmp/.X11-unix:rw
-    - ${XAUTHORITY:?XAUTHORITY must point to the active X11 authority file}:/tmp/.Xauthority:ro
+    # /dev/null keeps headless service selection parseable without X11. Graphical
+    # services still require XAUTHORITY to point to the active session's file.
+    - ${XAUTHORITY:-/dev/null}:/tmp/.Xauthority:ro
     # Mount the authoritative root configuration read-only so TF layout edits
     # take effect on the next container start without rebuilding the image.
     - ./config:/opt/rm65_ws/install/rm65_description/share/rm65_description/config:ro

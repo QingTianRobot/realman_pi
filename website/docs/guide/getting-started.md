@@ -13,7 +13,7 @@ description: 使用 Docker Compose 或本地 ROS 2 Humble 工作空间启动 RM6
 | --- | --- |
 | 操作系统 | 提供 X11 或 XWayland 的 Linux 桌面 |
 | 容器运行时 | Docker Engine 与 Docker Compose v2 |
-| 显示变量 | `DISPLAY` 非空，`XAUTHORITY` 指向可读文件 |
+| 显示变量 | 带 RViz 的服务要求 `DISPLAY` 非空且 `XAUTHORITY` 指向可读文件；headless 服务不需要 |
 | 项目目录 | 在包含 `docker-compose.yml` 的仓库根目录执行命令 |
 
 先确认当前终端继承了桌面会话：
@@ -29,7 +29,7 @@ export XAUTHORITY="$HOME/.Xauthority"
 ```
 
 ::: warning
-Compose 会把 `XAUTHORITY` 指向的文件只读挂载到容器中。该路径必须存在并且当前用户可读。
+带 RViz 的 Compose 服务会把 `XAUTHORITY` 指向的文件只读挂载到容器中。该路径必须存在并且当前用户可读。`realman_bringup_remote` 不创建 Qt 窗口，可以在没有 `DISPLAY` 和 `XAUTHORITY` 的远程终端运行。
 :::
 
 ## Docker 启动

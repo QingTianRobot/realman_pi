@@ -9,7 +9,8 @@ description: realman_pi 的网站、Docker 环境、ROS 2 描述包和运行节�
 
 ## 代码仓库结构
 
-<div class="repo-tree">realman_pi/
+```text
+realman_pi/
 ├── .github/
 │   └── workflows/
 │       └── deploy-pages.yml       # GitHub Pages 自动部署
@@ -39,7 +40,8 @@ description: realman_pi 的网站、Docker 环境、ROS 2 描述包和运行节�
 │   ├── package.json
 │   └── playwright.config.ts
 ├── docker-compose.yml
-└── README.md</div>
+└── README.md
+```
 
 ## ROS 2 包结构
 

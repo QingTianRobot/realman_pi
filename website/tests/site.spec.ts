@@ -117,3 +117,15 @@ test("documentation routes render", async ({ page }) => {
     await expect(page.locator("main")).toBeVisible();
   }
 });
+
+test("repository tree preserves its multiline structure", async ({ page }) => {
+  await page.goto("architecture/package");
+
+  const repositoryTree = page.locator("main pre code").filter({ hasText: "realman_pi/" });
+  await expect(repositoryTree).toBeVisible();
+
+  const lines = (await repositoryTree.textContent())?.trim().split("\n") ?? [];
+  expect(lines.length).toBeGreaterThan(20);
+  expect(lines).toContain("├── config/");
+  expect(lines).toContain("└── README.md");
+});

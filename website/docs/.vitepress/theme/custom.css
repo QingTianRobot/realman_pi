@@ -466,18 +466,6 @@
   background: transparent;
 }
 
-.repo-tree {
-  overflow-x: auto;
-  padding: 20px 22px;
-  border-left: 3px solid var(--vp-c-brand-1);
-  background: var(--vp-c-bg-soft);
-  color: var(--vp-c-text-1);
-  font-family: var(--vp-font-family-mono);
-  font-size: 13px;
-  line-height: 1.75;
-  white-space: pre;
-}
-
 .tf-tree-doc {
   overflow-x: auto;
   padding: 24px 0;

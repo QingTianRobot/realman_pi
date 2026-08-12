@@ -21,7 +21,10 @@ description: realman_pi 的网站、Docker 环境、ROS 2 描述包和运行节�
 ├── docker/
 │   └── ros_entrypoint.sh          # 容器运行入口脚本
 ├── src/
-│   └── rm65_description/          # ROS 2 ament_cmake 包
+│   ├── driver/
+│   │   └── xbox_controller_driver/ # C++ Xbox 输入处理包
+│   ├── realman_bringup/            # 系统级启动编排包
+│   └── rm65_description/           # 机器人描述与可视化包
 │       ├── launch/
 │       ├── meshes/
 │       └── urdf/
@@ -40,6 +43,14 @@ description: realman_pi 的网站、Docker 环境、ROS 2 描述包和运行节�
 
 ## ROS 2 包结构
 
+| 包 | 职责 | 主要入口 |
+| --- | --- | --- |
+| `rm65_description` | RM65 URDF、mesh、单臂/三臂 TF 与 RViz 2 | `display.launch.py`、`three_robots.launch.py` |
+| `xbox_controller_driver` | 订阅标准 Joy 消息并输出 Xbox 按键状态变化 | `xbox_controller_node` |
+| `realman_bringup` | 统一组合三臂、RViz、`game_controller_node` 与输入处理节点 | `system.launch.py` |
+
+资源和配置职责如下：
+
 | 路径 | 用途 |
 | --- | --- |
 | `launch/display.launch.py` | 校验型号并启动三个可视化节点 |
@@ -47,6 +58,7 @@ description: realman_pi 的网站、Docker 环境、ROS 2 描述包和运行节�
 | `urdf/*.urdf` | 五个型号的机器人描述与完整 TF 关系 |
 | `meshes/<model>/*.STL` | 每个 link 的视觉与碰撞网格 |
 | `config/ros/three_robots.yaml` | 三台机械臂的位置、朝向、型号和命名配置 |
+| `config/ros/xbox_controller.yaml` | Linux 手柄读取参数、按键名称和日志策略 |
 | `config/rviz/*.rviz` | Fixed Frame、视角、RobotModel 与 TF 配置 |
 | `config/website/vitepress.config.mts` | 网站导航、侧栏、搜索和构建路径配置 |
 | `CMakeLists.txt` | 安装 launch、URDF、mesh 与 RViz 资源 |
@@ -70,6 +82,9 @@ joint_state_publisher_gui ── /joint_states ──▶ robot_state_publisher
                                                    rviz2
 
 robot_state_publisher ── /robot_description ────────▶ rviz2
+
+/dev/input/event0 ──▶ game_controller_node ── /input/joy ──▶ xbox_controller_node
+                                                         └──▶ 按键边沿日志
 ```
 
 `display.launch.py` 在创建节点前读取所选 URDF，并把文本作为 `robot_description` 参数交给 `robot_state_publisher`。RViz 使用该描述加载相同的模型资源。
@@ -83,4 +98,6 @@ Compose 使用 host network 和 host IPC，并挂载两个只读/受限的显示
 | `/tmp/.X11-unix` | `/tmp/.X11-unix` | 读写 socket |
 | `$XAUTHORITY` | `/tmp/.Xauthority` | 只读 |
 
-容器默认设置 `ROS_DOMAIN_ID=65`、`QT_X11_NO_MITSHM=1` 和 `LIBGL_ALWAYS_SOFTWARE=1`，降低独立 RViz 查看器与其他 ROS 图或主机 OpenGL 驱动冲突的概率。
+容器默认设置 `ROS_DOMAIN_ID=65` 和 `ROS_LOCALHOST_ONLY=0`。使用 host network 后，同一网络中的 Humble 主机可以加入该 ROS 图进行远程调试；主机防火墙必须允许 DDS UDP 流量。带 RViz 的服务额外设置 `QT_X11_NO_MITSHM=1` 和 `LIBGL_ALWAYS_SOFTWARE=1`，降低主机与容器的 OpenGL 驱动冲突概率。
+
+`realman_bringup` 把实体手柄的 Linux event 设备映射到容器内 `/dev/input/event0`。`realman_bringup_remote` 不启动设备驱动和 GUI，只保留 ROS 节点供远程 Joy 发布者调试。具体接口和命令见 [Xbox 输入与统一 Bringup](../development/xbox-controller-bringup)。

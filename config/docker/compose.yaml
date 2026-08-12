@@ -1,7 +1,7 @@
-# Runtime services for the RM65 ROS 2 Humble visualizers. The repository-root
-# docker-compose.yml includes this file so standard `docker compose` commands
-# continue to work while substantive configuration stays under config/.
-x-rm65-rviz-common: &rm65-rviz-common
+# Runtime services for the RM65 ROS 2 Humble system. The repository-root
+# docker-compose.yml includes this file so standard commands still work while
+# substantive configuration stays under config/.
+x-realman-common: &realman-common
   image: rm65-humble-rviz:local
   build:
     context: .
@@ -9,15 +9,31 @@ x-rm65-rviz-common: &rm65-rviz-common
   network_mode: host
   ipc: host
   environment:
+    # Host networking plus ROS_LOCALHOST_ONLY=0 exposes DDS discovery to remote
+    # Humble hosts using the same domain. Firewalls must permit DDS UDP traffic.
+    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-65}
+    ROS_LOCALHOST_ONLY: "0"
+    REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
+  volumes:
+    # Runtime config edits take effect on the next launch without rebuilding.
+    - ./config:/opt/rm65_ws/config:ro
+  stdin_open: true
+  tty: true
+
+x-rm65-rviz-common: &rm65-rviz-common
+  <<: *realman-common
+  environment:
+    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-65}
+    ROS_LOCALHOST_ONLY: "0"
+    REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     # Forward the active desktop display and force software rendering to avoid
     # host/container OpenGL driver mismatches.
     DISPLAY: ${DISPLAY}
     LIBGL_ALWAYS_SOFTWARE: ${LIBGL_ALWAYS_SOFTWARE:-1}
     QT_X11_NO_MITSHM: "1"
-    # Domain 65 isolates the standalone viewer from unrelated ROS 2 graphs.
-    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-65}
     XAUTHORITY: /tmp/.Xauthority
   volumes:
+    - ./config:/opt/rm65_ws/config:ro
     - /tmp/.X11-unix:/tmp/.X11-unix:rw
     - ${XAUTHORITY:?XAUTHORITY must point to the active X11 authority file}:/tmp/.Xauthority:ro
     # Mount the authoritative root configuration read-only so TF layout edits
@@ -46,3 +62,31 @@ services:
       - rm65_description
       - three_robots.launch.py
       - use_gui:=${RM65_USE_GUI:-false}
+
+  # Full system bringup with three arms, RViz 2, and a physical Xbox controller.
+  realman_bringup:
+    <<: *rm65-rviz-common
+    devices:
+      # SDL reads Linux event devices. A by-id *-event-joystick path is preferred
+      # on the host; it is exposed as event0 so device_id=0 remains deterministic.
+      - ${REALMAN_JOY_DEVICE:-/dev/input/event0}:/dev/input/event0
+    command:
+      - ros2
+      - launch
+      - realman_bringup
+      - system.launch.py
+      - use_gui:=${RM65_USE_GUI:-false}
+      - use_rviz:=${RM65_USE_RVIZ:-true}
+
+  # Headless remote-debug target. Publish sensor_msgs/Joy from another Humble
+  # host on the same ROS_DOMAIN_ID to exercise the controller node without USB.
+  realman_bringup_remote:
+    <<: *realman-common
+    command:
+      - ros2
+      - launch
+      - realman_bringup
+      - system.launch.py
+      - start_joy_driver:=false
+      - use_gui:=false
+      - use_rviz:=false

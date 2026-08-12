@@ -33,6 +33,35 @@ docker compose build rm65_rviz
 docker compose run --rm rm65_rviz
 ```
 
+### Unified bringup with an Xbox controller
+
+`realman_bringup` starts the three-arm scene, RViz 2, the ROS 2
+`game_controller_node`, and the C++ Xbox input node. The controller defaults to
+the host's `/dev/input/event0`:
+
+```bash
+docker compose build realman_bringup
+docker compose run --rm realman_bringup
+```
+
+Press and release events are printed by `/input/xbox_controller`. Set
+`REALMAN_JOY_DEVICE` when Linux exposes the controller at another path:
+
+```bash
+REALMAN_JOY_DEVICE=/dev/input/by-id/usb-Xbox_Controller-event-joystick \
+  docker compose run --rm realman_bringup
+```
+
+For headless remote debugging, run the target without a local joystick or GUI:
+
+```bash
+ROS_DOMAIN_ID=65 docker compose run --rm realman_bringup_remote
+```
+
+Another ROS 2 Humble host on the same network and domain can publish
+`sensor_msgs/msg/Joy` on `/input/joy`. Both hosts must use
+`ROS_LOCALHOST_ONLY=0`, and the network firewall must permit DDS UDP traffic.
+
 ### Three-arm layout
 
 The repository-root `config/ros/three_robots.yaml` is the authoritative layout
@@ -70,9 +99,9 @@ as an external ROS 2 graph when connecting to other nodes.
 
 ```bash
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select rm65_description
+colcon build --symlink-install --packages-up-to realman_bringup
 source install/setup.bash
-ros2 launch rm65_description display.launch.py
+ros2 launch realman_bringup system.launch.py
 ```
 
 ## Website development
@@ -92,9 +121,15 @@ realman_pi/
 ├── .github/workflows/    GitHub Pages deployment
 ├── config/               Annotated Docker, ROS, TF, and RViz configuration
 ├── docker/               Container entrypoint scripts
-├── src/                  ROS 2 workspace source
+├── src/
+│   ├── driver/           C++ operator input packages
+│   ├── realman_bringup/  Top-level launch orchestration
+│   └── rm65_description/ Robot descriptions, TF, and RViz launch
 └── website/              VitePress documentation site
 ```
+
+The Xbox input and bringup contracts are documented in the
+[Web developer manual](https://qingtianrobot.github.io/realman_pi/development/xbox-controller-bringup).
 
 ## Model source
 

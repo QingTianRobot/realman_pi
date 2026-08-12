@@ -67,6 +67,7 @@ export default defineConfig({
           { text: "维护入口", link: "/development/" },
           { text: "功能文档同步", link: "/development/documentation-workflow" },
           { text: "三臂配置驱动可视化", link: "/development/three-arm-visualization" },
+          { text: "Xbox 输入与统一 Bringup", link: "/development/xbox-controller-bringup" },
         ],
       },
     ],

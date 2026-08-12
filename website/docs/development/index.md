@@ -13,6 +13,7 @@ description: realman_pi 功能契约、实现边界、配置来源和验证方�
 | --- | --- | --- |
 | [功能文档同步](./documentation-workflow) | 功能完成门槛、Web 手册结构和验证流程 | `.agents/skills/document-feature-updates/SKILL.md` |
 | [三臂配置驱动可视化](./three-arm-visualization) | ROS 2 三臂命名空间、完整 TF、RViz 2 和 Web 三维场景的数据流 | `config/ros/three_robots.yaml` |
+| [Xbox 输入与统一 Bringup](./xbox-controller-bringup) | C++ 按键边沿、`/input/joy`、系统启动开关和远程调试 | `config/ros/xbox_controller.yaml` |
 
 ## 文档完成标准
 

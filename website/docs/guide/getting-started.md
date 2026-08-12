@@ -112,15 +112,52 @@ RM65_USE_GUI=true docker compose run --rm rm65_three_rviz
 ROS_DOMAIN_ID=0 RM65_MODEL=RM65-B docker compose run --rm rm65_rviz
 ```
 
+## Xbox 手柄与统一启动
+
+将 Xbox Series 手柄连接到 Linux，并确认设备节点：
+
+```bash
+ls -l /dev/input/by-id/*-event-joystick
+```
+
+启动三臂、RViz 2、手柄驱动和 C++ 输入节点：
+
+```bash
+docker compose build realman_bringup
+docker compose run --rm realman_bringup
+```
+
+默认映射主机 `/dev/input/event0`。建议使用稳定的 `by-id` event 路径覆盖：
+
+```bash
+REALMAN_JOY_DEVICE=/dev/input/by-id/usb-Xbox_Controller-event-joystick \
+  docker compose run --rm realman_bringup
+```
+
+按下 A 键后，终端应出现类似日志：
+
+```text
+button[0] a PRESSED
+button[0] a RELEASED
+```
+
+无桌面的远程端可以启动 headless 调试目标：
+
+```bash
+ROS_DOMAIN_ID=65 docker compose run --rm realman_bringup_remote
+```
+
+远程 Humble 主机设置相同的 `ROS_DOMAIN_ID=65` 和 `ROS_LOCALHOST_ONLY=0`，向 `/input/joy` 发布 `sensor_msgs/msg/Joy` 即可驱动输入节点。两台主机之间还需要允许 DDS UDP 网络通信。
+
 ## 本地 Humble 工作空间
 
 已经安装 ROS 2 Humble 时，也可以直接构建描述包：
 
 ```bash
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-select rm65_description
+colcon build --symlink-install --packages-up-to realman_bringup
 source install/setup.bash
-ros2 launch rm65_description display.launch.py
+ros2 launch realman_bringup system.launch.py
 ```
 
 切换型号使用 launch 参数：
@@ -139,4 +176,4 @@ ros2 launch rm65_description display.launch.py model:=RM65-B-V
 | `joint_state_publisher_gui` | 调节并发布六个旋转关节状态 |
 | `rviz2` | 使用仓库内的 `rm65.rviz` 显示模型和 TF |
 
-下一步可以查看[型号差异](/models/)或[完整 TF 树](/architecture/tf-tree)。
+下一步可以查看[型号差异](/models/)、[完整 TF 树](/architecture/tf-tree)或 [Xbox 输入与统一 Bringup](/development/xbox-controller-bringup)。

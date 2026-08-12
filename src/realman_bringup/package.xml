@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>realman_bringup</name>
+  <version>0.1.0</version>
+  <description>Top-level launch orchestration for RealMan robots and operator input devices.</description>
+
+  <maintainer email="maintainer@example.com">RealMan maintainers</maintainer>
+  <license>BSD-3-Clause</license>
+
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>joy</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+  <exec_depend>rm65_description</exec_depend>
+  <exec_depend>xbox_controller_driver</exec_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+    <architecture_independent />
+  </export>
+</package>

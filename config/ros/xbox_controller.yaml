@@ -1,0 +1,44 @@
+# Xbox Series controller input configuration shared by realman_bringup nodes.
+# game_controller_node uses SDL's mapping database for stable button indices.
+/input/joy_node:
+  ros__parameters:
+    # Docker exposes the selected Linux event device as the only SDL controller.
+    device_id: 0
+    # Ignore small analogue stick drift. Valid values are in the normalized [0, 1] range.
+    deadzone: 0.10
+    # Publish held axis/button state for remote observers even when no value changes.
+    autorepeat_rate: 20.0
+    # Group axis events arriving within this window; this parameter is in milliseconds.
+    coalesce_interval_ms: 1
+
+/input/xbox_controller:
+  ros__parameters:
+    # Relative topic resolves to /input/joy because bringup places both nodes in /input.
+    joy_topic: joy
+    # Stable SDL game-controller order. Unknown extra indices are still logged as
+    # button_<index>, so controller-specific extensions remain diagnosable.
+    # Keep names quoted because the ROS YAML parser treats values such as y as booleans.
+    button_names:
+      - "a"
+      - "b"
+      - "x"
+      - "y"
+      - "view"
+      - "xbox"
+      - "menu"
+      - "left_stick"
+      - "right_stick"
+      - "left_bumper"
+      - "right_bumper"
+      - "dpad_up"
+      - "dpad_down"
+      - "dpad_left"
+      - "dpad_right"
+      - "share"
+      - "paddle_1"
+      - "paddle_2"
+      - "paddle_3"
+      - "paddle_4"
+      - "touchpad"
+    # Log both edges so future service/action mappings can distinguish press from release.
+    log_releases: true

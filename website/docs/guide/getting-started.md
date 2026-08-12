@@ -176,4 +176,4 @@ ros2 launch rm65_description display.launch.py model:=RM65-B-V
 | `joint_state_publisher_gui` | 调节并发布六个旋转关节状态 |
 | `rviz2` | 使用仓库内的 `rm65.rviz` 显示模型和 TF |
 
-下一步可以查看[型号差异](/models/)、[完整 TF 树](/architecture/tf-tree)或 [Xbox 输入与统一 Bringup](/development/xbox-controller-bringup)。
+下一步可以查看[型号差异](/models/)、[完整 TF 树](/architecture/tf-tree)、[Xbox 手柄输入](/development/xbox-controller)或[系统 Bringup](/development/system-bringup)。

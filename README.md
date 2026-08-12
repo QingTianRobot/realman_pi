@@ -134,8 +134,10 @@ realman_pi/
 └── website/              VitePress documentation site
 ```
 
-The Xbox input and bringup contracts are documented in the
-[Web developer manual](https://qingtianrobot.github.io/realman_pi/development/xbox-controller-bringup).
+The Web developer manual documents the
+[Xbox input contract](https://qingtianrobot.github.io/realman_pi/development/xbox-controller)
+and [system bringup contract](https://qingtianrobot.github.io/realman_pi/development/system-bringup)
+separately.
 
 ## Model source
 

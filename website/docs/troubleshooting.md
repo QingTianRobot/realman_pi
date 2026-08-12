@@ -5,6 +5,10 @@ description: 排查 Docker 中 RViz 2、Qt xcb、X11 授权、TF 和型号选择
 
 # 故障排查
 
+## Xbox 与 Bringup
+
+新加入的手柄、远程调试和 ROS 2 日志问题请优先查看[开发者手册：Xbox 输入与统一 Bringup](/development/xbox-controller-bringup)。该页面包含节点契约、SDL event 设备映射、远程 DDS 检查、日志目录和模拟 Joy 命令。
+
 ## Qt 无法连接 display
 
 典型日志如下：

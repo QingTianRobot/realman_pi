@@ -34,6 +34,31 @@ description: Xbox Series 手柄输入、C++ 按键处理、系统启动编排和
 
 `xbox_controller_node` 使用 sensor-data QoS，只在布尔按键状态变化时记录事件，手柄保持按下时不会按 `autorepeat_rate` 重复刷屏。消息中的未知按钮仍会显示为 `button_<index>`。
 
+## 节点与接口契约
+
+| 完整节点名 | 可执行文件 | 输入/输出 | 启动条件 |
+| --- | --- | --- | --- |
+| `/input/joy_node` | `joy/game_controller_node` | 发布 `/input/joy`，类型 `sensor_msgs/msg/Joy` | `start_joy_driver=true` |
+| `/input/xbox_controller` | `xbox_controller_driver/xbox_controller_node` | 订阅 `/input/joy`，输出 ROS 日志 | `start_controller=true` |
+| `/<id>/robot_state_publisher` | `robot_state_publisher/robot_state_publisher` | 发布 `/<id>/robot_description`、`/tf`、`/tf_static` | `start_robots=true` |
+| `/<id>/joint_state_publisher` | `joint_state_publisher/joint_state_publisher` | 发布 `/<id>/joint_states` | `start_robots=true` |
+| `/<id>/world_transform` | `tf2_ros/static_transform_publisher` | 发布 `world -> <id>/world` | `start_robots=true` |
+
+其中 `<id>` 只能是 `l`、`m` 或 `r`。输入节点目前没有 service、action 或参数动态映射接口；`joy_topic` 是唯一的设备层到 C++ 层连接点。后续增加命令映射时，应保持 `/input/joy` 的标准消息边界，并在独立模块中定义 service/action 客户端。
+
+### Joy 消息语义
+
+`buttons` 中的非零值都视为按下，零值视为释放。C++ 节点只比较当前消息和上一条消息的布尔状态，因此会产生以下事件：
+
+| 状态变化 | 日志 |
+| --- | --- |
+| `0 -> 非零` | `button[index] name PRESSED` |
+| `非零 -> 0` | `button[index] name RELEASED` |
+| 状态不变 | 不输出按键日志 |
+| 上一条消息存在但本条数组变短 | 缺失索引按释放处理 |
+
+轴和扳机值会由 `game_controller_node` 发布到 `axes`，但当前 C++ 节点不会处理它们。
+
 ## 权威配置
 
 所有输入参数由根目录 [`config/ros/xbox_controller.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/xbox_controller.yaml) 管理：
@@ -85,6 +110,15 @@ ros2 launch realman_bringup system.launch.py \
 | `use_gui` | `false` | 为三台机械臂启动关节状态 GUI |
 | `use_rviz` | `true` | 使用三臂配置启动 RViz 2 |
 
+启动参数只控制节点是否创建，不会改变 `config/ros/three_robots.yaml` 中的 TF 位姿。典型组合如下：
+
+| 用途 | `start_robots` | `start_joy_driver` | `start_controller` | `use_rviz` |
+| --- | --- | --- | --- | --- |
+| 完整本地操作 | `true` | `true` | `true` | `true` |
+| 只测输入处理 | `false` | `false` | `true` | `false` |
+| 远程 headless | `true` | `false` | `true` | `false` |
+| 只看三臂模型 | `true` | `false` | `false` | `true` |
+
 启动真实设备：
 
 ```bash
@@ -122,6 +156,16 @@ button[0] a RELEASED
 
 如果无法发现话题，先确认两端都是 Humble、`ROS_DOMAIN_ID` 一致、`ROS_LOCALHOST_ONLY=0`，并检查路由、组播和主机防火墙是否允许 DDS UDP 流量。
 
+远程发布端不需要启动 `joy_node`。可以先确认图发现和话题类型：
+
+```bash
+ros2 topic list | rg '^/input/joy$'
+ros2 topic info /input/joy --verbose
+ros2 node list | rg 'input|robot_state_publisher|joint_state_publisher'
+```
+
+`realman_bringup_remote` 使用 host network，但 DDS 自动发现仍依赖网络组播和 UDP。跨网段环境不能只依赖 `ROS_DOMAIN_ID`，还需要配置 DDS 的发现机制或在同一二层网络中测试。
+
 ## 构建与验证
 
 从仓库根目录执行 Humble 构建和单元测试：
@@ -134,6 +178,14 @@ colcon test-result --verbose
 ```
 
 `button_state_tracker_test` 覆盖按下/释放边沿、未知按钮命名，以及 Joy 按钮数组缩短时生成释放事件。端到端验证还应使用上述模拟消息观察实际 ROS 日志。
+
+Dockerfile 在构建阶段执行同一套测试：
+
+```bash
+docker compose build realman_bringup_remote
+```
+
+构建成功时应看到 `Summary: 4 tests, 0 errors, 0 failures`。实体手柄测试还需要主机存在 SDL 可识别的 `/dev/input/event*` 设备，容器用户有对应 input 权限。
 
 日志验证命令：
 
@@ -148,3 +200,14 @@ find logs -maxdepth 2 -type f -name '*.log' -print
 - 未被 SDL 数据库识别的控制器需要提供 `SDL_GAMECONTROLLERCONFIG`，否则节点可能无法打开设备。
 - ROS 2 自动发现依赖网络支持组播和 DDS UDP；host network 不会绕过防火墙策略。
 - 文档网页展示配置和模型，不实时连接运行中的 ROS 图或手柄。
+
+## 失败症状速查
+
+| 症状 | 优先检查 |
+| --- | --- |
+| `game_controller_node` 启动但没有 Joy 消息 | `REALMAN_JOY_DEVICE` 是否指向 `*-event-joystick`，不要映射 `js0`；检查 `ros2 run joy joy_enumerate_devices` |
+| 节点输出 `button_<index>` | SDL 映射产生了配置表之外的索引，检查 `config/ros/xbox_controller.yaml` 或设置 `SDL_GAMECONTROLLERCONFIG` |
+| 只有按下没有释放 | 发布端是否持续发布释放状态；检查 `buttons` 数组是否在释放消息中包含对应索引 |
+| 远程端看不到 `/input/joy` | 两端的 `ROS_DOMAIN_ID`、`ROS_LOCALHOST_ONLY`、DDS UDP 和防火墙 |
+| 日志没有落在项目目录 | 是否由 `realman_bringup` 启动、`REALMAN_LOG_ROOT` 是否可写、宿主 `logs/` 是否挂载 |
+| RViz/GUI 退出并提示 Qt/X11 | 图形服务需要有效 `DISPLAY`、`XAUTHORITY` 和 `/tmp/.X11-unix`；无桌面请使用 remote 服务 |

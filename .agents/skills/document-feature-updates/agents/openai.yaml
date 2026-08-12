@@ -1,0 +1,5 @@
+# Codex discovers skill interface metadata only from this tool-mandated path.
+interface:
+  display_name: "功能文档同步"
+  short_description: "每次功能完成后同步更新 Web 开发者手册并验证发布"
+  default_prompt: "使用 $document-feature-updates 在功能完成后整理并发布对应的开发者文档。"

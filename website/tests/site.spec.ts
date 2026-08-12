@@ -105,6 +105,9 @@ test("documentation routes render", async ({ page }) => {
     "models/",
     "architecture/tf-tree",
     "architecture/package",
+    "development/",
+    "development/documentation-workflow",
+    "development/three-arm-visualization",
     "troubleshooting",
   ]) {
     await page.goto(route);

@@ -16,7 +16,8 @@ description: realman_pi 的网站、Docker 环境、ROS 2 描述包和运行节�
 ├── config/
 │   ├── docker/                    # Compose 与 Humble 镜像配置
 │   ├── ros/                       # 三机械臂 TF 布局
-│   └── rviz/                      # 单臂和三臂显示配置
+│   ├── rviz/                      # 单臂和三臂显示配置
+│   └── website/                   # VitePress 实质配置
 ├── docker/
 │   └── ros_entrypoint.sh          # 容器运行入口脚本
 ├── src/
@@ -28,6 +29,7 @@ description: realman_pi 的网站、Docker 环境、ROS 2 描述包和运行节�
 │   ├── docs/
 │   │   ├── .vitepress/
 │   │   ├── architecture/
+│   │   ├── development/          # 功能契约与开发者手册
 │   │   ├── guide/
 │   │   ├── models/
 │   │   └── troubleshooting.md
@@ -46,6 +48,7 @@ description: realman_pi 的网站、Docker 环境、ROS 2 描述包和运行节�
 | `meshes/<model>/*.STL` | 每个 link 的视觉与碰撞网格 |
 | `config/ros/three_robots.yaml` | 三台机械臂的位置、朝向、型号和命名配置 |
 | `config/rviz/*.rviz` | Fixed Frame、视角、RobotModel 与 TF 配置 |
+| `config/website/vitepress.config.mts` | 网站导航、侧栏、搜索和构建路径配置 |
 | `CMakeLists.txt` | 安装 launch、URDF、mesh 与 RViz 资源 |
 | `package.xml` | Humble 运行依赖和 ament 包元数据 |
 

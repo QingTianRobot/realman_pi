@@ -5,12 +5,14 @@ log/
 **/__pycache__/
 *.py[cod]
 
-# Ignore local agent state while keeping the repository-level policy skill versioned.
+# Ignore local agent state while keeping repository-level policy skills versioned.
 .agents/*
 !.agents/skills/
 .agents/skills/*
 !.agents/skills/project-config-layout/
 !.agents/skills/project-config-layout/SKILL.md
+!.agents/skills/document-feature-updates/
+!.agents/skills/document-feature-updates/**
 .codex/
 src/.agents/
 src/.codex/

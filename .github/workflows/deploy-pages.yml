@@ -1,10 +1,13 @@
 name: Deploy website to GitHub Pages
 
+# GitHub only discovers workflows in this directory; substantive site settings live in config/website/.
+
 on:
   push:
     branches: [main]
     paths:
       - "website/**"
+      - "config/website/**"
       # The website build reads these authoritative robot inputs to regenerate its viewer assets.
       - "config/ros/three_robots.yaml"
       - "src/rm65_description/urdf/**"

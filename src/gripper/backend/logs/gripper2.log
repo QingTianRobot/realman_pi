@@ -1,0 +1,20 @@
+2026-08-13 10:22:06,762 - Line 540 - INFO - ======================================
+2026-08-13 10:22:06,762 - Line 541 - INFO - Connecting to PORT_R:/dev/ttyUSB0 ...
+2026-08-13 10:22:06,762 - Line 543 - INFO - Connected.
+2026-08-13 10:22:06,762 - Line 549 - INFO - Enabling actuator...
+2026-08-13 10:22:06,768 - Line 551 - INFO - Enable Success
+2026-08-13 10:22:06,768 - Line 422 - INFO - [Open] Moving to 400 ...
+2026-08-13 10:22:06,857 - Line 427 - INFO -   -> Result: position [Pos Feedback: 394]
+2026-08-13 10:22:06,886 - Line 523 - INFO - right_pos:394
+2026-08-13 10:22:06,886 - Line 524 - INFO - POS_OPEN_RIGHT:400
+2026-08-13 10:22:06,886 - Line 525 - INFO - POS_CLOSE_RIGHT:12000
+2026-08-13 10:22:06,886 - Line 526 - INFO - res_close:position
+2026-08-13 10:22:06,886 - Line 527 - INFO - torque_reached_res:False
+2026-08-13 10:22:06,886 - Line 532 - INFO - math.fabs(right_pos-POS_OPEN_RIGHT):6.0
+2026-08-13 10:22:06,886 - Line 533 - INFO - math.fabs(POS_CLOSE_RIGHT - right_pos):11606.0
+2026-08-13 10:22:06,886 - Line 642 - INFO - isRightGraspSuccess:False
+2026-08-13 10:22:06,892 - Line 463 - INFO - left_pos:401
+2026-08-13 10:22:06,900 - Line 469 - INFO - math.fabs(left_pos-open_l):1.0
+2026-08-13 10:22:06,900 - Line 470 - INFO - math.fabs(POS_CLOSE_LEFT - left_pos):548.0
+2026-08-13 10:22:06,900 - Line 471 - INFO - torque_reached_res:False
+2026-08-13 10:22:06,900 - Line 643 - INFO - isLeftGraspSuccess:False

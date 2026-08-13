@@ -1,0 +1,4 @@
+float32 percentage    # 开合度 0.0 ~ 1.0 (0=完全闭合/夹紧, 1=完全张开)
+---
+bool success          # 是否成功
+string message        # 结果描述（含实际位置反馈）

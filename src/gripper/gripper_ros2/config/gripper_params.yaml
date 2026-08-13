@@ -1,0 +1,11 @@
+/**:
+  ros__parameters:
+    slave_id: 1
+    baudrate: 115200
+    timeout: 0.3
+    speed: 100
+    force: 60
+    accel: 100
+    decel: 100
+    status_rate: 10.0
+    auto_enable: true

@@ -16,7 +16,8 @@ def generate_launch_description():
 
     launch_include_r = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(launch_file_dir, "gemini_330_series.launch.py")
+            # os.path.join(launch_file_dir, "gemini_330_series.launch.py")
+            os.path.join(launch_file_dir, "gemini305.launch.py")
         ),
         launch_arguments={
             'camera_name': 'camera_r',
@@ -32,7 +33,8 @@ def generate_launch_description():
 
     launch2_include_l = IncludeLaunchDescription(
         PythonLaunchDescriptionSource(
-            os.path.join(launch_file_dir, "gemini_330_series.launch.py")
+            # os.path.join(launch_file_dir, "gemini_330_series.launch.py")
+            os.path.join(launch_file_dir, "gemini305.launch.py")
         ),
         launch_arguments={
             'camera_name': 'camera_l',

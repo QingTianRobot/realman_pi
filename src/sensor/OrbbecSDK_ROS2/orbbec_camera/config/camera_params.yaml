@@ -22,8 +22,8 @@ software_trigger_period: 0
 
 # color params
 enable_color: true
-color_width: 0
-color_height: 0
+color_width: 640
+color_height: 480
 color_fps: 0
 color_format: "ANY"
 enable_color_auto_exposure: true
@@ -32,16 +32,16 @@ color_gain: 16 # -1 default
 
 # depth params
 enable_depth: true
-depth_width: 0
-depth_height: 0
+depth_width: 640
+depth_height: 480
 depth_fps: 0
 depth_format: "ANY"
 
 
 #left ir params
 enable_left_ir: false
-left_ir_width: 0
-left_ir_height: 0
+left_ir_width: 640
+left_ir_height: 480
 left_ir_fps: 0
 left_ir_format: "ANY"
 enable_ir_auto_exposure: true
@@ -50,8 +50,8 @@ ir_gain: 16 # -1 default
 
 #right ir params
 enable_right_ir: false
-right_ir_width: 0
-right_ir_height: 0
+right_ir_width: 640
+right_ir_height: 480
 right_ir_fps: 0
 right_ir_format: "ANY"
 

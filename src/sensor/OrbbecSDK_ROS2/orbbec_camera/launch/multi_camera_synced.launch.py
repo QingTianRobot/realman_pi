@@ -25,7 +25,7 @@ def generate_launch_description():
             "sync_mode": "primary",
             "config_file_path": config_file_path,
             "trigger_out_enabled": "true",
-            "log_level": "debug", # none
+            "log_level": "debug", # none    
             "log_file_name": "camera_01.log",
         }.items(),
     )
@@ -68,7 +68,7 @@ def generate_launch_description():
         [
             TimerAction(period=2.0, actions=[GroupAction([launch2_include_l])]),
             # TimerAction(period=0.0, actions=[GroupAction([launch3_include_m])]),
-            TimerAction(period=4.0, actions=[GroupAction([launch_include_r])]),
+            # TimerAction(period=4.0, actions=[GroupAction([launch_include_r])]),
             # The primary camera should be launched at last
         ]
     )

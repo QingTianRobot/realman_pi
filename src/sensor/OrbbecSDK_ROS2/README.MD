@@ -1,3 +1,10 @@
+colcon build --event-handlers console_direct+ --cmake-args -DCMAKE_BUILD_TYPE=Release
+
+ros2 launch orbbec_camera multi_camera_synced.launch.py
+
+ros2 run orbbec_camera list_devices_node
+
+
 # OrbbecSDK ROS2 Wrapper v2
 
 [English](./README.MD) | [中文](./README_CN.MD)

@@ -5,7 +5,7 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 
 # 系统 Bringup
 
-`realman_bringup` 是系统编排包。它只负责按参数组合三臂描述、RViz 2、标准 Joy 设备节点和 C++ 输入处理节点，不拥有机械臂 URDF、Xbox 按键语义或 TF 布局数值。
+`realman_bringup` 是系统编排包。它按参数组合三臂描述、RealMan 只读状态驱动、RViz 2、标准 Joy 设备节点和 C++ 输入处理节点，不拥有机械臂 URDF、Xbox 按键语义或 TF 布局数值。
 
 手柄设备和按键处理的详细契约见 [Xbox 手柄输入](./xbox-controller)，三臂位姿与 TF 契约见[三臂配置驱动可视化](./three-arm-visualization)。
 
@@ -14,6 +14,7 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 | 模块 | Bringup 的处理方式 | 权威来源 |
 | --- | --- | --- |
 | 三臂描述与 TF | Include `three_robots.launch.py` | `rm65_description`、`config/ros/three_robots.yaml` |
+| RealMan 状态回读 | Include `three_realman_drivers.launch.py` | `config/ros/realman_driver.yaml` |
 | Xbox 设备读取 | 创建 `joy/game_controller_node` | `config/ros/xbox_controller.yaml` |
 | 按键边沿处理 | 创建 `xbox_controller_node` | `xbox_controller_driver` |
 | RViz 2 | 透传 `use_rviz` 给三臂 launch | `config/rviz/three_robots.rviz` |
@@ -24,6 +25,7 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 ```bash
 ros2 launch realman_bringup system.launch.py \
   start_robots:=true \
+  start_driver:=true \
   start_joy_driver:=true \
   start_controller:=true \
   use_gui:=false \
@@ -35,8 +37,10 @@ ros2 launch realman_bringup system.launch.py \
 | `start_robots` | `true` | `/l`、`/m`、`/r` 描述、关节状态和完整 TF |
 | `start_joy_driver` | `true` | `/input/joy_node`，读取实体 SDL 设备 |
 | `start_controller` | `true` | `/input/xbox_controller`，处理 Joy 按键边沿 |
-| `use_gui` | `false` | 每台机械臂使用 `joint_state_publisher_gui` |
+| `use_gui` | `false` | 仅在 `start_driver:=false` 时选择假关节状态的 GUI 版本 |
 | `use_rviz` | `true` | 使用三臂 RViz 配置启动 `rviz2` |
+| `start_driver` | `true` | 启动三台真实关节状态驱动，并禁用三臂假关节状态源 |
+| `driver_config_file` | `config/ros/realman_driver.yaml` | 指定根目录下的真实或 mock 驱动配置 |
 | `wait_for_joy_device` | `false` | 输入设备不存在时持续轮询；Docker 输入服务设为 `true` |
 | `joy_device_path` | `${REALMAN_JOY_DEVICE:-auto}` | 设备路径、glob，或自动扫描 `/dev/input` |
 | `joy_poll_interval` | `1.0` | 轮询间隔，单位秒，最小 `0.1` |
@@ -50,16 +54,16 @@ ros2 launch realman_bringup system.launch.py \
 ```text
 realman_bringup/system.launch.py
 ├── /l
+│   ├── realman_driver
 │   ├── robot_state_publisher
-│   ├── joint_state_publisher
 │   └── world_transform
 ├── /m
+│   ├── realman_driver
 │   ├── robot_state_publisher
-│   ├── joint_state_publisher
 │   └── world_transform
 ├── /r
+│   ├── realman_driver
 │   ├── robot_state_publisher
-│   ├── joint_state_publisher
 │   └── world_transform
 ├── /input/joy_node
 ├── /input/xbox_controller
@@ -70,12 +74,13 @@ realman_bringup/system.launch.py
 
 ## 典型启动组合
 
-| 用途 | `start_robots` | `start_joy_driver` | `start_controller` | `use_rviz` |
-| --- | --- | --- | --- | --- |
-| 完整本地系统 | `true` | `true` | `true` | `true` |
-| 远程 headless | `true` | `false` | `true` | `false` |
-| 只验证输入处理 | `false` | `false` | `true` | `false` |
-| 只看三臂模型 | `true` | `false` | `false` | `true` |
+| 用途 | `start_robots` | `start_driver` | `start_joy_driver` | `start_controller` | `use_rviz` |
+| --- | --- | --- | --- | --- | --- |
+| 完整本地系统 | `true` | `true` | `true` | `true` | `true` |
+| 远程 headless | `true` | `true` | `false` | `true` | `false` |
+| 只验证输入处理 | `false` | `false` | `false` | `true` | `false` |
+| 只看三臂模型 | `true` | `false` | `false` | `false` | `true` |
+| 只看真实关节回读和 RViz | `true` | `true` | `false` | `false` | `true` |
 
 ## Docker 服务
 
@@ -84,12 +89,21 @@ realman_bringup/system.launch.py
 | `realman_bringup` | 完整本地系统 | 需要 `DISPLAY`、`XAUTHORITY` | 等待并读取 `${REALMAN_JOY_DEVICE:-auto}` |
 | `realman_bringup_remote` | 远程/headless 调试 | 不需要 X11 | 不映射设备，不启动 Joy 驱动 |
 | `xbox_controller_test` | 独立手柄测试 | 不需要 X11 | 等待并读取 `${REALMAN_JOY_DEVICE:-auto}` |
+| `realman_driver_rviz` | 三臂真实关节回读与 RViz | 需要 X11 | 不启动手柄 |
+| `realman_driver_test` | 三臂 mock 驱动测试 | 不需要 X11 | 不访问真机 |
 
 完整本地启动：
 
 ```bash
 docker compose build realman_bringup
 docker compose run --rm realman_bringup
+```
+
+只启动真实关节回读和 RViz：
+
+```bash
+docker compose build realman_driver_rviz
+docker compose run --rm realman_driver_rviz
 ```
 
 远程目标启动：
@@ -155,7 +169,9 @@ Docker 设置 `REALMAN_CONFIG_ROOT=/opt/rm65_ws/config` 并只读挂载根 `conf
 Bringup 当前读取：
 
 - `config/ros/three_robots.yaml`
+- `config/ros/realman_driver.yaml`
 - `config/ros/xbox_controller.yaml`
+- `config/python/realman-sdk-requirements.txt`
 
 配置字段的语义分别由三臂和 Xbox 功能页面维护，Bringup 不复制这些数值。
 
@@ -202,8 +218,45 @@ source /opt/ros/humble/setup.bash
 colcon build --symlink-install --packages-up-to realman_bringup
 source install/setup.bash
 ros2 launch realman_bringup system.launch.py \
-  start_joy_driver:=false use_rviz:=false
+  start_joy_driver:=false start_controller:=false use_rviz:=true
 ```
+
+验证真实关节状态：
+
+```bash
+ros2 topic echo /l/joint_states
+ros2 topic echo /m/joint_states
+ros2 topic echo /r/joint_states
+ros2 service call /r/status std_srvs/srv/Trigger '{}'
+```
+
+没有控制器时使用 mock 配置验证完整 ROS 图。该模式会自动连接内存适配器，发布三组六轴
+零位关节状态，不会访问真实 IP：
+
+```bash
+docker compose run --rm -e ROS_DOMAIN_ID=168 realman_driver_test bash -lc '
+  ros2 launch realman_bringup system.launch.py \
+    start_driver:=true \
+    driver_config_file:=/opt/rm65_ws/config/ros/realman_driver_mock.yaml \
+    start_joy_driver:=false start_controller:=false \
+    use_gui:=false use_rviz:=false
+'
+```
+
+检查每个关节状态话题的发布者数量以及三条末端 TF：
+
+```bash
+ros2 topic info /l/joint_states --verbose
+ros2 topic info /m/joint_states --verbose
+ros2 topic info /r/joint_states --verbose
+ros2 run tf2_ros tf2_echo world l/link_6
+ros2 run tf2_ros tf2_echo world m/link_6
+ros2 run tf2_ros tf2_echo world r/link_6
+```
+
+预期节点包括 `/l|m|r/realman_driver`、`/l|m|r/robot_state_publisher` 和
+`/l|m|r/world_transform`；每个 `joint_states` 只有一个驱动发布者、一个 RSP 订阅者，且
+`world -> l/m/r/link_6` 都能查询。驱动模式下不应启动 `joint_state_publisher`。
 
 Docker 验证：
 
@@ -220,6 +273,8 @@ find logs -maxdepth 2 -type f -name '*.log' -print
 | remote 服务解析时要求 X11 | 使用最新 Compose；headless 服务不应依赖 `DISPLAY` 或 `XAUTHORITY` |
 | 手柄未连接时服务退出 | 使用带 `wait_for_joy_device:=true` 的输入服务；它会持续等待设备出现 |
 | 远程主机看不到节点/TF | `ROS_DOMAIN_ID`、`ROS_LOCALHOST_ONLY`、DDS UDP、组播和防火墙 |
+| 驱动连接失败 | 核对 `config/ros/realman_driver.yaml` 的 IP/端口、控制器网络和 Docker host network；查看 `/l|m|r/status` |
+| RViz 模型不随关节角变化 | 确认 `start_driver:=true`，且每个 `/l|m|r/joint_states` 只有一个发布源 |
 | 日志没有落在项目目录 | `REALMAN_LOG_ROOT` 是否可写，宿主 `logs/` 是否正确挂载 |
 | RViz/GUI 报 Qt/X11 错误 | 图形服务需要有效 `DISPLAY`、`XAUTHORITY` 和 `/tmp/.X11-unix` |
 | 修改 YAML 后行为未变化 | Docker 需重启服务；本地安装需重新构建 `realman_bringup` |

@@ -23,7 +23,7 @@ description: l、m、r 三台 RM65 在 ROS 2、RViz 2 和 GitHub Pages 中共享
 `src/rm65_description/launch/three_robots.launch.py` 读取配置并为每台机械臂创建：
 
 1. 命名空间内的 `robot_state_publisher`；
-2. 命名空间内的 `joint_state_publisher` 或 GUI 版本；
+2. 默认是命名空间内的 `joint_state_publisher` 或 GUI 版本；当 `use_driver_joint_states:=true` 时改由对应命名空间的 `realman_robot_driver` 提供 `/l|m|r/joint_states`；
 3. 从父坐标系到 `<prefix>world` 的 `static_transform_publisher`。
 
 默认 TF 结构为：

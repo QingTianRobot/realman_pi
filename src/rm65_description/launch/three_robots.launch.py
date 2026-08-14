@@ -94,6 +94,10 @@ def _launch_nodes(context):
     config_path = Path(LaunchConfiguration("config_file").perform(context)).expanduser()
     use_gui = _parse_bool(LaunchConfiguration("use_gui").perform(context), "use_gui")
     use_rviz = _parse_bool(LaunchConfiguration("use_rviz").perform(context), "use_rviz")
+    use_driver_joint_states = _parse_bool(
+        LaunchConfiguration("use_driver_joint_states").perform(context),
+        "use_driver_joint_states",
+    )
     robots, settings = _read_layout(config_path)
 
     package_share = Path(get_package_share_directory("rm65_description"))
@@ -124,24 +128,26 @@ def _launch_nodes(context):
                         }
                     ],
                 ),
-                Node(
-                    package=("joint_state_publisher_gui" if use_gui else "joint_state_publisher"),
-                    executable=("joint_state_publisher_gui" if use_gui else "joint_state_publisher"),
-                    namespace=namespace,
-                    name="joint_state_publisher",
-                    output="screen",
-                    parameters=[
-                        {
-                            "robot_description": robot_description,
-                            "zeros.joint_1": float(default_joint_position),
-                            "zeros.joint_2": float(default_joint_position),
-                            "zeros.joint_3": float(default_joint_position),
-                            "zeros.joint_4": float(default_joint_position),
-                            "zeros.joint_5": float(default_joint_position),
-                            "zeros.joint_6": float(default_joint_position),
-                        }
-                    ],
-                ),
+                *([] if use_driver_joint_states else [
+                    Node(
+                        package=("joint_state_publisher_gui" if use_gui else "joint_state_publisher"),
+                        executable=("joint_state_publisher_gui" if use_gui else "joint_state_publisher"),
+                        namespace=namespace,
+                        name="joint_state_publisher",
+                        output="screen",
+                        parameters=[
+                            {
+                                "robot_description": robot_description,
+                                "zeros.joint_1": float(default_joint_position),
+                                "zeros.joint_2": float(default_joint_position),
+                                "zeros.joint_3": float(default_joint_position),
+                                "zeros.joint_4": float(default_joint_position),
+                                "zeros.joint_5": float(default_joint_position),
+                                "zeros.joint_6": float(default_joint_position),
+                            }
+                        ],
+                    )
+                ]),
                 Node(
                     package="tf2_ros",
                     executable="static_transform_publisher",
@@ -207,6 +213,14 @@ def generate_launch_description():
                 "use_rviz",
                 default_value="true",
                 description="Start RViz 2 with the three-robot display configuration.",
+            ),
+            DeclareLaunchArgument(
+                "use_driver_joint_states",
+                default_value="false",
+                description=(
+                    "Use /l|m|r/joint_states from realman_robot_driver instead of "
+                    "starting joint_state_publisher."
+                ),
             ),
             OpaqueFunction(function=_launch_nodes),
         ]

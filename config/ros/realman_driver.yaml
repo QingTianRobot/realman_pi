@@ -1,0 +1,53 @@
+# RealMan Python SDK joint-state driver parameters.
+#
+# This file is the authoritative starting point for l, m, and r driver instances.
+# The single-arm launch argument `namespace` selects one section; the three-arm
+# launch starts all sections together.
+# The l/m/r mapping follows the physical left-to-right layout. All addresses
+# are deployment inputs and must be reachable from the ROS 2 runtime host.
+/l/realman_driver:
+  ros__parameters:
+    # RM65 model identifier. Must match the connected controller and URDF.
+    robot_model: RM65-B
+    # Left arm controller IPv4 address.
+    robot_ip: 192.168.30.123
+    # RealMan API2 control port; the official Python quick-start example uses 8080.
+    robot_port: 8080
+    # UDP state callbacks require triple-thread mode; use single/dual only when needed.
+    thread_mode: RM_TRIPLE_MODE_E
+    # Read the real controller by default. Set true only for offline mock tests.
+    mock_mode: false
+    # Connect during launch so joint-state polling starts without a manual service call.
+    auto_connect: true
+    # Retry a failed or lost startup connection every 5 seconds; zero disables retries.
+    reconnect_interval: 5.0
+    # State publication period in Hz. Must be greater than zero.
+    state_publish_rate: 10.0
+    # JointState names must match the unprefixed RM65-B URDF joint names.
+    joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
+
+/m/realman_driver:
+  ros__parameters:
+    robot_model: RM65-B
+    # Middle arm controller IPv4 address.
+    robot_ip: 192.168.30.124
+    robot_port: 8080
+    thread_mode: RM_TRIPLE_MODE_E
+    mock_mode: false
+    auto_connect: true
+    reconnect_interval: 5.0
+    state_publish_rate: 10.0
+    joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
+
+/r/realman_driver:
+  ros__parameters:
+    robot_model: RM65-B
+    # Right arm controller IPv4 address.
+    robot_ip: 192.168.30.125
+    robot_port: 8080
+    thread_mode: RM_TRIPLE_MODE_E
+    mock_mode: false
+    auto_connect: true
+    reconnect_interval: 5.0
+    state_publish_rate: 10.0
+    joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]

@@ -37,10 +37,13 @@ def generate_launch_description():
     bringup_share = Path(get_package_share_directory("realman_bringup"))
     description_share = Path(get_package_share_directory("rm65_description"))
     three_robots_launch = description_share / "launch" / "three_robots.launch.py"
+    driver_share = Path(get_package_share_directory("realman_robot_driver"))
+    three_drivers_launch = driver_share / "launch" / "three_realman_drivers.launch.py"
     # Docker mounts the repository configuration at REALMAN_CONFIG_ROOT so edits
     # are picked up on restart. Installed config remains the local build fallback.
     config_root = Path(os.environ.get("REALMAN_CONFIG_ROOT", bringup_share / "config"))
     three_robots_config = config_root / "ros" / "three_robots.yaml"
+    default_driver_config = config_root / "ros" / "realman_driver.yaml"
     controller_config = config_root / "ros" / "xbox_controller.yaml"
 
     # One launch invocation gets one timestamped ROS log directory. The ROS 2
@@ -50,17 +53,19 @@ def generate_launch_description():
     run_log_dir.mkdir(parents=True, exist_ok=True)
 
     start_robots = LaunchConfiguration("start_robots")
-    start_joy_driver = LaunchConfiguration("start_joy_driver")
+    start_joy_driver_config = LaunchConfiguration("start_joy_driver")
     start_controller = LaunchConfiguration("start_controller")
     use_gui = LaunchConfiguration("use_gui")
     use_rviz = LaunchConfiguration("use_rviz")
+    start_driver = LaunchConfiguration("start_driver")
+    driver_config_file = LaunchConfiguration("driver_config_file")
     wait_for_joy_device = LaunchConfiguration("wait_for_joy_device")
     joy_device_path = LaunchConfiguration("joy_device_path")
     joy_poll_interval = LaunchConfiguration("joy_poll_interval")
     logger = get_logger("realman_bringup")
     wait_state = {"last_log_time": 0.0}
 
-    def start_joy_driver(context):
+    def start_joy_driver_when_available(context):
         device_path = joy_device_path.perform(context)
         joy_node = Node(
             package="joy",
@@ -95,7 +100,7 @@ def generate_launch_description():
         return [
             TimerAction(
                 period=poll_interval,
-                actions=[OpaqueFunction(function=start_joy_driver)],
+                actions=[OpaqueFunction(function=start_joy_driver_when_available)],
             )
         ]
 
@@ -129,6 +134,16 @@ def generate_launch_description():
                 description="Start RViz 2 with the three-arm display configuration.",
             ),
             DeclareLaunchArgument(
+                "start_driver",
+                default_value="true",
+                description="Start the three RealMan drivers and use their joint states for TF.",
+            ),
+            DeclareLaunchArgument(
+                "driver_config_file",
+                default_value=str(default_driver_config),
+                description="RealMan driver YAML under the project-root config/ directory.",
+            ),
+            DeclareLaunchArgument(
                 "wait_for_joy_device",
                 default_value="false",
                 description="Keep polling until the configured joystick device appears.",
@@ -150,7 +165,13 @@ def generate_launch_description():
                     "config_file": str(three_robots_config),
                     "use_gui": use_gui,
                     "use_rviz": use_rviz,
+                    "use_driver_joint_states": start_driver,
                 }.items(),
+            ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(str(three_drivers_launch)),
+                condition=IfCondition(start_driver),
+                launch_arguments={"config_file": driver_config_file}.items(),
             ),
             Node(
                 package="xbox_controller_driver",
@@ -162,8 +183,8 @@ def generate_launch_description():
                 parameters=[str(controller_config)],
             ),
             OpaqueFunction(
-                function=start_joy_driver,
-                condition=IfCondition(start_joy_driver),
+                function=start_joy_driver_when_available,
+                condition=IfCondition(start_joy_driver_config),
             ),
         ]
     )

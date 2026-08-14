@@ -66,6 +66,8 @@ export default defineConfig({
         items: [
           { text: "维护入口", link: "/development/" },
           { text: "功能文档同步", link: "/development/documentation-workflow" },
+          { text: "睿尔曼 Python 驱动查询", link: "/development/realman-python-driver" },
+          { text: "睿尔曼关节状态驱动", link: "/development/realman-driver-scaffold" },
           { text: "三臂配置驱动可视化", link: "/development/three-arm-visualization" },
           { text: "Xbox 手柄输入", link: "/development/xbox-controller" },
           { text: "系统 Bringup", link: "/development/system-bringup" },

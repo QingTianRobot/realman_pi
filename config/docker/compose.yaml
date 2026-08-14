@@ -73,6 +73,21 @@ services:
       - three_robots.launch.py
       - use_gui:=${RM65_USE_GUI:-false}
 
+  # Three-arm viewer driven by real controller joint states. This service does
+  # not start Xbox or joystick nodes, so the driver/RViz path can be tested alone.
+  realman_driver_rviz:
+    <<: *rm65-rviz-common
+    command:
+      - ros2
+      - launch
+      - realman_bringup
+      - system.launch.py
+      - start_driver:=true
+      - start_joy_driver:=false
+      - start_controller:=false
+      - use_gui:=false
+      - use_rviz:=true
+
   # Full system bringup with three arms, RViz 2, and a physical Xbox controller.
   realman_bringup:
     <<: *rm65-rviz-common
@@ -127,8 +142,20 @@ services:
       - realman_bringup
       - system.launch.py
       - start_robots:=false
+      - start_driver:=false
       - start_joy_driver:=true
       - start_controller:=true
       - wait_for_joy_device:=true
       - use_gui:=false
       - use_rviz:=false
+
+  # Standalone RealMan joint-state driver test. All l/m/r instances use the annotated
+  # mock configuration, so this service never contacts physical controllers.
+  realman_driver_test:
+    <<: *realman-common
+    command:
+      - ros2
+      - launch
+      - realman_robot_driver
+      - three_realman_drivers.launch.py
+      - config_file:=/opt/rm65_ws/config/ros/realman_driver_mock.yaml

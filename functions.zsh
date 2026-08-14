@@ -64,6 +64,16 @@ rm65_docker_xbox_test() {
   _rm65_compose run --rm xbox_controller_test
 }
 
+rm65_docker_driver_test() {
+  emulate -L zsh
+  _rm65_compose run --rm realman_driver_test
+}
+
+rm65_docker_driver_rviz() {
+  emulate -L zsh
+  _rm65_compose run --rm realman_driver_rviz
+}
+
 rm65_docker_bringup() {
   emulate -L zsh
   _rm65_compose run --rm realman_bringup
@@ -91,7 +101,8 @@ rm65_ros_build() {
     cd -- "$RM65_PROJECT_ROOT" || return
     source "$humble_setup"
     _rm65_require_command colcon || return
-    command colcon build --symlink-install --packages-up-to realman_bringup "$@"
+    command colcon build --symlink-install \
+      --packages-up-to realman_bringup realman_robot_driver "$@"
   )
 }
 
@@ -136,10 +147,12 @@ rm65_project_help() {
   print -r -- "  rm65_docker_rviz [model]           Run the single-arm RViz viewer"
   print -r -- "  rm65_docker_three_rviz             Run the configured three-arm RViz scene"
   print -r -- "  rm65_docker_xbox_test              Test only the physical Xbox input chain"
+  print -r -- "  rm65_docker_driver_test            Test only the three mock robot drivers"
+  print -r -- "  rm65_docker_driver_rviz            Visualize real joint states in RViz 2"
   print -r -- "  rm65_docker_bringup                Run robots, RViz, Joy, and Xbox input"
   print -r -- "  rm65_docker_bringup_remote         Run the headless remote-debug target"
   print -r -- "ROS:"
-  print -r -- "  rm65_ros_build [args ...]           Build through realman_bringup with Humble"
+  print -r -- "  rm65_ros_build [args ...]           Build bringup and robot driver with Humble"
   print -r -- "Website:"
   print -r -- "  rm65_web_build                     Build the VitePress website"
   print -r -- "  rm65_web_test                      Run the website Playwright tests"

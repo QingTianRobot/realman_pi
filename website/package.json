@@ -7,7 +7,7 @@
     "dev": "npm run sync-assets && vitepress dev docs",
     "build": "npm run sync-assets && vitepress build docs",
     "preview": "vitepress preview docs",
-    "test:e2e": "playwright test"
+    "test:e2e": "playwright test --config ../config/website/playwright.config.mjs"
   },
   "dependencies": {
     "three": "0.185.1",

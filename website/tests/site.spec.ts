@@ -107,6 +107,8 @@ test("documentation routes render", async ({ page }) => {
     "architecture/package",
     "development/",
     "development/documentation-workflow",
+    "development/realman-python-driver",
+    "development/realman-driver-scaffold",
     "development/three-arm-visualization",
     "development/xbox-controller",
     "development/system-bringup",

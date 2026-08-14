@@ -1,0 +1,41 @@
+# Offline RealMan driver configuration for automated and workstation tests.
+#
+# This file never imports the vendor SDK or opens a controller connection. Keep
+# it separate from realman_driver.yaml so production IP changes cannot weaken
+# the safety boundary of the mock test service. The 192.0.2.0/24 addresses are
+# IANA TEST-NET-1 documentation addresses and are never contacted in mock mode.
+/l/realman_driver:
+  ros__parameters:
+    robot_model: RM65-B
+    robot_ip: 192.0.2.123
+    robot_port: 8080
+    thread_mode: RM_TRIPLE_MODE_E
+    mock_mode: true
+    auto_connect: true
+    reconnect_interval: 0.0
+    state_publish_rate: 10.0
+    joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
+
+/m/realman_driver:
+  ros__parameters:
+    robot_model: RM65-B
+    robot_ip: 192.0.2.124
+    robot_port: 8080
+    thread_mode: RM_TRIPLE_MODE_E
+    mock_mode: true
+    auto_connect: true
+    reconnect_interval: 0.0
+    state_publish_rate: 10.0
+    joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
+
+/r/realman_driver:
+  ros__parameters:
+    robot_model: RM65-B
+    robot_ip: 192.0.2.125
+    robot_port: 8080
+    thread_mode: RM_TRIPLE_MODE_E
+    mock_mode: true
+    auto_connect: true
+    reconnect_interval: 0.0
+    state_publish_rate: 10.0
+    joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]

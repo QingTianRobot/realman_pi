@@ -1,0 +1,3 @@
+# Pin the vendor SDK used by the realman_robot_driver adapter.
+# The package provides Robotic_Arm.rm_robot_interface and supports Python 3.9+.
+Robotic_Arm==1.1.6

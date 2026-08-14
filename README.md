@@ -100,6 +100,49 @@ If the controller is not connected yet, the service keeps polling the
 `*-event-joystick` devices under `/dev/input` and starts the Joy driver when the
 controller appears.
 
+### RealMan joint-state driver and RViz
+
+The Python driver reads the current joint angles from the three RM65-B
+controllers and publishes `/l/joint_states`, `/m/joint_states`, and
+`/r/joint_states`. The default addresses are configured in
+`config/ros/realman_driver.yaml`:
+
+```text
+l: 192.168.30.123
+m: 192.168.30.124
+r: 192.168.30.125
+```
+
+Start the real driver and RViz 2 without the Xbox input chain:
+
+```bash
+docker compose build realman_driver_rviz
+docker compose run --rm realman_driver_rviz
+```
+
+The driver uses `rm_get_joint_degree()` and converts vendor degrees to ROS
+radians before publishing. The SDK version is pinned in
+`config/python/realman-sdk-requirements.txt`.
+
+For an offline test that cannot contact a controller, use the separate mock
+configuration:
+
+```bash
+docker compose build realman_driver_test
+docker compose run --rm realman_driver_test
+```
+
+In another ROS 2 Humble terminal on the same domain, inspect the mock state:
+
+```bash
+ros2 topic echo /r/connected
+ros2 topic echo /r/joint_states
+```
+
+The driver owns connection lifecycle, read-only joint state, reconnect and
+stop services. It does not yet expose motion actions, force control, IO or
+production motion behavior.
+
 ### Three-arm layout
 
 The repository-root `config/ros/three_robots.yaml` is the authoritative layout
@@ -137,7 +180,8 @@ as an external ROS 2 graph when connecting to other nodes.
 
 ```bash
 source /opt/ros/humble/setup.bash
-colcon build --symlink-install --packages-up-to realman_bringup
+colcon build --symlink-install \
+  --packages-up-to realman_bringup realman_robot_driver
 source install/setup.bash
 ros2 launch realman_bringup system.launch.py
 ```
@@ -160,7 +204,8 @@ realman_pi/
 ├── config/               Annotated Docker, ROS, TF, and RViz configuration
 ├── docker/               Container entrypoint scripts
 ├── src/
-│   ├── driver/           C++ operator input packages
+│   ├── driver/           Robot hardware and operator input drivers
+│   │   └── realman_robot_driver/ Python SDK joint-state driver
 │   ├── realman_bringup/  Top-level launch orchestration
 │   └── rm65_description/ Robot descriptions, TF, and RViz launch
 ├── functions.zsh         Optional Zsh development and deployment helpers

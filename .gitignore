@@ -13,6 +13,8 @@ log/
 !.agents/skills/project-config-layout/SKILL.md
 !.agents/skills/document-feature-updates/
 !.agents/skills/document-feature-updates/**
+!.agents/skills/realman-python-driver/
+!.agents/skills/realman-python-driver/**
 .codex/
 src/.agents/
 src/.codex/
@@ -25,3 +27,6 @@ website/docs/.vitepress/cache/
 website/docs/.vitepress/dist/
 website/playwright-report/
 website/test-results/
+.ace-tool/
+logs/*
+!logs/.gitkeep

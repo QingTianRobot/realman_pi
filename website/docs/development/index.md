@@ -12,6 +12,8 @@ description: realman_pi 功能契约、实现边界、配置来源和验证方�
 | 功能 | 主要内容 | 权威配置 |
 | --- | --- | --- |
 | [功能文档同步](./documentation-workflow) | 功能完成门槛、Web 手册结构和验证流程 | `.agents/skills/document-feature-updates/SKILL.md` |
+| [睿尔曼 Python 驱动查询 Skill](./realman-python-driver) | Python API 文档检索、驱动开发约束、版本与安全核对流程 | `.agents/skills/realman-python-driver/SKILL.md` |
+| [睿尔曼关节状态驱动](./realman-driver-scaffold) | 三臂关节回读、RViz 数据链路、连接恢复和 mock 验证 | `config/ros/realman_driver.yaml` |
 | [三臂配置驱动可视化](./three-arm-visualization) | ROS 2 三臂命名空间、完整 TF、RViz 2 和 Web 三维场景的数据流 | `config/ros/three_robots.yaml` |
 | [Xbox 手柄输入](./xbox-controller) | SDL event 设备、`/input/joy`、C++ 按键边沿和输入测试 | `config/ros/xbox_controller.yaml` |
 | [系统 Bringup](./system-bringup) | 三臂、RViz、输入节点、远程运行和日志的启动编排 | `config/docker/compose.yaml` |

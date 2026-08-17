@@ -1,0 +1,18 @@
+digraph G {
+"platform_link" -> "camera_a_link"[label=" Broadcaster: default_authority\nAverage rate: 20.207\nBuffer length: 5.048\nMost recent transform: 1773801082.503268\nOldest transform: 1773801077.455395\n"];
+"platform_link" -> "camera_b_link"[label=" Broadcaster: default_authority\nAverage rate: 20.207\nBuffer length: 5.048\nMost recent transform: 1773801082.503268\nOldest transform: 1773801077.455395\n"];
+"platform_link" -> "Link_S6"[label=" Broadcaster: default_authority\nAverage rate: 20.207\nBuffer length: 5.048\nMost recent transform: 1773801082.503268\nOldest transform: 1773801077.455395\n"];
+"camera_depth_frame" -> "camera_color_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"camera_link" -> "camera_depth_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"camera_color_frame" -> "camera_color_optical_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"camera_depth_frame" -> "camera_depth_optical_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"camera_link" -> "camera_bottom_screw_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"camera_depth_frame" -> "camera_left_ir_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"camera_left_ir_frame" -> "camera_left_ir_optical_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"camera_depth_frame" -> "camera_right_ir_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+"camera_right_ir_frame" -> "camera_right_ir_optical_frame"[label=" Broadcaster: default_authority\nAverage rate: 10000.0\nBuffer length: 0.0\nMost recent transform: 0.0\nOldest transform: 0.0\n"];
+edge [style=invis];
+ subgraph cluster_legend { style=bold; color=black; label ="view_frames Result";
+"Recorded at time: 1773801082.5341017"[ shape=plaintext ] ;
+}->"camera_link";
+}

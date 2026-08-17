@@ -1,0 +1,465 @@
+[INFO] [launch]: All log files can be found below /home/user/.ros/log/2026-03-18-16-04-57-257259-user-202822
+[INFO] [launch]: Default logging verbosity is set to INFO
+[INFO] [component_container-1]: process started with pid [202890]
+[component_container-1] [INFO] [1773821097.624445399] [camera_03_CP2N163000HK.camera_container]: Load Library: /home/user/code/OrbbecSDK_ROS2/install/orbbec_camera/lib/liborbbec_camera.so
+[component_container-1] [INFO] [1773821097.700374907] [camera_03_CP2N163000HK.camera_container]: Found class: rclcpp_components::NodeFactoryTemplate<orbbec_camera::OBCameraNodeDriver>
+[component_container-1] [INFO] [1773821097.700427842] [camera_03_CP2N163000HK.camera_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<orbbec_camera::OBCameraNodeDriver>
+[component_container-1] [INFO] [1773821097.703052138] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: SDK log file name set to: camera_03.log
+[component_container-1] [INFO] [1773821097.706959710] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device access mode: Default (4)
+[component_container-1] [INFO] [1773821097.706986492] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: setUvcBackendType:libuvc
+[INFO] [component_container-2]: process started with pid [203118]
+[component_container-2] [INFO] [1773821099.859811632] [camera_02_CP2AB5300086.camera_container]: Load Library: /home/user/code/OrbbecSDK_ROS2/install/orbbec_camera/lib/liborbbec_camera.so
+[component_container-2] [INFO] [1773821099.925498430] [camera_02_CP2AB5300086.camera_container]: Found class: rclcpp_components::NodeFactoryTemplate<orbbec_camera::OBCameraNodeDriver>
+[component_container-2] [INFO] [1773821099.925537871] [camera_02_CP2AB5300086.camera_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<orbbec_camera::OBCameraNodeDriver>
+[component_container-2] [INFO] [1773821099.928054948] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: SDK log file name set to: camera_02.log
+[component_container-2] [INFO] [1773821099.932014289] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Device access mode: Default (4)
+[component_container-2] [INFO] [1773821099.932038245] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: setUvcBackendType:libuvc
+[component_container-1] [INFO] [1773821103.021428001] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/camera_03_CP2N163000HK/camera_03_CP2N163000HK' in container '/camera_03_CP2N163000HK/camera_container'
+[component_container-1] [INFO] [1773821103.031547312] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with usb port: 1-5
+[component_container-1] [INFO] [1773821103.031592391] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device usb port: 1-5
+[component_container-1] [INFO] [1773821103.031611606] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device usb port: 1-5
+[component_container-1] [INFO] [1773821103.197510250] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: getDeviceByUid device usb port 1-5 done
+[component_container-1] [INFO] [1773821103.197613188] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Select device cost 166 ms
+[component_container-1] [INFO] [1773821103.197671076] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Try to connect device via USB2.1
+[component_container-1] [INFO] [1773821103.198109140] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: OBCameraNode: use_intra_process: OFF
+[component_container-1] [INFO] [1773821103.211167865] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: current time domain: global
+[component_container-1] [INFO] [1773821103.211219692] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: hdr_index1_laser_control_ 1 hdr_index1_depth_exposure_ 1 hdr_index1_depth_gain_ 16 hdr_index1_ir_brightness_ 30 hdr_index1_ir_ae_max_exposure_ 30458
+[component_container-1] 
+[component_container-1] [INFO] [1773821103.211237510] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: hdr_index0_laser_control_ 1 hdr_index0_depth_exposure_ 7500 hdr_index0_depth_gain_ 16 hdr_index0_ir_brightness_ 90 hdr_index0_ir_ae_max_exposure_ 30458
+[component_container-1] 
+[component_container-1] [INFO] [1773821103.211250790] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: laser_index1_laser_control_ 0 laser_index1_depth_exposure_ 3000 laser_index1_depth_gain_ 16 laser_index1_ir_brightness_ 60 laser_index1_ir_ae_max_exposure_ 17000
+[component_container-1] 
+[component_container-1] [INFO] [1773821103.211263410] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: laser_index0_laser_control_ 1 laser_index0_depth_exposure_ 3000 laser_index0_depth_gain_ 16 laser_index0_ir_brightness_ 60 laser_index0_ir_ae_max_exposure_ 30000
+[component_container-1] 
+[component_container-1] [INFO] [1773821103.211289164] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Available presets:
+[component_container-1] [INFO] [1773821103.211319568] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Preset 0: Default
+[component_container-1] [INFO] [1773821103.211334242] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Preset 1: Hand
+[component_container-1] [INFO] [1773821103.211346417] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Preset 2: High Accuracy
+[component_container-1] [INFO] [1773821103.211358918] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Preset 3: High Density
+[component_container-1] [INFO] [1773821103.211370427] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Preset 4: Medium Density
+[component_container-1] [INFO] [1773821103.211381726] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Preset 5: Factory Calib
+[component_container-1] [INFO] [1773821103.211403366] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Preset 6: Custom
+[component_container-1] [INFO] [1773821103.211415526] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Load device preset: Default
+[component_container-1] [INFO] [1773821103.211487273] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device preset Default loaded
+[component_container-1] [INFO] [1773821103.282290328] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting heartbeat to OFF
+[component_container-1] [INFO] [1773821103.282624660] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Depth process is HW
+[component_container-1] [INFO] [1773821103.282648087] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting LDP to OFF
+[component_container-1] [INFO] [1773821103.283225526] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting G300 laser control to 1
+[component_container-1] [INFO] [1773821103.283420832] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Current sync mode: OB_MULTI_DEVICE_SYNC_MODE_STANDALONE
+[component_container-1] [INFO] [1773821103.283920566] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Set sync mode: OB_MULTI_DEVICE_SYNC_MODE_SECONDARY_SYNCED
+[component_container-1] [INFO] [1773821103.283945323] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting color mirror to OFF
+[component_container-1] [INFO] [1773821103.283987802] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting color flip to OFF
+[component_container-1] [INFO] [1773821103.284016080] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting depth mirror to OFF
+[component_container-1] [INFO] [1773821103.284039765] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting depth flip to OFF
+[component_container-1] [INFO] [1773821103.284067402] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting noise removal filter:ON
+[component_container-1] [INFO] [1773821103.284101478] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting color auto white balance to ON
+[component_container-1] [INFO] [1773821103.284548291] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting color exposure to 30
+[component_container-1] [INFO] [1773821103.285376189] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting color gain to 16
+[component_container-1] [INFO] [1773821103.285610174] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting color auto exposure priority to OFF
+[component_container-1] [INFO] [1773821103.285724746] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting color auto exposure to ON
+[component_container-1] [INFO] [1773821103.286013959] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting depth auto exposure priority to OFF
+[component_container-1] [INFO] [1773821103.286240595] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting IR auto exposure to ON
+[component_container-1] [INFO] [1773821103.288667163] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting IR exposure to 3000
+[component_container-1] [INFO] [1773821103.290363221] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting IR gain to 16
+[component_container-1] [INFO] [1773821103.291550703] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: default noise removal filter min diff: 256
+[component_container-1] [INFO] [1773821103.291578145] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: default noise removal filter max size: 80
+[component_container-1] [INFO] [1773821103.291780169] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting hardware noise removal filter:OFF
+[component_container-1] [INFO] [1773821103.291800283] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting accel data correction to ON
+[component_container-1] [INFO] [1773821103.291820767] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting gyro data correction to ON
+[component_container-1] [INFO] [1773821103.292093502] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting DecimationFilter......
+[component_container-1] [INFO] [1773821103.292116056] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: set DecimationFilter to false
+[component_container-1] [INFO] [1773821103.292138327] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Skip setting filter: DecimationFilter
+[component_container-1] [INFO] [1773821103.292153409] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting ThresholdFilter......
+[component_container-1] [INFO] [1773821103.292163262] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: set ThresholdFilter to false
+[component_container-1] [INFO] [1773821103.292172709] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Skip setting filter: ThresholdFilter
+[component_container-1] [INFO] [1773821103.292184344] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting HDRMerge......
+[component_container-1] [INFO] [1773821103.292193898] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: set HDRMerge to false
+[component_container-1] [INFO] [1773821103.292203266] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Skip setting filter: HDRMerge
+[component_container-1] [INFO] [1773821103.292214474] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting SequenceIdFilter......
+[component_container-1] [INFO] [1773821103.292223435] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: set SequenceIdFilter to false
+[component_container-1] [INFO] [1773821103.292232657] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Skip setting filter: SequenceIdFilter
+[component_container-1] [INFO] [1773821103.292243067] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting SpatialFastFilter......
+[component_container-1] [INFO] [1773821103.292251849] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: set SpatialFastFilter to false
+[component_container-1] [INFO] [1773821103.292260711] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Skip setting filter: SpatialFastFilter
+[component_container-1] [INFO] [1773821103.292271069] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting SpatialModerateFilter......
+[component_container-1] [INFO] [1773821103.292279844] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: set SpatialModerateFilter to false
+[component_container-1] [INFO] [1773821103.292288875] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Skip setting filter: SpatialModerateFilter
+[component_container-1] [INFO] [1773821103.292299482] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting SpatialAdvancedFilter......
+[component_container-1] [INFO] [1773821103.292308208] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: set SpatialAdvancedFilter to false
+[component_container-1] [INFO] [1773821103.292317140] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Skip setting filter: SpatialAdvancedFilter
+[component_container-1] [INFO] [1773821103.292327757] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting TemporalFilter......
+[component_container-1] [INFO] [1773821103.292346873] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: set TemporalFilter to false
+[component_container-1] [INFO] [1773821103.292358773] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Skip setting filter: TemporalFilter
+[component_container-1] [INFO] [1773821103.292369847] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting HoleFillingFilter......
+[component_container-1] [INFO] [1773821103.292378169] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: set HoleFillingFilter to false
+[component_container-1] [INFO] [1773821103.292393133] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Skip setting filter: HoleFillingFilter
+[component_container-1] [INFO] [1773821103.292404958] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting DisparityTransform......
+[component_container-1] [INFO] [1773821103.292413272] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: set DisparityTransform to true
+[component_container-1] [INFO] [1773821103.292422113] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Skip setting filter: DisparityTransform
+[component_container-1] [INFO] [1773821103.292996574] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting DecimationFilter......
+[component_container-1] [INFO] [1773821103.293014980] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: set color DecimationFilter to false
+[component_container-1] [INFO] [1773821103.314241827] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Publish diagnostics every 1 seconds
+[component_container-1] [INFO] [1773821103.607882435] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device Orbbec Gemini 335L connected
+[component_container-1] [INFO] [1773821103.607960674] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821103.607991454] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Firmware version: 1.4.60
+[component_container-1] [INFO] [1773821103.608009514] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: ROS Wrapper version: 2.7.6
+[component_container-1] [INFO] [1773821103.608036844] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: SDK version: 2.7.6
+[component_container-1] [INFO] [1773821103.608056887] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Hardware version: 0.1
+[component_container-1] [INFO] [1773821103.608071714] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: usb connect type: USB2.1
+[component_container-1] [INFO] [1773821103.608090189] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: device unique id: 1-5-10
+[component_container-1] [INFO] [1773821103.608111287] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Current node pid: 202890
+[component_container-1] [INFO] [1773821103.608126627] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Start device cost 586 ms
+[component_container-1] [INFO] [1773821103.608258575] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Enable color stream
+[component_container-1] [INFO] [1773821103.608293547] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Enable depth stream
+[component_container-1] [INFO] [1773821103.611888029] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Enable frame sync
+[component_container-1] [INFO] [1773821103.832521102] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: onDeviceDisconnected called
+[component_container-1] [INFO] [1773821103.832608520] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: onDeviceDisconnected: device connection/initialization in progress, ignoring disconnect event
+[component_container-1] [INFO] [1773821103.832632596] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: onDeviceConnected called
+[component_container-1] [ERROR] [1773821104.315287345] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Failed to TemperatureUpdate1: Device is deactivated/disconnected!
+[component_container-1] [INFO] [1773821104.612043068] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Setting interleave mode to nothing
+[component_container-1] [INFO] [1773821104.612190885] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: current interleave_ae_mode_: laser
+[component_container-1] [ERROR] [1773821104.612364905] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Failed to initialize device Device is deactivated/disconnected!
+[component_container-1] [INFO] [1773821104.612526358] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: resetDevice : Reset device uid: 1-5-10
+[component_container-1] [WARN] [1773821104.612651403] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Do OBCameraNode clean
+[component_container-1] [WARN] [1773821104.612689582] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Stop tf thread
+[component_container-1] [WARN] [1773821104.612711198] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Stop color frame thread
+[component_container-1] [INFO] [1773821104.612779568] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Color frame thread exit!
+[component_container-1] [WARN] [1773821104.612971545] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: stop streams
+[component_container-1] [INFO] [1773821104.613044967] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: pipeline not started or not exist, skip stop pipeline
+[component_container-1] [WARN] [1773821104.613078175] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Clean d2c_viewer
+[component_container-1] [WARN] [1773821104.613098328] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Clean up buffers
+[component_container-1] [WARN] [1773821104.613139012] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Do OBCameraNode clean DONE
+[component_container-1] [INFO] [1773821104.714519828] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Resetting device_
+[component_container-1] [INFO] [1773821104.714651293] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: device_ reset completed
+[component_container-1] [INFO] [1773821104.714666175] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Resetting device_info_
+[component_container-1] [INFO] [1773821104.714674363] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: device_info_ reset completed
+[component_container-1] [INFO] [1773821104.714837560] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Reset device uid:  done
+[component_container-2] [INFO] [1773821104.945638460] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: startDevice called
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/camera_02_CP2AB5300086/camera_02_CP2AB5300086' in container '/camera_02_CP2AB5300086/camera_container'
+[component_container-2] [INFO] [1773821104.955836076] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Connecting to device with usb port: 1-6
+[component_container-2] [INFO] [1773821104.955899599] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Before lock: Select device usb port: 1-6
+[component_container-2] [INFO] [1773821104.955929451] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: After lock: Select device usb port: 1-6
+[component_container-2] [INFO] [1773821105.123629574] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: getDeviceByUid device usb port 1-6 done
+[component_container-2] [INFO] [1773821105.123743984] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Select device cost 167 ms
+[component_container-2] [INFO] [1773821105.123801372] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Try to connect device via USB2.1
+[component_container-2] [INFO] [1773821105.124218146] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: OBCameraNode: use_intra_process: OFF
+[component_container-2] [INFO] [1773821105.144985290] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: current time domain: global
+[component_container-2] [INFO] [1773821105.145057678] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: hdr_index1_laser_control_ 1 hdr_index1_depth_exposure_ 1 hdr_index1_depth_gain_ 16 hdr_index1_ir_brightness_ 30 hdr_index1_ir_ae_max_exposure_ 30458
+[component_container-2] 
+[component_container-2] [INFO] [1773821105.145085320] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: hdr_index0_laser_control_ 1 hdr_index0_depth_exposure_ 7500 hdr_index0_depth_gain_ 16 hdr_index0_ir_brightness_ 90 hdr_index0_ir_ae_max_exposure_ 30458
+[component_container-2] 
+[component_container-2] [INFO] [1773821105.145107255] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: laser_index1_laser_control_ 0 laser_index1_depth_exposure_ 3000 laser_index1_depth_gain_ 16 laser_index1_ir_brightness_ 60 laser_index1_ir_ae_max_exposure_ 17000
+[component_container-2] 
+[component_container-2] [INFO] [1773821105.145127954] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: laser_index0_laser_control_ 1 laser_index0_depth_exposure_ 3000 laser_index0_depth_gain_ 16 laser_index0_ir_brightness_ 60 laser_index0_ir_ae_max_exposure_ 30000
+[component_container-2] 
+[component_container-2] [INFO] [1773821105.145164621] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Available presets:
+[component_container-2] [INFO] [1773821105.145209976] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Preset 0: Default
+[component_container-2] [INFO] [1773821105.145232680] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Preset 1: Hand
+[component_container-2] [INFO] [1773821105.145251543] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Preset 2: High Accuracy
+[component_container-2] [INFO] [1773821105.145269016] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Preset 3: High Density
+[component_container-2] [INFO] [1773821105.145286412] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Preset 4: Medium Density
+[component_container-2] [INFO] [1773821105.145303071] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Preset 5: Factory Calib
+[component_container-2] [INFO] [1773821105.145319787] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Preset 6: Custom
+[component_container-2] [INFO] [1773821105.145336900] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Load device preset: Default
+[component_container-2] [INFO] [1773821105.145422676] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Device preset Default loaded
+[component_container-2] [INFO] [1773821105.216069449] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting heartbeat to OFF
+[component_container-2] [INFO] [1773821105.216364611] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Depth process is HW
+[component_container-2] [INFO] [1773821105.216382209] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting LDP to OFF
+[component_container-2] [INFO] [1773821105.216930333] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting G300 laser control to 1
+[component_container-2] [INFO] [1773821105.217130822] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Current sync mode: OB_MULTI_DEVICE_SYNC_MODE_STANDALONE
+[component_container-2] [INFO] [1773821105.217610568] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Set sync mode: OB_MULTI_DEVICE_SYNC_MODE_SECONDARY_SYNCED
+[component_container-2] [INFO] [1773821105.217628498] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting color mirror to OFF
+[component_container-2] [INFO] [1773821105.217661718] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting color flip to OFF
+[component_container-2] [INFO] [1773821105.217682578] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting depth mirror to OFF
+[component_container-2] [INFO] [1773821105.217700584] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting depth flip to OFF
+[component_container-2] [INFO] [1773821105.217722456] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting noise removal filter:ON
+[component_container-2] [INFO] [1773821105.217745240] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting color auto white balance to ON
+[component_container-2] [INFO] [1773821105.218146196] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting color exposure to 30
+[component_container-2] [INFO] [1773821105.218931475] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting color gain to 16
+[component_container-2] [INFO] [1773821105.219138341] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting color auto exposure priority to OFF
+[component_container-2] [INFO] [1773821105.219228394] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting color auto exposure to ON
+[component_container-2] [INFO] [1773821105.219496501] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting depth auto exposure priority to OFF
+[component_container-2] [INFO] [1773821105.219695964] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting IR auto exposure to ON
+[component_container-2] [INFO] [1773821105.222094746] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting IR exposure to 3000
+[component_container-2] [INFO] [1773821105.223794430] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting IR gain to 16
+[component_container-2] [INFO] [1773821105.224985323] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: default noise removal filter min diff: 256
+[component_container-2] [INFO] [1773821105.225008190] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: default noise removal filter max size: 80
+[component_container-2] [INFO] [1773821105.225197761] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting hardware noise removal filter:OFF
+[component_container-2] [INFO] [1773821105.225208259] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting accel data correction to ON
+[component_container-2] [INFO] [1773821105.225219241] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting gyro data correction to ON
+[component_container-2] [INFO] [1773821105.225429659] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting DecimationFilter......
+[component_container-2] [INFO] [1773821105.225445926] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: set DecimationFilter to false
+[component_container-2] [INFO] [1773821105.225461471] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Skip setting filter: DecimationFilter
+[component_container-2] [INFO] [1773821105.225469390] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting ThresholdFilter......
+[component_container-2] [INFO] [1773821105.225474500] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: set ThresholdFilter to false
+[component_container-2] [INFO] [1773821105.225479919] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Skip setting filter: ThresholdFilter
+[component_container-2] [INFO] [1773821105.225486328] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting HDRMerge......
+[component_container-2] [INFO] [1773821105.225491066] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: set HDRMerge to false
+[component_container-2] [INFO] [1773821105.225496063] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Skip setting filter: HDRMerge
+[component_container-2] [INFO] [1773821105.225501933] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting SequenceIdFilter......
+[component_container-2] [INFO] [1773821105.225506474] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: set SequenceIdFilter to false
+[component_container-2] [INFO] [1773821105.225511415] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Skip setting filter: SequenceIdFilter
+[component_container-2] [INFO] [1773821105.225517140] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting SpatialFastFilter......
+[component_container-2] [INFO] [1773821105.225522137] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: set SpatialFastFilter to false
+[component_container-2] [INFO] [1773821105.225533039] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Skip setting filter: SpatialFastFilter
+[component_container-2] [INFO] [1773821105.225539357] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting SpatialModerateFilter......
+[component_container-2] [INFO] [1773821105.225544095] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: set SpatialModerateFilter to false
+[component_container-2] [INFO] [1773821105.225548778] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Skip setting filter: SpatialModerateFilter
+[component_container-2] [INFO] [1773821105.225554364] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting SpatialAdvancedFilter......
+[component_container-2] [INFO] [1773821105.225559047] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: set SpatialAdvancedFilter to false
+[component_container-2] [INFO] [1773821105.225563673] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Skip setting filter: SpatialAdvancedFilter
+[component_container-2] [INFO] [1773821105.225569560] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting TemporalFilter......
+[component_container-2] [INFO] [1773821105.225583740] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: set TemporalFilter to false
+[component_container-2] [INFO] [1773821105.225590509] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Skip setting filter: TemporalFilter
+[component_container-2] [INFO] [1773821105.225596805] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting HoleFillingFilter......
+[component_container-2] [INFO] [1773821105.225601639] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: set HoleFillingFilter to false
+[component_container-2] [INFO] [1773821105.225606504] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Skip setting filter: HoleFillingFilter
+[component_container-2] [INFO] [1773821105.225612125] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting DisparityTransform......
+[component_container-2] [INFO] [1773821105.225616711] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: set DisparityTransform to true
+[component_container-2] [INFO] [1773821105.225621386] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Skip setting filter: DisparityTransform
+[component_container-2] [INFO] [1773821105.226098997] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting DecimationFilter......
+[component_container-2] [INFO] [1773821105.226114060] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: set color DecimationFilter to false
+[component_container-2] [INFO] [1773821105.246878986] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Publish diagnostics every 1 seconds
+[component_container-2] [INFO] [1773821105.540141386] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Device Orbbec Gemini 335L connected
+[component_container-2] [INFO] [1773821105.540177886] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Serial number: CP2AB5300086
+[component_container-2] [INFO] [1773821105.540186390] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Firmware version: 1.4.60
+[component_container-2] [INFO] [1773821105.540191296] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: ROS Wrapper version: 2.7.6
+[component_container-2] [INFO] [1773821105.540202968] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: SDK version: 2.7.6
+[component_container-2] [INFO] [1773821105.540209311] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Hardware version: 0.1
+[component_container-2] [INFO] [1773821105.540214424] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: usb connect type: USB2.1
+[component_container-2] [INFO] [1773821105.540218647] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: device unique id: 1-6-12
+[component_container-2] [INFO] [1773821105.540225959] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Current node pid: 203118
+[component_container-2] [INFO] [1773821105.540231667] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Start device cost 594 ms
+[component_container-2] [INFO] [1773821105.540285543] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Enable color stream
+[component_container-2] [INFO] [1773821105.540300367] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Enable depth stream
+[component_container-2] [INFO] [1773821105.542021165] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Enable frame sync
+[component_container-2] [INFO] [1773821106.128741202] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Publishing static transform from color to depth
+[component_container-2] [INFO] [1773821106.128801901] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Translation 23.8397, 0.0149661, -0.176514
+[component_container-2] [INFO] [1773821106.128821051] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Rotation -0.00267071, -0.000605162, -0.00144163, 0.999995
+[component_container-2] [INFO] [1773821106.128854781] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Publishing static transform from depth to depth
+[component_container-2] [INFO] [1773821106.128871492] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Translation 0, 0, 0
+[component_container-2] [INFO] [1773821106.128895195] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Rotation 0, 0, 0, 1
+[component_container-2] [INFO] [1773821106.130330183] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting depth AE ROI to 0, 847, 0, 479
+[component_container-2] [INFO] [1773821106.130527404] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Depth Frame - Width: 848 Height: 480 fps: 10 Format: Y16
+[component_container-2] [INFO] [1773821106.155834642] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting color AE ROI to 0, 1279, 0, 719
+[component_container-2] [INFO] [1773821106.155915105] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Color Frame - Width: 1280 Height: 720 fps: 10 Format: MJPG
+[component_container-1] [INFO] [1773821106.257857911] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: onDeviceConnected called
+[component_container-2] [INFO] [1773821106.257901354] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: onDeviceConnected called
+[component_container-1] [INFO] [1773821106.268026571] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device lock is held by another process, waiting 100ms
+[component_container-1] [INFO] [1773821106.368163166] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device lock is held by another process, waiting 100ms
+[component_container-1] [INFO] [1773821106.468276833] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device lock is held by another process, waiting 100ms
+[component_container-2] [INFO] [1773821106.542128170] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Setting interleave mode to nothing
+[component_container-2] [INFO] [1773821106.542204525] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: current interleave_ae_mode_: laser
+[component_container-2] [INFO] [1773821106.542852771] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Enable enable_interleave_depth_frame to false
+[component_container-2] [INFO] [1773821106.542902787] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Initialize device cost 1419 ms
+[component_container-1] [INFO] [1773821106.568438160] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821106.568534583] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821106.568565293] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821106.568591267] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: 
+[component_container-1] [WARN] [1773821106.568606618] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[component_container-1] [INFO] [1773821115.613350938] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[component_container-1] [INFO] [1773821115.623493931] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821115.623554711] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821115.623570309] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821115.623585454] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: CP2AB530006D
+[component_container-1] [WARN] [1773821115.623601453] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[INFO] [component_container-3]: process started with pid [205553]
+[component_container-3] [INFO] [1773821117.860771330] [camera_01_CP2AB530006D.camera_container]: Load Library: /home/user/code/OrbbecSDK_ROS2/install/orbbec_camera/lib/liborbbec_camera.so
+[component_container-3] [INFO] [1773821117.918140948] [camera_01_CP2AB530006D.camera_container]: Found class: rclcpp_components::NodeFactoryTemplate<orbbec_camera::OBCameraNodeDriver>
+[component_container-3] [INFO] [1773821117.918180892] [camera_01_CP2AB530006D.camera_container]: Instantiate class: rclcpp_components::NodeFactoryTemplate<orbbec_camera::OBCameraNodeDriver>
+[component_container-3] [INFO] [1773821117.921035490] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: SDK log file name set to: camera_01.log
+[component_container-3] [INFO] [1773821117.925049671] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Device access mode: Default (4)
+[component_container-3] [INFO] [1773821117.925074184] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: setUvcBackendType:libuvc
+[component_container-1] [INFO] [1773821120.664354043] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[component_container-1] [INFO] [1773821120.674486762] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821120.674535311] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821120.674548095] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821120.674558843] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: CP2AB530006D
+[component_container-1] [WARN] [1773821120.674571004] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[component_container-3] [INFO] [1773821122.081365919] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: startDevice called
+[INFO] [launch_ros.actions.load_composable_nodes]: Loaded node '/camera_01_CP2AB530006D/camera_01_CP2AB530006D' in container '/camera_01_CP2AB530006D/camera_container'
+[component_container-3] [INFO] [1773821122.091492539] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Connecting to device with usb port: 1-2
+[component_container-3] [INFO] [1773821122.091534013] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Before lock: Select device usb port: 1-2
+[component_container-3] [INFO] [1773821122.091547919] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: After lock: Select device usb port: 1-2
+[component_container-3] [INFO] [1773821122.357851356] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: getDeviceByUid device usb port 1-2 done
+[component_container-3] [INFO] [1773821122.357960441] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Select device cost 266 ms
+[component_container-3] [INFO] [1773821122.358009223] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Try to connect device via USB2.1
+[component_container-3] [INFO] [1773821122.358457083] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: OBCameraNode: use_intra_process: OFF
+[component_container-3] [INFO] [1773821122.380221410] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: current time domain: global
+[component_container-3] [INFO] [1773821122.380277326] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: hdr_index1_laser_control_ 1 hdr_index1_depth_exposure_ 1 hdr_index1_depth_gain_ 16 hdr_index1_ir_brightness_ 30 hdr_index1_ir_ae_max_exposure_ 30458
+[component_container-3] 
+[component_container-3] [INFO] [1773821122.380299844] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: hdr_index0_laser_control_ 1 hdr_index0_depth_exposure_ 7500 hdr_index0_depth_gain_ 16 hdr_index0_ir_brightness_ 90 hdr_index0_ir_ae_max_exposure_ 30458
+[component_container-3] 
+[component_container-3] [INFO] [1773821122.380316397] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: laser_index1_laser_control_ 0 laser_index1_depth_exposure_ 3000 laser_index1_depth_gain_ 16 laser_index1_ir_brightness_ 60 laser_index1_ir_ae_max_exposure_ 17000
+[component_container-3] 
+[component_container-3] [INFO] [1773821122.380332871] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: laser_index0_laser_control_ 1 laser_index0_depth_exposure_ 3000 laser_index0_depth_gain_ 16 laser_index0_ir_brightness_ 60 laser_index0_ir_ae_max_exposure_ 30000
+[component_container-3] 
+[component_container-3] [INFO] [1773821122.380362902] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Available presets:
+[component_container-3] [INFO] [1773821122.380410063] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Preset 0: Default
+[component_container-3] [INFO] [1773821122.380432159] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Preset 1: Hand
+[component_container-3] [INFO] [1773821122.380447931] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Preset 2: High Accuracy
+[component_container-3] [INFO] [1773821122.380461256] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Preset 3: High Density
+[component_container-3] [INFO] [1773821122.380474403] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Preset 4: Medium Density
+[component_container-3] [INFO] [1773821122.380488192] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Preset 5: Factory Calib
+[component_container-3] [INFO] [1773821122.380502393] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Preset 6: Custom
+[component_container-3] [INFO] [1773821122.380515672] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Load device preset: Default
+[component_container-3] [INFO] [1773821122.380599637] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Device preset Default loaded
+[component_container-3] [INFO] [1773821122.456932174] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting heartbeat to OFF
+[component_container-3] [INFO] [1773821122.457248446] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Depth process is HW
+[component_container-3] [INFO] [1773821122.457271368] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting LDP to OFF
+[component_container-3] [INFO] [1773821122.457878180] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting G300 laser control to 1
+[component_container-3] [INFO] [1773821122.458136324] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Current sync mode: OB_MULTI_DEVICE_SYNC_MODE_STANDALONE
+[component_container-3] [INFO] [1773821122.458678950] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Set sync mode: OB_MULTI_DEVICE_SYNC_MODE_PRIMARY
+[component_container-3] [INFO] [1773821122.458702404] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting color mirror to OFF
+[component_container-3] [INFO] [1773821122.458742921] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting color flip to OFF
+[component_container-3] [INFO] [1773821122.458770919] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting depth mirror to OFF
+[component_container-3] [INFO] [1773821122.458793568] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting depth flip to OFF
+[component_container-3] [INFO] [1773821122.458821039] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting noise removal filter:ON
+[component_container-3] [INFO] [1773821122.458833557] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting color auto white balance to ON
+[component_container-3] [INFO] [1773821122.459255716] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting color exposure to 30
+[component_container-3] [INFO] [1773821122.460087512] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting color gain to 16
+[component_container-3] [INFO] [1773821122.460323937] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting color auto exposure priority to OFF
+[component_container-3] [INFO] [1773821122.460442016] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting color auto exposure to ON
+[component_container-3] [INFO] [1773821122.460766415] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting depth auto exposure priority to OFF
+[component_container-3] [INFO] [1773821122.460990642] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting IR auto exposure to ON
+[component_container-3] [INFO] [1773821122.463467991] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting IR exposure to 3000
+[component_container-3] [INFO] [1773821122.465256467] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting IR gain to 16
+[component_container-3] [INFO] [1773821122.466472298] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: default noise removal filter min diff: 256
+[component_container-3] [INFO] [1773821122.466501028] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: default noise removal filter max size: 80
+[component_container-3] [INFO] [1773821122.466704220] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting hardware noise removal filter:OFF
+[component_container-3] [INFO] [1773821122.466724494] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting accel data correction to ON
+[component_container-3] [INFO] [1773821122.466744739] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting gyro data correction to ON
+[component_container-3] [INFO] [1773821122.467043474] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting DecimationFilter......
+[component_container-3] [INFO] [1773821122.467066129] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: set DecimationFilter to false
+[component_container-3] [INFO] [1773821122.467087580] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Skip setting filter: DecimationFilter
+[component_container-3] [INFO] [1773821122.467118626] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting ThresholdFilter......
+[component_container-3] [INFO] [1773821122.467129737] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: set ThresholdFilter to false
+[component_container-3] [INFO] [1773821122.467139791] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Skip setting filter: ThresholdFilter
+[component_container-3] [INFO] [1773821122.467151850] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting HDRMerge......
+[component_container-3] [INFO] [1773821122.467161053] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: set HDRMerge to false
+[component_container-3] [INFO] [1773821122.467169973] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Skip setting filter: HDRMerge
+[component_container-3] [INFO] [1773821122.467180946] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting SequenceIdFilter......
+[component_container-3] [INFO] [1773821122.467190189] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: set SequenceIdFilter to false
+[component_container-3] [INFO] [1773821122.467199711] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Skip setting filter: SequenceIdFilter
+[component_container-3] [INFO] [1773821122.467210881] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting SpatialFastFilter......
+[component_container-3] [INFO] [1773821122.467219580] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: set SpatialFastFilter to false
+[component_container-3] [INFO] [1773821122.467228633] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Skip setting filter: SpatialFastFilter
+[component_container-3] [INFO] [1773821122.467239127] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting SpatialModerateFilter......
+[component_container-3] [INFO] [1773821122.467247701] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: set SpatialModerateFilter to false
+[component_container-3] [INFO] [1773821122.467256323] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Skip setting filter: SpatialModerateFilter
+[component_container-3] [INFO] [1773821122.467266899] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting SpatialAdvancedFilter......
+[component_container-3] [INFO] [1773821122.467275850] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: set SpatialAdvancedFilter to false
+[component_container-3] [INFO] [1773821122.467284927] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Skip setting filter: SpatialAdvancedFilter
+[component_container-3] [INFO] [1773821122.467296079] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting TemporalFilter......
+[component_container-3] [INFO] [1773821122.467305471] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: set TemporalFilter to false
+[component_container-3] [INFO] [1773821122.467314591] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Skip setting filter: TemporalFilter
+[component_container-3] [INFO] [1773821122.467324517] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting HoleFillingFilter......
+[component_container-3] [INFO] [1773821122.467332592] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: set HoleFillingFilter to false
+[component_container-3] [INFO] [1773821122.467341384] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Skip setting filter: HoleFillingFilter
+[component_container-3] [INFO] [1773821122.467351296] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting DisparityTransform......
+[component_container-3] [INFO] [1773821122.467359739] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: set DisparityTransform to true
+[component_container-3] [INFO] [1773821122.467368476] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Skip setting filter: DisparityTransform
+[component_container-3] [INFO] [1773821122.468032780] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting DecimationFilter......
+[component_container-3] [INFO] [1773821122.468052239] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: set color DecimationFilter to false
+[component_container-3] [INFO] [1773821122.492356060] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Publish diagnostics every 1 seconds
+[component_container-1] [INFO] [1773821122.694885086] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device lock is held by another process, waiting 100ms
+[component_container-3] [INFO] [1773821122.785938245] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Device Orbbec Gemini 335L connected
+[component_container-3] [INFO] [1773821122.785978741] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Serial number: CP2AB530006D
+[component_container-3] [INFO] [1773821122.785988491] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Firmware version: 1.4.60
+[component_container-3] [INFO] [1773821122.785993994] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: ROS Wrapper version: 2.7.6
+[component_container-3] [INFO] [1773821122.786005496] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: SDK version: 2.7.6
+[component_container-3] [INFO] [1773821122.786012489] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Hardware version: 0.1
+[component_container-3] [INFO] [1773821122.786017771] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: usb connect type: USB2.1
+[component_container-3] [INFO] [1773821122.786022422] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: device unique id: 1-2-11
+[component_container-3] [INFO] [1773821122.786029911] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Current node pid: 205553
+[component_container-3] [INFO] [1773821122.786035268] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Start device cost 704 ms
+[component_container-3] [INFO] [1773821122.786087854] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Enable color stream
+[component_container-3] [INFO] [1773821122.786101255] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Enable depth stream
+[component_container-3] [INFO] [1773821122.787943544] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Enable frame sync
+[component_container-1] [INFO] [1773821122.794990753] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device lock is held by another process, waiting 100ms
+[component_container-1] [INFO] [1773821122.895096686] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device lock is held by another process, waiting 100ms
+[component_container-1] [INFO] [1773821122.995238133] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device lock is held by another process, waiting 100ms
+[component_container-1] [INFO] [1773821123.095401296] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device lock is held by another process, waiting 100ms
+[component_container-1] [ERROR] [1773821123.195556251] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Failed to lock orb_device_lock_
+[component_container-3] [INFO] [1773821123.339505040] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Publishing static transform from color to depth
+[component_container-3] [INFO] [1773821123.339555973] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Translation 23.848, -0.0594608, -0.0742018
+[component_container-3] [INFO] [1773821123.339569772] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Rotation -0.00550832, 0.000220863, -0.000996599, 0.999984
+[component_container-3] [INFO] [1773821123.339595348] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Publishing static transform from depth to depth
+[component_container-3] [INFO] [1773821123.339607568] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Translation 0, 0, 0
+[component_container-3] [INFO] [1773821123.339620669] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Rotation 0, 0, 0, 1
+[component_container-3] [INFO] [1773821123.340685942] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting depth AE ROI to 0, 847, 0, 479
+[component_container-3] [INFO] [1773821123.340852494] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Depth Frame - Width: 848 Height: 480 fps: 10 Format: Y16
+[component_container-3] [INFO] [1773821123.401708094] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting color AE ROI to 0, 1279, 0, 719
+[component_container-3] [INFO] [1773821123.401775955] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Color Frame - Width: 1280 Height: 720 fps: 10 Format: MJPG
+[component_container-3] [INFO] [1773821123.788046502] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Setting interleave mode to nothing
+[component_container-3] [INFO] [1773821123.788133349] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: current interleave_ae_mode_: laser
+[component_container-3] [INFO] [1773821123.788942556] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Enable enable_interleave_depth_frame to false
+[component_container-3] [INFO] [1773821123.788981515] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Initialize device cost 1430 ms
+[component_container-1] [INFO] [1773821126.216117989] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[component_container-1] [INFO] [1773821126.226290662] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821126.226350114] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821126.226366596] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821126.226381724] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: CP2AB530006D
+[component_container-1] [WARN] [1773821126.226416961] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[component_container-1] [INFO] [1773821131.267266484] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[component_container-1] [INFO] [1773821131.277418104] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821131.277500270] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821131.277524688] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821131.277547243] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: CP2AB530006D
+[component_container-1] [WARN] [1773821131.277572838] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[component_container-1] [INFO] [1773821136.318368074] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[component_container-1] [INFO] [1773821136.328531967] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821136.328602107] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821136.328616335] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821136.328629599] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: CP2AB530006D
+[component_container-1] [WARN] [1773821136.328645201] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[component_container-1] [INFO] [1773821141.369354060] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[component_container-1] [INFO] [1773821141.379481859] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821141.379532648] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821141.379542644] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821141.379552050] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: CP2AB530006D
+[component_container-1] [WARN] [1773821141.379563201] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[component_container-1] [INFO] [1773821146.420277697] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[component_container-1] [INFO] [1773821146.430403525] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821146.430444337] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821146.430453969] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821146.430463155] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: CP2AB530006D
+[component_container-1] [WARN] [1773821146.430473689] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[component_container-1] [INFO] [1773821151.471144616] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[component_container-1] [INFO] [1773821151.481263906] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821151.481320524] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821151.481333259] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821151.481341962] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: CP2AB530006D
+[component_container-1] [WARN] [1773821151.481350749] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[component_container-1] [INFO] [1773821156.522047383] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[component_container-1] [INFO] [1773821156.532151444] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821156.532186192] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821156.532194848] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821156.532202686] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: CP2AB530006D
+[component_container-1] [WARN] [1773821156.532211639] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[component_container-1] [INFO] [1773821161.572936731] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[component_container-1] [INFO] [1773821161.583074731] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821161.583121638] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821161.583137820] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821161.583152031] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: CP2AB530006D
+[component_container-1] [WARN] [1773821161.583169270] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[component_container-1] [INFO] [1773821166.623936014] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[component_container-1] [INFO] [1773821166.634127274] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821166.634207940] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821166.634228373] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821166.634246577] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: CP2AB530006D
+[component_container-1] [WARN] [1773821166.634272686] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[component_container-1] [INFO] [1773821171.675087045] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: startDevice called
+[component_container-1] [INFO] [1773821171.685277672] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Connecting to device with serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821171.685380471] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Before lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821171.685428191] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: After lock: Select device serial number: CP2N163000HK
+[component_container-1] [INFO] [1773821171.685453331] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device serial number: CP2AB530006D
+[component_container-1] [WARN] [1773821171.685481348] [camera_03_CP2N163000HK.camera_03_CP2N163000HK]: Device with serial number CP2N163000HK not found
+[WARNING] [launch]: user interrupted with ctrl-c (SIGINT)
+[WARNING] [launch]: user interrupted with ctrl-c (SIGINT) again, ignoring...
+[component_container-2] [INFO] [1773821176.192719759] [camera_02_CP2AB5300086.camera_02_CP2AB5300086]: Color frame thread exit!
+[component_container-3] [INFO] [1773821176.236902809] [camera_01_CP2AB530006D.camera_01_CP2AB530006D]: Color frame thread exit!
+[ERROR] [component_container-1]: process has died [pid 202890, exit code -2, cmd '/opt/ros/humble/lib/rclcpp_components/component_container --ros-args -r __node:=camera_container -r __ns:=/camera_03_CP2N163000HK'].
+[ERROR] [component_container-3]: process has died [pid 205553, exit code -2, cmd '/opt/ros/humble/lib/rclcpp_components/component_container --ros-args -r __node:=camera_container -r __ns:=/camera_01_CP2AB530006D'].
+[ERROR] [component_container-2]: process has died [pid 203118, exit code -2, cmd '/opt/ros/humble/lib/rclcpp_components/component_container --ros-args -r __node:=camera_container -r __ns:=/camera_02_CP2AB5300086'].

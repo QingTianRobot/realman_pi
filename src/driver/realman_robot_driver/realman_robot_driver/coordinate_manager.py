@@ -232,16 +232,6 @@ class CoordinateManager:
         self._profile(arm)
         return self._motion_allowed[arm]
 
-    def selected_tool(self, arm: str) -> str:
-        """Return the configured tool name selected for the next verification."""
-        self._profile(arm)
-        return self._selected_tools[arm]
-
-    def selected_work(self, arm: str) -> str:
-        """Return the configured work-frame name selected for the next verification."""
-        self._profile(arm)
-        return self._selected_works[arm]
-
     def _profile(self, arm: str) -> ArmCoordinateDefaults:
         if arm not in self.profiles:
             raise ValueError(f"unknown arm: {arm}")

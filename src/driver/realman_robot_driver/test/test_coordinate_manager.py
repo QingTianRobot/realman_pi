@@ -238,7 +238,8 @@ def test_select_refuses_busy_arm(profile_path: Path, fake_adapter: FakeAdapter):
     assert result.status != 0
     assert "busy" in result.message
     assert manager.motion_allowed("l") is False
-    assert manager.selected_tool("l") == "tcpgrip"
+    assert result.expected_tool == "tcpgrip"
+    assert result.current_tool is None
     assert not any(call[0] == "change_tool_frame" for call in fake_adapter.calls)
 
 
@@ -251,7 +252,8 @@ def test_select_tool_updates_selection_and_verifies_readback(
     result = manager.select_tool(fake_adapter, "l", "camera")
 
     assert result.matched is True
-    assert manager.selected_tool("l") == "camera"
+    assert (result.expected_tool, result.current_tool) == ("camera", "camera")
+    assert (result.expected_work, result.current_work) == ("cell", "cell")
     assert ("change_tool_frame", "l", "camera") in fake_adapter.calls
 
 
@@ -264,8 +266,16 @@ def test_select_work_updates_selection_and_verifies_readback(
     result = manager.select_work(fake_adapter, "l", "fixture")
 
     assert result.matched is True
-    assert manager.selected_work("l") == "fixture"
+    assert (result.expected_tool, result.current_tool) == ("tcpgrip", "tcpgrip")
+    assert (result.expected_work, result.current_work) == ("fixture", "fixture")
     assert ("change_work_frame", "l", "fixture") in fake_adapter.calls
+
+
+def test_does_not_expose_unapproved_selection_query_methods(profile_path: Path):
+    manager = CoordinateManager.from_yaml(profile_path)
+
+    assert not hasattr(manager, "selected_tool")
+    assert not hasattr(manager, "selected_work")
 
 
 def test_adapter_read_failure_blocks_motion(profile_path: Path):

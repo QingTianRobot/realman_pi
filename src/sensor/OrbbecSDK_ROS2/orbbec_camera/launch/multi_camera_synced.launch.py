@@ -20,7 +20,7 @@ def generate_launch_description():
             os.path.join(launch_file_dir, "gemini305.launch.py")
         ),
         launch_arguments={
-            'camera_name': 'camera_r',
+            'camera_name': 'r',
             'usb_port': '1-4', # CP2AB5300086
             "device_num": "3",
             "sync_mode": "primary",
@@ -37,7 +37,7 @@ def generate_launch_description():
             os.path.join(launch_file_dir, "gemini305.launch.py")
         ),
         launch_arguments={
-            'camera_name': 'camera_l',
+            'camera_name': 'l',
             'usb_port': '1-3', # CP2N163000HK
             "device_num": "4",
             "sync_mode": "secondary_synced",
@@ -70,7 +70,7 @@ def generate_launch_description():
         [
             TimerAction(period=2.0, actions=[GroupAction([launch2_include_l])]),
             # TimerAction(period=0.0, actions=[GroupAction([launch3_include_m])]),
-            # TimerAction(period=4.0, actions=[GroupAction([launch_include_r])]),
+            TimerAction(period=4.0, actions=[GroupAction([launch_include_r])]),
             # The primary camera should be launched at last
         ]
     )

@@ -282,6 +282,8 @@ def test_motion_type_hints_resolve_private_mapping_helper():
         "velocity_watchdog_ms",
         "max_linear_accel_mps2",
         "max_angular_accel_radps2",
+        "joint_goal_tolerance_deg",
+        "stop_timeout_sec",
     ],
 )
 def test_motion_settings_reject_non_positive_or_non_finite_values(tmp_path: Path, field: str):

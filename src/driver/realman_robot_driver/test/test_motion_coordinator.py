@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import threading
 from dataclasses import replace
 from enum import IntEnum
 from types import SimpleNamespace
@@ -85,7 +86,10 @@ class FakeAdapter:
         self.calls: list[tuple[object, ...]] = []
         self.move_status = 0
         self.stop_status = 0
+        self.fast_stop_status = 0
         self.stopped = False
+        self.state_error_when_stopped = 0
+        self.trajectory_error_when_stopped = 0
         self.joints = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
         self.event_callback = None
         self.emit_event_on_move = False
@@ -147,13 +151,23 @@ class FakeAdapter:
             self.stopped = True
         return self.stop_status
 
+    def stop(self) -> int:
+        self.calls.append(("stop",))
+        if self.fast_stop_status == 0:
+            self.stopped = True
+        return self.fast_stop_status
+
     def current_trajectory(self):
         self.calls.append(("current_trajectory",))
-        return {"trajectory_type": 0 if self.stopped else 1}
+        return {
+            "error_code": self.trajectory_error_when_stopped if self.stopped else 0,
+            "trajectory_type": 0 if self.stopped else 1,
+        }
 
     def get_state(self) -> RobotState:
         self.calls.append(("get_state",))
-        return RobotState(tuple(self.joints), self.connected, "RM65-B", self.last_error)
+        error_code = self.state_error_when_stopped if self.stopped else self.last_error
+        return RobotState(tuple(self.joints), self.connected, "RM65-B", error_code)
 
 
 class FakeCoordinateManager:
@@ -515,6 +529,30 @@ def test_cancel_stop_failure_aborts_with_stop_api2_status():
     assert handle.transitions == ["aborted"]
 
 
+@pytest.mark.parametrize(
+    ("state_status", "trajectory_status", "expected_status"),
+    [(23, 0, 23), (0, 47, 47), (23, 47, 23)],
+)
+def test_cancel_stop_confirmation_status_aborts_before_canceled(
+    state_status: int,
+    trajectory_status: int,
+    expected_status: int,
+):
+    adapter = FakeAdapter()
+    adapter.state_error_when_stopped = state_status
+    adapter.trajectory_error_when_stopped = trajectory_status
+    coordinator, _, _, _ = make_coordinator(adapter=adapter)
+    handle = FakeGoalHandle(movej_goal())
+    handle.is_cancel_requested = True
+
+    result = coordinator.execute(handle)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert result.api2_status == expected_status
+    assert adapter.calls.count(("slow_stop",)) == 1
+    assert handle.transitions == ["aborted"]
+
+
 def test_timeout_slow_stops_once_and_returns_timeout():
     coordinator, adapter, _, ownership = make_coordinator()
     handle = FakeGoalHandle(movej_goal(timeout_sec=0.02))
@@ -524,6 +562,91 @@ def test_timeout_slow_stops_once_and_returns_timeout():
     assert result.terminal_state == FakeResult.TIMEOUT
     assert adapter.calls.count(("slow_stop",)) == 1
     assert handle.transitions == ["aborted"]
+    assert ownership.is_busy("l") is False
+
+
+@pytest.mark.parametrize(
+    ("state_status", "trajectory_status", "expected_status"),
+    [(23, 0, 23), (0, 47, 47), (23, 47, 23)],
+)
+def test_timeout_stop_confirmation_status_aborts_before_timeout(
+    state_status: int,
+    trajectory_status: int,
+    expected_status: int,
+):
+    adapter = FakeAdapter()
+    adapter.state_error_when_stopped = state_status
+    adapter.trajectory_error_when_stopped = trajectory_status
+    coordinator, _, _, _ = make_coordinator(adapter=adapter)
+    handle = FakeGoalHandle(movej_goal(timeout_sec=0.02))
+
+    result = coordinator.execute(handle)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert result.api2_status == expected_status
+    assert adapter.calls.count(("slow_stop",)) == 1
+    assert handle.transitions == ["aborted"]
+
+
+def test_fast_stop_marks_active_generation_aborted_without_slow_stop_or_timeout():
+    adapter = FakeAdapter()
+    coordinator, adapter, clock, ownership = make_coordinator(adapter=adapter)
+    handle = FakeGoalHandle(movej_goal(timeout_sec=10.0))
+    polling = threading.Event()
+    resume = threading.Event()
+    result_holder = []
+
+    def block_poll() -> None:
+        polling.set()
+        resume.wait(timeout=1.0)
+
+    clock.on_sleep = block_poll
+    execute_thread = threading.Thread(
+        target=lambda: result_holder.append(coordinator.execute(handle))
+    )
+    execute_thread.start()
+    try:
+        assert polling.wait(timeout=1.0)
+        assert coordinator.fast_stop() == 0
+    finally:
+        resume.set()
+    execute_thread.join(timeout=1.0)
+
+    assert execute_thread.is_alive() is False
+    assert len(result_holder) == 1
+    result = result_holder[0]
+    assert result.terminal_state == FakeResult.ABORTED
+    assert result.api2_status == 0
+    assert adapter.calls.count(("stop",)) == 1
+    assert adapter.calls.count(("slow_stop",)) == 0
+    assert clock.now < 10.0
+    assert ownership.is_busy("l") is False
+
+
+def test_fast_stop_failure_still_aborts_active_generation_with_status():
+    adapter = FakeAdapter()
+    adapter.fast_stop_status = 73
+    coordinator, adapter, clock, _ = make_coordinator(adapter=adapter)
+    handle = FakeGoalHandle(movej_goal(timeout_sec=10.0))
+    clock.on_sleep = coordinator.fast_stop
+
+    result = coordinator.execute(handle)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert result.api2_status == 73
+    assert adapter.calls.count(("stop",)) == 1
+    assert adapter.calls.count(("slow_stop",)) == 0
+
+
+def test_fast_stop_calls_adapter_when_no_goal_and_returns_status():
+    adapter = FakeAdapter()
+    adapter.fast_stop_status = 19
+    coordinator, adapter, _, ownership = make_coordinator(adapter=adapter)
+
+    status = coordinator.fast_stop()
+
+    assert status == 19
+    assert adapter.calls == [("stop",)]
     assert ownership.is_busy("l") is False
 
 

@@ -192,7 +192,7 @@ class RealManDriverNode(Node):
         return response
 
     def _stop(self, _request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
-        code = self.adapter.stop()
+        code = self.motion_coordinator.fast_stop()
         response.success = code == 0
         response.message = "stop requested" if code == 0 else f"stop failed with status {code}"
         if code != 0:

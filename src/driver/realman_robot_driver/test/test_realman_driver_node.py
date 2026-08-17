@@ -100,6 +100,19 @@ def test_node_source_stops_coordinator_before_adapter_disconnect():
     )
 
 
+def test_stop_service_delegates_fast_stop_to_coordinator():
+    tree = ast.parse(NODE_PATH.read_text(encoding="utf-8"))
+    stop = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_stop"
+    )
+    calls = [ast.unparse(node.func) for node in ast.walk(stop) if isinstance(node, ast.Call)]
+
+    assert "self.motion_coordinator.fast_stop" in calls
+    assert "self.adapter.stop" not in calls
+
+
 @requires_ros_action_runtime
 def test_mock_node_constructs_and_exposes_services():
     rclpy.init()

@@ -120,6 +120,8 @@ class MotionCoordinator:
         self._terminal_result: Any | None = None
         self._stop_generation: int | None = None
         self._stop_status: int | object | None = None
+        self._fast_stop_generation: int | None = None
+        self._fast_stop_status: int | object | None = None
         self._shutdown_generation: int | None = None
 
     @property
@@ -243,6 +245,16 @@ class MotionCoordinator:
             deadline = self._monotonic() + goal.timeout_sec
             completion_event: bool | None = None
             while True:
+                fast_stop_status = self._fast_stop_status_for(generation)
+                if fast_stop_status is not None:
+                    return self._finish(
+                        goal_handle,
+                        generation,
+                        TerminalState.ABORTED,
+                        fast_stop_status,
+                        current_joints,
+                        "fast stop requested",
+                    )
                 shutdown_requested = self._shutdown_requested(generation)
                 if shutdown_requested or bool(getattr(goal_handle, "is_cancel_requested", False)):
                     reason = "driver shutdown requested" if shutdown_requested else "cancel requested"
@@ -266,11 +278,21 @@ class MotionCoordinator:
                     )
 
                 state_status, observed_joints, state_connected = self._read_state()
+                trajectory_status, trajectory_active = self._read_trajectory()
+                fast_stop_status = self._fast_stop_status_for(generation)
+                if fast_stop_status is not None:
+                    return self._finish(
+                        goal_handle,
+                        generation,
+                        TerminalState.ABORTED,
+                        fast_stop_status,
+                        current_joints,
+                        "fast stop requested",
+                    )
                 if observed_joints:
                     current_joints = observed_joints
                     if not initial_joints:
                         initial_joints = observed_joints
-                trajectory_status, trajectory_active = self._read_trajectory()
                 api2_status = _first_nonzero(state_status, trajectory_status)
                 if api2_status != 0:
                     return self._finish(
@@ -293,6 +315,16 @@ class MotionCoordinator:
                 latest_event = self._take_event(generation)
                 if latest_event is not None:
                     completion_event = latest_event
+                fast_stop_status = self._fast_stop_status_for(generation)
+                if fast_stop_status is not None:
+                    return self._finish(
+                        goal_handle,
+                        generation,
+                        TerminalState.ABORTED,
+                        fast_stop_status,
+                        current_joints,
+                        "fast stop requested",
+                    )
                 progress = _estimated_progress(goal, initial_joints, current_joints)
                 self._publish_feedback(
                     goal_handle,
@@ -443,6 +475,8 @@ class MotionCoordinator:
             self._terminal_result = None
             self._stop_generation = None
             self._stop_status = None
+            self._fast_stop_generation = None
+            self._fast_stop_status = None
             self._shutdown_generation = None
             return generation
 
@@ -484,6 +518,16 @@ class MotionCoordinator:
         current_joints: tuple[float, ...],
         reason: str,
     ) -> Any:
+        fast_stop_status = self._fast_stop_status_for(generation)
+        if fast_stop_status is not None:
+            return self._finish(
+                goal_handle,
+                generation,
+                TerminalState.ABORTED,
+                fast_stop_status,
+                current_joints,
+                "fast stop requested",
+            )
         self._publish_feedback(
             goal_handle,
             FeedbackPhase.STOPPING,
@@ -494,6 +538,16 @@ class MotionCoordinator:
             reason,
         )
         stop_status = self._request_stop_once(generation)
+        fast_stop_status = self._fast_stop_status_for(generation)
+        if fast_stop_status is not None:
+            return self._finish(
+                goal_handle,
+                generation,
+                TerminalState.ABORTED,
+                fast_stop_status,
+                current_joints,
+                "fast stop requested",
+            )
         if stop_status != 0:
             return self._finish(
                 goal_handle,
@@ -507,8 +561,29 @@ class MotionCoordinator:
         deadline = self._monotonic() + self._stop_timeout_sec
         while True:
             state_status, observed_joints, state_connected = self._read_state()
+            trajectory_status, trajectory_active = self._read_trajectory()
+            fast_stop_status = self._fast_stop_status_for(generation)
+            if fast_stop_status is not None:
+                return self._finish(
+                    goal_handle,
+                    generation,
+                    TerminalState.ABORTED,
+                    fast_stop_status,
+                    current_joints,
+                    "fast stop requested",
+                )
             if observed_joints:
                 current_joints = observed_joints
+            api2_status = _first_nonzero(state_status, trajectory_status)
+            if api2_status != 0:
+                return self._finish(
+                    goal_handle,
+                    generation,
+                    TerminalState.ABORTED,
+                    api2_status,
+                    current_joints,
+                    "controlled stop confirmation reported an API2 error",
+                )
             if state_connected is False:
                 return self._finish(
                     goal_handle,
@@ -518,7 +593,6 @@ class MotionCoordinator:
                     current_joints,
                     "robot connection lost while confirming stop",
                 )
-            trajectory_status, trajectory_active = self._read_trajectory()
             stopped_event = self._take_event(generation) is not None
             if trajectory_active is False or stopped_event:
                 message = "motion canceled after controlled stop"
@@ -560,6 +634,41 @@ class MotionCoordinator:
             self._stop_status = status
             self._condition.notify_all()
         return status
+
+    def fast_stop(self) -> int:
+        """Request the adapter's fast stop and abort the active generation."""
+        with self._condition:
+            generation = self._active_generation
+            if self._terminal_generation == generation:
+                generation = None
+            if generation is not None:
+                if self._fast_stop_generation == generation:
+                    while self._fast_stop_status is _STOP_IN_PROGRESS:
+                        self._condition.wait()
+                    return int(self._fast_stop_status or 0)
+                self._fast_stop_generation = generation
+                self._fast_stop_status = _STOP_IN_PROGRESS
+
+        try:
+            status = int(self.adapter.stop())
+        except Exception:
+            status = _nonzero_status(getattr(self.adapter, "last_error", -1))
+
+        if generation is None:
+            return status
+        with self._condition:
+            if self._fast_stop_generation == generation:
+                self._fast_stop_status = status
+                self._condition.notify_all()
+            return status
+
+    def _fast_stop_status_for(self, generation: int) -> int | None:
+        with self._condition:
+            if self._fast_stop_generation != generation:
+                return None
+            while self._fast_stop_status is _STOP_IN_PROGRESS:
+                self._condition.wait()
+            return int(self._fast_stop_status or 0)
 
     def _read_state(self) -> tuple[int, tuple[float, ...], bool | None]:
         try:
@@ -673,9 +782,15 @@ class MotionCoordinator:
         current_joints: Sequence[float],
         message: str,
     ) -> Any:
-        with self._lock:
+        with self._condition:
             if self._terminal_generation == generation:
                 return self._terminal_result
+            if self._fast_stop_generation == generation:
+                while self._fast_stop_status is _STOP_IN_PROGRESS:
+                    self._condition.wait()
+                terminal_state = TerminalState.ABORTED
+                api2_status = int(self._fast_stop_status or 0)
+                message = "fast stop requested"
             result = self._make_result(
                 terminal_state, api2_status, current_joints, message
             )
@@ -724,6 +839,8 @@ class MotionCoordinator:
                 self._active_generation = None
                 self._accept_events = False
                 self._event = None
+                self._fast_stop_generation = None
+                self._fast_stop_status = None
                 self._shutdown_generation = None
                 release = True
                 self._condition.notify_all()

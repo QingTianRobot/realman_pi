@@ -181,10 +181,10 @@ class RealManSdkAdapter:
             self._connected = False
             self._disconnecting = robot is not None
             self._destroying = False
-            self._event_callback = None
             if mock_mode or robot is None:
                 self._robot = None
                 self._handle = None
+                self._event_callback = None
                 self._disconnecting = False
                 self._destroying = False
                 self._generation += 1
@@ -214,6 +214,7 @@ class RealManSdkAdapter:
         with self._lock:
             self._robot = None
             self._handle = None
+            self._event_callback = None
             self._disconnecting = False
             self._destroying = False
             self._generation += 1

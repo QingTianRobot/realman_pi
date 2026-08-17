@@ -432,6 +432,20 @@ def test_disconnect_attempts_destroy_after_delete_exception_and_clears_callback(
     assert adapter.connected is False
 
 
+def test_disconnect_retains_event_callback_until_destroy_returns(adapter, fake_robot):
+    callback = lambda event: event
+    adapter._event_callback = callback
+
+    def destroy():
+        assert adapter._event_callback is callback
+        return 0
+
+    fake_robot.rm_destroy = destroy
+
+    assert adapter.disconnect() == 0
+    assert adapter._event_callback is None
+
+
 def test_mock_connected_malformed_tool_frame_returns_error_without_raising():
     adapter = RealManSdkAdapter(
         ip="192.0.2.123",

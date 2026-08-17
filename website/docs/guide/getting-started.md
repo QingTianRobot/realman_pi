@@ -50,6 +50,9 @@ rm65_project_help
 | `rm65_docker_xbox_test` | 只启动实体手柄输入链路 |
 | `rm65_docker_bringup` | 启动三臂、RViz、Joy 和 Xbox 输入 |
 | `rm65_docker_bringup_remote` | 启动远程 headless 目标 |
+| `rm65_docker_remote_rviz [domain]` | 在当前桌面前台显示远程 ROS 图 |
+| `rm65_docker_remote_rviz_start [domain]` | 在当前桌面后台持续运行远程 RViz |
+| `rm65_docker_remote_rviz_status` / `logs [-f]` / `stop` | 查看、跟踪或停止后台 RViz |
 | `rm65_ros_build` | 使用本机 Humble 构建到 `realman_bringup` |
 | `rm65_web_build` / `rm65_web_test` | 构建或测试文档网站 |
 | `rm65_deploy_update` | 在生产端对 `main` 执行安全快进更新 |
@@ -57,6 +60,44 @@ rm65_project_help
 这些函数不会自动写入 `~/.zshrc`，也不会隐藏底层参数。需要函数未覆盖的 Compose、
 colcon 或 launch 选项时，继续使用本页的原始命令。`rm65_docker_xbox_test` 不启动
 三臂和 RViz，适合先验证实体手柄是否能产生 Joy 消息和按键日志。
+
+### 远程 RViz 函数详解
+
+下面的函数只在有图形桌面的笔记本上运行。真实机械臂驱动仍应在连接工业交换机的工控机上
+运行 `realman_bringup_remote`；笔记本不能使用 `realman_driver_rviz` 去直接连接
+`192.168.30.x` 控制器。所有函数的可选 `domain` 参数必须与工控机一致，取值范围是 `0` 到
+`232`；省略时沿用当前 `ROS_DOMAIN_ID`，如果环境中没有设置则默认使用 `166`。
+
+| 函数 | 使用方式 | 生命周期和适用场景 |
+| --- | --- | --- |
+| `rm65_docker_build` | `rm65_docker_build realman_remote_rviz` | 首次使用或代码更新后构建 RViz 镜像；不会启动节点。 |
+| `rm65_docker_remote_rviz_start` | `rm65_docker_remote_rviz_start 166` | 后台启动 `realman_remote_rviz`；命令返回后 RViz 窗口和容器继续运行，适合日常使用。 |
+| `rm65_docker_remote_rviz` | `rm65_docker_remote_rviz 166` | 前台启动；当前终端持续显示 launch 日志，关闭窗口或按 `Ctrl-C` 停止。适合首次排错。 |
+| `rm65_docker_remote_rviz_status` | `rm65_docker_remote_rviz_status` | 只查看 Compose 服务状态，不改变运行状态。看到 `Up` 才表示容器仍在运行。 |
+| `rm65_docker_remote_rviz_logs` | `rm65_docker_remote_rviz_logs` 或 `rm65_docker_remote_rviz_logs -f` | 查看最近 100 行日志；`-f` 持续跟踪日志，按 `Ctrl-C` 只退出跟踪，不停止 RViz。 |
+| `rm65_docker_remote_rviz_stop` | `rm65_docker_remote_rviz_stop` | 停止笔记本上的 RViz-only 服务，不停止工控机驱动和机械臂。 |
+
+推荐的笔记本操作顺序如下：
+
+```zsh
+source /path/to/realman_pi/functions.zsh
+rm65_docker_build realman_remote_rviz  # 第一次或代码更新后执行
+rm65_docker_remote_rviz_start 166
+rm65_docker_remote_rviz_status
+```
+
+后台服务不会因为关闭当前终端而停止，但目前没有配置开机自动重启；电脑或 Docker 服务重启
+后需要再次执行 `rm65_docker_remote_rviz_start 166`。函数会自动读取 `DISPLAY` 和
+`XAUTHORITY`，并兼容 GNOME Wayland 的 `.mutter-Xwaylandauth.*` 文件。
+
+常见问题的判断方式：
+
+| 现象 | 检查方向 |
+| --- | --- |
+| `no readable Xauthority file` | 从当前图形桌面终端加载 `functions.zsh`，确认 `DISPLAY` 和 `XAUTHORITY` 指向当前会话。 |
+| RViz 窗口出现但没有 `/l`、`/m`、`/r` 数据 | 工控机和笔记本的 `ROS_DOMAIN_ID` 是否相同，且两端 `ROS_LOCALHOST_ONLY=0`、DDS UDP/组播未被防火墙阻断。 |
+| `socket connect err` 或 `invalid robot handle` 出现在笔记本 | 误用了 `realman_driver_rviz`；笔记本应使用 `realman_remote_rviz`，SDK 连接只在工控机完成。 |
+| `permission denied while trying to connect to the Docker API` | 当前用户没有 Docker socket 权限；先修复 Docker 用户组或使用有权限的终端，再重试函数。 |
 
 ## Docker 启动
 
@@ -174,6 +215,44 @@ ROS_DOMAIN_ID=65 docker compose run --rm realman_bringup_remote
 ```
 
 远程 Humble 主机设置相同的 `ROS_DOMAIN_ID=65` 和 `ROS_LOCALHOST_ONLY=0`，向 `/input/joy` 发布 `sensor_msgs/msg/Joy` 即可驱动输入节点。两台主机之间还需要允许 DDS UDP 网络通信。
+
+### 在本机显示远程机械臂
+
+如果真实驱动运行在另一台工控机，而 RViz 要显示在当前桌面机上，请让工控机只运行
+`realman_bringup_remote`，当前桌面机运行 RViz-only 服务。两端需要使用同一个未占用的
+ROS domain；下面使用 `166` 作为示例。
+
+工控机：
+
+```bash
+ROS_DOMAIN_ID=166 docker compose up -d realman_bringup_remote
+```
+
+当前桌面机：
+
+```bash
+source /path/to/realman_pi/functions.zsh
+rm65_docker_build realman_remote_rviz
+rm65_docker_remote_rviz_start 166
+rm65_docker_remote_rviz_status
+```
+
+`rm65_docker_remote_rviz_start` 会从当前桌面会话读取 `DISPLAY` 和 `XAUTHORITY`，在 GNOME
+Wayland 下也会查找 `.mutter-Xwaylandauth.*`。命令返回后容器和 RViz 窗口继续运行；查看日志
+或停止时使用：
+
+```zsh
+rm65_docker_remote_rviz_logs -f
+rm65_docker_remote_rviz_stop
+```
+
+需要让日志留在当前终端并在 `Ctrl-C` 时同时停止 RViz，可改用前台命令
+`rm65_docker_remote_rviz 166`。参数缺省时函数沿用当前 `ROS_DOMAIN_ID`，环境中也未设置时
+默认使用 `166`。
+
+该服务只启动 RViz 2，不连接机械臂、不启动 `robot_state_publisher`，也不发布假关节状态。
+桌面机和工控机需要在可互通并允许 DDS UDP/组播的网络中；如果连接经过 NAT 或 VPN 不支持
+组播，应改用 DDS discovery server 或在工控机上运行 RViz。
 
 ## 本地 Humble 工作空间
 

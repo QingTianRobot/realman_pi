@@ -88,6 +88,7 @@ realman_bringup/system.launch.py
 | --- | --- | --- | --- |
 | `realman_bringup` | 完整本地系统 | 需要 `DISPLAY`、`XAUTHORITY` | 等待并读取 `${REALMAN_JOY_DEVICE:-auto}` |
 | `realman_bringup_remote` | 远程/headless 调试 | 不需要 X11 | 不映射设备，不启动 Joy 驱动 |
+| `realman_remote_rviz` | 只在本机显示远程 ROS 图 | 需要 X11 | 不启动驱动或手柄 |
 | `xbox_controller_test` | 独立手柄测试 | 不需要 X11 | 等待并读取 `${REALMAN_JOY_DEVICE:-auto}` |
 | `realman_driver_rviz` | 三臂真实关节回读与 RViz | 需要 X11 | 不启动手柄 |
 | `realman_driver_test` | 三臂 mock 驱动测试 | 不需要 X11 | 不访问真机 |
@@ -111,6 +112,33 @@ docker compose run --rm realman_driver_rviz
 ```bash
 ROS_DOMAIN_ID=65 docker compose run --rm realman_bringup_remote
 ```
+
+在另一台同网段的桌面机显示远程真实状态时，工控机只启动 headless bringup，桌面机只启动
+RViz。两端使用同一个未被其他 ROS 图占用的 `ROS_DOMAIN_ID`：
+
+```bash
+# 工控机
+ROS_DOMAIN_ID=166 docker compose up -d realman_bringup_remote
+
+# 桌面机
+source /path/to/realman_pi/functions.zsh
+rm65_docker_build realman_remote_rviz
+rm65_docker_remote_rviz_start 166
+rm65_docker_remote_rviz_status
+```
+
+后台方式会立即归还终端，但 RViz 节点和窗口会持续运行。`rm65_docker_remote_rviz_logs -f`
+跟踪容器日志，`rm65_docker_remote_rviz_stop` 停止节点。需要让 RViz 生命周期跟随当前终端时，
+使用 `rm65_docker_remote_rviz 166`；关闭窗口或按 `Ctrl-C` 即停止前台容器。
+
+启动函数会验证 domain 范围，并从当前桌面环境获取 `DISPLAY` 与 `XAUTHORITY`；若 GNOME
+Wayland 没有导出 `XAUTHORITY`，函数会自动查找运行时目录下的
+`.mutter-Xwaylandauth.*`。domain 参数缺省时沿用已有 `ROS_DOMAIN_ID`，否则使用 `166`。
+
+`realman_remote_rviz` 只启动 `rviz2`，直接订阅远程的 `/l|m|r/robot_description`、TF 和
+`/l|m|r/joint_states`；它不会在桌面机创建 RealMan SDK 连接，也不会启动假关节状态源。
+两台主机必须能互相发现 DDS 的 UDP 流量；跨 NAT 或只允许单播的网络需要额外的 DDS
+discovery 配置。具体的 Zsh 函数参数、生命周期和故障判断见[快速开始：远程 RViz 函数详解](../guide/getting-started#远程-rviz-函数详解)。
 
 所有服务使用 host network、`ROS_LOCALHOST_ONLY=0` 和默认 `ROS_DOMAIN_ID=65`。远程主机必须使用相同域；DDS 自动发现还要求网络允许组播和 UDP。跨网段部署需要额外的 DDS discovery 配置。
 

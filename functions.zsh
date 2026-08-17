@@ -84,6 +84,80 @@ rm65_docker_bringup_remote() {
   _rm65_compose run --rm realman_bringup_remote
 }
 
+_rm65_prepare_remote_rviz_env() {
+  emulate -L zsh
+  local domain_id="${1:-${ROS_DOMAIN_ID:-166}}"
+  local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$EUID}"
+  local -a xauthority_candidates
+
+  if [[ "$domain_id" != <-> ]] || (( domain_id < 0 || domain_id > 232 )); then
+    print -u2 -r -- "rm65: ROS domain must be an integer from 0 through 232: ${domain_id}"
+    return 2
+  fi
+
+  export ROS_DOMAIN_ID="$domain_id"
+  export ROS_LOCALHOST_ONLY=0
+  export DISPLAY="${DISPLAY:-:0}"
+
+  if [[ -z "${XAUTHORITY:-}" || ! -r "$XAUTHORITY" ]]; then
+    xauthority_candidates=("$runtime_dir"/.mutter-Xwaylandauth.*(N.om))
+    if (( ${#xauthority_candidates} > 0 )); then
+      export XAUTHORITY="${xauthority_candidates[1]}"
+    elif [[ -r "$HOME/.Xauthority" ]]; then
+      export XAUTHORITY="$HOME/.Xauthority"
+    else
+      print -u2 -r -- "rm65: no readable Xauthority file for display ${DISPLAY}"
+      print -u2 -r -- "rm65: run this command from the active desktop session or export XAUTHORITY"
+      return 1
+    fi
+  fi
+
+  print -r -- "rm65: local RViz uses ROS_DOMAIN_ID=${ROS_DOMAIN_ID}, DISPLAY=${DISPLAY}"
+}
+
+rm65_docker_remote_rviz() {
+  emulate -L zsh
+  if (( $# > 1 )); then
+    print -u2 -r -- "usage: rm65_docker_remote_rviz [domain_id]"
+    return 2
+  fi
+
+  (
+    _rm65_prepare_remote_rviz_env "${1:-}" || return
+    print -r -- "rm65: RViz is running in the foreground; close it or press Ctrl-C to stop"
+    _rm65_compose run --rm realman_remote_rviz
+  )
+}
+
+rm65_docker_remote_rviz_start() {
+  emulate -L zsh
+  if (( $# > 1 )); then
+    print -u2 -r -- "usage: rm65_docker_remote_rviz_start [domain_id]"
+    return 2
+  fi
+
+  (
+    _rm65_prepare_remote_rviz_env "${1:-}" || return
+    _rm65_compose up -d realman_remote_rviz || return
+    _rm65_compose ps realman_remote_rviz
+  )
+}
+
+rm65_docker_remote_rviz_stop() {
+  emulate -L zsh
+  _rm65_compose stop realman_remote_rviz
+}
+
+rm65_docker_remote_rviz_status() {
+  emulate -L zsh
+  _rm65_compose ps realman_remote_rviz
+}
+
+rm65_docker_remote_rviz_logs() {
+  emulate -L zsh
+  _rm65_compose logs --tail=100 "$@" realman_remote_rviz
+}
+
 rm65_ros_build() {
   emulate -L zsh
   local humble_setup
@@ -151,6 +225,11 @@ rm65_project_help() {
   print -r -- "  rm65_docker_driver_rviz            Visualize real joint states in RViz 2"
   print -r -- "  rm65_docker_bringup                Run robots, RViz, Joy, and Xbox input"
   print -r -- "  rm65_docker_bringup_remote         Run the headless remote-debug target"
+  print -r -- "  rm65_docker_remote_rviz [domain]   Run remote RViz in the foreground"
+  print -r -- "  rm65_docker_remote_rviz_start [domain]  Start remote RViz in the background"
+  print -r -- "  rm65_docker_remote_rviz_stop       Stop the background remote RViz"
+  print -r -- "  rm65_docker_remote_rviz_status     Show the background remote RViz status"
+  print -r -- "  rm65_docker_remote_rviz_logs [-f]  Show or follow remote RViz logs"
   print -r -- "ROS:"
   print -r -- "  rm65_ros_build [args ...]           Build bringup and robot driver with Humble"
   print -r -- "Website:"
@@ -160,7 +239,8 @@ rm65_project_help() {
   print -r -- "  rm65_deploy_update                 Fast-forward main on the production host"
   print -r -- ""
   print -r -- "Runtime variables: RM65_MODEL, RM65_USE_GUI, RM65_USE_RVIZ,"
-  print -r -- "REALMAN_JOY_DEVICE, ROS_DOMAIN_ID, REALMAN_PRODUCTION_HOST,"
+  print -r -- "REALMAN_JOY_DEVICE, ROS_DOMAIN_ID, DISPLAY, XAUTHORITY,"
+  print -r -- "REALMAN_PRODUCTION_HOST,"
   print -r -- "REALMAN_PRODUCTION_DIR. Run the underlying commands directly for"
   print -r -- "options not covered by these helpers."
 }

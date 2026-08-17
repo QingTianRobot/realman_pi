@@ -125,6 +125,16 @@ services:
       - use_gui:=false
       - use_rviz:=false
 
+  # RViz-only viewer for a remote realman_bringup_remote ROS graph. It does not
+  # start a local driver, robot_state_publisher, or fake joint-state publisher.
+  realman_remote_rviz:
+    <<: *rm65-rviz-common
+    command:
+      - ros2
+      - launch
+      - realman_bringup
+      - remote_rviz.launch.py
+
   # Standalone Xbox validation. This starts only the SDL Joy publisher and the
   # C++ button logger, so a controller can be tested without RViz or robot TF.
   xbox_controller_test:

@@ -52,6 +52,12 @@ class _ValidatedGoal:
     radio: int
 
 
+@dataclass
+class _Reservation:
+    request: Any
+    result: VelocityResult | None = None
+
+
 _ZERO = (0.0,) * 6
 _ARMS = frozenset({"l", "m", "r"})
 
@@ -98,11 +104,16 @@ class CartesianVelocitySession:
         self._avoid_singularity_flag = avoid_singularity_flag
 
         self._lock = threading.RLock()
+        self._condition = threading.Condition(self._lock)
         self._stop_event = threading.Event()
         self._done_event = threading.Event()
         self._thread: threading.Thread | None = None
         self._running = False
         self._owns_ownership = False
+        self._reservation: _Reservation | None = None
+        self._active_request: Any | None = None
+        self._fast_stop_in_progress = False
+        self._last_fast_stop_status: int | None = None
         self._goal: _ValidatedGoal | None = None
         self._command = _ZERO
         self._limited_command = _ZERO
@@ -133,29 +144,62 @@ class CartesianVelocitySession:
 
     def start(self, goal: Any) -> bool:
         """Validate and start a session; return false for an ownership/API failure."""
-        validated = self._validate_goal(goal)
-        with self._lock:
+        with self._condition:
+            if self._fast_stop_in_progress:
+                reservation = self._reservation
+                if reservation is None or goal is not reservation.request:
+                    return False
+                while self._fast_stop_in_progress:
+                    self._condition.wait()
             if self._running:
                 self._set_result_locked(False, VelocityTerminalState.ABORTED, -1, "session is already running")
                 return False
-            if self._coordinate_manager is not None:
-                allowed = bool(self._coordinate_manager.motion_allowed(self.arm_id))
-            elif self._motion_allowed is not None:
-                allowed = bool(self._motion_allowed(self.arm_id))
-            else:
-                allowed = True
-            if not allowed:
-                self._set_result_locked(False, VelocityTerminalState.ABORTED, -1, "active coordinates are not verified")
+            reservation = self._reservation
+            if reservation is not None and goal is not reservation.request:
                 return False
+            if reservation is not None and reservation.result is not None:
+                self._reservation = None
+                self._result = reservation.result
+                self._condition.notify_all()
+                return False
+            if reservation is None:
+                try:
+                    acquired = bool(self.ownership.acquire(self.arm_id))
+                except Exception as error:
+                    self._set_result_locked(
+                        False,
+                        VelocityTerminalState.ABORTED,
+                        -1,
+                        f"arm ownership acquire failed: {error}",
+                    )
+                    return False
+                if not acquired:
+                    self._set_result_locked(
+                        False,
+                        VelocityTerminalState.ABORTED,
+                        -1,
+                        "arm is busy",
+                    )
+                    return False
+                self._owns_ownership = True
             try:
-                acquired = bool(self.ownership.acquire(self.arm_id))
+                validated = self._validate_owned_goal(goal)
             except Exception as error:
-                self._set_result_locked(False, VelocityTerminalState.ABORTED, -1, f"arm ownership acquire failed: {error}")
-                return False
-            if not acquired:
-                self._set_result_locked(False, VelocityTerminalState.ABORTED, -1, "arm is busy")
-                return False
-            self._owns_ownership = True
+                if reservation is not None:
+                    self._reservation = None
+                self._release_ownership_locked()
+                self._condition.notify_all()
+                if reservation is not None:
+                    self._set_result_locked(
+                        False,
+                        VelocityTerminalState.ABORTED,
+                        -1,
+                        f"velocity goal revalidation failed: {error}",
+                    )
+                    return False
+                raise
+            if reservation is not None:
+                self._reservation = None
             try:
                 init_status = _status(self.adapter.set_movev_init(
                     self._avoid_singularity_flag,
@@ -184,6 +228,7 @@ class CartesianVelocitySession:
                 return False
             now = self._monotonic()
             self._goal = validated
+            self._active_request = goal
             self._command = _ZERO
             self._limited_command = _ZERO
             self._command_received_at = now
@@ -192,6 +237,7 @@ class CartesianVelocitySession:
             self._phase = VelocityFeedbackPhase.EXECUTING
             self._stop_sent = False
             self._result = None
+            self._last_fast_stop_status = None
             self._done_event.clear()
             self._stop_event.clear()
             self._running = True
@@ -268,18 +314,121 @@ class CartesianVelocitySession:
         result = self._stop_and_join(VelocityTerminalState.CANCELED, "velocity session shutdown")
         return result.api2_status
 
+    def fast_stop_if_owned(self) -> int | None:
+        """Claim and fast-stop an active/reserved velocity session, else return none."""
+        with self._condition:
+            if self._fast_stop_in_progress:
+                while self._fast_stop_in_progress:
+                    self._condition.wait()
+                return self._last_fast_stop_status
+            reservation = self._reservation
+            reserved = (
+                reservation is not None
+                and reservation.result is None
+                and self._owns_ownership
+            )
+            active = self._running and self._owns_ownership
+            if not reserved and not active:
+                return None
+            self._fast_stop_in_progress = True
+            self._last_fast_stop_status = None
+            initialized = active and self._goal is not None
+            goal = self._goal if initialized else None
+            thread = self._thread if active else None
+            self._running = False
+            self._stop_event.set()
+
+        if thread is not None and thread is not threading.current_thread():
+            thread.join()
+
+        zero_status = 0
+        if goal is not None:
+            try:
+                zero_status = _status(
+                    self.adapter.movev(
+                        list(_ZERO),
+                        goal.follow,
+                        goal.trajectory_mode,
+                        goal.radio,
+                    )
+                )
+            except Exception:
+                zero_status = -1
+        try:
+            stop_status = _status(self.adapter.stop())
+        except Exception:
+            stop_status = -1
+        status = zero_status or stop_status
+        result = VelocityResult(
+            False,
+            VelocityTerminalState.ABORTED,
+            status,
+            "velocity session fast-stopped"
+            if status == 0
+            else f"velocity fast stop failed with API2 status {status}",
+        )
+
+        with self._condition:
+            if reserved and self._reservation is reservation:
+                self._reservation.result = result
+            self._result = result
+            self._active_request = None
+            self._stop_sent = True
+            self._done_event.set()
+            self._last_fast_stop_status = status
+            self._fast_stop_in_progress = False
+            self._release_ownership_locked()
+            self._condition.notify_all()
+        return status
+
     # rclpy ActionServer lifecycle callbacks ---------------------------------
     def goal_callback(self, goal_request: Any) -> Any:
-        try:
-            self._validate_goal(goal_request)
-        except (TypeError, ValueError):
-            return _goal_reject()
-        with self._lock:
-            if self._running or self.ownership.is_busy(self.arm_id):
+        with self._condition:
+            if (
+                self._running
+                or self._reservation is not None
+                or self._fast_stop_in_progress
+            ):
                 return _goal_reject()
+            try:
+                acquired = bool(self.ownership.acquire(self.arm_id))
+            except Exception as error:
+                self._log("error", f"velocity ownership acquire failed: {error}")
+                return _goal_reject()
+            if not acquired:
+                return _goal_reject()
+            self._owns_ownership = True
+            try:
+                self._validate_owned_goal(goal_request)
+            except Exception as error:
+                self._release_ownership_locked()
+                self._log("warn", f"Rejecting Cartesian velocity goal: {error}")
+                return _goal_reject()
+            self._reservation = _Reservation(goal_request)
+            self._last_fast_stop_status = None
         return _goal_accept()
 
-    def cancel_callback(self, _goal_handle: Any) -> Any:
+    def cancel_callback(self, goal_handle: Any) -> Any:
+        request = getattr(goal_handle, "request", None)
+        with self._condition:
+            if (
+                self._reservation is not None
+                and request is self._reservation.request
+            ):
+                if self._fast_stop_in_progress:
+                    return _cancel_accept()
+                if self._reservation.result is None:
+                    self._reservation.result = VelocityResult(
+                        True,
+                        VelocityTerminalState.CANCELED,
+                        0,
+                        "velocity session canceled before execution",
+                    )
+                    self._release_ownership_locked()
+                self._condition.notify_all()
+                return _cancel_accept()
+            if request is not self._active_request:
+                return _cancel_reject()
         return _cancel_accept()
 
     def accepted_callback(self, goal_handle: Any) -> None:
@@ -287,15 +436,21 @@ class CartesianVelocitySession:
 
     def execute(self, goal_handle: Any) -> Any:
         if not self.start(goal_handle.request):
-            result = self._ros_result(self.result)
-            goal_handle.abort()
-            return result
+            result = self.result
+            if result.terminal_state == VelocityTerminalState.CANCELED:
+                goal_handle.canceled()
+            else:
+                goal_handle.abort()
+            return self._ros_result(result)
         while self.running:
             if getattr(goal_handle, "is_cancel_requested", False):
                 self.cancel()
                 break
             self._publish_feedback(goal_handle)
             self._done_event.wait(timeout=min(0.1, self._goal.watchdog_ms / 1000.0 if self._goal else 0.1))
+        with self._condition:
+            while self._fast_stop_in_progress:
+                self._condition.wait()
         result = self.result
         if result.terminal_state == VelocityTerminalState.CANCELED:
             goal_handle.canceled()
@@ -306,6 +461,19 @@ class CartesianVelocitySession:
         return self._ros_result(result)
 
     # Internals ---------------------------------------------------------------
+    def _validate_owned_goal(self, goal: Any) -> _ValidatedGoal:
+        if not self._owns_ownership:
+            raise RuntimeError("velocity goal validation requires arm ownership")
+        if self._coordinate_manager is not None:
+            allowed = bool(self._coordinate_manager.motion_allowed(self.arm_id))
+        elif self._motion_allowed is not None:
+            allowed = bool(self._motion_allowed(self.arm_id))
+        else:
+            allowed = True
+        if not allowed:
+            raise ValueError("active coordinates are not verified")
+        return self._validate_goal(goal)
+
     def _validate_goal(self, goal: Any) -> _ValidatedGoal:
         reference_type = _enum_value(_field(goal, "reference_type"), ReferenceType, "reference_type")
         reference_name = _field(goal, "reference_name")
@@ -376,25 +544,36 @@ class CartesianVelocitySession:
                 if self._running:
                     self._terminate_locked(VelocityTerminalState.ABORTED, f"velocity loop failed: {error}")
         finally:
-            with self._lock:
+            with self._condition:
                 if self._thread is threading.current_thread():
                     self._thread = None
-                if not self._running:
+                if not self._running and not self._fast_stop_in_progress:
                     self._release_ownership_locked()
+                self._condition.notify_all()
 
     def _stop_and_join(self, state: VelocityTerminalState, message: str) -> VelocityResult:
-        with self._lock:
+        with self._condition:
+            while self._fast_stop_in_progress:
+                self._condition.wait()
+            if self._reservation is not None and not self._running:
+                if self._reservation.result is None:
+                    self._reservation.result = VelocityResult(True, state, 0, message)
+                self._result = self._reservation.result
+                self._release_ownership_locked()
+                self._condition.notify_all()
+                return self._result
             running = self._running
             thread = self._thread
             self._stop_event.set()
         if thread is not None and thread is not threading.current_thread():
             thread.join(timeout=max(1.0, self.settings.watchdog_sec * 2.0))
-        with self._lock:
+        with self._condition:
             if running and self._running:
                 self._terminate_locked(state, message)
             elif self._result is None:
                 self._set_result_locked(True, state, 0, message)
             self._release_ownership_locked()
+            self._condition.notify_all()
             return self._result or VelocityResult(True, state, 0, message)
 
     def _terminate_locked(
@@ -435,6 +614,7 @@ class CartesianVelocitySession:
         if terminal_state == VelocityTerminalState.ABORTED:
             success = False
         self._running = False
+        self._active_request = None
         self._set_result_locked(success, terminal_state, api2_status, message)
         self._done_event.set()
         if self._thread is None or self._thread is threading.current_thread():
@@ -601,6 +781,15 @@ def _cancel_accept() -> Any:
         return CancelResponse.ACCEPT
     except ImportError:
         return True
+
+
+def _cancel_reject() -> Any:
+    try:
+        from rclpy.action import CancelResponse
+
+        return CancelResponse.REJECT
+    except ImportError:
+        return False
 
 
 __all__ = [

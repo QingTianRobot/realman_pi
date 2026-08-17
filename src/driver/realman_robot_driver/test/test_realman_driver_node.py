@@ -595,6 +595,30 @@ def test_node_shutdown_stops_velocity_before_disconnect():
     )
 
 
+def test_disconnect_stops_velocity_then_motion_before_adapter_disconnect():
+    tree = ast.parse(NODE_PATH.read_text(encoding="utf-8"))
+    disconnect = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_disconnect"
+    )
+    calls = [
+        ast.unparse(node.func)
+        for node in ast.walk(disconnect)
+        if isinstance(node, ast.Call)
+    ]
+
+    assert calls.index("self.velocity_session.shutdown") < calls.index(
+        "self.motion_coordinator.shutdown"
+    ) < calls.index("self.adapter.disconnect")
+    source = ast.unparse(disconnect)
+    assert "velocity_shutdown_status" in source
+    assert "motion_shutdown_status" in source
+    assert "velocity_shutdown_status == 0" in source
+    assert "motion_shutdown_status == 0" in source
+    assert "code == 0" in source
+
+
 def test_node_source_stops_coordinator_before_adapter_disconnect():
     tree = ast.parse(NODE_PATH.read_text(encoding="utf-8"))
     destroy = next(
@@ -620,12 +644,20 @@ def test_node_source_clears_motion_lockout_only_after_successful_disconnect():
     assert "if self.adapter.disconnect() == 0:\n            self.motion_coordinator.clear_lockout_after_disconnect()" in source
 
 
-def test_disconnect_service_exposes_shutdown_failure_even_when_sdk_disconnect_succeeds():
+def test_disconnect_service_exposes_all_shutdown_failures_when_sdk_disconnect_succeeds():
     source = NODE_PATH.read_text(encoding="utf-8")
 
-    assert "shutdown_status = self.motion_coordinator.shutdown()" in source
-    assert "response.success = shutdown_status == 0 and code == 0" in source
-    assert "shutdown_status" in source
+    assert "velocity_shutdown_status = self.velocity_session.shutdown()" in source
+    assert "motion_shutdown_status = self.motion_coordinator.shutdown()" in source
+    assert (
+        "response.success = (\n"
+        "            velocity_shutdown_status == 0\n"
+        "            and motion_shutdown_status == 0\n"
+        "            and code == 0\n"
+        "        )"
+    ) in source
+    assert "velocity shutdown failed" in source
+    assert "motion shutdown failed" in source
 
 
 def test_connect_reconciles_physical_lockout_with_read_only_trajectory_state():
@@ -671,6 +703,7 @@ def test_stop_service_delegates_fast_stop_to_coordinator():
     )
     calls = [ast.unparse(node.func) for node in ast.walk(stop) if isinstance(node, ast.Call)]
 
+    assert "self.velocity_session.fast_stop_if_owned" in calls
     assert "self.motion_coordinator.fast_stop" in calls
     assert "self.adapter.stop" not in calls
 

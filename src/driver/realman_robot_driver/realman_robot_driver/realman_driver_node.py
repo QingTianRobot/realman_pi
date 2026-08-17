@@ -256,28 +256,41 @@ class RealManDriverNode(Node):
     def _disconnect(
         self, _request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
-        shutdown_status = self.motion_coordinator.shutdown()
+        velocity_shutdown_status = self.velocity_session.shutdown()
+        motion_shutdown_status = self.motion_coordinator.shutdown()
         code = self.adapter.disconnect()
         if code == 0:
             self.motion_coordinator.clear_lockout_after_disconnect()
-        response.success = shutdown_status == 0 and code == 0
-        if shutdown_status != 0:
-            response.message = (
-                f"disconnect completed with shutdown failure status {shutdown_status}"
-                if code == 0
-                else f"shutdown failed with status {shutdown_status}; "
-                f"disconnect failed with status {code}"
+        response.success = (
+            velocity_shutdown_status == 0
+            and motion_shutdown_status == 0
+            and code == 0
+        )
+        failures = []
+        if velocity_shutdown_status != 0:
+            failures.append(
+                f"velocity shutdown failed with status {velocity_shutdown_status}"
             )
-            self.get_logger().error(response.message)
-        elif code != 0:
-            response.message = f"disconnect failed with status {code}"
+        if motion_shutdown_status != 0:
+            failures.append(
+                f"motion shutdown failed with status {motion_shutdown_status}"
+            )
+        if code != 0:
+            failures.append(f"disconnect failed with status {code}")
+        if failures:
+            response.message = "; ".join(failures)
             self.get_logger().error(response.message)
         else:
             response.message = "disconnected"
         return response
 
     def _stop(self, _request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
-        code = self.motion_coordinator.fast_stop()
+        velocity_status = self.velocity_session.fast_stop_if_owned()
+        code = (
+            self.motion_coordinator.fast_stop()
+            if velocity_status is None
+            else velocity_status
+        )
         response.success = code == 0
         response.message = "stop requested" if code == 0 else f"stop failed with status {code}"
         if code != 0:

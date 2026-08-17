@@ -7,8 +7,8 @@ uint8 reference_type
 string reference_name
 uint32 control_period_ms
 uint32 watchdog_ms
-float64[3] linear_acceleration_limit_mps2
-float64[3] angular_acceleration_limit_radps2
+float64 max_linear_accel_mps2
+float64 max_angular_accel_radps2
 bool follow
 uint8 trajectory_mode
 uint8 radio

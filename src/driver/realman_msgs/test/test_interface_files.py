@@ -13,10 +13,14 @@ def test_motion_actions_are_typed_and_present():
     assert "uint8 MOVEJ=0" in motion
     assert "float64[3] commanded_linear_velocity_mps" in velocity
     assert "uint32 watchdog_ms" in velocity
+    assert "float64 max_linear_accel_mps2" in velocity
+    assert "float64 max_angular_accel_radps2" in velocity
     assert "float64[3] commanded_angular_velocity_radps" in velocity
     assert "float64[3] limited_linear_velocity_mps" in velocity
     assert "float64[3] limited_angular_velocity_radps" in velocity
     assert "uint8 WATCHDOG_STOP=3" in velocity
+    assert "float64[3] linear_acceleration_limit_mps2" not in velocity
+    assert "float64[3] angular_acceleration_limit_radps2" not in velocity
     assert "{" not in motion
     assert "{" not in velocity
 

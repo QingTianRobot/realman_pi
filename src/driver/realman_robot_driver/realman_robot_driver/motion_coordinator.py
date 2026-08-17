@@ -112,6 +112,7 @@ class MotionCoordinator:
         self._condition = threading.Condition(self._lock)
         self._reserved_request: object | None = None
         self._invalidated_request_ids: set[int] = set()
+        self._canceled_request_ids: set[int] = set()
         self._active_goal: object | None = None
         self._active_generation: int | None = None
         self._generation = 0
@@ -124,6 +125,7 @@ class MotionCoordinator:
         self._fast_stop_generation: int | None = None
         self._fast_stop_status: int | object | None = None
         self._shutdown_generation: int | None = None
+        self._cancel_generation: int | None = None
 
     @property
     def active_generation(self) -> int | None:
@@ -150,12 +152,16 @@ class MotionCoordinator:
 
     def cancel_callback(self, goal_handle: object) -> Any:
         request = getattr(goal_handle, "request", None)
-        with self._lock:
+        with self._condition:
             active = goal_handle is self._active_goal
             reserved = request is not None and request is self._reserved_request
-        if active or reserved:
-            return self.cancel_response_type.ACCEPT
-        return self.cancel_response_type.REJECT
+            if reserved:
+                self._canceled_request_ids.add(id(request))
+            elif active:
+                self._cancel_generation = self._active_generation
+            else:
+                return self.cancel_response_type.REJECT
+        return self.cancel_response_type.ACCEPT
 
     def accepted_callback(self, goal_handle: object) -> None:
         goal_handle.execute()
@@ -187,6 +193,13 @@ class MotionCoordinator:
             0,
             "validating motion goal",
         )
+        if self._consume_canceled_request(request):
+            return self._finish_unowned(
+                goal_handle,
+                TerminalState.CANCELED,
+                0,
+                "motion canceled before execution",
+            )
         validation = self._validate(request)
         if not validation.valid or validation.goal is None:
             return self._finish_unowned(
@@ -198,6 +211,13 @@ class MotionCoordinator:
 
         generation = self._activate(goal_handle, request)
         if generation is None:
+            if self._consume_canceled_request(request):
+                return self._finish_unowned(
+                    goal_handle,
+                    TerminalState.CANCELED,
+                    0,
+                    "motion canceled before execution",
+                )
             return self._finish_unowned(
                 goal_handle,
                 TerminalState.ABORTED,
@@ -220,7 +240,20 @@ class MotionCoordinator:
             )
             # The SDK event payload has no generation; ignore callbacks until
             # this submission has returned success to avoid stale completion.
-            submit_status = self._submit(goal)
+            submit_status, interrupted_terminal = self._submit_if_permitted(
+                goal_handle, generation, goal
+            )
+            if interrupted_terminal is not None:
+                terminal_state, api2_status, reason = interrupted_terminal
+                return self._finish(
+                    goal_handle,
+                    generation,
+                    terminal_state,
+                    api2_status,
+                    current_joints,
+                    reason,
+                )
+            assert submit_status is not None
             if submit_status != 0:
                 return self._finish(
                     goal_handle,
@@ -464,6 +497,8 @@ class MotionCoordinator:
         with self._lock:
             if self._active_goal is not None:
                 return None
+            if id(request) in self._canceled_request_ids:
+                return None
             if id(request) in self._invalidated_request_ids:
                 self._invalidated_request_ids.discard(id(request))
                 return None
@@ -487,7 +522,57 @@ class MotionCoordinator:
             self._fast_stop_generation = None
             self._fast_stop_status = None
             self._shutdown_generation = None
+            self._cancel_generation = None
             return generation
+
+    def _submit_if_permitted(
+        self,
+        goal_handle: object,
+        generation: int,
+        goal: ValidatedGoal,
+    ) -> tuple[int | None, tuple[TerminalState, int, str] | None]:
+        """Atomically exclude stop/cancel requests from SDK motion submission."""
+        with self._condition:
+            interruption = self._submission_interruption_locked(
+                goal_handle, generation
+            )
+            if interruption is not None:
+                return None, interruption
+            try:
+                submit_status = self._submit(goal)
+            except Exception:
+                submit_status = _nonzero_status(
+                    getattr(self.adapter, "last_error", -1)
+                )
+            return submit_status, None
+
+    def _submission_interruption_locked(
+        self, goal_handle: object, generation: int
+    ) -> tuple[TerminalState, int, str] | None:
+        if self._fast_stop_generation == generation:
+            while self._fast_stop_status is _STOP_IN_PROGRESS:
+                self._condition.wait()
+            return (
+                TerminalState.ABORTED,
+                int(self._fast_stop_status or 0),
+                "fast stop requested before motion submission",
+            )
+        if self._shutdown_generation == generation:
+            return (
+                TerminalState.CANCELED,
+                0,
+                "driver shutdown requested before motion submission",
+            )
+        if (
+            self._cancel_generation == generation
+            or bool(getattr(goal_handle, "is_cancel_requested", False))
+        ):
+            return (
+                TerminalState.CANCELED,
+                0,
+                "motion canceled before submission",
+            )
+        return None
 
     def _submit(self, goal: ValidatedGoal) -> int:
         if goal.command == CommandType.MOVEJ:
@@ -787,6 +872,16 @@ class MotionCoordinator:
                 release = True
         if release:
             self.ownership.release(self.arm_id)
+
+    def _consume_canceled_request(self, request: object | None) -> bool:
+        if request is None:
+            return False
+        with self._lock:
+            request_id = id(request)
+            if request_id not in self._canceled_request_ids:
+                return False
+            self._canceled_request_ids.discard(request_id)
+            return True
 
     def _invalidate_reserved_request_locked(self) -> None:
         if self._reserved_request is not None:

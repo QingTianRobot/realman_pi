@@ -350,14 +350,94 @@ def test_valid_movej_uses_exact_adapter_call_and_event_succeeds():
 
 def test_completion_callback_returned_by_sdk_submission_is_current_goal_event():
     adapter = FakeAdapter()
-    adapter.emit_event_on_move = True
-    coordinator, adapter, _, _ = make_coordinator(adapter=adapter)
+    coordinator, adapter, clock, _ = make_coordinator(adapter=adapter)
     adapter.event_callback = coordinator.handle_event
+
+    def emit_after_submit() -> None:
+        adapter.stopped = True
+        adapter.joints = (1.0, 2.0, 3.0, 4.0, 5.0, 6.0)
+        adapter.event_callback(
+            SimpleNamespace(event_type=1, trajectory_state=True, device=0)
+        )
+
+    clock.on_sleep = emit_after_submit
 
     result = coordinator.execute(FakeGoalHandle(movej_goal()))
 
     assert result.terminal_state == FakeResult.SUCCEEDED
     assert adapter.calls.count(("slow_stop",)) == 0
+
+
+def test_submission_callback_before_sdk_returns_is_ignored_as_stale():
+    adapter = FakeAdapter()
+    adapter.emit_event_on_move = True
+    coordinator, adapter, _, _ = make_coordinator(adapter=adapter)
+    adapter.event_callback = coordinator.handle_event
+
+    result = coordinator.execute(FakeGoalHandle(movej_goal(timeout_sec=0.02)))
+
+    assert result.terminal_state == FakeResult.TIMEOUT
+    assert adapter.calls.count(("slow_stop",)) == 1
+
+
+@pytest.mark.parametrize(
+    ("state_status", "trajectory_status", "expected_status"),
+    [(23, 0, 23), (0, 47, 47), (23, 47, 23)],
+)
+def test_nonzero_monitor_status_aborts_without_reporting_success(
+    state_status: int,
+    trajectory_status: int,
+    expected_status: int,
+):
+    adapter = FakeAdapter()
+    adapter.last_error = state_status
+    if trajectory_status:
+        adapter.current_trajectory = lambda: {
+            "error_code": trajectory_status,
+            "trajectory_type": 0,
+        }
+    coordinator, adapter, _, ownership = make_coordinator(adapter=adapter)
+    handle = FakeGoalHandle(movej_goal())
+
+    result = coordinator.execute(handle)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert result.success is False
+    assert result.api2_status == expected_status
+    assert handle.transitions == ["aborted"]
+    assert ownership.is_busy("l") is False
+
+
+def test_revalidation_failure_after_acceptance_releases_reservation_for_next_goal():
+    adapter = FakeAdapter()
+    coordinator, adapter, _, ownership = make_coordinator(adapter=adapter)
+    accepted = FakeGoalHandle(movej_goal())
+
+    assert coordinator.goal_callback(accepted.request) == FakeGoalResponse.ACCEPT
+    adapter.connected = False
+    result = coordinator.execute(accepted)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert ownership.is_busy("l") is False
+    adapter.connected = True
+    assert (
+        coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6))
+        == FakeGoalResponse.ACCEPT
+    )
+
+
+def test_activation_failure_does_not_release_another_goal_reservation():
+    coordinator, adapter, _, ownership = make_coordinator()
+    reserved = FakeGoalHandle(movej_goal())
+    unaccepted = FakeGoalHandle(movej_goal(joint_degrees=(2.0,) * 6))
+
+    assert coordinator.goal_callback(reserved.request) == FakeGoalResponse.ACCEPT
+    result = coordinator.execute(unaccepted)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert adapter.calls == []
+    assert ownership.is_busy("l") is True
+    assert coordinator.cancel_callback(reserved) == FakeCancelResponse.ACCEPT
 
 
 @pytest.mark.parametrize(

@@ -206,9 +206,6 @@ class MotionCoordinator:
         current_joints: tuple[float, ...] = ()
         initial_joints: tuple[float, ...] = ()
         try:
-            with self._lock:
-                if self._active_generation == generation:
-                    self._accept_events = True
             self._publish_feedback(
                 goal_handle,
                 FeedbackPhase.SUBMITTING,
@@ -218,6 +215,8 @@ class MotionCoordinator:
                 0,
                 "submitting non-blocking motion",
             )
+            # The SDK event payload has no generation; ignore callbacks until
+            # this submission has returned success to avoid stale completion.
             submit_status = self._submit(goal)
             if submit_status != 0:
                 return self._finish(
@@ -271,6 +270,17 @@ class MotionCoordinator:
                     current_joints = observed_joints
                     if not initial_joints:
                         initial_joints = observed_joints
+                trajectory_status, trajectory_active = self._read_trajectory()
+                api2_status = _first_nonzero(state_status, trajectory_status)
+                if api2_status != 0:
+                    return self._finish(
+                        goal_handle,
+                        generation,
+                        TerminalState.ABORTED,
+                        api2_status,
+                        current_joints,
+                        "motion monitor reported an API2 error",
+                    )
                 if state_connected is False:
                     return self._finish(
                         goal_handle,
@@ -280,11 +290,9 @@ class MotionCoordinator:
                         current_joints,
                         "robot connection lost during state monitoring",
                     )
-                trajectory_status, trajectory_active = self._read_trajectory()
                 latest_event = self._take_event(generation)
                 if latest_event is not None:
                     completion_event = latest_event
-                api2_status = _first_nonzero(state_status, trajectory_status)
                 progress = _estimated_progress(goal, initial_joints, current_joints)
                 self._publish_feedback(
                     goal_handle,
@@ -642,9 +650,19 @@ class MotionCoordinator:
         api2_status: int,
         message: str,
     ) -> Any:
+        self._release_reservation(getattr(goal_handle, "request", None))
         result = self._make_result(terminal_state, api2_status, (), message)
         self._transition(goal_handle, terminal_state)
         return result
+
+    def _release_reservation(self, request: object | None) -> None:
+        release = False
+        with self._lock:
+            if request is not None and request is self._reserved_request:
+                self._reserved_request = None
+                release = True
+        if release:
+            self.ownership.release(self.arm_id)
 
     def _finish(
         self,

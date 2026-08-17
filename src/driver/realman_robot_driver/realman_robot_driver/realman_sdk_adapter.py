@@ -84,8 +84,7 @@ class RealManSdkAdapter:
                 mode = getattr(rm_thread_mode_e, self.thread_mode)
                 self._robot = RoboticArm(mode)
                 self._handle = self._robot.rm_create_robot_arm(self.ip, self.port)
-                handle_id = getattr(self._handle, "id", -1)
-                self._connected = isinstance(handle_id, int) and handle_id >= 0
+                self._connected = _is_valid_handle(self._handle)
                 if self._connected:
                     self._set_success_locked()
                 else:
@@ -423,8 +422,17 @@ def _vendor_tool_frame(frame: Any) -> Any:
 
 
 def _is_valid_handle(handle: Any) -> bool:
-    handle_id = getattr(handle, "id", -1)
-    return isinstance(handle_id, int) and handle_id >= 0
+    """Return whether an SDK handle exposes a safe, non-negative integer id."""
+    try:
+        handle_id = getattr(handle, "id", None)
+    except Exception:
+        return False
+    if isinstance(handle_id, bool) or not isinstance(handle_id, int):
+        return False
+    try:
+        return handle_id >= 0
+    except Exception:
+        return False
 
 
 def _unpack_result(result: Any) -> tuple[int, Any]:

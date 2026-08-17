@@ -227,6 +227,28 @@ def test_get_state_without_valid_handle_fails_closed_without_calling_sdk(
     assert adapter.last_error_message
 
 
+class HandleWithRaisingId:
+    @property
+    def id(self):
+        raise RuntimeError("handle id unavailable")
+
+
+@pytest.mark.parametrize("handle", [HandleWithRaisingId(), SimpleNamespace(id=True)])
+def test_get_state_handles_unreadable_or_boolean_handle_id_without_calling_sdk(
+    adapter, fake_robot, handle
+):
+    adapter._handle = handle
+
+    state = adapter.get_state()
+
+    assert state.joint_degrees == ()
+    assert state.connected is False
+    assert state.error_code == -1
+    assert fake_robot.calls == []
+    assert adapter.last_error == -1
+    assert adapter.last_error_message == "SDK returned an invalid robot handle"
+
+
 def test_set_work_frame_malformed_input_returns_error_without_calling_sdk(
     adapter, fake_robot
 ):

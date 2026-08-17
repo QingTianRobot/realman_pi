@@ -58,6 +58,8 @@ class RealManSdkAdapter:
         self._last_error_message = ""
         # The SDK may keep only a native callback pointer, so retain Python ownership.
         self._event_callback: Callable[[Any], Any] | None = None
+        self._pending_event_callback: Callable[[Any], Any] | None = None
+        self._pending_event_callback_marker: object | None = None
         self._mock_tool_frame_name = ""
         self._mock_work_frame_name = ""
 
@@ -114,6 +116,8 @@ class RealManSdkAdapter:
                 self._destroying = False
                 self._connected = False
                 self._event_callback = None
+                self._pending_event_callback = None
+                self._pending_event_callback_marker = None
             robot: Any | None = None
             try:
                 mode = getattr(rm_thread_mode_e, self.thread_mode)
@@ -185,6 +189,8 @@ class RealManSdkAdapter:
                 self._robot = None
                 self._handle = None
                 self._event_callback = None
+                self._pending_event_callback = None
+                self._pending_event_callback_marker = None
                 self._disconnecting = False
                 self._destroying = False
                 self._generation += 1
@@ -215,6 +221,8 @@ class RealManSdkAdapter:
             self._robot = None
             self._handle = None
             self._event_callback = None
+            self._pending_event_callback = None
+            self._pending_event_callback_marker = None
             self._disconnecting = False
             self._destroying = False
             self._generation += 1
@@ -333,13 +341,22 @@ class RealManSdkAdapter:
                 self._event_callback = callback
                 self._set_success_locked()
                 return 0
+            status = self._ready_status_locked()
+            if status is not None:
+                return status
+            pending_marker = object()
+            self._pending_event_callback = callback
+            self._pending_event_callback_marker = pending_marker
         result, token, error, _, readiness_status = self._invoke_vendor(
             "rm_get_arm_event_call_back", (callback,)
         )
         if readiness_status is not None:
+            with self._lock:
+                self._clear_pending_event_callback_locked(pending_marker)
             return readiness_status
         if error is not None:
             with self._lock:
+                self._clear_pending_event_callback_locked(pending_marker)
                 if token is not None and self._call_matches_locked(token):
                     self._set_failure_locked(-1, str(error))
             return -1
@@ -348,13 +365,20 @@ class RealManSdkAdapter:
             # Re-check identity after the vendor call. A disconnect may have
             # drained this call and a reconnect may already own the adapter.
             if token is None or not self._call_matches_locked(token):
+                self._clear_pending_event_callback_locked(pending_marker)
                 return -1
             if status == 0:
                 self._event_callback = callback
                 self._set_success_locked()
             else:
                 self._set_failure_locked(status, "SDK event callback registration failed")
+            self._clear_pending_event_callback_locked(pending_marker)
         return status
+
+    def _clear_pending_event_callback_locked(self, marker: object) -> None:
+        if self._pending_event_callback_marker is marker:
+            self._pending_event_callback = None
+            self._pending_event_callback_marker = None
 
     def current_tool_frame(self) -> Any:
         with self._lock:

@@ -190,6 +190,7 @@ def test_event_callback_is_registered_and_retained(adapter, fake_robot):
     assert adapter.register_event_callback(callback) == 0
     assert fake_robot.calls[-1] == ("rm_get_arm_event_call_back", callback)
     assert adapter._event_callback is callback
+    assert adapter._pending_event_callback is None
 
 
 def test_event_callback_reference_changes_only_after_successful_registration(adapter, fake_robot):
@@ -199,14 +200,17 @@ def test_event_callback_reference_changes_only_after_successful_registration(ada
     fake_robot.results["rm_get_arm_event_call_back"] = 41
     assert adapter.register_event_callback(first) == 41
     assert adapter._event_callback is None
+    assert adapter._pending_event_callback is None
 
     fake_robot.results["rm_get_arm_event_call_back"] = 0
     assert adapter.register_event_callback(first) == 0
     assert adapter._event_callback is first
+    assert adapter._pending_event_callback is None
 
     fake_robot.results["rm_get_arm_event_call_back"] = 42
     assert adapter.register_event_callback(second) == 42
     assert adapter._event_callback is first
+    assert adapter._pending_event_callback is None
 
 
 def test_connected_without_handle_fails_closed_without_calling_sdk(adapter, fake_robot):
@@ -412,8 +416,10 @@ def test_disconnect_clears_event_callback_and_reconnect_does_not_retain_it():
     assert adapter.register_event_callback(callback) == 0
     assert adapter.disconnect() == 0
     assert adapter._event_callback is None
+    assert adapter._pending_event_callback is None
     assert adapter.connect() == 0
     assert adapter._event_callback is None
+    assert adapter._pending_event_callback is None
 
 
 def test_disconnect_attempts_destroy_after_delete_exception_and_clears_callback(
@@ -444,6 +450,7 @@ def test_disconnect_retains_event_callback_until_destroy_returns(adapter, fake_r
 
     assert adapter.disconnect() == 0
     assert adapter._event_callback is None
+    assert adapter._pending_event_callback is None
 
 
 def test_mock_connected_malformed_tool_frame_returns_error_without_raising():
@@ -939,3 +946,49 @@ def test_stale_callback_completion_cannot_bind_after_reconnect(adapter, fake_rob
     assert adapter.connect() == 0
     assert registration_result == [-1]
     assert adapter._event_callback is None
+
+
+def test_disconnect_retains_callback_during_post_registration_teardown(
+    adapter, fake_robot, monkeypatch
+):
+    vendor_call_returned = threading.Event()
+    finish_registration = threading.Event()
+    callback = lambda event: event
+    invoke_vendor = adapter._invoke_vendor
+
+    def block_after_vendor_call(*args, **kwargs):
+        result = invoke_vendor(*args, **kwargs)
+        vendor_call_returned.set()
+        finish_registration.wait(timeout=2.0)
+        return result
+
+    def destroy():
+        assert (
+            adapter._event_callback is callback
+            or adapter._pending_event_callback is callback
+        )
+        return 0
+
+    monkeypatch.setattr(adapter, "_invoke_vendor", block_after_vendor_call)
+    fake_robot.rm_destroy = destroy
+    registration_result = []
+    registration = threading.Thread(
+        target=lambda: registration_result.append(adapter.register_event_callback(callback))
+    )
+    registration.start()
+    assert vendor_call_returned.wait(timeout=1.0)
+    assert adapter._active_calls == 0
+
+    disconnect_result = []
+    disconnector = threading.Thread(target=lambda: disconnect_result.append(adapter.disconnect()))
+    disconnector.start()
+    disconnector.join(timeout=2.0)
+    assert not disconnector.is_alive()
+
+    finish_registration.set()
+    registration.join(timeout=2.0)
+    assert not registration.is_alive()
+    assert disconnect_result == [0]
+    assert registration_result == [-1]
+    assert adapter._event_callback is None
+    assert adapter._pending_event_callback is None

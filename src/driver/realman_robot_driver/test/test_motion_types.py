@@ -180,6 +180,10 @@ def settings_data() -> dict[str, object]:
         "velocity_watchdog_ms": 100,
         "max_linear_accel_mps2": 0.10,
         "max_angular_accel_radps2": 0.50,
+        "joint_goal_tolerance_deg": 0.25,
+        "pose_position_tolerance_m": 0.002,
+        "pose_orientation_tolerance_rad": 0.035,
+        "stop_timeout_sec": 2.0,
     }
     return {"robots": {arm: dict(arm_settings) for arm in ("l", "m", "r")}}
 
@@ -206,6 +210,23 @@ def test_motion_settings_parse_existing_schema_and_units(tmp_path: Path):
     assert settings.watchdog_sec == pytest.approx(0.100)
     assert isinstance(settings.velocity_control_period_ms, int)
     assert isinstance(settings.velocity_watchdog_ms, int)
+
+
+def test_motion_settings_parse_per_arm_completion_and_stop_safety_limits(tmp_path: Path):
+    path = write_settings(
+        tmp_path,
+        joint_goal_tolerance_deg=0.25,
+        pose_position_tolerance_m=0.002,
+        pose_orientation_tolerance_rad=0.035,
+        stop_timeout_sec=2.0,
+    )
+
+    settings = MotionSettings.from_yaml(path, "l")
+
+    assert settings.joint_goal_tolerance_deg == pytest.approx(0.25)
+    assert settings.pose_position_tolerance_m == pytest.approx(0.002)
+    assert settings.pose_orientation_tolerance_rad == pytest.approx(0.035)
+    assert settings.stop_timeout_sec == pytest.approx(2.0)
 
 
 def test_motion_settings_millisecond_fields_reject_fractional_and_boolean_values(tmp_path: Path):

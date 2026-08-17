@@ -354,6 +354,10 @@ _MOTION_FIELDS = frozenset(
         "velocity_watchdog_ms",
         "max_linear_accel_mps2",
         "max_angular_accel_radps2",
+        "joint_goal_tolerance_deg",
+        "pose_position_tolerance_m",
+        "pose_orientation_tolerance_rad",
+        "stop_timeout_sec",
     }
 )
 
@@ -367,6 +371,10 @@ class MotionSettings:
     velocity_watchdog_ms: int
     max_linear_accel_mps2: float
     max_angular_accel_radps2: float
+    joint_goal_tolerance_deg: float
+    pose_position_tolerance_m: float
+    pose_orientation_tolerance_rad: float
+    stop_timeout_sec: float
 
     @property
     def control_period_sec(self) -> float:
@@ -442,6 +450,21 @@ class MotionSettings:
                 ),
                 max_angular_accel_radps2=_positive_finite(
                     values["max_angular_accel_radps2"], f"robots.{robot}.max_angular_accel_radps2"
+                ),
+                joint_goal_tolerance_deg=_positive_finite(
+                    values["joint_goal_tolerance_deg"],
+                    f"robots.{robot}.joint_goal_tolerance_deg",
+                ),
+                pose_position_tolerance_m=_positive_finite(
+                    values["pose_position_tolerance_m"],
+                    f"robots.{robot}.pose_position_tolerance_m",
+                ),
+                pose_orientation_tolerance_rad=_positive_finite(
+                    values["pose_orientation_tolerance_rad"],
+                    f"robots.{robot}.pose_orientation_tolerance_rad",
+                ),
+                stop_timeout_sec=_positive_finite(
+                    values["stop_timeout_sec"], f"robots.{robot}.stop_timeout_sec"
                 ),
             )
         return parsed[arm]

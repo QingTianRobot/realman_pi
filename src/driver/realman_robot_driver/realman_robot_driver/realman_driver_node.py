@@ -139,6 +139,10 @@ class RealManDriverNode(Node):
             ),
             active_reference=lambda reference_type: self._active_references[reference_type],
             action_type=ExecuteMotion,
+            stop_timeout_sec=self.motion_settings.stop_timeout_sec,
+            joint_goal_tolerance_deg=self.motion_settings.joint_goal_tolerance_deg,
+            pose_position_tolerance_m=self.motion_settings.pose_position_tolerance_m,
+            pose_orientation_tolerance_rad=self.motion_settings.pose_orientation_tolerance_rad,
             logger=self.get_logger(),
         )
         self.execute_motion_action_server = ActionServer(
@@ -187,6 +191,8 @@ class RealManDriverNode(Node):
     ) -> Trigger.Response:
         self.motion_coordinator.shutdown()
         code = self.adapter.disconnect()
+        if code == 0:
+            self.motion_coordinator.clear_lockout_after_disconnect()
         response.success = code == 0
         response.message = "disconnected" if code == 0 else f"disconnect failed with status {code}"
         return response
@@ -294,7 +300,8 @@ class RealManDriverNode(Node):
         self.motion_coordinator.shutdown()
         if self.execute_motion_action_server is not None:
             self.execute_motion_action_server.destroy()
-        self.adapter.disconnect()
+        if self.adapter.disconnect() == 0:
+            self.motion_coordinator.clear_lockout_after_disconnect()
         return super().destroy_node()
 
 

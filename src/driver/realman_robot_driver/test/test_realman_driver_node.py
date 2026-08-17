@@ -100,6 +100,13 @@ def test_node_source_stops_coordinator_before_adapter_disconnect():
     )
 
 
+def test_node_source_clears_motion_lockout_only_after_successful_disconnect():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert "if code == 0:\n            self.motion_coordinator.clear_lockout_after_disconnect()" in source
+    assert "if self.adapter.disconnect() == 0:\n            self.motion_coordinator.clear_lockout_after_disconnect()" in source
+
+
 def test_stop_service_delegates_fast_stop_to_coordinator():
     tree = ast.parse(NODE_PATH.read_text(encoding="utf-8"))
     stop = next(
@@ -111,6 +118,24 @@ def test_stop_service_delegates_fast_stop_to_coordinator():
 
     assert "self.motion_coordinator.fast_stop" in calls
     assert "self.adapter.stop" not in calls
+
+
+def test_node_source_passes_motion_completion_and_stop_safety_limits():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert "stop_timeout_sec=self.motion_settings.stop_timeout_sec" in source
+    assert (
+        "joint_goal_tolerance_deg=self.motion_settings.joint_goal_tolerance_deg"
+        in source
+    )
+    assert (
+        "pose_position_tolerance_m=self.motion_settings.pose_position_tolerance_m"
+        in source
+    )
+    assert (
+        "pose_orientation_tolerance_rad=self.motion_settings.pose_orientation_tolerance_rad"
+        in source
+    )
 
 
 @requires_ros_action_runtime

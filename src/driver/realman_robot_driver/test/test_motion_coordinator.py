@@ -87,6 +87,8 @@ class FakeAdapter:
         self.move_status = 0
         self.stop_status = 0
         self.fast_stop_status = 0
+        self.fast_stop_completes_trajectory = True
+        self.slow_stop_completes_trajectory = True
         self.stopped = False
         self.state_error_when_stopped = 0
         self.trajectory_error_when_stopped = 0
@@ -147,13 +149,13 @@ class FakeAdapter:
 
     def slow_stop(self) -> int:
         self.calls.append(("slow_stop",))
-        if self.stop_status == 0:
+        if self.stop_status == 0 and self.slow_stop_completes_trajectory:
             self.stopped = True
         return self.stop_status
 
     def stop(self) -> int:
         self.calls.append(("stop",))
-        if self.fast_stop_status == 0:
+        if self.fast_stop_status == 0 and self.fast_stop_completes_trajectory:
             self.stopped = True
         return self.fast_stop_status
 
@@ -238,6 +240,7 @@ def make_coordinator(
     coordinates: FakeCoordinateManager | None = None,
     ownership: ArmOwnership | None = None,
     active_reference=None,
+    stop_timeout_sec: float = 2.0,
 ) -> tuple[MotionCoordinator, FakeAdapter, FakeClock, ArmOwnership]:
     adapter = adapter or FakeAdapter()
     clock = clock or FakeClock()
@@ -267,6 +270,7 @@ def make_coordinator(
         monotonic=clock.monotonic,
         sleep=clock.sleep,
         poll_period_sec=0.01,
+        stop_timeout_sec=stop_timeout_sec,
     )
     return coordinator, adapter, clock, ownership
 
@@ -474,7 +478,9 @@ def test_activation_failure_does_not_release_another_goal_reservation():
     ("command", "method_name"),
     [(CommandType.MOVEL, "movel"), (CommandType.MOVEJ_P, "movej_p")],
 )
-def test_pose_commands_forward_normalized_wxyz_pose(command: CommandType, method_name: str):
+def test_pose_commands_submit_wxyz_pose_but_fail_closed_without_frame_proof(
+    command: CommandType, method_name: str
+):
     coordinator, adapter, clock, _ = make_coordinator()
     handle = FakeGoalHandle(pose_goal(command))
     complete_after_first_poll(coordinator, adapter, clock)
@@ -488,7 +494,8 @@ def test_pose_commands_forward_normalized_wxyz_pose(command: CommandType, method
         4,
         False,
     ) in adapter.calls
-    assert result.terminal_state == FakeResult.SUCCEEDED
+    assert result.terminal_state == FakeResult.TIMEOUT
+    assert result.success is False
 
 
 def test_vendor_submission_error_aborts_and_preserves_api2_status():
@@ -543,6 +550,34 @@ def test_cancel_stop_failure_aborts_with_stop_api2_status():
     assert result.api2_status == 52
     assert adapter.calls.count(("slow_stop",)) == 1
     assert handle.transitions == ["aborted"]
+
+
+def test_controlled_stop_does_not_accept_an_event_in_place_of_inactive_trajectory():
+    adapter = FakeAdapter()
+    adapter.slow_stop_completes_trajectory = False
+    coordinator, _, clock, ownership = make_coordinator(
+        adapter=adapter, stop_timeout_sec=0.02
+    )
+    handle = FakeGoalHandle(movej_goal(timeout_sec=10.0))
+    emitted = False
+
+    def cancel_and_emit_success() -> None:
+        nonlocal emitted
+        if emitted:
+            return
+        emitted = True
+        handle.is_cancel_requested = True
+        coordinator.handle_event(
+            SimpleNamespace(event_type=1, trajectory_state=True, device=0)
+        )
+
+    clock.on_sleep = cancel_and_emit_success
+
+    result = coordinator.execute(handle)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert result.api2_status != 0
+    assert ownership.is_busy("l") is True
 
 
 @pytest.mark.parametrize(
@@ -654,6 +689,160 @@ def test_fast_stop_failure_still_aborts_active_generation_with_status():
     assert adapter.calls.count(("slow_stop",)) == 0
 
 
+def test_fast_stop_without_inactive_trajectory_aborts_and_locks_out_arm():
+    adapter = FakeAdapter()
+    adapter.fast_stop_completes_trajectory = False
+    coordinator, adapter, clock, ownership = make_coordinator(
+        adapter=adapter, stop_timeout_sec=0.02
+    )
+    handle = FakeGoalHandle(movej_goal(timeout_sec=10.0))
+    clock.on_sleep = coordinator.fast_stop
+
+    result = coordinator.execute(handle)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert result.api2_status != 0
+    assert adapter.calls.count(("stop",)) == 1
+    assert ownership.is_busy("l") is True
+    assert coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6)) == FakeGoalResponse.REJECT
+
+
+def test_successful_disconnect_notification_releases_fast_stop_lockout():
+    adapter = FakeAdapter()
+    adapter.fast_stop_completes_trajectory = False
+    coordinator, _, clock, ownership = make_coordinator(
+        adapter=adapter, stop_timeout_sec=0.02
+    )
+    clock.on_sleep = coordinator.fast_stop
+
+    result = coordinator.execute(FakeGoalHandle(movej_goal(timeout_sec=10.0)))
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert ownership.is_busy("l") is True
+    coordinator.clear_lockout_after_disconnect()
+    assert ownership.is_busy("l") is False
+    assert coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6)) == FakeGoalResponse.ACCEPT
+
+
+def test_fast_stop_keeps_reserved_goal_ownership_until_execution_consumes_abort():
+    coordinator, _, _, ownership = make_coordinator()
+    reserved = FakeGoalHandle(movej_goal())
+
+    assert coordinator.goal_callback(reserved.request) == FakeGoalResponse.ACCEPT
+    assert coordinator.fast_stop() == 0
+    assert ownership.is_busy("l") is True
+    assert (
+        coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6))
+        == FakeGoalResponse.REJECT
+    )
+
+    result = coordinator.execute(reserved)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert ownership.is_busy("l") is False
+    assert (
+        coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6))
+        == FakeGoalResponse.ACCEPT
+    )
+
+
+def test_reserved_goal_cannot_submit_while_fast_stop_command_is_in_progress():
+    coordinator, adapter, _, _ = make_coordinator()
+    reserved = FakeGoalHandle(movej_goal(timeout_sec=10.0))
+    stop_started = threading.Event()
+    release_stop = threading.Event()
+    move_attempted = threading.Event()
+    original_stop = adapter.stop
+    original_movej = adapter.movej
+    results = []
+
+    def blocking_stop() -> int:
+        stop_started.set()
+        assert release_stop.wait(timeout=1.0)
+        return original_stop()
+
+    def tracked_movej(*args, **kwargs) -> int:
+        move_attempted.set()
+        return original_movej(*args, **kwargs)
+
+    adapter.stop = blocking_stop
+    adapter.movej = tracked_movej
+    assert coordinator.goal_callback(reserved.request) == FakeGoalResponse.ACCEPT
+    stop_thread = threading.Thread(target=coordinator.fast_stop)
+    stop_thread.start()
+    assert stop_started.wait(timeout=1.0)
+    execute_thread = threading.Thread(
+        target=lambda: results.append(coordinator.execute(reserved))
+    )
+    execute_thread.start()
+    try:
+        assert move_attempted.wait(timeout=0.05) is False
+    finally:
+        release_stop.set()
+    stop_thread.join(timeout=1.0)
+    execute_thread.join(timeout=1.0)
+
+    assert stop_thread.is_alive() is False
+    assert execute_thread.is_alive() is False
+    assert len(results) == 1
+    assert results[0].terminal_state == FakeResult.ABORTED
+    assert not any(call[0] == "movej" for call in adapter.calls)
+
+
+def test_pre_submit_shutdown_slow_stop_failure_aborts_with_original_status():
+    adapter = FakeAdapter()
+    adapter.stop_status = 61
+    coordinator, adapter, _, ownership = make_coordinator(adapter=adapter)
+    reserved = FakeGoalHandle(movej_goal())
+
+    assert coordinator.goal_callback(reserved.request) == FakeGoalResponse.ACCEPT
+    assert coordinator.shutdown(timeout_sec=0.0) == 61
+    assert ownership.is_busy("l") is True
+
+    result = coordinator.execute(reserved)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert result.api2_status == 61
+    assert adapter.calls.count(("slow_stop",)) == 1
+    assert ownership.is_busy("l") is False
+
+
+def test_activated_pre_submit_shutdown_failure_aborts_with_original_status():
+    adapter = FakeAdapter()
+    adapter.stop_status = 67
+    coordinator, adapter, _, ownership = make_coordinator(adapter=adapter)
+    handle = FakeGoalHandle(movej_goal())
+    activated = threading.Event()
+    resume = threading.Event()
+    results = []
+    original_activate = coordinator._activate
+
+    def pause_after_activation(goal_handle: object, request: object) -> int | None:
+        generation = original_activate(goal_handle, request)
+        activated.set()
+        assert resume.wait(timeout=1.0)
+        return generation
+
+    coordinator._activate = pause_after_activation
+    execute_thread = threading.Thread(
+        target=lambda: results.append(coordinator.execute(handle))
+    )
+    execute_thread.start()
+    try:
+        assert activated.wait(timeout=1.0)
+        assert coordinator.shutdown(timeout_sec=0.0) == 67
+    finally:
+        resume.set()
+    execute_thread.join(timeout=1.0)
+
+    assert execute_thread.is_alive() is False
+    assert len(results) == 1
+    assert results[0].terminal_state == FakeResult.ABORTED
+    assert results[0].api2_status == 67
+    assert not any(call[0] == "movej" for call in adapter.calls)
+    assert ownership.is_busy("l") is False
+
+
 @pytest.mark.parametrize(
     ("interrupt", "stop_call", "terminal_state"),
     [
@@ -734,38 +923,6 @@ def test_cancel_before_submission_never_allows_a_later_movej():
     assert ownership.is_busy("l") is False
 
 
-@pytest.mark.parametrize(
-    ("stop_method", "status", "expected_call"),
-    [
-        ("fast_stop", 0, ("stop",)),
-        ("fast_stop", 73, ("stop",)),
-        ("shutdown", 0, None),
-    ],
-)
-def test_stop_invalidates_reserved_goal_without_blocking_next_goal(
-    stop_method: str, status: int, expected_call: tuple[str] | None,
-):
-    adapter = FakeAdapter()
-    adapter.fast_stop_status = status
-    coordinator, adapter, _, ownership = make_coordinator(adapter=adapter)
-    reserved = FakeGoalHandle(movej_goal())
-
-    assert coordinator.goal_callback(reserved.request) == FakeGoalResponse.ACCEPT
-    assert getattr(coordinator, stop_method)() == status
-    assert adapter.calls == ([] if expected_call is None else [expected_call])
-
-    result = coordinator.execute(reserved)
-
-    assert result.terminal_state == FakeResult.ABORTED
-    assert result.success is False
-    assert [call for call in adapter.calls if call[0] == "movej"] == []
-    assert ownership.is_busy("l") is False
-    assert (
-        coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6))
-        == FakeGoalResponse.ACCEPT
-    )
-
-
 def test_reserved_goal_invalidations_are_consumed_before_the_next_reservation():
     coordinator, adapter, _, ownership = make_coordinator()
 
@@ -781,42 +938,6 @@ def test_reserved_goal_invalidations_are_consumed_before_the_next_reservation():
 
     assert adapter.calls == [("stop",), ("stop",)]
     assert [call for call in adapter.calls if call[0] == "movej"] == []
-
-
-def test_invalidated_goal_does_not_release_a_later_reserved_goal():
-    coordinator, adapter, _, ownership = make_coordinator()
-    first = FakeGoalHandle(movej_goal(joint_degrees=(1.0,) * 6))
-    second = FakeGoalHandle(movej_goal(joint_degrees=(2.0,) * 6))
-
-    assert coordinator.goal_callback(first.request) == FakeGoalResponse.ACCEPT
-    assert coordinator.fast_stop() == 0
-    assert coordinator.goal_callback(second.request) == FakeGoalResponse.ACCEPT
-
-    result = coordinator.execute(first)
-
-    assert result.terminal_state == FakeResult.ABORTED
-    assert [call for call in adapter.calls if call[0] == "movej"] == []
-    assert coordinator.cancel_callback(second) == FakeCancelResponse.ACCEPT
-    assert ownership.is_busy("l") is True
-
-
-def test_multiple_pending_invalidated_goals_never_submit_motion():
-    coordinator, adapter, _, ownership = make_coordinator()
-    first = FakeGoalHandle(movej_goal(joint_degrees=(1.0,) * 6))
-    second = FakeGoalHandle(movej_goal(joint_degrees=(2.0,) * 6))
-
-    assert coordinator.goal_callback(first.request) == FakeGoalResponse.ACCEPT
-    assert coordinator.fast_stop() == 0
-    assert coordinator.goal_callback(second.request) == FakeGoalResponse.ACCEPT
-    assert coordinator.fast_stop() == 0
-
-    first_result = coordinator.execute(first)
-    second_result = coordinator.execute(second)
-
-    assert first_result.terminal_state == FakeResult.ABORTED
-    assert second_result.terminal_state == FakeResult.ABORTED
-    assert adapter.calls == [("stop",), ("stop",)]
-    assert ownership.is_busy("l") is False
 
 
 def test_fast_stop_calls_adapter_when_no_goal_and_returns_status():
@@ -940,6 +1061,30 @@ def test_success_event_without_observed_active_trajectory_fails_safe():
         )
 
     clock.on_sleep = emit_success
+
+    result = coordinator.execute(handle)
+
+    assert result.terminal_state == FakeResult.TIMEOUT
+    assert result.success is False
+    assert adapter.calls.count(("slow_stop",)) == 1
+
+
+def test_movej_completion_requires_final_joints_to_converge_on_target():
+    coordinator, adapter, clock, _ = make_coordinator()
+    handle = FakeGoalHandle(movej_goal(timeout_sec=0.02))
+    emitted = False
+
+    def stop_short_of_target() -> None:
+        nonlocal emitted
+        if emitted:
+            return
+        emitted = True
+        adapter.stopped = True
+        coordinator.handle_event(
+            SimpleNamespace(event_type=1, trajectory_state=True, device=0)
+        )
+
+    clock.on_sleep = stop_short_of_target
 
     result = coordinator.execute(handle)
 

@@ -205,10 +205,7 @@ class CoordinateManager:
     def apply(self, adapter: CoordinateAdapter, arm: str) -> CoordinateVerification:
         """Explicitly write and select the arm defaults, then read them back."""
         profile = self._profile(arm)
-        ownership_error = self._acquire_mutation(arm)
-        if ownership_error:
-            return self._failure(arm, -1, ownership_error)
-        try:
+        def operation() -> CoordinateVerification:
             identity_error = _adapter_identity_error(adapter, arm)
             if identity_error:
                 return self._failure(arm, -1, identity_error)
@@ -226,8 +223,8 @@ class CoordinateManager:
                     self._motion_allowed[arm] = False
                     return self._failure(arm, status, error)
             return self.verify(adapter, arm)
-        finally:
-            self._release_mutation(arm)
+
+        return self._run_mutation(arm, operation)
 
     def select_tool(
         self, adapter: CoordinateAdapter, arm: str, name: str
@@ -236,10 +233,7 @@ class CoordinateManager:
         profile = self._profile(arm)
         if name not in profile.tools:
             return self._failure(arm, -1, f"unknown configured tool frame: {name}")
-        ownership_error = self._acquire_mutation(arm)
-        if ownership_error:
-            return self._failure(arm, -1, ownership_error)
-        try:
+        def operation() -> CoordinateVerification:
             identity_error = _adapter_identity_error(adapter, arm)
             if identity_error:
                 return self._failure(arm, -1, identity_error)
@@ -248,8 +242,8 @@ class CoordinateManager:
                 return self._failure(arm, status, error)
             self._selected_tools[arm] = name
             return self.verify(adapter, arm)
-        finally:
-            self._release_mutation(arm)
+
+        return self._run_mutation(arm, operation)
 
     def select_work(
         self, adapter: CoordinateAdapter, arm: str, name: str
@@ -258,10 +252,7 @@ class CoordinateManager:
         profile = self._profile(arm)
         if name not in profile.works:
             return self._failure(arm, -1, f"unknown configured work frame: {name}")
-        ownership_error = self._acquire_mutation(arm)
-        if ownership_error:
-            return self._failure(arm, -1, ownership_error)
-        try:
+        def operation() -> CoordinateVerification:
             identity_error = _adapter_identity_error(adapter, arm)
             if identity_error:
                 return self._failure(arm, -1, identity_error)
@@ -270,8 +261,8 @@ class CoordinateManager:
                 return self._failure(arm, status, error)
             self._selected_works[arm] = name
             return self.verify(adapter, arm)
-        finally:
-            self._release_mutation(arm)
+
+        return self._run_mutation(arm, operation)
 
     def motion_allowed(self, arm: str) -> bool:
         """Return true only after a successful verification of current selections."""
@@ -290,6 +281,31 @@ class CoordinateManager:
         if not acquired:
             return f"arm {arm} is busy; coordinate mutation refused"
         return ""
+
+    def _run_mutation(
+        self,
+        arm: str,
+        operation: Callable[[], CoordinateVerification],
+    ) -> CoordinateVerification:
+        ownership_error = self._acquire_mutation(arm)
+        if ownership_error:
+            return self._failure(arm, -1, ownership_error)
+
+        release_error: Exception | None = None
+        try:
+            try:
+                result = operation()
+            except Exception as error:
+                result = self._failure(arm, -1, f"coordinate mutation failed: {error}")
+        finally:
+            try:
+                self._release_mutation(arm)
+            except Exception as error:
+                release_error = error
+
+        if release_error is not None:
+            return self._failure(arm, -1, f"ownership release failed: {release_error}")
+        return result
 
     def _release_mutation(self, arm: str) -> None:
         assert self._release_arm is not None
@@ -342,6 +358,8 @@ def _profile_from_data(
         name: _work_frame(arm, name, _mapping(value, f"robots.{arm}.work_frames.{name}"))
         for name, value in work_data.items()
     }
+    _expect_unique_controller_names(tools, f"robots.{arm}.tools")
+    _expect_unique_controller_names(works, f"robots.{arm}.work_frames")
     if tool_default not in tools:
         raise ValueError(f"robots.{arm}.default_tool is not a configured tool frame")
     if work_default not in works:
@@ -424,6 +442,20 @@ def _expect_frame_aliases(data: Mapping[Any, Any], context: str) -> None:
             raise ValueError(
                 f"{context} frame alias must be a non-empty 1-9 character ASCII string"
             )
+
+
+def _expect_unique_controller_names(
+    frames: Mapping[str, ToolFrame] | Mapping[str, WorkFrame],
+    context: str,
+) -> None:
+    controller_names = [frame.controller_name for frame in frames.values()]
+    duplicates = sorted(
+        {name for name in controller_names if controller_names.count(name) > 1}
+    )
+    if duplicates:
+        raise ValueError(
+            f"{context} controller_name values must be unique: {', '.join(duplicates)}"
+        )
 
 
 def _required_string(data: Mapping[str, Any], key: str, context: str) -> str:

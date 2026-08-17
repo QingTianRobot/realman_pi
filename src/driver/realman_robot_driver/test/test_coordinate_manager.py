@@ -122,6 +122,7 @@ class AtomicOwner:
     def __init__(self) -> None:
         self.owned: set[str] = set()
         self.released: list[str] = []
+        self.raise_on_release = False
 
     def acquire(self, arm: str) -> bool:
         if arm in self.owned:
@@ -132,6 +133,8 @@ class AtomicOwner:
     def release(self, arm: str) -> None:
         self.owned.remove(arm)
         self.released.append(arm)
+        if self.raise_on_release:
+            raise RuntimeError("forced ownership release failure")
 
 
 @pytest.fixture
@@ -205,6 +208,26 @@ def test_rejects_duplicate_ros_frame_ids(tmp_path: Path):
     path.write_text(yaml.safe_dump(data), encoding="ascii")
 
     with pytest.raises(ValueError, match="unique"):
+        CoordinateManager.from_yaml(path)
+
+
+def test_rejects_duplicate_tool_controller_names(tmp_path: Path):
+    data = profile_data()
+    data["robots"]["l"]["tools"]["camera"]["controller_name"] = "tcpgrip"
+    path = tmp_path / "coordinates.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="ascii")
+
+    with pytest.raises(ValueError, match=r"tools.*controller_name.*unique"):
+        CoordinateManager.from_yaml(path)
+
+
+def test_rejects_duplicate_work_controller_names(tmp_path: Path):
+    data = profile_data()
+    data["robots"]["l"]["work_frames"]["fixture"]["controller_name"] = "cell"
+    path = tmp_path / "coordinates.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="ascii")
+
+    with pytest.raises(ValueError, match=r"work_frames.*controller_name.*unique"):
         CoordinateManager.from_yaml(path)
 
 
@@ -395,6 +418,36 @@ def test_apply_releases_atomic_ownership_after_adapter_failure(
     result = manager.apply(fake_adapter, "l")
 
     assert result.matched is False
+    assert atomic_owner.owned == set()
+    assert atomic_owner.released == ["l"]
+
+
+@pytest.mark.parametrize("operation", ["apply", "select_tool", "select_work"])
+def test_release_failure_blocks_motion_after_successful_mutation(
+    atomic_owner: AtomicOwner,
+    fake_adapter: FakeAdapter,
+    profile_path: Path,
+    operation: str,
+):
+    manager = CoordinateManager.from_yaml(
+        profile_path,
+        acquire_arm=atomic_owner.acquire,
+        release_arm=atomic_owner.release,
+    )
+    atomic_owner.raise_on_release = True
+    if operation == "apply":
+        result = manager.apply(fake_adapter, "l")
+    elif operation == "select_tool":
+        fake_adapter.work = (0, "cell")
+        result = manager.select_tool(fake_adapter, "l", "camera")
+    else:
+        fake_adapter.tool = (0, "tcpgrip")
+        result = manager.select_work(fake_adapter, "l", "fixture")
+
+    assert result.matched is False
+    assert result.status != 0
+    assert "ownership release" in result.message
+    assert manager.motion_allowed("l") is False
     assert atomic_owner.owned == set()
     assert atomic_owner.released == ["l"]
 

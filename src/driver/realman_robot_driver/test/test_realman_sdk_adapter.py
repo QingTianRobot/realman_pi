@@ -627,3 +627,187 @@ def test_communication_error_marks_connection_for_retry():
     assert state.connected is False
     assert state.error_code == -2
     assert adapter.connected is False
+
+
+class BlockingCreateRobot:
+    created = 0
+    create_entered = threading.Event()
+    create_release = threading.Event()
+    destroyed = []
+
+    def __init__(self, mode):
+        type(self).created += 1
+        self.calls = []
+
+    def rm_create_robot_arm(self, ip, port):
+        type(self).create_entered.set()
+        type(self).create_release.wait(timeout=2.0)
+        return SimpleNamespace(id=type(self).created)
+
+    def rm_delete_robot_arm(self):
+        self.calls.append("delete")
+        return 0
+
+    def rm_destroy(self):
+        self.calls.append("destroy")
+        type(self).destroyed.append(self)
+        return 0
+
+
+def _install_connecting_sdk(monkeypatch, robot_type):
+    sdk = ModuleType("Robotic_Arm.rm_robot_interface")
+    sdk.RoboticArm = robot_type
+    sdk.rm_thread_mode_e = SimpleNamespace(RM_TRIPLE_MODE_E=object())
+    package = ModuleType("Robotic_Arm")
+    package.rm_robot_interface = sdk
+    monkeypatch.setitem(sys.modules, "Robotic_Arm", package)
+    monkeypatch.setitem(sys.modules, "Robotic_Arm.rm_robot_interface", sdk)
+
+
+def test_connect_is_single_handle_and_disconnect_waits_for_blocking_create(monkeypatch):
+    BlockingCreateRobot.created = 0
+    BlockingCreateRobot.create_entered.clear()
+    BlockingCreateRobot.create_release.clear()
+    BlockingCreateRobot.destroyed = []
+    _install_connecting_sdk(monkeypatch, BlockingCreateRobot)
+    adapter = RealManSdkAdapter(
+        ip="192.0.2.123",
+        port=8080,
+        thread_mode="RM_TRIPLE_MODE_E",
+        robot_model="RM65-B",
+        mock_mode=False,
+    )
+    connect_results = []
+    connector = threading.Thread(target=lambda: connect_results.append(adapter.connect()))
+    second_connector = threading.Thread(target=lambda: connect_results.append(adapter.connect()))
+    connector.start()
+    assert BlockingCreateRobot.create_entered.wait(timeout=1.0)
+    second_connector.start()
+    disconnect_result = []
+    disconnector = threading.Thread(target=lambda: disconnect_result.append(adapter.disconnect()))
+    disconnector.start()
+    assert disconnector.is_alive()
+    BlockingCreateRobot.create_release.set()
+    connector.join(timeout=2.0)
+    second_connector.join(timeout=2.0)
+    disconnector.join(timeout=2.0)
+
+    assert not connector.is_alive()
+    assert not second_connector.is_alive()
+    assert not disconnector.is_alive()
+    assert connect_results == [0, 0]
+    assert disconnect_result == [0]
+    assert BlockingCreateRobot.created == 1
+    assert len(BlockingCreateRobot.destroyed) == 1
+    assert adapter.connected is False
+
+
+def test_disconnect_waits_for_blocking_motion_before_destroy(adapter, fake_robot):
+    entered = threading.Event()
+    release = threading.Event()
+    destroy_started = threading.Event()
+
+    def slow_movej(*args):
+        entered.set()
+        release.wait(timeout=2.0)
+        return 17
+
+    def destroy():
+        destroy_started.set()
+        return 0
+
+    fake_robot.rm_movej = slow_movej
+    fake_robot.rm_destroy = destroy
+    motion = threading.Thread(target=adapter.movej, args=([0.0] * 6, 20, 0, False))
+    motion.start()
+    assert entered.wait(timeout=1.0)
+
+    disconnect_result = []
+    disconnector = threading.Thread(target=lambda: disconnect_result.append(adapter.disconnect()))
+    disconnector.start()
+    assert disconnector.is_alive()
+    assert not destroy_started.wait(timeout=0.2)
+    assert adapter.stop() == 0
+    assert ("rm_set_arm_stop",) in fake_robot.calls
+
+    release.set()
+    motion.join(timeout=2.0)
+    disconnector.join(timeout=2.0)
+    assert not motion.is_alive()
+    assert not disconnector.is_alive()
+    assert destroy_started.is_set()
+    assert disconnect_result == [0]
+
+
+def test_stale_motion_result_does_not_pollute_disconnect_or_reconnect(adapter, fake_robot):
+    entered = threading.Event()
+    release = threading.Event()
+    destroy_entered = threading.Event()
+    destroy_release = threading.Event()
+
+    def stale_movej(*args):
+        entered.set()
+        release.wait(timeout=2.0)
+        return 44
+
+    def blocking_destroy():
+        destroy_entered.set()
+        destroy_release.wait(timeout=2.0)
+        return 0
+
+    fake_robot.rm_movej = stale_movej
+    fake_robot.rm_destroy = blocking_destroy
+    motion = threading.Thread(target=adapter.movej, args=([0.0] * 6, 20, 0, False))
+    motion.start()
+    assert entered.wait(timeout=1.0)
+    disconnector = threading.Thread(target=adapter.disconnect)
+    disconnector.start()
+    release.set()
+    assert destroy_entered.wait(timeout=1.0)
+
+    assert adapter.last_error == 0
+    destroy_release.set()
+    motion.join(timeout=2.0)
+    disconnector.join(timeout=2.0)
+    assert not motion.is_alive()
+    assert not disconnector.is_alive()
+
+    adapter.mock_mode = True
+    assert adapter.connect() == 0
+    assert adapter.last_error == 0
+
+
+def test_stale_callback_completion_cannot_bind_after_reconnect(adapter, fake_robot):
+    callback_started = threading.Event()
+    callback_release = threading.Event()
+    first = lambda event: ("first", event)
+
+    def blocking_callback(callback):
+        callback_started.set()
+        callback_release.wait(timeout=2.0)
+        return 0
+
+    fake_robot.rm_get_arm_event_call_back = blocking_callback
+    registration_result = []
+    registration = threading.Thread(
+        target=lambda: registration_result.append(adapter.register_event_callback(first))
+    )
+    registration.start()
+    assert callback_started.wait(timeout=1.0)
+
+    disconnect_result = []
+    disconnector = threading.Thread(target=lambda: disconnect_result.append(adapter.disconnect()))
+    disconnector.start()
+    callback_release.set()
+    registration.join(timeout=2.0)
+    disconnector.join(timeout=2.0)
+    assert not registration.is_alive()
+    assert not disconnector.is_alive()
+
+    adapter._robot = None
+    adapter._handle = None
+    adapter._connected = False
+    adapter.mock_mode = True
+    assert adapter.connect() == 0
+    assert registration_result == [-1]
+    assert adapter._event_callback is None

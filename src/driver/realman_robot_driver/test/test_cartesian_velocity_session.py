@@ -57,13 +57,18 @@ class FakeAdapter:
         return self.fast_stop_status
 
 
-def settings(*, max_linear_speed_mps=1.0, max_angular_speed_radps=2.0) -> MotionSettings:
+def settings(
+    *,
+    max_linear_speed_mps=1.0,
+    max_angular_speed_radps=2.0,
+    velocity_watchdog_ms=100,
+) -> MotionSettings:
     return MotionSettings(
         default_timeout_sec=10.0,
         max_linear_speed_mps=max_linear_speed_mps,
         max_angular_speed_radps=max_angular_speed_radps,
         velocity_control_period_ms=20,
-        velocity_watchdog_ms=100,
+        velocity_watchdog_ms=velocity_watchdog_ms,
         max_linear_accel_mps2=1.0,
         max_angular_accel_radps2=2.0,
         joint_goal_tolerance_deg=0.25,
@@ -127,7 +132,11 @@ def test_tick_limits_linear_and_angular_delta_norms_independently():
     session = make_session(
         adapter=adapter,
         clock=clock,
-        session_settings=settings(max_linear_speed_mps=10.0, max_angular_speed_radps=10.0),
+        session_settings=settings(
+            max_linear_speed_mps=10.0,
+            max_angular_speed_radps=10.0,
+            velocity_watchdog_ms=2000,
+        ),
     )
     session.start(valid_goal(watchdog_ms=2000))
     session.accept_command(twist("l/tool/tcpgrip", linear=(3.0, 4.0, 0.0), angular=(0.0, 3.0, 4.0)))
@@ -161,6 +170,7 @@ def test_watchdog_sends_zero_then_stops_once_and_rejects_commands():
     assert adapter.velocity_calls[-1][0] == [0.0] * 6
     assert adapter.slow_stop_calls == 1
     assert session.result.terminal_state == VelocityTerminalState.WATCHDOG_STOP
+    assert session.result.success is False
     with pytest.raises(RuntimeError, match="terminated"):
         session.accept_command(twist("l/tool/tcpgrip"))
 
@@ -175,7 +185,7 @@ def test_cancel_sends_zero_and_slow_stop():
     assert adapter.velocity_calls[-1][0] == [0.0] * 6
     assert adapter.slow_stop_calls == 1
     assert result.terminal_state == VelocityTerminalState.CANCELED
-    assert session.result.success is True
+    assert session.result.success is False
 
 
 def test_cancel_reports_aborted_when_slow_stop_fails():
@@ -214,6 +224,39 @@ def test_rejects_goal_settings_that_are_not_positive():
     session = make_session()
     with pytest.raises(ValueError, match="control_period_ms"):
         session.start(valid_goal(control_period_ms=0))
+
+
+@pytest.mark.parametrize(
+    ("field", "value", "message"),
+    [
+        ("control_period_ms", 10, "configured control period"),
+        ("watchdog_ms", 101, "configured watchdog"),
+        ("max_linear_accel_mps2", 1.01, "configured linear acceleration"),
+        ("max_angular_accel_radps2", 2.01, "configured angular acceleration"),
+    ],
+)
+def test_goal_safety_settings_cannot_exceed_configuration(field, value, message):
+    ownership = ArmOwnership()
+    session = make_session(ownership=ownership)
+
+    with pytest.raises(ValueError, match=message):
+        session.start(valid_goal(**{field: value}))
+
+    assert ownership.is_busy("l") is False
+
+
+@pytest.mark.parametrize(
+    ("trajectory_mode", "radio"),
+    [(-1, 0), (3, 0), (0, 1), (1, -1), (1, 101), (2, -1), (2, 1001)],
+)
+def test_goal_rejects_invalid_trajectory_mode_and_radio(trajectory_mode, radio):
+    ownership = ArmOwnership()
+    session = make_session(ownership=ownership)
+
+    with pytest.raises(ValueError, match="trajectory_mode|radio"):
+        session.start(valid_goal(trajectory_mode=trajectory_mode, radio=radio))
+
+    assert ownership.is_busy("l") is False
 
 
 def test_commands_are_rejected_above_configured_speed_limits():
@@ -488,3 +531,279 @@ def test_reserved_start_waits_for_claimed_fast_stop_result():
     assert start_result == [False]
     assert session.result.terminal_state == VelocityTerminalState.ABORTED
     assert session.result.api2_status == 31
+
+
+def test_canceled_request_cannot_resurrect_after_more_than_32_completions():
+    ownership = ArmOwnership()
+    session = make_session(ownership=ownership)
+    old_goal = valid_goal()
+    assert bool(session.goal_callback(old_goal)) is True
+    assert bool(session.cancel_callback(SimpleNamespace(request=old_goal))) is True
+
+    for _ in range(40):
+        goal = valid_goal()
+        assert bool(session.goal_callback(goal)) is True
+        assert bool(session.cancel_callback(SimpleNamespace(request=goal))) is True
+
+    assert session.start(old_goal) is False
+    assert ownership.is_busy("l") is False
+
+
+def test_fast_stop_invalidates_start_while_velocity_init_is_blocked():
+    init_entered = threading.Event()
+    allow_init = threading.Event()
+    stop_called = threading.Event()
+
+    class BlockingInitAdapter(FakeAdapter):
+        def set_movev_init(self, avoid_singularity_flag, frame_type, period_ms):
+            self.init_calls.append((avoid_singularity_flag, frame_type, period_ms))
+            init_entered.set()
+            assert allow_init.wait(timeout=1.0)
+            return self.init_status
+
+        def stop(self):
+            self.fast_stop_calls += 1
+            stop_called.set()
+            return self.fast_stop_status
+
+    ownership = ArmOwnership()
+    adapter = BlockingInitAdapter()
+    session = make_session(adapter=adapter, ownership=ownership)
+    start_results = []
+    start_thread = threading.Thread(
+        target=lambda: start_results.append(session.start(valid_goal()))
+    )
+    start_thread.start()
+    assert init_entered.wait(timeout=1.0)
+
+    stop_results = []
+    stop_thread = threading.Thread(
+        target=lambda: stop_results.append(session.fast_stop_if_owned())
+    )
+    stop_thread.start()
+    issued_while_blocked = stop_called.wait(timeout=0.05)
+    allow_init.set()
+    start_thread.join(timeout=1.0)
+    stop_thread.join(timeout=1.0)
+
+    assert issued_while_blocked is True
+    assert start_results == [False]
+    assert stop_results == [0]
+    assert adapter.velocity_calls == []
+    assert session.result.terminal_state == VelocityTerminalState.ABORTED
+    assert ownership.is_busy("l") is False
+
+
+def test_shutdown_timeout_invalidates_blocked_start_and_retains_ownership():
+    init_entered = threading.Event()
+    allow_init = threading.Event()
+
+    class BlockingInitAdapter(FakeAdapter):
+        def set_movev_init(self, avoid_singularity_flag, frame_type, period_ms):
+            self.init_calls.append((avoid_singularity_flag, frame_type, period_ms))
+            init_entered.set()
+            assert allow_init.wait(timeout=1.0)
+            return self.init_status
+
+    ownership = ArmOwnership()
+    session = make_session(adapter=BlockingInitAdapter(), ownership=ownership)
+    session._thread_join_timeout_sec = 0.02
+    start_results = []
+    start_thread = threading.Thread(
+        target=lambda: start_results.append(session.start(valid_goal()))
+    )
+    start_thread.start()
+    assert init_entered.wait(timeout=1.0)
+
+    statuses = []
+    shutdown_thread = threading.Thread(target=lambda: statuses.append(session.shutdown()))
+    shutdown_thread.start()
+    shutdown_thread.join(timeout=0.1)
+    returned_before_init = not shutdown_thread.is_alive()
+    ownership_retained = ownership.is_busy("l")
+    allow_init.set()
+    start_thread.join(timeout=1.0)
+    shutdown_thread.join(timeout=1.0)
+
+    assert returned_before_init is True
+    assert statuses == [-1]
+    assert start_results == [False]
+    assert session.result.terminal_state == VelocityTerminalState.ABORTED
+    assert ownership_retained is True
+    assert ownership.is_busy("l") is True
+    ownership.release("l")
+
+
+def test_cancel_callback_during_start_does_not_release_ownership_early():
+    init_entered = threading.Event()
+    allow_init = threading.Event()
+
+    class BlockingInitAdapter(FakeAdapter):
+        def set_movev_init(self, avoid_singularity_flag, frame_type, period_ms):
+            self.init_calls.append((avoid_singularity_flag, frame_type, period_ms))
+            init_entered.set()
+            assert allow_init.wait(timeout=1.0)
+            return self.init_status
+
+    ownership = ArmOwnership()
+    session = make_session(adapter=BlockingInitAdapter(), ownership=ownership)
+    goal = valid_goal()
+    assert bool(session.goal_callback(goal)) is True
+    start_results = []
+    start_thread = threading.Thread(
+        target=lambda: start_results.append(session.start(goal))
+    )
+    start_thread.start()
+    assert init_entered.wait(timeout=1.0)
+
+    cancel_accepted = session.cancel_callback(SimpleNamespace(request=goal))
+    ownership_retained = ownership.is_busy("l")
+    allow_init.set()
+    start_thread.join(timeout=1.0)
+    session.cancel()
+
+    assert bool(cancel_accepted) is True
+    assert ownership_retained is True
+    assert start_results == [True]
+    assert ownership.is_busy("l") is False
+
+
+def test_overlapping_ticks_do_not_duplicate_velocity_sdk_calls():
+    move_entered = threading.Event()
+    allow_move = threading.Event()
+
+    class BlockingMoveAdapter(FakeAdapter):
+        def __init__(self):
+            super().__init__()
+            self.block_movev = False
+
+        def movev(self, vector, follow, trajectory_mode, radio):
+            self.velocity_calls.append((list(vector), follow, trajectory_mode, radio))
+            if self.block_movev:
+                move_entered.set()
+                assert allow_move.wait(timeout=1.0)
+            return self.move_status
+
+    adapter = BlockingMoveAdapter()
+    session = make_session(adapter=adapter)
+    session.start(valid_goal())
+    session._stop_event.set()
+    session.thread.join(timeout=1.0)
+    adapter.block_movev = True
+
+    first_tick = threading.Thread(target=session.tick)
+    first_tick.start()
+    assert move_entered.wait(timeout=1.0)
+    calls_during_first_tick = len(adapter.velocity_calls)
+
+    second_tick = threading.Thread(target=session.tick)
+    second_tick.start()
+    second_tick.join(timeout=0.05)
+    second_tick_returned = not second_tick.is_alive()
+    calls_before_unblock = len(adapter.velocity_calls)
+    allow_move.set()
+    first_tick.join(timeout=1.0)
+    second_tick.join(timeout=1.0)
+    session.cancel()
+
+    assert second_tick_returned is True
+    assert calls_before_unblock == calls_during_first_tick
+
+
+def test_fast_stop_is_issued_while_control_movev_is_blocked():
+    move_entered = threading.Event()
+    allow_move = threading.Event()
+    stop_called = threading.Event()
+
+    class BlockingMoveAdapter(FakeAdapter):
+        def __init__(self):
+            super().__init__()
+            self.block_movev = False
+
+        def movev(self, vector, follow, trajectory_mode, radio):
+            self.velocity_calls.append((list(vector), follow, trajectory_mode, radio))
+            if self.block_movev:
+                move_entered.set()
+                assert allow_move.wait(timeout=1.0)
+            return self.move_status
+
+        def stop(self):
+            self.fast_stop_calls += 1
+            stop_called.set()
+            return self.fast_stop_status
+
+    adapter = BlockingMoveAdapter()
+    session = make_session(adapter=adapter)
+    session.start(valid_goal(watchdog_ms=100))
+    adapter.block_movev = True
+    tick_thread = threading.Thread(target=session.tick)
+    tick_thread.start()
+    assert move_entered.wait(timeout=1.0)
+
+    stop_thread = threading.Thread(target=session.fast_stop_if_owned)
+    stop_thread.start()
+    issued_while_blocked = stop_called.wait(timeout=0.05)
+    allow_move.set()
+    tick_thread.join(timeout=1.0)
+    stop_thread.join(timeout=1.0)
+
+    assert issued_while_blocked is True
+    assert adapter.fast_stop_calls == 1
+
+
+def test_shutdown_timeout_retains_ownership_while_control_thread_is_alive():
+    move_entered = threading.Event()
+    allow_move = threading.Event()
+
+    class BlockingMoveAdapter(FakeAdapter):
+        def __init__(self):
+            super().__init__()
+            self.block_movev = False
+
+        def movev(self, vector, follow, trajectory_mode, radio):
+            self.velocity_calls.append((list(vector), follow, trajectory_mode, radio))
+            if self.block_movev:
+                move_entered.set()
+                assert allow_move.wait(timeout=1.0)
+            return self.move_status
+
+    ownership = ArmOwnership()
+    adapter = BlockingMoveAdapter()
+    session = make_session(adapter=adapter, ownership=ownership)
+    session._thread_join_timeout_sec = 0.02
+    session.start(valid_goal())
+    adapter.block_movev = True
+    assert move_entered.wait(timeout=1.0)
+
+    statuses = []
+    shutdown_thread = threading.Thread(target=lambda: statuses.append(session.shutdown()))
+    shutdown_thread.start()
+    shutdown_thread.join(timeout=0.1)
+    returned_before_move = not shutdown_thread.is_alive()
+    ownership_retained = ownership.is_busy("l")
+    allow_move.set()
+    shutdown_thread.join(timeout=1.0)
+
+    assert returned_before_move is True
+    assert statuses == [-1]
+    assert session.result.terminal_state == VelocityTerminalState.ABORTED
+    assert ownership_retained is True
+    assert ownership.is_busy("l") is True
+    ownership.release("l")
+
+
+def test_base_velocity_uses_namespaced_base_link_frame():
+    session = CartesianVelocitySession(
+        arm_id="l",
+        adapter=FakeAdapter(),
+        ownership=ArmOwnership(),
+        settings=settings(),
+        active_frame={ReferenceType.BASE: ("base", "l/base_link")},
+        motion_allowed=lambda _arm: True,
+        monotonic=Clock(),
+    )
+    goal = valid_goal(reference_type=int(ReferenceType.BASE), reference_name="base")
+
+    assert session.start(goal) is True
+    assert session.accept_command(twist("l/base_link")) is True
+    session.shutdown()

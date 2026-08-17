@@ -587,6 +587,12 @@ def test_node_source_registers_cartesian_velocity_action_and_command_topic():
     assert "self.velocity_session.accept_command" in source
 
 
+def test_node_uses_namespaced_base_link_for_base_velocity_commands():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert 'ReferenceType.BASE: ("base", f"{self.arm_id}/base_link")' in source
+
+
 def test_node_shutdown_stops_velocity_before_disconnect():
     source = NODE_PATH.read_text(encoding="utf-8")
     destroy_source = source[source.index("    def destroy_node"):]

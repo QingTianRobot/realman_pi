@@ -155,7 +155,7 @@ class RealManDriverNode(Node):
             logger=self.get_logger(),
         )
         self._active_velocity_frames = {
-            ReferenceType.BASE: ("base", f"{self.arm_id}/base"),
+            ReferenceType.BASE: ("base", f"{self.arm_id}/base_link"),
             ReferenceType.WORK: (
                 profile.works[profile.work_default].controller_name,
                 profile.works[profile.work_default].ros_frame_id,

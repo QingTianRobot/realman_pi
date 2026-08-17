@@ -124,7 +124,13 @@ class CartesianVelocitySession:
         self._result: VelocityResult | None = None
         self._last_api2_status = 0
         self._phase = VelocityFeedbackPhase.VALIDATING
-        self._last_feedback_at = 0.0
+        self._starting = False
+        self._start_token = 0
+        self._velocity_initialized = False
+        self._movev_in_progress = False
+        self._slow_stop_in_progress = False
+        self._lockout = False
+        self._thread_join_timeout_sec = settings.stop_timeout_sec
 
     @property
     def running(self) -> bool:
@@ -157,8 +163,12 @@ class CartesianVelocitySession:
                 if not self._running and self._reservation is None:
                     self._result = completed.result
                 return False
-            if self._running:
-                self._set_result_locked(False, VelocityTerminalState.ABORTED, -1, "session is already running")
+            if (
+                self._running
+                or self._starting
+                or self._slow_stop_in_progress
+                or self._lockout
+            ):
                 return False
             reservation = self._reservation
             if reservation is not None and goal is not reservation.request:
@@ -205,68 +215,85 @@ class CartesianVelocitySession:
                     self._result = result
                     return False
                 raise
-            if reservation is not None:
-                self._reservation = None
-            try:
-                init_status = _status(self.adapter.set_movev_init(
+            self._start_token += 1
+            token = self._start_token
+            self._starting = True
+            self._goal = validated
+            self._velocity_initialized = False
+            self._movev_in_progress = False
+            self._phase = VelocityFeedbackPhase.VALIDATING
+            self._stop_sent = False
+            self._result = None
+            self._last_fast_stop_status = None
+            self._done_event.clear()
+            self._stop_event.clear()
+
+        init_error: Exception | None = None
+        try:
+            init_status = _status(
+                self.adapter.set_movev_init(
                     self._avoid_singularity_flag,
                     int(validated.reference_type),
                     validated.control_period_ms,
-                ))
-            except Exception as error:
-                self._release_ownership_locked()
-                result = VelocityResult(
-                    False,
-                    VelocityTerminalState.ABORTED,
-                    -1,
-                    f"velocity initialization failed: {error}",
                 )
-                if reservation is not None:
-                    self._complete_reservation_locked(reservation, result)
-                self._result = result
+            )
+        except Exception as error:
+            init_status = -1
+            init_error = error
+
+        with self._condition:
+            if token != self._start_token:
+                self._starting = False
+                self._condition.notify_all()
                 return False
             if init_status != 0:
-                self._release_ownership_locked()
                 result = VelocityResult(
                     False,
                     VelocityTerminalState.ABORTED,
                     init_status,
-                    "velocity initialization failed",
+                    f"velocity initialization failed: {init_error}"
+                    if init_error is not None
+                    else "velocity initialization failed",
                 )
-                if reservation is not None:
-                    self._complete_reservation_locked(reservation, result)
-                self._result = result
+                self._finish_start_failure_locked(reservation, result)
                 return False
-            try:
-                zero_status = _status(self.adapter.movev(
-                    list(_ZERO), validated.follow, validated.trajectory_mode, validated.radio
-                ))
-            except Exception as error:
-                self._release_ownership_locked()
-                result = VelocityResult(
-                    False,
-                    VelocityTerminalState.ABORTED,
-                    -1,
-                    f"zero velocity initialization failed: {error}",
+            self._velocity_initialized = True
+            self._movev_in_progress = True
+
+        zero_error: Exception | None = None
+        try:
+            zero_status = _status(
+                self.adapter.movev(
+                    list(_ZERO),
+                    validated.follow,
+                    validated.trajectory_mode,
+                    validated.radio,
                 )
-                if reservation is not None:
-                    self._complete_reservation_locked(reservation, result)
-                self._result = result
+            )
+        except Exception as error:
+            zero_status = -1
+            zero_error = error
+
+        with self._condition:
+            self._movev_in_progress = False
+            if token != self._start_token:
+                self._starting = False
+                self._condition.notify_all()
                 return False
             if zero_status != 0:
-                self._release_ownership_locked()
                 result = VelocityResult(
                     False,
                     VelocityTerminalState.ABORTED,
                     zero_status,
-                    "zero velocity initialization failed",
+                    f"zero velocity initialization failed: {zero_error}"
+                    if zero_error is not None
+                    else "zero velocity initialization failed",
                 )
-                if reservation is not None:
-                    self._complete_reservation_locked(reservation, result)
-                self._result = result
+                self._finish_start_failure_locked(reservation, result)
                 return False
+            if reservation is not None and self._reservation is reservation:
+                self._reservation = None
             now = self._monotonic()
-            self._goal = validated
             self._active_request = goal
             self._command = _ZERO
             self._limited_command = _ZERO
@@ -274,11 +301,7 @@ class CartesianVelocitySession:
             self._last_tick_at = now
             self._last_api2_status = 0
             self._phase = VelocityFeedbackPhase.EXECUTING
-            self._stop_sent = False
-            self._result = None
-            self._last_fast_stop_status = None
-            self._done_event.clear()
-            self._stop_event.clear()
+            self._starting = False
             self._running = True
             self._thread = threading.Thread(
                 target=self._run_loop,
@@ -286,6 +309,7 @@ class CartesianVelocitySession:
                 daemon=True,
             )
             self._thread.start()
+            self._condition.notify_all()
             return True
 
     def accept_command(self, command: Any) -> bool:
@@ -312,37 +336,71 @@ class CartesianVelocitySession:
 
     def tick(self) -> VelocityResult | None:
         """Send one bounded command, or terminate safely when the watchdog expires."""
-        with self._lock:
+        with self._condition:
             if not self._running or self._goal is None:
                 return self._result
+            if self._movev_in_progress:
+                return None
             now = self._monotonic()
             if now - self._command_received_at >= self._goal.watchdog_ms / 1000.0:
-                return self._terminate_locked(
-                    VelocityTerminalState.WATCHDOG_STOP,
-                    "velocity command watchdog expired",
+                watchdog_expired = True
+            else:
+                watchdog_expired = False
+            if not watchdog_expired:
+                goal = self._goal
+                token = self._start_token
+                dt = max(0.0, now - self._last_tick_at)
+                self._last_tick_at = now
+                target = _clip_speed(self._command, self.settings)
+                linear = limit_vector_delta(
+                    self._limited_command[:3],
+                    target[:3],
+                    goal.max_linear_accel_mps2,
+                    dt,
                 )
-            dt = max(0.0, now - self._last_tick_at)
-            self._last_tick_at = now
-            target = _clip_speed(self._command, self.settings)
-            linear = limit_vector_delta(
-                self._limited_command[:3], target[:3], self._goal.max_linear_accel_mps2, dt
+                angular = limit_vector_delta(
+                    self._limited_command[3:],
+                    target[3:],
+                    goal.max_angular_accel_radps2,
+                    dt,
+                )
+                limited = tuple(linear + angular)
+                self._movev_in_progress = True
+
+        if watchdog_expired:
+            return self._stop_and_join(
+                VelocityTerminalState.WATCHDOG_STOP,
+                "velocity command watchdog expired",
             )
-            angular = limit_vector_delta(
-                self._limited_command[3:], target[3:], self._goal.max_angular_accel_radps2, dt
+
+        try:
+            status = _status(
+                self.adapter.movev(
+                    list(limited), goal.follow, goal.trajectory_mode, goal.radio
+                )
             )
-            limited = tuple(linear + angular)
-            status = _status(self.adapter.movev(
-                list(limited), self._goal.follow, self._goal.trajectory_mode, self._goal.radio
-            ))
+        except Exception:
+            status = -1
+
+        with self._condition:
+            self._movev_in_progress = False
+            self._condition.notify_all()
+            if (
+                token != self._start_token
+                or not self._running
+                or self._goal is not goal
+            ):
+                return self._result
             self._limited_command = limited
             self._last_api2_status = status
-            if status != 0:
-                return self._terminate_locked(
-                    VelocityTerminalState.ABORTED,
-                    "Cartesian velocity command failed",
-                    api2_status=status,
-                )
-            return None
+
+        if status != 0:
+            return self._stop_and_join(
+                VelocityTerminalState.ABORTED,
+                "Cartesian velocity command failed",
+                api2_status=status,
+            )
+        return None
 
     def cancel(self) -> VelocityResult:
         """Stop a running session and return CANCELED unless slow-stop fails."""
@@ -360,28 +418,40 @@ class CartesianVelocitySession:
                 while self._fast_stop_in_progress:
                     self._condition.wait()
                 return self._last_fast_stop_status
+            while self._slow_stop_in_progress:
+                self._condition.wait()
             reservation = self._reservation
             reserved = (
                 reservation is not None
                 and reservation.result is None
                 and self._owns_ownership
             )
-            active = self._running and self._owns_ownership
+            active = self._owns_ownership and (
+                self._running
+                or self._starting
+                or self._velocity_initialized
+                or self._movev_in_progress
+                or self._lockout
+            )
             if not reserved and not active:
                 return None
             self._fast_stop_in_progress = True
             self._last_fast_stop_status = None
-            initialized = active and self._goal is not None
-            goal = self._goal if initialized else None
-            thread = self._thread if active else None
+            self._start_token += 1
+            goal = self._goal
+            thread = self._thread
+            send_zero = (
+                self._velocity_initialized
+                and goal is not None
+                and not self._movev_in_progress
+            )
             self._running = False
             self._stop_event.set()
-
-        if thread is not None and thread is not threading.current_thread():
-            thread.join()
+            self._stop_sent = True
+            self._phase = VelocityFeedbackPhase.STOPPING
 
         zero_status = 0
-        if goal is not None:
+        if send_zero:
             try:
                 zero_status = _status(
                     self.adapter.movev(
@@ -397,14 +467,18 @@ class CartesianVelocitySession:
             stop_status = _status(self.adapter.stop())
         except Exception:
             stop_status = -1
-        status = zero_status or stop_status
+
+        timed_out = self._wait_for_calls_to_stop(thread)
+        status = -1 if timed_out else zero_status or stop_status
         result = VelocityResult(
             False,
             VelocityTerminalState.ABORTED,
             status,
-            "velocity session fast-stopped"
-            if status == 0
-            else f"velocity fast stop failed with API2 status {status}",
+            "velocity session fast-stopped" if status == 0 else (
+                "velocity fast stop timed out"
+                if timed_out
+                else f"velocity fast stop failed with API2 status {status}"
+            ),
         )
 
         with self._condition:
@@ -416,7 +490,10 @@ class CartesianVelocitySession:
             self._done_event.set()
             self._last_fast_stop_status = status
             self._fast_stop_in_progress = False
-            self._release_ownership_locked()
+            self._velocity_initialized = False
+            self._lockout = timed_out
+            if not timed_out:
+                self._release_ownership_locked()
             self._condition.notify_all()
         return status
 
@@ -425,8 +502,11 @@ class CartesianVelocitySession:
         with self._condition:
             if (
                 self._running
+                or self._starting
                 or self._reservation is not None
                 or self._fast_stop_in_progress
+                or self._slow_stop_in_progress
+                or self._lockout
             ):
                 return _goal_reject()
             try:
@@ -456,9 +536,11 @@ class CartesianVelocitySession:
             ):
                 if self._fast_stop_in_progress:
                     return _cancel_accept()
+                if self._starting:
+                    return _cancel_accept()
                 if self._reservation.result is None:
                     result = VelocityResult(
-                        True,
+                        False,
                         VelocityTerminalState.CANCELED,
                         0,
                         "velocity session canceled before execution",
@@ -503,6 +585,19 @@ class CartesianVelocitySession:
         return self._ros_result(result)
 
     # Internals ---------------------------------------------------------------
+    def _finish_start_failure_locked(
+        self, reservation: _Reservation | None, result: VelocityResult
+    ) -> None:
+        self._starting = False
+        self._goal = None
+        self._velocity_initialized = False
+        self._movev_in_progress = False
+        if reservation is not None and self._reservation is reservation:
+            self._complete_reservation_locked(reservation, result)
+        self._result = result
+        self._release_ownership_locked()
+        self._condition.notify_all()
+
     def _complete_reservation_locked(
         self, reservation: _Reservation, result: VelocityResult
     ) -> None:
@@ -510,9 +605,8 @@ class CartesianVelocitySession:
         if self._reservation is reservation:
             self._reservation = None
         self._completed_reservations.append(reservation)
-        # Retain recent request identities so late Action execution callbacks
-        # cannot reacquire the arm, while bounding references held by a node.
-        del self._completed_reservations[:-32]
+        # Action execution can be arbitrarily delayed. Retain every completed
+        # request identity for this session's lifetime so none can resurrect.
 
     def _completed_reservation_locked(self, request: Any) -> _Reservation | None:
         for reservation in reversed(self._completed_reservations):
@@ -544,18 +638,40 @@ class CartesianVelocitySession:
                 f"reference_name must equal active verified frame {controller_name!r}"
             )
         period = _positive_int(_field(goal, "control_period_ms"), "control_period_ms")
+        if period != self.settings.velocity_control_period_ms:
+            raise ValueError(
+                "control_period_ms must equal the configured control period"
+            )
         watchdog = _positive_int(_field(goal, "watchdog_ms"), "watchdog_ms")
+        if watchdog > self.settings.velocity_watchdog_ms:
+            raise ValueError("watchdog_ms exceeds the configured watchdog")
         linear_accel = _positive_float(
             _field(goal, "max_linear_accel_mps2"), "max_linear_accel_mps2"
         )
+        if linear_accel > self.settings.max_linear_accel_mps2:
+            raise ValueError(
+                "max_linear_accel_mps2 exceeds configured linear acceleration"
+            )
         angular_accel = _positive_float(
             _field(goal, "max_angular_accel_radps2"), "max_angular_accel_radps2"
         )
+        if angular_accel > self.settings.max_angular_accel_radps2:
+            raise ValueError(
+                "max_angular_accel_radps2 exceeds configured angular acceleration"
+            )
         follow = _field(goal, "follow")
         if not isinstance(follow, bool):
             raise ValueError("follow must be a boolean")
         trajectory_mode = _integer(_field(goal, "trajectory_mode"), "trajectory_mode")
         radio = _integer(_field(goal, "radio"), "radio")
+        if trajectory_mode not in {0, 1, 2}:
+            raise ValueError("trajectory_mode must be 0, 1, or 2")
+        radio_limit = {0: 0, 1: 100, 2: 1000}[trajectory_mode]
+        if not 0 <= radio <= radio_limit:
+            raise ValueError(
+                f"radio must be between 0 and {radio_limit} for trajectory_mode "
+                f"{trajectory_mode}"
+            )
         return _ValidatedGoal(
             reference_type,
             reference_name,
@@ -599,93 +715,171 @@ class CartesianVelocitySession:
                     break
                 self.tick()
         except Exception as error:
-            with self._lock:
-                if self._running:
-                    self._terminate_locked(VelocityTerminalState.ABORTED, f"velocity loop failed: {error}")
+            with self._condition:
+                abort = (
+                    self._running
+                    and not self._fast_stop_in_progress
+                    and not self._slow_stop_in_progress
+                )
+            if abort:
+                self._stop_and_join(
+                    VelocityTerminalState.ABORTED,
+                    f"velocity loop failed: {error}",
+                    api2_status=-1,
+                )
         finally:
             with self._condition:
                 if self._thread is threading.current_thread():
                     self._thread = None
-                if not self._running and not self._fast_stop_in_progress:
+                if (
+                    not self._running
+                    and not self._fast_stop_in_progress
+                    and not self._slow_stop_in_progress
+                    and not self._lockout
+                    and not self._starting
+                    and not self._movev_in_progress
+                ):
                     self._release_ownership_locked()
                 self._condition.notify_all()
 
-    def _stop_and_join(self, state: VelocityTerminalState, message: str) -> VelocityResult:
-        with self._condition:
-            while self._fast_stop_in_progress:
-                self._condition.wait()
-            if self._reservation is not None and not self._running:
-                reservation = self._reservation
-                if reservation.result is None:
-                    self._complete_reservation_locked(
-                        reservation,
-                        VelocityResult(True, state, 0, message),
-                    )
-                self._result = reservation.result
-                self._release_ownership_locked()
-                self._condition.notify_all()
-                return self._result
-            running = self._running
-            thread = self._thread
-            self._stop_event.set()
-        if thread is not None and thread is not threading.current_thread():
-            thread.join(timeout=max(1.0, self.settings.watchdog_sec * 2.0))
-        with self._condition:
-            if running and self._running:
-                self._terminate_locked(state, message)
-            elif self._result is None:
-                self._set_result_locked(True, state, 0, message)
-            self._release_ownership_locked()
-            self._condition.notify_all()
-            return self._result or VelocityResult(True, state, 0, message)
-
-    def _terminate_locked(
+    def _stop_and_join(
         self,
         state: VelocityTerminalState,
         message: str,
         *,
         api2_status: int = 0,
     ) -> VelocityResult:
-        if self._result is not None and not self._running:
-            return self._result
-        self._phase = VelocityFeedbackPhase.STOPPING
-        self._stop_event.set()
-        stop_status = 0
-        if not self._stop_sent and self._goal is not None:
+        with self._condition:
+            while self._fast_stop_in_progress:
+                self._condition.wait()
+            if self._slow_stop_in_progress:
+                while self._slow_stop_in_progress:
+                    self._condition.wait()
+                return self._result or VelocityResult(False, state, -1, message)
+            if self._lockout:
+                return self._result or VelocityResult(
+                    False, VelocityTerminalState.ABORTED, -1, message
+                )
+            if (
+                self._reservation is not None
+                and not self._running
+                and not self._starting
+            ):
+                reservation = self._reservation
+                if reservation.result is None:
+                    self._complete_reservation_locked(
+                        reservation,
+                        VelocityResult(False, state, 0, message),
+                    )
+                self._result = reservation.result
+                self._release_ownership_locked()
+                self._condition.notify_all()
+                return self._result
+            active = self._owns_ownership and (
+                self._running
+                or self._starting
+                or self._velocity_initialized
+                or self._movev_in_progress
+            )
+            if not active:
+                if self._result is None:
+                    self._set_result_locked(False, state, api2_status, message)
+                self._release_ownership_locked()
+                return self._result
+
+            reservation = self._reservation
+            thread = self._thread
+            goal = self._goal
+            send_zero = (
+                self._velocity_initialized
+                and goal is not None
+                and not self._movev_in_progress
+            )
+            self._slow_stop_in_progress = True
+            self._start_token += 1
+            self._running = False
+            self._stop_event.set()
             self._stop_sent = True
+            self._phase = VelocityFeedbackPhase.STOPPING
+
+        zero_status = 0
+        if send_zero:
             try:
-                zero_status = _status(self.adapter.movev(
-                    list(_ZERO), self._goal.follow, self._goal.trajectory_mode, self._goal.radio
-                ))
+                zero_status = _status(
+                    self.adapter.movev(
+                        list(_ZERO),
+                        goal.follow,
+                        goal.trajectory_mode,
+                        goal.radio,
+                    )
+                )
             except Exception:
                 zero_status = -1
-            try:
-                stop_status = _status(self.adapter.slow_stop())
-            except Exception:
-                stop_status = -1
-            stop_status = zero_status or stop_status
-            if api2_status == 0:
-                api2_status = stop_status
-        self._last_api2_status = api2_status
-        terminal_state = state
-        if state == VelocityTerminalState.CANCELED and stop_status != 0:
-            terminal_state = VelocityTerminalState.ABORTED
-        success = terminal_state in (
-            VelocityTerminalState.CANCELED,
-            VelocityTerminalState.WATCHDOG_STOP,
-        ) and stop_status == 0
-        if terminal_state == VelocityTerminalState.ABORTED:
-            success = False
-        self._running = False
-        self._active_request = None
-        self._set_result_locked(success, terminal_state, api2_status, message)
-        self._done_event.set()
-        if self._thread is None or self._thread is threading.current_thread():
-            self._release_ownership_locked()
-        return self._result
+        try:
+            stop_status = _status(self.adapter.slow_stop())
+        except Exception:
+            stop_status = -1
+
+        timed_out = self._wait_for_calls_to_stop(thread)
+        with self._condition:
+            if timed_out:
+                result = VelocityResult(
+                    False,
+                    VelocityTerminalState.ABORTED,
+                    -1,
+                    f"{message}; velocity control did not stop before timeout",
+                )
+                if reservation is not None and self._reservation is reservation:
+                    self._complete_reservation_locked(reservation, result)
+                self._result = result
+                self._active_request = None
+                self._lockout = True
+                self._slow_stop_in_progress = False
+                self._done_event.set()
+                self._condition.notify_all()
+                return result
+
+            stop_api2_status = zero_status or stop_status
+            terminal_state = state
+            if state == VelocityTerminalState.CANCELED and stop_api2_status != 0:
+                terminal_state = VelocityTerminalState.ABORTED
+            status = api2_status or stop_api2_status
+            result = VelocityResult(False, terminal_state, status, message)
+            if reservation is not None and self._reservation is reservation:
+                self._complete_reservation_locked(reservation, result)
+            self._result = result
+            self._active_request = None
+            self._velocity_initialized = False
+            self._slow_stop_in_progress = False
+            self._done_event.set()
+            if thread is not threading.current_thread():
+                self._release_ownership_locked()
+            self._condition.notify_all()
+            return result
+
+    def _wait_for_calls_to_stop(self, thread: threading.Thread | None) -> bool:
+        deadline = time.monotonic() + max(0.0, self._thread_join_timeout_sec)
+        current = threading.current_thread()
+        if thread is not None and thread is not current:
+            thread.join(timeout=max(0.0, deadline - time.monotonic()))
+        with self._condition:
+            while self._starting or self._movev_in_progress:
+                remaining = deadline - time.monotonic()
+                if remaining <= 0.0:
+                    break
+                self._condition.wait(timeout=remaining)
+            thread_alive = (
+                thread is not None and thread is not current and thread.is_alive()
+            )
+            return thread_alive or self._starting or self._movev_in_progress
 
     def _set_result_locked(self, success: bool, state: VelocityTerminalState, status: int, message: str) -> None:
-        self._result = VelocityResult(bool(success), state, int(status), message)
+        self._result = VelocityResult(
+            bool(success) and state == VelocityTerminalState.SUCCEEDED,
+            state,
+            int(status),
+            message,
+        )
         self._done_event.set()
 
     def _release_ownership_locked(self) -> None:

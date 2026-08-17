@@ -22,6 +22,7 @@ src/.codex/
 
 .idea/
 .vscode/
+.worktrees/
 
 website/node_modules/
 website/docs/.vitepress/cache/

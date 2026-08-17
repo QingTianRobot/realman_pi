@@ -345,6 +345,34 @@ def test_query_raw_integer_status_updates_and_clears_last_error(adapter, fake_ro
     assert adapter.last_error_message == ""
 
 
+def test_query_malformed_status_returns_error_without_leaking_exception(
+    adapter, fake_robot
+):
+    fake_robot.results["rm_get_arm_current_trajectory"] = (object(), {"state": 1})
+
+    result = adapter.current_trajectory()
+
+    assert result == (-1, None)
+    assert adapter.last_error == -1
+    assert adapter.last_error_message == "SDK trajectory query failed"
+    assert adapter._active_calls == 0
+
+
+def test_get_state_malformed_status_returns_error_without_leaking_exception(
+    adapter, fake_robot
+):
+    fake_robot.joint_result = (object(), [0.0] * 6)
+
+    state = adapter.get_state()
+
+    assert state.joint_degrees == ()
+    assert state.connected is True
+    assert state.error_code == -1
+    assert adapter.last_error == -1
+    assert adapter.last_error_message == "SDK joint state request failed"
+    assert adapter._active_calls == 0
+
+
 def test_mock_current_trajectory_uses_documented_raw_dict_shape():
     adapter = RealManSdkAdapter(
         ip="192.0.2.123",
@@ -662,6 +690,48 @@ def _install_connecting_sdk(monkeypatch, robot_type):
     package.rm_robot_interface = sdk
     monkeypatch.setitem(sys.modules, "Robotic_Arm", package)
     monkeypatch.setitem(sys.modules, "Robotic_Arm.rm_robot_interface", sdk)
+
+
+class InvalidHandleRobot:
+    instances = []
+
+    def __init__(self, mode):
+        self.calls = []
+        type(self).instances.append(self)
+
+    def rm_create_robot_arm(self, ip, port):
+        self.calls.append(("create", ip, port))
+        return SimpleNamespace(id=-1)
+
+    def rm_delete_robot_arm(self):
+        self.calls.append(("delete",))
+        return 0
+
+    def rm_destroy(self):
+        self.calls.append(("destroy",))
+        return 0
+
+
+def test_connect_invalid_handle_cleans_up_robot_immediately(monkeypatch):
+    InvalidHandleRobot.instances = []
+    _install_connecting_sdk(monkeypatch, InvalidHandleRobot)
+    adapter = RealManSdkAdapter(
+        ip="192.0.2.123",
+        port=8080,
+        thread_mode="RM_TRIPLE_MODE_E",
+        robot_model="RM65-B",
+        mock_mode=False,
+    )
+
+    assert adapter.connect() == -1
+
+    robot = InvalidHandleRobot.instances[-1]
+    assert robot.calls == [("create", "192.0.2.123", 8080), ("delete",), ("destroy",)]
+    assert adapter._robot is None
+    assert adapter._handle is None
+    assert adapter.connected is False
+    assert adapter.last_error == -1
+    assert adapter.last_error_message == "SDK returned an invalid robot handle"
 
 
 def test_connect_is_single_handle_and_disconnect_waits_for_blocking_create(monkeypatch):

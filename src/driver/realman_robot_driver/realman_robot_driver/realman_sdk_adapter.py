@@ -118,6 +118,28 @@ class RealManSdkAdapter:
                 robot = RoboticArm(mode)
                 handle = robot.rm_create_robot_arm(self.ip, self.port)
                 connected = _is_valid_handle(handle)
+                if not connected:
+                    # A create call may return an object even when the API2
+                    # handle is invalid. Release that native object before
+                    # exposing the failed connection to any later call.
+                    try:
+                        if handle is not None:
+                            robot.rm_delete_robot_arm()
+                    except Exception:
+                        pass
+                    try:
+                        robot.rm_destroy()
+                    except Exception:
+                        pass
+                    with self._lock:
+                        if self._generation == generation:
+                            self._robot = None
+                            self._handle = None
+                            self._connected = False
+                            self._set_failure_locked(
+                                -1, "SDK returned an invalid robot handle"
+                            )
+                    return -1
                 with self._lock:
                     # The lifecycle lock guarantees no disconnect can supersede
                     # this create operation.
@@ -488,7 +510,13 @@ class RealManSdkAdapter:
                 if token is not None and self._call_matches_locked(token):
                     self._set_failure_locked(-1, str(error))
             return -1, None
-        result_status, _ = _unpack_result(result)
+        try:
+            result_status, _ = _unpack_result(result)
+        except Exception:
+            with self._lock:
+                if token is not None and self._call_matches_locked(token):
+                    self._set_failure_locked(-1, failure_message)
+            return -1, None
         with self._lock:
             if token is None or not self._call_matches_locked(token):
                 return result
@@ -616,7 +644,14 @@ class RealManSdkAdapter:
                     return RobotState((), self._connected, self.robot_model, -1)
             return RobotState((), False, self.robot_model, -1)
 
-        status, data = _unpack_result(result)
+        try:
+            status, data = _unpack_result(result)
+        except Exception:
+            with self._lock:
+                if token is not None and self._call_matches_locked(token):
+                    self._set_failure_locked(-1, "SDK joint state request failed")
+                    return RobotState((), self._connected, self.robot_model, -1)
+            return RobotState((), False, self.robot_model, -1)
         with self._lock:
             if token is None or not self._call_matches_locked(token):
                 return RobotState((), False, self.robot_model, -1)

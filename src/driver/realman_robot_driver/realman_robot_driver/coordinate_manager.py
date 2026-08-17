@@ -1,9 +1,11 @@
 """Validated desired coordinate profiles and explicit controller-frame policy.
 
 The adapter seam deliberately accepts simple duck-typed methods so this module
-does not import the RealMan SDK. Adapter reads may return ``(status, frame)``
-or a frame value; writes may return an API2 integer status. Missing methods and
-exceptions become status ``-1``, an unmatched verification, and blocked motion.
+does not import the RealMan SDK. An adapter declares one ``arm_id`` and never
+accepts an arm argument for controller calls. Reads may return ``(status,
+frame)`` or a frame value; writes may return an API2 integer status. Missing
+methods and exceptions become status ``-1``, an unmatched verification, and
+blocked motion.
 """
 
 from __future__ import annotations
@@ -72,17 +74,19 @@ class CoordinateVerification:
 class CoordinateAdapter(Protocol):
     """Minimal seam to be implemented by the node's controller adapter."""
 
-    def current_tool_frame(self, arm: str) -> Any: ...
+    arm_id: str
 
-    def current_work_frame(self, arm: str) -> Any: ...
+    def current_tool_frame(self) -> Any: ...
 
-    def set_tool_frame(self, arm: str, frame: ToolFrame) -> Any: ...
+    def current_work_frame(self) -> Any: ...
 
-    def set_work_frame(self, arm: str, frame: WorkFrame) -> Any: ...
+    def set_tool_frame(self, frame: ToolFrame) -> Any: ...
 
-    def change_tool_frame(self, arm: str, controller_name: str) -> Any: ...
+    def set_work_frame(self, frame: WorkFrame) -> Any: ...
 
-    def change_work_frame(self, arm: str, controller_name: str) -> Any: ...
+    def change_tool_frame(self, controller_name: str) -> Any: ...
+
+    def change_work_frame(self, controller_name: str) -> Any: ...
 
 
 class CoordinateManager:
@@ -114,10 +118,12 @@ class CoordinateManager:
             data = yaml.safe_load(stream)
         if not isinstance(data, dict):
             raise ValueError("coordinate profile must be a YAML mapping")
+        _expect_keys(data, {"version", "policy", "robots"}, "root")
         if data.get("version") != 1:
             raise ValueError("coordinate profile version must be 1")
 
         policy_data = _mapping(data.get("policy"), "policy")
+        _expect_keys(policy_data, {"on_start", "on_mismatch"}, "policy")
         policy = CoordinatePolicy(
             on_start=_required_string(policy_data, "on_start", "policy"),
             on_mismatch=_required_string(policy_data, "on_mismatch", "policy"),
@@ -150,8 +156,11 @@ class CoordinateManager:
         profile = self._profile(arm)
         expected_tool = profile.tools[self._selected_tools[arm]].controller_name
         expected_work = profile.works[self._selected_works[arm]].controller_name
-        tool_status, current_tool, tool_error = _read_frame(adapter, "current_tool_frame", arm)
-        work_status, current_work, work_error = _read_frame(adapter, "current_work_frame", arm)
+        identity_error = _adapter_identity_error(adapter, arm)
+        if identity_error:
+            return self._failure(arm, -1, identity_error)
+        tool_status, current_tool, tool_error = _read_frame(adapter, "current_tool_frame")
+        work_status, current_work, work_error = _read_frame(adapter, "current_work_frame")
         status = _first_error(tool_status, work_status)
         tool_matched = tool_status == 0 and current_tool == expected_tool
         work_matched = work_status == 0 and current_work == expected_work
@@ -182,6 +191,11 @@ class CoordinateManager:
     def apply(self, adapter: CoordinateAdapter, arm: str) -> CoordinateVerification:
         """Explicitly write and select the arm defaults, then read them back."""
         profile = self._profile(arm)
+        if self._is_arm_busy(arm):
+            return self._failure(arm, -1, f"arm {arm} is busy; coordinate apply refused")
+        identity_error = _adapter_identity_error(adapter, arm)
+        if identity_error:
+            return self._failure(arm, -1, identity_error)
         self._selected_tools[arm] = profile.tool_default
         self._selected_works[arm] = profile.work_default
         operations = (
@@ -191,7 +205,7 @@ class CoordinateManager:
             ("change_work_frame", profile.works[profile.work_default].controller_name),
         )
         for method_name, value in operations:
-            status, error = _write_frame(adapter, method_name, arm, value)
+            status, error = _write_frame(adapter, method_name, value)
             if status != 0:
                 self._motion_allowed[arm] = False
                 return self._failure(arm, status, error)
@@ -206,7 +220,10 @@ class CoordinateManager:
             return self._failure(arm, -1, f"unknown configured tool frame: {name}")
         if self._is_arm_busy(arm):
             return self._failure(arm, -1, f"arm {arm} is busy; tool frame selection refused")
-        status, error = _write_frame(adapter, "change_tool_frame", arm, profile.tools[name].controller_name)
+        identity_error = _adapter_identity_error(adapter, arm)
+        if identity_error:
+            return self._failure(arm, -1, identity_error)
+        status, error = _write_frame(adapter, "change_tool_frame", profile.tools[name].controller_name)
         if status != 0:
             return self._failure(arm, status, error)
         self._selected_tools[arm] = name
@@ -221,7 +238,10 @@ class CoordinateManager:
             return self._failure(arm, -1, f"unknown configured work frame: {name}")
         if self._is_arm_busy(arm):
             return self._failure(arm, -1, f"arm {arm} is busy; work frame selection refused")
-        status, error = _write_frame(adapter, "change_work_frame", arm, profile.works[name].controller_name)
+        identity_error = _adapter_identity_error(adapter, arm)
+        if identity_error:
+            return self._failure(arm, -1, identity_error)
+        status, error = _write_frame(adapter, "change_work_frame", profile.works[name].controller_name)
         if status != 0:
             return self._failure(arm, status, error)
         self._selected_works[arm] = name
@@ -257,6 +277,11 @@ class CoordinateManager:
 def _profile_from_data(
     arm: str, data: Mapping[str, Any]
 ) -> tuple[ArmCoordinateDefaults, set[str]]:
+    _expect_keys(
+        data,
+        {"default_tool", "default_work", "tools", "work_frames"},
+        f"robots.{arm}",
+    )
     tool_default = _required_string(data, "default_tool", f"robots.{arm}")
     work_default = _required_string(data, "default_work", f"robots.{arm}")
     tool_data = _mapping(data.get("tools"), f"robots.{arm}.tools")
@@ -264,8 +289,14 @@ def _profile_from_data(
     if not tool_data or not work_data:
         raise ValueError(f"robots.{arm} requires non-empty tools and work_frames")
 
-    tools = {name: _tool_frame(arm, name, _mapping(value, name)) for name, value in tool_data.items()}
-    works = {name: _work_frame(arm, name, _mapping(value, name)) for name, value in work_data.items()}
+    tools = {
+        name: _tool_frame(arm, name, _mapping(value, f"robots.{arm}.tools.{name}"))
+        for name, value in tool_data.items()
+    }
+    works = {
+        name: _work_frame(arm, name, _mapping(value, f"robots.{arm}.work_frames.{name}"))
+        for name, value in work_data.items()
+    }
     if tool_default not in tools:
         raise ValueError(f"robots.{arm}.default_tool is not a configured tool frame")
     if work_default not in works:
@@ -285,7 +316,13 @@ def _profile_from_data(
 
 
 def _tool_frame(arm: str, name: str, data: Mapping[str, Any]) -> ToolFrame:
+    _expect_keys(
+        data,
+        {"controller_name", "ros_frame_id", "pose", "payload_kg", "center_of_mass_m"},
+        f"tools.{name}",
+    )
     pose = _mapping(data.get("pose"), f"tools.{name}.pose")
+    _expect_keys(pose, {"xyz_m", "quaternion_wxyz"}, f"tools.{name}.pose")
     return ToolFrame(
         _controller_name(data, arm, name),
         _ros_frame_id(data, arm, name),
@@ -297,7 +334,9 @@ def _tool_frame(arm: str, name: str, data: Mapping[str, Any]) -> ToolFrame:
 
 
 def _work_frame(arm: str, name: str, data: Mapping[str, Any]) -> WorkFrame:
+    _expect_keys(data, {"controller_name", "ros_frame_id", "pose"}, f"work_frames.{name}")
     pose = _mapping(data.get("pose"), f"work_frames.{name}.pose")
+    _expect_keys(pose, {"xyz_m", "quaternion_wxyz"}, f"work_frames.{name}.pose")
     return WorkFrame(
         _controller_name(data, arm, name),
         _ros_frame_id(data, arm, name),
@@ -326,6 +365,12 @@ def _mapping(value: Any, context: str) -> Mapping[str, Any]:
     if not isinstance(value, dict):
         raise ValueError(f"{context} must be a mapping")
     return value
+
+
+def _expect_keys(data: Mapping[Any, Any], allowed: set[str], context: str) -> None:
+    unknown = [repr(key) for key in data if key not in allowed]
+    if unknown:
+        raise ValueError(f"{context} contains unknown key(s): {', '.join(sorted(unknown))}")
 
 
 def _required_string(data: Mapping[str, Any], key: str, context: str) -> str:
@@ -360,12 +405,19 @@ def _quaternion(value: Any, context: str) -> tuple[float, float, float, float]:
     return tuple(component / norm for component in scaled)  # type: ignore[return-value]
 
 
-def _read_frame(adapter: Any, method_name: str, arm: str) -> tuple[int, str | None, str]:
+def _adapter_identity_error(adapter: Any, arm: str) -> str:
+    actual = getattr(adapter, "arm_id", None)
+    if actual != arm:
+        return f"adapter arm_id {actual!r} does not match requested arm {arm!r}"
+    return ""
+
+
+def _read_frame(adapter: Any, method_name: str) -> tuple[int, str | None, str]:
     method = getattr(adapter, method_name, None)
     if not callable(method):
         return -1, None, f"adapter does not implement {method_name}"
     try:
-        result = method(arm)
+        result = method()
     except Exception as error:
         return -1, None, f"{method_name} failed: {error}"
     status, frame = _unpack_read_result(result)
@@ -397,12 +449,12 @@ def _frame_name(frame: Any) -> str | None:
     return value if isinstance(value, str) and value else None
 
 
-def _write_frame(adapter: Any, method_name: str, arm: str, value: Any) -> tuple[int, str]:
+def _write_frame(adapter: Any, method_name: str, value: Any) -> tuple[int, str]:
     method = getattr(adapter, method_name, None)
     if not callable(method):
         return -1, f"adapter does not implement {method_name}"
     try:
-        result = method(arm, value)
+        result = method(value)
     except Exception as error:
         return -1, f"{method_name} failed: {error}"
     status = _status_from_write(result)

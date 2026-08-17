@@ -4,16 +4,46 @@ from __future__ import annotations
 
 import math
 import time
+from pathlib import Path
 from typing import Any
 
+from ament_index_python.packages import get_package_share_directory
 import rclpy
-from rclpy.executors import ExternalShutdownException
+from rclpy.action import ActionServer
+from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
+from realman_msgs.action import ExecuteMotion
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 
+from .coordinate_manager import CoordinateManager
+from .motion_coordinator import ArmOwnership, MotionCoordinator
+from .motion_types import MotionSettings, ReferenceState, ReferenceType
 from .realman_sdk_adapter import RealManSdkAdapter, RobotState
+
+
+_ARMS = frozenset({"l", "m", "r"})
+
+
+def _arm_from_namespace(namespace: str) -> str:
+    parts = [part for part in namespace.split("/") if part]
+    if len(parts) != 1 or parts[0] not in _ARMS:
+        raise ValueError("node namespace must be exactly /l, /m, or /r")
+    return parts[0]
+
+
+def _config_path(filename: str) -> str:
+    try:
+        package_path = Path(get_package_share_directory("realman_robot_driver"))
+        installed = package_path / "config" / "ros" / filename
+        if installed.exists():
+            return str(installed)
+    except (KeyError, RuntimeError):
+        pass
+    source_root = Path(__file__).resolve().parents[4]
+    return str(source_root / "config" / "ros" / filename)
 
 
 class RealManDriverNode(Node):
@@ -21,6 +51,7 @@ class RealManDriverNode(Node):
 
     def __init__(self, **kwargs: Any) -> None:
         super().__init__("realman_driver", **kwargs)
+        self.arm_id = _arm_from_namespace(self.get_namespace())
         self.robot_model = self.declare_parameter("robot_model", "RM65-B").value
         self.robot_ip = self.declare_parameter("robot_ip", "").value
         self.robot_port = int(self.declare_parameter("robot_port", 8080).value)
@@ -31,6 +62,16 @@ class RealManDriverNode(Node):
             self.declare_parameter("reconnect_interval", 5.0).value
         )
         self.state_publish_rate = float(self.declare_parameter("state_publish_rate", 10.0).value)
+        self.coordinates_config_file = str(
+            self.declare_parameter(
+                "coordinates_config_file", _config_path("realman_coordinates.yaml")
+            ).value
+        )
+        self.motion_config_file = str(
+            self.declare_parameter(
+                "motion_config_file", _config_path("realman_motion.yaml")
+            ).value
+        )
         self.joint_names = list(
             self.declare_parameter(
                 "joint_names",
@@ -43,6 +84,10 @@ class RealManDriverNode(Node):
             raise ValueError("robot_port must be between 1 and 65535")
         if self.thread_mode not in {"RM_SINGLE_MODE_E", "RM_DUAL_MODE_E", "RM_TRIPLE_MODE_E"}:
             raise ValueError("thread_mode must be a documented rm_thread_mode_e name")
+        if self.thread_mode != "RM_TRIPLE_MODE_E":
+            raise ValueError(
+                "ordinary motion actions require RM_TRIPLE_MODE_E for SDK event callbacks"
+            )
         if self.state_publish_rate <= 0.0:
             raise ValueError("state_publish_rate must be positive")
         if self.reconnect_interval < 0.0:
@@ -50,12 +95,61 @@ class RealManDriverNode(Node):
         if not self.joint_names or any(not isinstance(name, str) or not name for name in self.joint_names):
             raise ValueError("joint_names must be a non-empty list of non-empty strings")
 
+        self.arm_ownership = ArmOwnership()
+        self.coordinate_manager = CoordinateManager.from_yaml(
+            self.coordinates_config_file,
+            is_arm_busy=self.arm_ownership.is_busy,
+            acquire_arm=self.arm_ownership.acquire,
+            release_arm=self.arm_ownership.release,
+        )
+        self.motion_settings = MotionSettings.from_yaml(
+            self.motion_config_file,
+            self.arm_id,
+        )
+        profile = self.coordinate_manager.profiles[self.arm_id]
+        self._active_references = {
+            ReferenceType.BASE: "base",
+            ReferenceType.WORK: profile.works[profile.work_default].controller_name,
+            ReferenceType.TOOL: profile.tools[profile.tool_default].controller_name,
+        }
         self.adapter = RealManSdkAdapter(
             ip=self.robot_ip,
             port=self.robot_port,
             thread_mode=self.thread_mode,
             robot_model=self.robot_model,
             mock_mode=self.mock_mode,
+            arm_id=self.arm_id,
+        )
+        self.motion_callback_group = ReentrantCallbackGroup()
+        self.motion_coordinator = MotionCoordinator(
+            arm_id=self.arm_id,
+            adapter=self.adapter,
+            coordinate_manager=self.coordinate_manager,
+            ownership=self.arm_ownership,
+            reference_resolver=ReferenceState(
+                {
+                    ReferenceType.BASE: frozenset({"base"}),
+                    ReferenceType.WORK: frozenset(
+                        frame.controller_name for frame in profile.works.values()
+                    ),
+                    ReferenceType.TOOL: frozenset(
+                        frame.controller_name for frame in profile.tools.values()
+                    ),
+                }
+            ),
+            active_reference=lambda reference_type: self._active_references[reference_type],
+            action_type=ExecuteMotion,
+            logger=self.get_logger(),
+        )
+        self.execute_motion_action_server = ActionServer(
+            self,
+            ExecuteMotion,
+            "execute_motion",
+            execute_callback=self.motion_coordinator.execute,
+            goal_callback=self.motion_coordinator.goal_callback,
+            cancel_callback=self.motion_coordinator.cancel_callback,
+            handle_accepted_callback=self.motion_coordinator.accepted_callback,
+            callback_group=self.motion_callback_group,
         )
         self.joint_state_publisher = self.create_publisher(JointState, "joint_states", 10)
         self.connected_publisher = self.create_publisher(Bool, "connected", 10)
@@ -91,6 +185,7 @@ class RealManDriverNode(Node):
     def _disconnect(
         self, _request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
+        self.motion_coordinator.shutdown()
         code = self.adapter.disconnect()
         response.success = code == 0
         response.message = "disconnected" if code == 0 else f"disconnect failed with status {code}"
@@ -118,6 +213,29 @@ class RealManDriverNode(Node):
         self._last_connect_attempt = time.monotonic()
         code = self.adapter.connect()
         if code == 0:
+            callback_status = self.adapter.register_event_callback(
+                self.motion_coordinator.handle_event
+            )
+            if callback_status != 0:
+                self.get_logger().error(
+                    "RealMan event callback registration failed with API2 status "
+                    f"{callback_status}"
+                )
+                self.adapter.disconnect()
+                return callback_status
+            verification = self.coordinate_manager.verify(self.adapter, self.arm_id)
+            self._active_references[ReferenceType.TOOL] = (
+                verification.current_tool
+                or self._active_references[ReferenceType.TOOL]
+            )
+            self._active_references[ReferenceType.WORK] = (
+                verification.current_work
+                or self._active_references[ReferenceType.WORK]
+            )
+            if not verification.matched:
+                self.get_logger().warn(
+                    f"RealMan coordinate verification blocked motion: {verification.message}"
+                )
             self.get_logger().info("RealMan connection ready")
         else:
             detail = self.adapter.last_error_message or "no SDK detail"
@@ -173,6 +291,9 @@ class RealManDriverNode(Node):
             self.get_logger().info("RealMan state stream recovered")
 
     def destroy_node(self) -> bool:
+        self.motion_coordinator.shutdown()
+        if self.execute_motion_action_server is not None:
+            self.execute_motion_action_server.destroy()
         self.adapter.disconnect()
         return super().destroy_node()
 
@@ -180,13 +301,17 @@ class RealManDriverNode(Node):
 def main(args: Any = None) -> None:
     rclpy.init(args=args)
     node = RealManDriverNode()
+    executor = MultiThreadedExecutor()
+    executor.add_node(node)
     try:
-        rclpy.spin(node)
+        executor.spin()
     except (KeyboardInterrupt, ExternalShutdownException):
         if rclpy.ok():
             node.get_logger().info("RealMan driver shutdown requested")
     finally:
         try:
+            node.motion_coordinator.shutdown()
+            executor.shutdown()
             node.destroy_node()
         except (KeyboardInterrupt, ExternalShutdownException):
             pass

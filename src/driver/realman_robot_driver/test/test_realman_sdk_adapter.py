@@ -1,4 +1,5 @@
 import builtins
+import math
 import sys
 import threading
 from types import ModuleType, SimpleNamespace
@@ -515,7 +516,7 @@ def test_coordinate_adapter_protocol_uses_one_adapter_arm_and_vendor_frames(
         controller_name="cell",
         ros_frame_id="l/cell",
         xyz_m=(0.4, 0.5, 0.6),
-        quaternion_wxyz=(0.5, 0.5, 0.5, 0.5),
+        quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
     )
     fake_robot.results["rm_get_current_tool_frame"] = (
         0,
@@ -563,10 +564,53 @@ def test_coordinate_adapter_protocol_uses_one_adapter_arm_and_vendor_frames(
     assert fake_robot.calls[-1] == (
         "rm_set_manual_work_frame",
         "cell",
-        [0.4, 0.5, 0.6, 0.5, 0.5, 0.5, 0.5],
+        [0.4, 0.5, 0.6, 0.0, 0.0, 0.0],
     )
     assert adapter.change_tool_frame("gripper") == 0
     assert adapter.change_work_frame("cell") == 0
+
+
+def test_set_work_frame_normalizes_quaternion_and_serializes_known_axis_euler(
+    adapter, fake_robot
+):
+    scale = math.sqrt(2.0)
+    work = WorkFrame(
+        controller_name="cell",
+        ros_frame_id="l/cell",
+        xyz_m=(0.4, 0.5, 0.6),
+        quaternion_wxyz=(scale, 0.0, 0.0, scale),
+    )
+
+    assert adapter.set_work_frame(work) == 0
+
+    method, name, pose = fake_robot.calls[-1]
+    assert (method, name) == ("rm_set_manual_work_frame", "cell")
+    assert pose == pytest.approx([0.4, 0.5, 0.6, 0.0, 0.0, math.pi / 2.0])
+
+
+@pytest.mark.parametrize(
+    ("xyz_m", "quaternion_wxyz"),
+    [
+        ((float("nan"), 0.0, 0.0), (1.0, 0.0, 0.0, 0.0)),
+        ((0.0, 0.0, 0.0), (float("nan"), 0.0, 0.0, 0.0)),
+        ((0.0, 0.0, 0.0), (float("inf"), 0.0, 0.0, 0.0)),
+        ((0.0, 0.0, 0.0), (0.0, 0.0, 0.0, 0.0)),
+    ],
+)
+def test_set_work_frame_rejects_nonfinite_or_zero_pose_before_sdk(
+    adapter, fake_robot, xyz_m, quaternion_wxyz
+):
+    work = WorkFrame(
+        controller_name="cell",
+        ros_frame_id="l/cell",
+        xyz_m=xyz_m,
+        quaternion_wxyz=quaternion_wxyz,
+    )
+
+    assert adapter.set_work_frame(work) == -1
+    assert fake_robot.calls == []
+    assert adapter.last_error == -1
+    assert adapter.last_error_message
 
 
 def test_coordinate_operations_return_nonzero_vendor_status_unchanged(

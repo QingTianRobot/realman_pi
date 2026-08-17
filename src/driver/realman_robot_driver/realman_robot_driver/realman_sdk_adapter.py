@@ -474,9 +474,12 @@ class RealManSdkAdapter:
         if status is not None:
             return status
         try:
-            pose = [*frame.xyz_m, *frame.quaternion_wxyz]
+            controller_frame = _controller_frame_from_profile(frame, is_tool=False)
+            pose = [
+                *controller_frame.xyz_m,
+                *_euler_from_quaternion(controller_frame.quaternion_wxyz),
+            ]
             if mock_mode:
-                controller_frame = _controller_frame_from_profile(frame, is_tool=False)
                 with self._lock:
                     if not self._connected:
                         self._set_failure_locked(-1, "robot is not connected")
@@ -486,7 +489,7 @@ class RealManSdkAdapter:
                     self._set_success_locked()
                     return 0
             result, token, error, _, readiness_status = self._invoke_vendor(
-                "rm_set_manual_work_frame", (frame.controller_name, pose)
+                "rm_set_manual_work_frame", (controller_frame.controller_name, pose)
             )
         except Exception as error:
             with self._lock:
@@ -787,20 +790,25 @@ def _vendor_tool_frame(frame: Any) -> Any:
 
 
 def _controller_frame_from_profile(frame: Any, *, is_tool: bool) -> ControllerFrame:
+    if is_tool:
+        controller_name = str(frame.controller_name)
+    xyz_m = _finite_vector(frame.xyz_m, 3, "xyz_m")
+    quaternion_wxyz = _normalized_quaternion(frame.quaternion_wxyz)
+    if is_tool:
+        payload_kg = _finite_scalar(frame.payload_kg, "payload", minimum=0.0)
+        center_of_mass_m = _finite_vector(
+            frame.center_of_mass_m, 3, "center_of_mass_m"
+        )
+    else:
+        controller_name = str(frame.controller_name)
+        payload_kg = None
+        center_of_mass_m = None
     return ControllerFrame(
-        controller_name=str(frame.controller_name),
-        xyz_m=_finite_vector(frame.xyz_m, 3, "xyz_m"),
-        quaternion_wxyz=_normalized_quaternion(frame.quaternion_wxyz),
-        payload_kg=(
-            _finite_scalar(frame.payload_kg, "payload", minimum=0.0)
-            if is_tool
-            else None
-        ),
-        center_of_mass_m=(
-            _finite_vector(frame.center_of_mass_m, 3, "center_of_mass_m")
-            if is_tool
-            else None
-        ),
+        controller_name=controller_name,
+        xyz_m=xyz_m,
+        quaternion_wxyz=quaternion_wxyz,
+        payload_kg=payload_kg,
+        center_of_mass_m=center_of_mass_m,
     )
 
 
@@ -914,6 +922,17 @@ def _quaternion_from_euler(
             cr * cp * sy - sr * sp * cy,
         )
     )
+
+
+def _euler_from_quaternion(
+    quaternion_wxyz: Any,
+) -> tuple[float, float, float]:
+    w, x, y, z = _normalized_quaternion(quaternion_wxyz)
+    roll = math.atan2(2.0 * (w * x + y * z), 1.0 - 2.0 * (x * x + y * y))
+    pitch_sine = 2.0 * (w * y - z * x)
+    pitch = math.asin(max(-1.0, min(1.0, pitch_sine)))
+    yaw = math.atan2(2.0 * (w * z + x * y), 1.0 - 2.0 * (y * y + z * z))
+    return roll, pitch, yaw
 
 
 def _is_valid_handle(handle: Any) -> bool:

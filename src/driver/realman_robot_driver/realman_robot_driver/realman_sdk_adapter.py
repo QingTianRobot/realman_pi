@@ -87,7 +87,9 @@ class RealManSdkAdapter:
                     return 0
                 has_stale_robot = self._robot is not None
             if has_stale_robot:
-                self._disconnect_locked()
+                teardown_status = self._disconnect_locked()
+                if teardown_status != 0:
+                    return teardown_status
             if self.mock_mode:
                 with self._lock:
                     self._generation += 1
@@ -712,9 +714,9 @@ def _is_valid_handle(handle: Any) -> bool:
 
 
 def _unpack_result(result: Any) -> tuple[int, Any]:
-    if isinstance(result, tuple) and len(result) >= 2:
-        return int(result[0]), result[1]
-    if isinstance(result, list) and len(result) >= 2:
+    if isinstance(result, (tuple, list)):
+        if len(result) < 2:
+            raise ValueError("SDK query result must contain status and data")
         return int(result[0]), result[1]
     return _status_code(result), None
 

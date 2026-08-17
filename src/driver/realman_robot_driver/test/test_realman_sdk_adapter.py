@@ -358,6 +358,17 @@ def test_query_malformed_status_returns_error_without_leaking_exception(
     assert adapter._active_calls == 0
 
 
+@pytest.mark.parametrize("result", [(7,), [], [0]])
+def test_query_short_sequence_fails_closed(adapter, fake_robot, result):
+    fake_robot.results["rm_get_arm_current_trajectory"] = result
+
+    query_result = adapter.current_trajectory()
+
+    assert query_result == (-1, None)
+    assert adapter.last_error == -1
+    assert adapter.last_error_message == "SDK trajectory query failed"
+
+
 def test_get_state_malformed_status_returns_error_without_leaking_exception(
     adapter, fake_robot
 ):
@@ -710,6 +721,39 @@ class InvalidHandleRobot:
     def rm_destroy(self):
         self.calls.append(("destroy",))
         return 0
+
+
+class UnexpectedReplacementRobot:
+    instances = []
+
+    def __init__(self, mode):
+        type(self).instances.append(self)
+
+
+def test_connect_aborts_when_stale_robot_teardown_fails(monkeypatch):
+    UnexpectedReplacementRobot.instances = []
+    _install_connecting_sdk(monkeypatch, UnexpectedReplacementRobot)
+    adapter = RealManSdkAdapter(
+        ip="192.0.2.123",
+        port=8080,
+        thread_mode="RM_TRIPLE_MODE_E",
+        robot_model="RM65-B",
+        mock_mode=False,
+    )
+    stale_robot = FakeRobot()
+    stale_robot.results["rm_destroy"] = 71
+    adapter._robot = stale_robot
+    adapter._handle = SimpleNamespace(id=17)
+
+    assert adapter.connect() == 71
+
+    assert stale_robot.calls == [("rm_delete_robot_arm",), ("rm_destroy",)]
+    assert UnexpectedReplacementRobot.instances == []
+    assert adapter._robot is None
+    assert adapter._handle is None
+    assert adapter.connected is False
+    assert adapter.last_error == 71
+    assert adapter.last_error_message == "SDK disconnect failed"
 
 
 def test_connect_invalid_handle_cleans_up_robot_immediately(monkeypatch):

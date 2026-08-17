@@ -3,6 +3,7 @@ import importlib
 import importlib.util
 import math
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 
@@ -39,35 +40,81 @@ def _coordinate_services_module():
 class FakeCoordinateAdapter:
     def __init__(self) -> None:
         self.arm_id = "l"
-        self.tool = "other"
-        self.work = "other"
+        self._tool = _controller_tool("other")
+        self._work = _controller_work("other")
         self.calls: list[tuple[object, ...]] = []
+
+    @property
+    def tool(self):
+        return self._tool
+
+    @tool.setter
+    def tool(self, value):
+        self._tool = _controller_tool(value) if isinstance(value, str) else value
+
+    @property
+    def work(self):
+        return self._work
+
+    @work.setter
+    def work(self, value):
+        self._work = _controller_work(value) if isinstance(value, str) else value
 
     def current_tool_frame(self):
         self.calls.append(("current_tool_frame",))
-        return 0, self.tool
+        return 0, self._tool
 
     def current_work_frame(self):
         self.calls.append(("current_work_frame",))
-        return 0, self.work
+        return 0, self._work
 
     def set_tool_frame(self, frame):
         self.calls.append(("set_tool_frame", frame))
+        self._tool = frame
         return 0
 
     def set_work_frame(self, frame):
         self.calls.append(("set_work_frame", frame))
+        self._work = frame
         return 0
 
     def change_tool_frame(self, name):
         self.calls.append(("change_tool_frame", name))
-        self.tool = name
+        self._tool = _controller_tool(name)
         return 0
 
     def change_work_frame(self, name):
         self.calls.append(("change_work_frame", name))
-        self.work = name
+        self._work = _controller_work(name)
         return 0
+
+
+def _controller_tool(name: str):
+    if name == "tcpgrip":
+        return SimpleNamespace(
+            controller_name=name,
+            xyz_m=(0.0, 0.0, 0.120),
+            quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+            payload_kg=0.80,
+            center_of_mass_m=(0.0, 0.0, 0.060),
+        )
+    return SimpleNamespace(
+        controller_name=name,
+        xyz_m=(0.0, 0.0, 0.0),
+        quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+        payload_kg=0.0,
+        center_of_mass_m=(0.0, 0.0, 0.0),
+    )
+
+
+def _controller_work(name: str):
+    return SimpleNamespace(
+        controller_name=name,
+        xyz_m=(0.0, 0.0, 0.0),
+        quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+        payload_kg=None,
+        center_of_mass_m=None,
+    )
 
 
 class FakeArmOwnership:
@@ -89,6 +136,22 @@ class FakeArmOwnership:
         assert arm == "l"
         assert self.owner is not None
         self.owner = None
+
+
+class RaisingArmOwnership(FakeArmOwnership):
+    def __init__(self, failure: str) -> None:
+        super().__init__()
+        self.failure = failure
+
+    def acquire(self, arm: str) -> bool:
+        if self.failure == "acquire":
+            raise RuntimeError("forced acquire failure")
+        return super().acquire(arm)
+
+    def release(self, arm: str) -> None:
+        super().release(arm)
+        if self.failure == "release":
+            raise RuntimeError("forced release failure")
 
 
 def _coordinate_context():
@@ -272,6 +335,88 @@ def test_coordinates_operations_reject_busy_arm_without_adapter_calls(
     assert adapter.calls == []
 
 
+@pytest.mark.parametrize(
+    ("operation", "name"),
+    [
+        ("verify", ""),
+        ("apply", ""),
+        ("select_tool", "tcpgrip"),
+        ("select_work", "cell"),
+    ],
+)
+def test_coordinates_publish_active_references_before_releasing_ownership(
+    operation: str, name: str
+):
+    module = _coordinate_services_module()
+    manager, adapter, ownership = _coordinate_context()
+    adapter.tool = "tcpgrip"
+    adapter.work = "cell"
+    published = []
+
+    def publish(result):
+        assert ownership.acquire("l") is False
+        published.append(result)
+
+    result = module.run_coordinate_operation(
+        manager,
+        adapter,
+        ownership,
+        "l",
+        operation,
+        name,
+        publish_result=publish,
+    )
+
+    assert result.success is True
+    assert published == [result]
+    assert ownership.owner is None
+
+
+def test_coordinates_publisher_exception_fails_closed_and_releases_ownership():
+    module = _coordinate_services_module()
+    manager, adapter, ownership = _coordinate_context()
+
+    def fail_publication(_result):
+        raise RuntimeError("forced publication failure")
+
+    result = module.run_coordinate_operation(
+        manager,
+        adapter,
+        ownership,
+        "l",
+        "apply",
+        publish_result=fail_publication,
+    )
+
+    assert result.success is False
+    assert result.api2_status == -1
+    assert "publication" in result.message
+    assert manager.motion_allowed("l") is False
+    assert ownership.owner is None
+
+
+@pytest.mark.parametrize("failure", ["acquire", "release"])
+def test_coordinates_ownership_exceptions_are_structured_failures(failure: str):
+    module = _coordinate_services_module()
+    adapter = FakeCoordinateAdapter()
+    ownership = RaisingArmOwnership(failure)
+    manager = CoordinateManager.from_yaml(
+        COORDINATES_CONFIG_PATH,
+        acquire_arm=ownership.acquire,
+        release_arm=ownership.release,
+    )
+
+    result = module.run_coordinate_operation(
+        manager, adapter, ownership, "l", "verify"
+    )
+
+    assert result.success is False
+    assert result.api2_status == -1
+    assert failure in result.message
+    assert manager.motion_allowed("l") is False
+    assert ownership.owner is None
+
+
 def test_verify_only_startup_reads_without_controller_writes():
     module = _coordinate_services_module()
     manager, adapter, ownership = _coordinate_context()
@@ -301,15 +446,31 @@ def test_explicit_apply_startup_verifies_before_writing_and_reading_back():
     ]
 
 
-def test_startup_always_verifies_after_connect_even_if_service_gate_is_busy():
+def test_explicit_apply_startup_does_not_write_when_verify_already_matches():
+    module = _coordinate_services_module()
+    manager, adapter, ownership = _coordinate_context()
+    manager.policy = CoordinatePolicy("apply", "block_motion")
+    adapter.tool = "tcpgrip"
+    adapter.work = "cell"
+
+    result = module.run_startup_coordinate_policy(manager, adapter, ownership, "l")
+
+    assert result.success is True
+    assert result.matched is True
+    assert adapter.calls == [("current_tool_frame",), ("current_work_frame",)]
+
+
+def test_startup_rejects_busy_arm_without_adapter_calls():
     module = _coordinate_services_module()
     manager, adapter, ownership = _coordinate_context()
     assert ownership.acquire("l") is True
 
     result = module.run_startup_coordinate_policy(manager, adapter, ownership, "l")
 
-    assert result.api2_status == 0
-    assert adapter.calls == [("current_tool_frame",), ("current_work_frame",)]
+    assert result.success is False
+    assert result.api2_status == -1
+    assert "busy" in result.message
+    assert adapter.calls == []
 
 
 def test_launches_declare_coordinate_and_motion_config_paths():
@@ -450,6 +611,33 @@ def test_connect_reconciles_physical_lockout_with_read_only_trajectory_state():
 
     assert "was_connected = self.adapter.connected" in source
     assert "connection_reset=not was_connected" in source
+
+
+def test_connect_returns_coordinate_api_failure_instead_of_ready_status():
+    tree = ast.parse(NODE_PATH.read_text(encoding="utf-8"))
+    connect = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "_connect_to_robot"
+    )
+    returns = [
+        ast.unparse(node.value)
+        for node in ast.walk(connect)
+        if isinstance(node, ast.Return) and node.value is not None
+    ]
+
+    assert "verification.api2_status" in returns
+
+
+def test_mock_coordinate_profile_is_configured_before_auto_connect():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    configure_index = source.index(
+        "self.adapter.configure_mock_coordinate_profile(profile)"
+    )
+    auto_connect_index = source.index("if self.auto_connect:")
+
+    assert configure_index < auto_connect_index
 
 
 def test_stop_service_delegates_fast_stop_to_coordinator():

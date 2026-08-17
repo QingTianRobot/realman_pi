@@ -21,6 +21,7 @@ from std_srvs.srv import Trigger
 
 from .coordinate_manager import CoordinateManager
 from .coordinate_services import (
+    CoordinateOperation,
     CoordinateOperationResult,
     run_coordinate_operation,
     run_startup_coordinate_policy,
@@ -126,6 +127,8 @@ class RealManDriverNode(Node):
             mock_mode=self.mock_mode,
             arm_id=self.arm_id,
         )
+        if self.mock_mode:
+            self.adapter.configure_mock_coordinate_profile(profile)
         self.motion_callback_group = ReentrantCallbackGroup()
         self.motion_coordinator = MotionCoordinator(
             arm_id=self.arm_id,
@@ -256,7 +259,7 @@ class RealManDriverNode(Node):
         _request: VerifyCoordinates.Request,
         response: VerifyCoordinates.Response,
     ) -> VerifyCoordinates.Response:
-        result = self._run_coordinate_operation("verify")
+        result = self._run_coordinate_operation(CoordinateOperation.VERIFY)
         return self._fill_verify_response(response, result)
 
     def _apply_coordinates(
@@ -264,7 +267,7 @@ class RealManDriverNode(Node):
         _request: VerifyCoordinates.Request,
         response: VerifyCoordinates.Response,
     ) -> VerifyCoordinates.Response:
-        result = self._run_coordinate_operation("apply")
+        result = self._run_coordinate_operation(CoordinateOperation.APPLY)
         return self._fill_verify_response(response, result)
 
     def _select_tool_frame(
@@ -272,7 +275,9 @@ class RealManDriverNode(Node):
         request: SelectFrame.Request,
         response: SelectFrame.Response,
     ) -> SelectFrame.Response:
-        result = self._run_coordinate_operation("select_tool", request.name)
+        result = self._run_coordinate_operation(
+            CoordinateOperation.SELECT_TOOL, request.name
+        )
         return self._fill_select_response(response, result)
 
     def _select_work_frame(
@@ -280,11 +285,13 @@ class RealManDriverNode(Node):
         request: SelectFrame.Request,
         response: SelectFrame.Response,
     ) -> SelectFrame.Response:
-        result = self._run_coordinate_operation("select_work", request.name)
+        result = self._run_coordinate_operation(
+            CoordinateOperation.SELECT_WORK, request.name
+        )
         return self._fill_select_response(response, result)
 
     def _run_coordinate_operation(
-        self, operation: str, name: str = ""
+        self, operation: CoordinateOperation, name: str = ""
     ) -> CoordinateOperationResult:
         result = run_coordinate_operation(
             self.coordinate_manager,
@@ -293,8 +300,8 @@ class RealManDriverNode(Node):
             self.arm_id,
             operation,
             name,
+            publish_result=self._update_active_references,
         )
-        self._update_active_references(result)
         if not result.success or not result.matched:
             self.get_logger().warn(
                 f"RealMan coordinate {operation} did not establish a full match: "
@@ -361,8 +368,14 @@ class RealManDriverNode(Node):
                 self.adapter,
                 self.arm_ownership,
                 self.arm_id,
+                publish_result=self._update_active_references,
             )
-            self._update_active_references(verification)
+            if verification.api2_status != 0:
+                self.get_logger().error(
+                    "RealMan coordinate startup failed with API2 status "
+                    f"{verification.api2_status}: {verification.message}"
+                )
+                return verification.api2_status
             if not verification.matched:
                 self.get_logger().warn(
                     f"RealMan coordinate verification blocked motion: {verification.message}"

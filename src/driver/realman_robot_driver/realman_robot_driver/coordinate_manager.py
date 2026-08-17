@@ -23,6 +23,9 @@ import yaml
 _ARMS = frozenset({"l", "m", "r"})
 _CONTROLLER_NAME = re.compile(r"^[A-Za-z0-9_-]{1,9}$")
 _ROS_FRAME_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:/[A-Za-z][A-Za-z0-9_]*)*$")
+_LINEAR_TOLERANCE_M = 1.0e-5
+_ORIENTATION_TOLERANCE_RAD = 1.0e-5
+_PAYLOAD_TOLERANCE_KG = 1.0e-4
 
 
 @dataclass(frozen=True)
@@ -47,6 +50,17 @@ class WorkFrame:
     ros_frame_id: str
     xyz_m: tuple[float, float, float]
     quaternion_wxyz: tuple[float, float, float, float]
+
+
+@dataclass(frozen=True)
+class ControllerFrame:
+    """Canonical, SDK-neutral coordinate frame returned by an adapter."""
+
+    controller_name: str
+    xyz_m: tuple[float, float, float]
+    quaternion_wxyz: tuple[float, float, float, float]
+    payload_kg: float | None
+    center_of_mass_m: tuple[float, float, float] | None
 
 
 @dataclass(frozen=True)
@@ -165,19 +179,43 @@ class CoordinateManager:
             release_arm=release_arm,
         )
 
-    def verify(self, adapter: CoordinateAdapter, arm: str) -> CoordinateVerification:
+    def verify(
+        self,
+        adapter: CoordinateAdapter,
+        arm: str,
+        *,
+        verified_result_callback: Callable[[CoordinateVerification], None] | None = None,
+    ) -> CoordinateVerification:
         """Read controller frame selection and update the motion permission state."""
         profile = self._profile(arm)
-        expected_tool = profile.tools[self._selected_tools[arm]].controller_name
-        expected_work = profile.works[self._selected_works[arm]].controller_name
+        desired_tool = profile.tools[self._selected_tools[arm]]
+        desired_work = profile.works[self._selected_works[arm]]
+        expected_tool = desired_tool.controller_name
+        expected_work = desired_work.controller_name
         identity_error = _adapter_identity_error(adapter, arm)
         if identity_error:
             return self._failure(arm, -1, identity_error)
-        tool_status, current_tool, tool_error = _read_frame(adapter, "current_tool_frame")
-        work_status, current_work, work_error = _read_frame(adapter, "current_work_frame")
+        tool_status, tool_frame, tool_error = _read_frame(
+            adapter, "current_tool_frame", "tool"
+        )
+        work_status, work_frame, work_error = _read_frame(
+            adapter, "current_work_frame", "work"
+        )
         status = _first_error(tool_status, work_status)
-        tool_matched = tool_status == 0 and current_tool == expected_tool
-        work_matched = work_status == 0 and current_work == expected_work
+        current_tool = tool_frame.controller_name if tool_frame is not None else None
+        current_work = work_frame.controller_name if work_frame is not None else None
+        tool_mismatches = (
+            _frame_mismatches("tool", desired_tool, tool_frame, include_payload=True)
+            if tool_status == 0 and tool_frame is not None
+            else []
+        )
+        work_mismatches = (
+            _frame_mismatches("work", desired_work, work_frame, include_payload=False)
+            if work_status == 0 and work_frame is not None
+            else []
+        )
+        tool_matched = tool_status == 0 and not tool_mismatches
+        work_matched = work_status == 0 and not work_mismatches
         matched = tool_matched and work_matched
         self._motion_allowed[arm] = matched
         if matched:
@@ -185,11 +223,12 @@ class CoordinateManager:
         elif status != 0:
             message = "; ".join(error for error in (tool_error, work_error) if error)
         else:
+            mismatch_fields = ", ".join((*tool_mismatches, *work_mismatches))
             message = (
-                f"frame mismatch: expected tool={expected_tool} work={expected_work}; "
-                f"current tool={current_tool} work={current_work}"
+                f"frame mismatch ({mismatch_fields}): expected tool={expected_tool} "
+                f"work={expected_work}; current tool={current_tool} work={current_work}"
             )
-        return CoordinateVerification(
+        result = CoordinateVerification(
             arm,
             expected_tool,
             current_tool,
@@ -201,8 +240,15 @@ class CoordinateManager:
             status,
             message,
         )
+        return self._publish_verified_result(arm, result, verified_result_callback)
 
-    def apply(self, adapter: CoordinateAdapter, arm: str) -> CoordinateVerification:
+    def apply(
+        self,
+        adapter: CoordinateAdapter,
+        arm: str,
+        *,
+        verified_result_callback: Callable[[CoordinateVerification], None] | None = None,
+    ) -> CoordinateVerification:
         """Explicitly write and select the arm defaults, then read them back."""
         profile = self._profile(arm)
         def operation() -> CoordinateVerification:
@@ -224,10 +270,15 @@ class CoordinateManager:
                     return self._failure(arm, status, error)
             return self.verify(adapter, arm)
 
-        return self._run_mutation(arm, operation)
+        return self._run_mutation(arm, operation, verified_result_callback)
 
     def select_tool(
-        self, adapter: CoordinateAdapter, arm: str, name: str
+        self,
+        adapter: CoordinateAdapter,
+        arm: str,
+        name: str,
+        *,
+        verified_result_callback: Callable[[CoordinateVerification], None] | None = None,
     ) -> CoordinateVerification:
         """Select a configured tool only while the ownership callback says arm is idle."""
         profile = self._profile(arm)
@@ -243,10 +294,15 @@ class CoordinateManager:
             self._selected_tools[arm] = name
             return self.verify(adapter, arm)
 
-        return self._run_mutation(arm, operation)
+        return self._run_mutation(arm, operation, verified_result_callback)
 
     def select_work(
-        self, adapter: CoordinateAdapter, arm: str, name: str
+        self,
+        adapter: CoordinateAdapter,
+        arm: str,
+        name: str,
+        *,
+        verified_result_callback: Callable[[CoordinateVerification], None] | None = None,
     ) -> CoordinateVerification:
         """Select a configured work frame only while the ownership callback says arm is idle."""
         profile = self._profile(arm)
@@ -262,12 +318,18 @@ class CoordinateManager:
             self._selected_works[arm] = name
             return self.verify(adapter, arm)
 
-        return self._run_mutation(arm, operation)
+        return self._run_mutation(arm, operation, verified_result_callback)
 
     def motion_allowed(self, arm: str) -> bool:
         """Return true only after a successful verification of current selections."""
         self._profile(arm)
         return self._motion_allowed[arm]
+
+    def fail_closed(
+        self, arm: str, message: str, *, status: int = -1
+    ) -> CoordinateVerification:
+        """Invalidate an arm after an ownership or publication boundary failure."""
+        return self._failure(arm, status, message)
 
     def _acquire_mutation(self, arm: str) -> str:
         if self._acquire_arm is None or self._release_arm is None:
@@ -286,6 +348,7 @@ class CoordinateManager:
         self,
         arm: str,
         operation: Callable[[], CoordinateVerification],
+        verified_result_callback: Callable[[CoordinateVerification], None] | None,
     ) -> CoordinateVerification:
         ownership_error = self._acquire_mutation(arm)
         if ownership_error:
@@ -297,6 +360,9 @@ class CoordinateManager:
                 result = operation()
             except Exception as error:
                 result = self._failure(arm, -1, f"coordinate mutation failed: {error}")
+            result = self._publish_verified_result(
+                arm, result, verified_result_callback
+            )
         finally:
             try:
                 self._release_mutation(arm)
@@ -305,6 +371,22 @@ class CoordinateManager:
 
         if release_error is not None:
             return self._failure(arm, -1, f"ownership release failed: {release_error}")
+        return result
+
+    def _publish_verified_result(
+        self,
+        arm: str,
+        result: CoordinateVerification,
+        callback: Callable[[CoordinateVerification], None] | None,
+    ) -> CoordinateVerification:
+        if callback is None:
+            return result
+        try:
+            callback(result)
+        except Exception as error:
+            return self._failure(
+                arm, -1, f"coordinate result publication failed: {error}"
+            )
         return result
 
     def _release_mutation(self, arm: str) -> None:
@@ -497,7 +579,9 @@ def _adapter_identity_error(adapter: Any, arm: str) -> str:
     return ""
 
 
-def _read_frame(adapter: Any, method_name: str) -> tuple[int, str | None, str]:
+def _read_frame(
+    adapter: Any, method_name: str, frame_kind: str
+) -> tuple[int, ControllerFrame | None, str]:
     method = getattr(adapter, method_name, None)
     if not callable(method):
         return -1, None, f"adapter does not implement {method_name}"
@@ -508,10 +592,10 @@ def _read_frame(adapter: Any, method_name: str) -> tuple[int, str | None, str]:
     status, frame = _unpack_read_result(result)
     if status != 0:
         return status, None, f"{method_name} returned API2 status {status}"
-    name = _frame_name(frame)
-    if name is None:
-        return -1, None, f"{method_name} returned no controller frame name"
-    return 0, name, ""
+    try:
+        return 0, _controller_frame(frame, frame_kind), ""
+    except ValueError as error:
+        return -1, None, f"{method_name} returned invalid {frame_kind} frame: {error}"
 
 
 def _unpack_read_result(result: Any) -> tuple[int, Any]:
@@ -522,16 +606,88 @@ def _unpack_read_result(result: Any) -> tuple[int, Any]:
     return 0, result
 
 
-def _frame_name(frame: Any) -> str | None:
-    if isinstance(frame, str) and frame:
-        return frame
-    if isinstance(frame, Mapping):
-        for key in ("controller_name", "name", "frame_name"):
-            value = frame.get(key)
-            if isinstance(value, str) and value:
-                return value
-    value = getattr(frame, "controller_name", None)
-    return value if isinstance(value, str) and value else None
+def _controller_frame(frame: Any, frame_kind: str) -> ControllerFrame:
+    controller_name = getattr(frame, "controller_name", None)
+    if not isinstance(controller_name, str) or not controller_name:
+        raise ValueError("controller_name must be a non-empty string")
+    xyz_m = _finite_vector(getattr(frame, "xyz_m", None), 3, f"{frame_kind}.xyz_m")
+    quaternion_wxyz = _quaternion(
+        getattr(frame, "quaternion_wxyz", None),
+        f"{frame_kind}.quaternion_wxyz",
+    )
+    if frame_kind == "tool":
+        payload_kg = _finite_scalar(
+            getattr(frame, "payload_kg", None),
+            "tool.payload_kg",
+            minimum=0.0,
+        )
+        center_of_mass_m = _finite_vector(
+            getattr(frame, "center_of_mass_m", None),
+            3,
+            "tool.center_of_mass_m",
+        )
+    else:
+        payload_kg = None
+        center_of_mass_m = None
+    return ControllerFrame(
+        controller_name,
+        xyz_m,  # type: ignore[arg-type]
+        quaternion_wxyz,
+        payload_kg,
+        center_of_mass_m,  # type: ignore[arg-type]
+    )
+
+
+def _frame_mismatches(
+    frame_kind: str,
+    desired: ToolFrame | WorkFrame,
+    current: ControllerFrame,
+    *,
+    include_payload: bool,
+) -> list[str]:
+    mismatches = []
+    if current.controller_name != desired.controller_name:
+        mismatches.append(f"{frame_kind}.controller_name")
+    if not _vectors_close(current.xyz_m, desired.xyz_m, _LINEAR_TOLERANCE_M):
+        mismatches.append(f"{frame_kind}.xyz_m")
+    if not _orientations_close(current.quaternion_wxyz, desired.quaternion_wxyz):
+        mismatches.append(f"{frame_kind}.quaternion_wxyz")
+    if include_payload:
+        assert isinstance(desired, ToolFrame)
+        assert current.payload_kg is not None
+        assert current.center_of_mass_m is not None
+        if not math.isclose(
+            current.payload_kg,
+            desired.payload_kg,
+            rel_tol=0.0,
+            abs_tol=_PAYLOAD_TOLERANCE_KG,
+        ):
+            mismatches.append("tool.payload_kg")
+        if not _vectors_close(
+            current.center_of_mass_m,
+            desired.center_of_mass_m,
+            _LINEAR_TOLERANCE_M,
+        ):
+            mismatches.append("tool.center_of_mass_m")
+    return mismatches
+
+
+def _vectors_close(
+    current: tuple[float, ...], desired: tuple[float, ...], tolerance: float
+) -> bool:
+    return all(
+        math.isclose(actual, expected, rel_tol=0.0, abs_tol=tolerance)
+        for actual, expected in zip(current, desired)
+    )
+
+
+def _orientations_close(
+    current: tuple[float, float, float, float],
+    desired: tuple[float, float, float, float],
+) -> bool:
+    dot = abs(sum(actual * expected for actual, expected in zip(current, desired)))
+    angular_error = 2.0 * math.acos(min(1.0, dot))
+    return angular_error <= _ORIENTATION_TOLERANCE_RAD
 
 
 def _write_frame(adapter: Any, method_name: str, value: Any) -> tuple[int, str]:

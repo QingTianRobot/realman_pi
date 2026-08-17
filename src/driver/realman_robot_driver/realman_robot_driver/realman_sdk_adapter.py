@@ -3,8 +3,11 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import threading
 from typing import Any, Callable
+
+from .coordinate_manager import ControllerFrame
 
 
 @dataclass(frozen=True)
@@ -60,8 +63,10 @@ class RealManSdkAdapter:
         self._event_callback: Callable[[Any], Any] | None = None
         self._pending_event_callback: Callable[[Any], Any] | None = None
         self._pending_event_callback_marker: object | None = None
-        self._mock_tool_frame_name = ""
-        self._mock_work_frame_name = ""
+        self._mock_tool_frames: dict[str, ControllerFrame] = {}
+        self._mock_work_frames: dict[str, ControllerFrame] = {}
+        self._mock_tool_frame: ControllerFrame | None = None
+        self._mock_work_frame: ControllerFrame | None = None
 
     @property
     def connected(self) -> bool:
@@ -383,14 +388,42 @@ class RealManSdkAdapter:
     def current_tool_frame(self) -> Any:
         with self._lock:
             if self.mock_mode and self._connected:
-                return 0, {"frame_name": self._mock_tool_frame_name}
-        return self._query("rm_get_current_tool_frame", "SDK tool frame query failed")
+                if self._mock_tool_frame is None:
+                    self._set_failure_locked(-1, "mock tool coordinate profile is not configured")
+                    return -1, None
+                return 0, self._mock_tool_frame
+        return self._coordinate_query(
+            "rm_get_current_tool_frame", "SDK tool frame query failed", is_tool=True
+        )
 
     def current_work_frame(self) -> Any:
         with self._lock:
             if self.mock_mode and self._connected:
-                return 0, {"frame_name": self._mock_work_frame_name}
-        return self._query("rm_get_current_work_frame", "SDK work frame query failed")
+                if self._mock_work_frame is None:
+                    self._set_failure_locked(-1, "mock work coordinate profile is not configured")
+                    return -1, None
+                return 0, self._mock_work_frame
+        return self._coordinate_query(
+            "rm_get_current_work_frame", "SDK work frame query failed", is_tool=False
+        )
+
+    def configure_mock_coordinate_profile(self, profile: Any) -> None:
+        """Seed deterministic full-frame readback for the selected arm profile."""
+        tool_frames = {
+            frame.controller_name: _controller_frame_from_profile(frame, is_tool=True)
+            for frame in profile.tools.values()
+        }
+        work_frames = {
+            frame.controller_name: _controller_frame_from_profile(frame, is_tool=False)
+            for frame in profile.works.values()
+        }
+        default_tool = profile.tools[profile.tool_default].controller_name
+        default_work = profile.works[profile.work_default].controller_name
+        with self._lock:
+            self._mock_tool_frames = tool_frames
+            self._mock_work_frames = work_frames
+            self._mock_tool_frame = tool_frames[default_tool]
+            self._mock_work_frame = work_frames[default_work]
 
     def set_tool_frame(self, frame: Any) -> int:
         with self._lock:
@@ -400,7 +433,7 @@ class RealManSdkAdapter:
             return status
         if mock_mode:
             try:
-                frame_name = str(frame.controller_name)
+                controller_frame = _controller_frame_from_profile(frame, is_tool=True)
             except Exception as error:
                 with self._lock:
                     self._set_failure_locked(-1, str(error))
@@ -409,7 +442,8 @@ class RealManSdkAdapter:
                 if not self._connected:
                     self._set_failure_locked(-1, "robot is not connected")
                     return -1
-                self._mock_tool_frame_name = frame_name
+                self._mock_tool_frames[controller_frame.controller_name] = controller_frame
+                self._mock_tool_frame = controller_frame
                 self._set_success_locked()
                 return 0
         try:
@@ -442,12 +476,13 @@ class RealManSdkAdapter:
         try:
             pose = [*frame.xyz_m, *frame.quaternion_wxyz]
             if mock_mode:
-                frame_name = str(frame.controller_name)
+                controller_frame = _controller_frame_from_profile(frame, is_tool=False)
                 with self._lock:
                     if not self._connected:
                         self._set_failure_locked(-1, "robot is not connected")
                         return -1
-                    self._mock_work_frame_name = frame_name
+                    self._mock_work_frames[controller_frame.controller_name] = controller_frame
+                    self._mock_work_frame = controller_frame
                     self._set_success_locked()
                     return 0
             result, token, error, _, readiness_status = self._invoke_vendor(
@@ -470,22 +505,49 @@ class RealManSdkAdapter:
             return self._finish_command_locked(result, "SDK work frame update failed")
 
     def change_tool_frame(self, controller_name: str) -> int:
+        with self._lock:
+            if self.mock_mode and controller_name not in self._mock_tool_frames:
+                self._set_failure_locked(-1, f"unknown mock tool frame: {controller_name}")
+                return -1
         status = self._command(
             "rm_change_tool_frame", "SDK tool frame selection failed", controller_name
         )
         with self._lock:
             if status == 0 and self.mock_mode:
-                self._mock_tool_frame_name = controller_name
+                self._mock_tool_frame = self._mock_tool_frames[controller_name]
         return status
 
     def change_work_frame(self, controller_name: str) -> int:
+        with self._lock:
+            if self.mock_mode and controller_name not in self._mock_work_frames:
+                self._set_failure_locked(-1, f"unknown mock work frame: {controller_name}")
+                return -1
         status = self._command(
             "rm_change_work_frame", "SDK work frame selection failed", controller_name
         )
         with self._lock:
             if status == 0 and self.mock_mode:
-                self._mock_work_frame_name = controller_name
+                self._mock_work_frame = self._mock_work_frames[controller_name]
         return status
+
+    def _coordinate_query(
+        self, method_name: str, failure_message: str, *, is_tool: bool
+    ) -> tuple[int, ControllerFrame | None]:
+        result = self._query(method_name, failure_message)
+        try:
+            status, frame = _unpack_result(result)
+        except Exception:
+            with self._lock:
+                self._set_failure_locked(-1, failure_message)
+            return -1, None
+        if status != 0:
+            return status, None
+        try:
+            return 0, _controller_frame_from_vendor(frame, is_tool=is_tool)
+        except (AttributeError, TypeError, ValueError) as error:
+            with self._lock:
+                self._set_failure_locked(-1, f"{failure_message}: {error}")
+            return -1, None
 
     def _command(
         self,
@@ -722,6 +784,136 @@ def _vendor_tool_frame(frame: Any) -> Any:
     vendor_frame.payload = frame.payload_kg
     vendor_frame.x, vendor_frame.y, vendor_frame.z = frame.center_of_mass_m
     return vendor_frame
+
+
+def _controller_frame_from_profile(frame: Any, *, is_tool: bool) -> ControllerFrame:
+    return ControllerFrame(
+        controller_name=str(frame.controller_name),
+        xyz_m=_finite_vector(frame.xyz_m, 3, "xyz_m"),
+        quaternion_wxyz=_normalized_quaternion(frame.quaternion_wxyz),
+        payload_kg=(
+            _finite_scalar(frame.payload_kg, "payload", minimum=0.0)
+            if is_tool
+            else None
+        ),
+        center_of_mass_m=(
+            _finite_vector(frame.center_of_mass_m, 3, "center_of_mass_m")
+            if is_tool
+            else None
+        ),
+    )
+
+
+def _controller_frame_from_vendor(frame: Any, *, is_tool: bool) -> ControllerFrame:
+    name_value = _field(frame, "frame_name")
+    if isinstance(name_value, bytes):
+        controller_name = name_value.split(b"\0", 1)[0].decode("ascii")
+    elif isinstance(name_value, str):
+        controller_name = name_value
+    else:
+        raise ValueError("frame_name must be an ASCII string")
+    if not controller_name or not controller_name.isascii():
+        raise ValueError("frame_name must be a non-empty ASCII string")
+
+    pose = _field(frame, "pose")
+    if isinstance(pose, (list, tuple)):
+        values = _finite_vector(pose, 6, "pose")
+        xyz_m = values[:3]
+        quaternion_wxyz = _quaternion_from_euler(*values[3:])
+    else:
+        position = _field(pose, "position")
+        xyz_m = _finite_vector(
+            tuple(_field(position, axis) for axis in ("x", "y", "z")),
+            3,
+            "pose.position",
+        )
+        quaternion = _optional_field(pose, "quaternion")
+        if quaternion is not None:
+            quaternion_wxyz = _normalized_quaternion(
+                tuple(_field(quaternion, axis) for axis in ("w", "x", "y", "z"))
+            )
+        else:
+            euler = _field(pose, "euler")
+            quaternion_wxyz = _quaternion_from_euler(
+                *tuple(_field(euler, axis) for axis in ("rx", "ry", "rz"))
+            )
+
+    if is_tool:
+        payload_kg = _finite_scalar(_field(frame, "payload"), "payload", minimum=0.0)
+        center_of_mass_m = _finite_vector(
+            tuple(_field(frame, axis) for axis in ("x", "y", "z")),
+            3,
+            "center_of_mass_m",
+        )
+    else:
+        payload_kg = None
+        center_of_mass_m = None
+    return ControllerFrame(
+        controller_name,
+        xyz_m,
+        quaternion_wxyz,
+        payload_kg,
+        center_of_mass_m,
+    )
+
+
+def _field(value: Any, name: str) -> Any:
+    result = _optional_field(value, name)
+    if result is None:
+        raise ValueError(f"missing {name}")
+    return result
+
+
+def _optional_field(value: Any, name: str) -> Any:
+    if isinstance(value, dict):
+        return value.get(name)
+    return getattr(value, name, None)
+
+
+def _finite_scalar(value: Any, context: str, *, minimum: float | None = None) -> float:
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        raise ValueError(f"{context} must be a finite number")
+    result = float(value)
+    if not math.isfinite(result):
+        raise ValueError(f"{context} must be a finite number")
+    if minimum is not None and result < minimum:
+        raise ValueError(f"{context} must be at least {minimum}")
+    return result
+
+
+def _finite_vector(value: Any, length: int, context: str) -> tuple[float, ...]:
+    if not isinstance(value, (list, tuple)) or len(value) != length:
+        raise ValueError(f"{context} must contain exactly {length} values")
+    return tuple(_finite_scalar(item, context) for item in value)
+
+
+def _normalized_quaternion(value: Any) -> tuple[float, float, float, float]:
+    quaternion = _finite_vector(value, 4, "quaternion")
+    scale = max(abs(component) for component in quaternion)
+    if scale == 0.0:
+        raise ValueError("quaternion must have non-zero norm")
+    scaled = tuple(component / scale for component in quaternion)
+    norm = math.sqrt(sum(component * component for component in scaled))
+    return tuple(component / norm for component in scaled)  # type: ignore[return-value]
+
+
+def _quaternion_from_euler(
+    roll: Any, pitch: Any, yaw: Any
+) -> tuple[float, float, float, float]:
+    rx, ry, rz = (
+        _finite_scalar(value, "pose.euler") for value in (roll, pitch, yaw)
+    )
+    cr, sr = math.cos(rx / 2.0), math.sin(rx / 2.0)
+    cp, sp = math.cos(ry / 2.0), math.sin(ry / 2.0)
+    cy, sy = math.cos(rz / 2.0), math.sin(rz / 2.0)
+    return _normalized_quaternion(
+        (
+            cr * cp * cy + sr * sp * sy,
+            sr * cp * cy - cr * sp * sy,
+            cr * sp * cy + sr * cp * sy,
+            cr * cp * sy - sr * sp * cy,
+        )
+    )
 
 
 def _is_valid_handle(handle: Any) -> bool:

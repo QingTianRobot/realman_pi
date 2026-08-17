@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 from pathlib import Path
+from types import SimpleNamespace
 
 import pytest
 import yaml
@@ -78,8 +79,19 @@ def write_profile(tmp_path: Path, **tool_overrides: object) -> Path:
 class FakeAdapter:
     def __init__(self) -> None:
         self.arm_id = "l"
-        self.tool = (0, "other_tool")
-        self.work = (0, "other_work")
+        self.tool = (0, _controller_tool("other"))
+        self.work = (0, _controller_work("other"))
+        self.tool_frames = {
+            "tcpgrip": _controller_tool("tcpgrip"),
+            "camera": _controller_tool(
+                "camera", xyz_m=(0.0, 0.0, 0.2), payload_kg=0.2,
+                center_of_mass_m=(0.0, 0.0, 0.01),
+            ),
+        }
+        self.work_frames = {
+            "cell": _controller_work("cell"),
+            "fixture": _controller_work("fixture", xyz_m=(0.5, 0.0, 0.0)),
+        }
         self.calls: list[tuple[object, ...]] = []
         self.raise_from: str | None = None
         self.on_call = None
@@ -101,20 +113,32 @@ class FakeAdapter:
 
     def set_tool_frame(self, frame: object) -> int:
         self._record("set_tool_frame", frame)
+        self.tool_frames[frame.controller_name] = _controller_tool(
+            frame.controller_name,
+            xyz_m=frame.xyz_m,
+            quaternion_wxyz=frame.quaternion_wxyz,
+            payload_kg=frame.payload_kg,
+            center_of_mass_m=frame.center_of_mass_m,
+        )
         return 0
 
     def set_work_frame(self, frame: object) -> int:
         self._record("set_work_frame", frame)
+        self.work_frames[frame.controller_name] = _controller_work(
+            frame.controller_name,
+            xyz_m=frame.xyz_m,
+            quaternion_wxyz=frame.quaternion_wxyz,
+        )
         return 0
 
     def change_tool_frame(self, name: str) -> int:
         self._record("change_tool_frame", name)
-        self.tool = (0, name)
+        self.tool = (0, self.tool_frames[name])
         return 0
 
     def change_work_frame(self, name: str) -> int:
         self._record("change_work_frame", name)
-        self.work = (0, name)
+        self.work = (0, self.work_frames[name])
         return 0
 
 
@@ -135,6 +159,38 @@ class AtomicOwner:
         self.released.append(arm)
         if self.raise_on_release:
             raise RuntimeError("forced ownership release failure")
+
+
+def _controller_tool(
+    controller_name: str = "tcpgrip",
+    *,
+    xyz_m=(0.0, 0.0, 0.1),
+    quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+    payload_kg=0.5,
+    center_of_mass_m=(0.0, 0.0, 0.02),
+):
+    return SimpleNamespace(
+        controller_name=controller_name,
+        xyz_m=xyz_m,
+        quaternion_wxyz=quaternion_wxyz,
+        payload_kg=payload_kg,
+        center_of_mass_m=center_of_mass_m,
+    )
+
+
+def _controller_work(
+    controller_name: str = "cell",
+    *,
+    xyz_m=(0.4, 0.0, 0.0),
+    quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+):
+    return SimpleNamespace(
+        controller_name=controller_name,
+        xyz_m=xyz_m,
+        quaternion_wxyz=quaternion_wxyz,
+        payload_kg=None,
+        center_of_mass_m=None,
+    )
 
 
 @pytest.fixture
@@ -330,9 +386,82 @@ def test_mismatch_blocks_motion_by_default(fake_adapter: FakeAdapter, profile_pa
 
     assert result.matched is False
     assert result.expected_tool == "tcpgrip"
-    assert result.current_tool == "other_tool"
+    assert result.current_tool == "other"
     assert result.expected_work == "cell"
-    assert result.current_work == "other_work"
+    assert result.current_work == "other"
+    assert manager.motion_allowed("l") is False
+
+
+@pytest.mark.parametrize(
+    ("frame_kind", "field", "value"),
+    [
+        ("tool", "xyz_m", (0.001, 0.0, 0.1)),
+        ("tool", "quaternion_wxyz", (0.0, 1.0, 0.0, 0.0)),
+        ("tool", "payload_kg", 0.6),
+        ("tool", "center_of_mass_m", (0.01, 0.0, 0.02)),
+        ("work", "xyz_m", (0.401, 0.0, 0.0)),
+        ("work", "quaternion_wxyz", (0.0, 0.0, 1.0, 0.0)),
+    ],
+)
+def test_same_name_frame_with_wrong_configured_field_blocks_motion(
+    profile_path: Path, frame_kind: str, field: str, value: object
+):
+    manager = CoordinateManager.from_yaml(profile_path)
+    adapter = FakeAdapter()
+    adapter.tool = (0, _controller_tool())
+    adapter.work = (0, _controller_work())
+    setattr(adapter.tool[1] if frame_kind == "tool" else adapter.work[1], field, value)
+
+    result = manager.verify(adapter, "l")
+
+    assert result.matched is False
+    assert manager.motion_allowed("l") is False
+    assert f"{frame_kind}.{field}" in result.message
+
+
+def test_quaternion_sign_and_small_finite_readback_error_match(profile_path: Path):
+    manager = CoordinateManager.from_yaml(profile_path)
+    adapter = FakeAdapter()
+    adapter.tool = (
+        0,
+        _controller_tool(
+            xyz_m=(0.0, 0.0, 0.100001),
+            quaternion_wxyz=(-1.0, 0.0, 0.0, 0.0),
+            payload_kg=0.50001,
+            center_of_mass_m=(0.0, 0.0, 0.020001),
+        ),
+    )
+    adapter.work = (0, _controller_work(xyz_m=(0.400001, 0.0, 0.0)))
+
+    result = manager.verify(adapter, "l")
+
+    assert result.matched is True
+    assert manager.motion_allowed("l") is True
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("xyz_m", (float("nan"), 0.0, 0.1)),
+        ("quaternion_wxyz", (float("inf"), 0.0, 0.0, 0.0)),
+        ("payload_kg", float("nan")),
+        ("center_of_mass_m", None),
+    ],
+)
+def test_invalid_or_missing_controller_tool_field_fails_closed(
+    profile_path: Path, field: str, value: object
+):
+    manager = CoordinateManager.from_yaml(profile_path)
+    adapter = FakeAdapter()
+    adapter.tool = (0, _controller_tool())
+    adapter.work = (0, _controller_work())
+    setattr(adapter.tool[1], field, value)
+
+    result = manager.verify(adapter, "l")
+
+    assert result.status == -1
+    assert result.matched is False
+    assert field in result.message
     assert manager.motion_allowed("l") is False
 
 
@@ -379,7 +508,7 @@ def test_apply_refuses_atomically_owned_arm_without_adapter_calls(
         acquire_arm=atomic_owner.acquire,
         release_arm=atomic_owner.release,
     )
-    fake_adapter.work = (0, "cell")
+    fake_adapter.work = (0, _controller_work("cell"))
     selected = manager.select_tool(fake_adapter, "l", "camera")
     assert selected.matched is True
     fake_adapter.calls.clear()
@@ -449,10 +578,10 @@ def test_release_failure_blocks_motion_after_successful_mutation(
     if operation == "apply":
         result = manager.apply(fake_adapter, "l")
     elif operation == "select_tool":
-        fake_adapter.work = (0, "cell")
+        fake_adapter.work = (0, _controller_work("cell"))
         result = manager.select_tool(fake_adapter, "l", "camera")
     else:
-        fake_adapter.tool = (0, "tcpgrip")
+        fake_adapter.tool = (0, _controller_tool("tcpgrip"))
         result = manager.select_work(fake_adapter, "l", "fixture")
 
     assert result.matched is False
@@ -498,7 +627,7 @@ def test_select_tool_updates_selection_and_verifies_readback(
         acquire_arm=atomic_owner.acquire,
         release_arm=atomic_owner.release,
     )
-    fake_adapter.work = (0, "cell")
+    fake_adapter.work = (0, _controller_work("cell"))
 
     result = manager.select_tool(fake_adapter, "l", "camera")
 
@@ -518,7 +647,7 @@ def test_select_work_updates_selection_and_verifies_readback(
         acquire_arm=atomic_owner.acquire,
         release_arm=atomic_owner.release,
     )
-    fake_adapter.tool = (0, "tcpgrip")
+    fake_adapter.tool = (0, _controller_tool("tcpgrip"))
 
     result = manager.select_work(fake_adapter, "l", "fixture")
 

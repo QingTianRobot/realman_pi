@@ -517,12 +517,37 @@ def test_coordinate_adapter_protocol_uses_one_adapter_arm_and_vendor_frames(
         xyz_m=(0.4, 0.5, 0.6),
         quaternion_wxyz=(0.5, 0.5, 0.5, 0.5),
     )
-    fake_robot.results["rm_get_current_tool_frame"] = (0, {"frame_name": "gripper"})
-    fake_robot.results["rm_get_current_work_frame"] = (0, {"frame_name": "cell"})
+    fake_robot.results["rm_get_current_tool_frame"] = (
+        0,
+        {
+            "frame_name": "gripper",
+            "pose": {
+                "position": {"x": 0.1, "y": 0.2, "z": 0.3},
+                "quaternion": {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0},
+            },
+            "payload": 1.5,
+            "x": 0.01,
+            "y": 0.02,
+            "z": 0.03,
+        },
+    )
+    fake_robot.results["rm_get_current_work_frame"] = (
+        0,
+        {"frame_name": "cell", "pose": [0.4, 0.5, 0.6, 0.0, 0.0, 0.0]},
+    )
 
     assert adapter.arm_id == "l"
-    assert adapter.current_tool_frame() == (0, {"frame_name": "gripper"})
-    assert adapter.current_work_frame() == (0, {"frame_name": "cell"})
+    tool_status, current_tool = adapter.current_tool_frame()
+    work_status, current_work = adapter.current_work_frame()
+    assert tool_status == work_status == 0
+    assert current_tool.controller_name == "gripper"
+    assert current_tool.xyz_m == (0.1, 0.2, 0.3)
+    assert current_tool.quaternion_wxyz == (1.0, 0.0, 0.0, 0.0)
+    assert current_tool.payload_kg == 1.5
+    assert current_tool.center_of_mass_m == (0.01, 0.02, 0.03)
+    assert current_work.controller_name == "cell"
+    assert current_work.xyz_m == (0.4, 0.5, 0.6)
+    assert current_work.quaternion_wxyz == (1.0, 0.0, 0.0, 0.0)
     assert adapter.set_tool_frame(tool) == 0
     sent_tool = fake_robot.calls[-1][1]
     assert sent_tool.frame_name == b"gripper"
@@ -574,8 +599,8 @@ def test_coordinate_operations_return_nonzero_vendor_status_unchanged(
         }
     )
 
-    assert adapter.current_tool_frame() == (51, {"frame_name": "bad-tool"})
-    assert adapter.current_work_frame() == (52, {"frame_name": "bad-work"})
+    assert adapter.current_tool_frame() == (51, None)
+    assert adapter.current_work_frame() == (52, None)
     assert adapter.set_tool_frame(tool) == 53
     assert adapter.set_work_frame(work) == 54
     assert adapter.change_tool_frame("gripper") == 55
@@ -606,14 +631,66 @@ def test_mock_adapter_is_safe_and_deterministic():
     assert adapter.movej_p([0.0] * 7, 20, 0, False) == 0
     assert adapter.set_movev_init(1, 0, 5) == 0
     assert adapter.movev([0.0] * 6, True, 0, 0) == 0
-    assert adapter.current_tool_frame() == (0, {"frame_name": ""})
-    assert adapter.current_work_frame() == (0, {"frame_name": ""})
-    assert adapter.change_tool_frame("gripper") == 0
-    assert adapter.change_work_frame("cell") == 0
-    assert adapter.current_tool_frame() == (0, {"frame_name": "gripper"})
-    assert adapter.current_work_frame() == (0, {"frame_name": "cell"})
+    tool = ToolFrame(
+        controller_name="gripper",
+        ros_frame_id="l/tool",
+        xyz_m=(0.1, 0.2, 0.3),
+        quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+        payload_kg=1.5,
+        center_of_mass_m=(0.01, 0.02, 0.03),
+    )
+    work = WorkFrame(
+        controller_name="cell",
+        ros_frame_id="l/cell",
+        xyz_m=(0.4, 0.5, 0.6),
+        quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+    )
+    adapter.configure_mock_coordinate_profile(
+        SimpleNamespace(
+            tool_default="gripper",
+            work_default="cell",
+            tools={"gripper": tool},
+            works={"cell": work},
+        )
+    )
+    tool_status, current_tool = adapter.current_tool_frame()
+    work_status, current_work = adapter.current_work_frame()
+    assert tool_status == work_status == 0
+    assert current_tool.controller_name == "gripper"
+    assert current_tool.xyz_m == tool.xyz_m
+    assert current_tool.payload_kg == tool.payload_kg
+    assert current_tool.center_of_mass_m == tool.center_of_mass_m
+    assert current_work.controller_name == "cell"
+    assert current_work.xyz_m == work.xyz_m
     assert adapter.disconnect() == 0
     assert adapter.get_state().connected is False
+
+
+@pytest.mark.parametrize(
+    "frame",
+    [
+        {"frame_name": "tool", "pose": {"position": {"x": 0.0, "y": 0.0, "z": 0.0}}},
+        {
+            "frame_name": "tool",
+            "pose": [0.0, 0.0, 0.0, 0.0, 0.0, 0.0],
+            "payload": float("nan"),
+            "x": 0.0,
+            "y": 0.0,
+            "z": 0.0,
+        },
+        {"name": "invented", "xyz": [0.0, 0.0, 0.0]},
+    ],
+)
+def test_coordinate_readback_rejects_missing_nonfinite_or_unknown_shape(
+    adapter, fake_robot, frame
+):
+    fake_robot.results["rm_get_current_tool_frame"] = (0, frame)
+
+    status, current = adapter.current_tool_frame()
+
+    assert status == -1
+    assert current is None
+    assert adapter.last_error == -1
 
 
 def test_missing_sdk_reports_a_distinct_status(monkeypatch):

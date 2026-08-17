@@ -78,6 +78,12 @@ class FakeRobot:
     def rm_change_work_frame(self, name):
         return self._call("rm_change_work_frame", name)
 
+    def rm_delete_robot_arm(self):
+        return self._call("rm_delete_robot_arm")
+
+    def rm_destroy(self):
+        return self._call("rm_destroy")
+
 
 @pytest.fixture
 def fake_robot():
@@ -292,34 +298,119 @@ def test_disconnected_missing_robot_invalid_handle_and_exception_fail_explicitly
     assert adapter.last_error_message == "SDK failure"
 
 
-def test_sdk_calls_are_serialized(adapter, fake_robot):
+@pytest.mark.parametrize(
+    ("stop_method", "vendor_method"),
+    [("stop", "rm_set_arm_stop"), ("slow_stop", "rm_set_arm_slow_stop")],
+)
+def test_stop_requests_preempt_a_blocking_motion(adapter, fake_robot, stop_method, vendor_method):
     entered = threading.Event()
     release = threading.Event()
-    active = 0
-    peak_active = 0
+    stop_completed = threading.Event()
 
     def slow_movej(*args):
-        nonlocal active, peak_active
-        active += 1
-        peak_active = max(peak_active, active)
         entered.set()
         release.wait(timeout=1.0)
-        active -= 1
         return 0
 
     fake_robot.rm_movej = slow_movej
-    first = threading.Thread(target=adapter.movej, args=([0.0] * 6, 20, 0, False))
-    second = threading.Thread(target=adapter.movej, args=([1.0] * 6, 20, 0, False))
-    first.start()
-    assert entered.wait(timeout=1.0)
-    second.start()
-    release.set()
-    first.join(timeout=1.0)
-    second.join(timeout=1.0)
+    def issue_stop():
+        assert getattr(adapter, stop_method)() == 0
+        stop_completed.set()
 
-    assert not first.is_alive()
-    assert not second.is_alive()
-    assert peak_active == 1
+    motion = threading.Thread(target=adapter.movej, args=([0.0] * 6, 20, 0, False))
+    stopper = threading.Thread(target=issue_stop)
+    motion.start()
+    assert entered.wait(timeout=1.0)
+    stopper.start()
+    assert stop_completed.wait(timeout=0.2)
+    assert fake_robot.calls[-1][0] == vendor_method
+    release.set()
+    motion.join(timeout=1.0)
+    stopper.join(timeout=1.0)
+
+    assert not motion.is_alive()
+    assert not stopper.is_alive()
+
+
+def test_query_raw_integer_status_updates_and_clears_last_error(adapter, fake_robot):
+    fake_robot.results["rm_get_arm_current_trajectory"] = 23
+
+    assert adapter.current_trajectory() == 23
+    assert adapter.last_error == 23
+    assert adapter.last_error_message == "SDK trajectory query failed"
+
+    fake_robot.results["rm_get_arm_current_trajectory"] = 0
+    assert adapter.current_trajectory() == 0
+    assert adapter.last_error == 0
+    assert adapter.last_error_message == ""
+
+
+def test_mock_current_trajectory_uses_documented_raw_dict_shape():
+    adapter = RealManSdkAdapter(
+        ip="192.0.2.123",
+        port=8080,
+        thread_mode="RM_TRIPLE_MODE_E",
+        robot_model="RM65-B",
+        mock_mode=True,
+    )
+
+    assert adapter.connect() == 0
+    assert adapter.current_trajectory() == {}
+    assert adapter.current_arm_state() == (0, {})
+
+
+def test_disconnect_clears_event_callback_and_reconnect_does_not_retain_it():
+    adapter = RealManSdkAdapter(
+        ip="192.0.2.123",
+        port=8080,
+        thread_mode="RM_TRIPLE_MODE_E",
+        robot_model="RM65-B",
+        mock_mode=True,
+    )
+    callback = lambda event: event
+
+    assert adapter.connect() == 0
+    assert adapter.register_event_callback(callback) == 0
+    assert adapter.disconnect() == 0
+    assert adapter._event_callback is None
+    assert adapter.connect() == 0
+    assert adapter._event_callback is None
+
+
+def test_disconnect_attempts_destroy_after_delete_exception_and_clears_callback(
+    adapter, fake_robot
+):
+    callback = lambda event: event
+    adapter._event_callback = callback
+    fake_robot.results["rm_delete_robot_arm"] = RuntimeError("delete failed")
+
+    assert adapter.disconnect() == -1
+    assert ("rm_delete_robot_arm",) in fake_robot.calls
+    assert ("rm_destroy",) in fake_robot.calls
+    assert adapter._event_callback is None
+    assert adapter._robot is None
+    assert adapter._handle is None
+    assert adapter.connected is False
+
+
+def test_mock_connected_malformed_tool_frame_returns_error_without_raising():
+    adapter = RealManSdkAdapter(
+        ip="192.0.2.123",
+        port=8080,
+        thread_mode="RM_TRIPLE_MODE_E",
+        robot_model="RM65-B",
+        mock_mode=True,
+    )
+    assert adapter.connect() == 0
+
+    class MalformedFrame:
+        @property
+        def controller_name(self):
+            raise RuntimeError("malformed tool frame")
+
+    assert adapter.set_tool_frame(MalformedFrame()) == -1
+    assert adapter.last_error == -1
+    assert adapter.last_error_message == "malformed tool frame"
 
 
 class FakePose:

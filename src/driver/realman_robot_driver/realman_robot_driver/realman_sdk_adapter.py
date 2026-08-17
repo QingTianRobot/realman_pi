@@ -18,7 +18,7 @@ class RobotState:
 
 
 class RealManSdkAdapter:
-    """One SDK handle, serialized behind a deterministic mock-friendly seam."""
+    """One SDK handle with state-safe, mock-friendly vendor call boundaries."""
 
     def __init__(
         self,
@@ -37,6 +37,8 @@ class RealManSdkAdapter:
         self.mock_mode = mock_mode
         self.arm_id = arm_id
         self._lock = threading.RLock()
+        # Serialize ordinary SDK operations without preventing preemption or state reads.
+        self._sdk_lock = threading.Lock()
         self._robot: Any | None = None
         self._handle: Any | None = None
         self._connected = False
@@ -67,76 +69,97 @@ class RealManSdkAdapter:
         with self._lock:
             if self._connected:
                 return 0
-            if self._robot is not None:
-                self._disconnect_locked()
-            if self.mock_mode:
+            has_stale_robot = self._robot is not None
+        if has_stale_robot:
+            self._disconnect_locked()
+        if self.mock_mode:
+            with self._lock:
                 self._connected = True
                 self._set_success_locked()
                 return 0
 
-            try:
-                from Robotic_Arm.rm_robot_interface import RoboticArm, rm_thread_mode_e
-            except ImportError:
+        try:
+            from Robotic_Arm.rm_robot_interface import RoboticArm, rm_thread_mode_e
+        except ImportError:
+            with self._lock:
                 self._set_failure_locked(-100, "Robotic_Arm Python SDK is not installed")
-                return -100
+            return -100
 
-            try:
-                mode = getattr(rm_thread_mode_e, self.thread_mode)
-                self._robot = RoboticArm(mode)
-                self._handle = self._robot.rm_create_robot_arm(self.ip, self.port)
-                self._connected = _is_valid_handle(self._handle)
-                if self._connected:
+        try:
+            mode = getattr(rm_thread_mode_e, self.thread_mode)
+            robot = RoboticArm(mode)
+            handle = robot.rm_create_robot_arm(self.ip, self.port)
+            connected = _is_valid_handle(handle)
+            with self._lock:
+                self._robot = robot
+                self._handle = handle
+                self._connected = connected
+                if connected:
                     self._set_success_locked()
                 else:
                     self._set_failure_locked(-1, "SDK returned an invalid robot handle")
-            except Exception as error:
+                return self._last_error
+        except Exception as error:
+            with self._lock:
                 self._robot = None
                 self._handle = None
                 self._connected = False
                 self._set_failure_locked(-1, str(error))
-            return self._last_error
+                return -1
 
     def disconnect(self) -> int:
         """Release the SDK handle and all SDK connections."""
-        with self._lock:
-            return self._disconnect_locked()
+        return self._disconnect_locked()
 
     def _disconnect_locked(self) -> int:
-        if self.mock_mode:
-            self._connected = False
-            self._set_success_locked()
-            return 0
-        if self._robot is None:
-            self._connected = False
-            self._set_success_locked()
-            return 0
-
-        try:
-            result = self._robot.rm_delete_robot_arm() if self._handle is not None else 0
-            destroy_result = self._robot.rm_destroy()
+        # Detach state before entering vendor code so other adapter calls can proceed.
+        with self._lock:
+            robot = self._robot
+            handle = self._handle
+            mock_mode = self.mock_mode
             self._robot = None
             self._handle = None
             self._connected = False
-            status = _status_code(result, destroy_result)
+            self._event_callback = None
+            if mock_mode or robot is None:
+                self._set_success_locked()
+                return 0
+
+        delete_result = 0
+        destroy_result = 0
+        first_error: Exception | None = None
+        try:
+            if handle is not None:
+                delete_result = robot.rm_delete_robot_arm()
+        except Exception as error:
+            first_error = error
+        try:
+            destroy_result = robot.rm_destroy()
+        except Exception as error:
+            first_error = first_error or error
+
+        with self._lock:
+            if first_error is not None:
+                self._set_failure_locked(-1, str(first_error))
+                return -1
+            status = _status_code(delete_result, destroy_result)
             if status == 0:
                 self._set_success_locked()
             else:
                 self._set_failure_locked(status, "SDK disconnect failed")
             return status
-        except Exception as error:
-            self._robot = None
-            self._handle = None
-            self._connected = False
-            self._set_failure_locked(-1, str(error))
-            return -1
 
     def stop(self) -> int:
         """Request the SDK's immediate trajectory stop."""
-        return self._command("rm_set_arm_stop", "SDK stop request failed")
+        return self._command(
+            "rm_set_arm_stop", "SDK stop request failed", bypass_sdk_lock=True
+        )
 
     def slow_stop(self) -> int:
         """Request the SDK's controlled trajectory slow stop."""
-        return self._command("rm_set_arm_slow_stop", "SDK slow-stop request failed")
+        return self._command(
+            "rm_set_arm_slow_stop", "SDK slow-stop request failed", bypass_sdk_lock=True
+        )
 
     def movej(
         self,
@@ -215,19 +238,24 @@ class RealManSdkAdapter:
         )
 
     def current_trajectory(self) -> Any:
-        return self._query("rm_get_arm_current_trajectory", "SDK trajectory query failed")
+        return self._query(
+            "rm_get_arm_current_trajectory", "SDK trajectory query failed", mock_success={}
+        )
 
     def current_arm_state(self) -> Any:
         return self._query("rm_get_current_arm_state", "SDK arm state query failed")
 
     def register_event_callback(self, callback: Callable[[Any], Any]) -> int:
-        with self._lock:
-            status = self._command(
-                "rm_get_arm_event_call_back", "SDK event callback registration failed", callback
-            )
-            if status == 0:
-                self._event_callback = callback
-            return status
+        status = self._command(
+            "rm_get_arm_event_call_back", "SDK event callback registration failed", callback
+        )
+        if status == 0:
+            with self._lock:
+                if self._connected:
+                    self._event_callback = callback
+                else:
+                    return -1
+        return status
 
     def current_tool_frame(self) -> Any:
         with self._lock:
@@ -243,36 +271,61 @@ class RealManSdkAdapter:
 
     def set_tool_frame(self, frame: Any) -> int:
         with self._lock:
-            if self.mock_mode and self._connected:
-                self._mock_tool_frame_name = str(frame.controller_name)
+            status = self._ready_status_locked()
+            robot = self._robot
+            mock_mode = self.mock_mode
+        if status is not None:
+            return status
+        if mock_mode:
+            try:
+                frame_name = str(frame.controller_name)
+            except Exception as error:
+                with self._lock:
+                    self._set_failure_locked(-1, str(error))
+                return -1
+            with self._lock:
+                if not self._connected:
+                    self._set_failure_locked(-1, "robot is not connected")
+                    return -1
+                self._mock_tool_frame_name = frame_name
                 self._set_success_locked()
                 return 0
-            status = self._ready_status_locked()
-            if status is not None:
-                return status
-            try:
-                vendor_frame = _vendor_tool_frame(frame)
-                result = self._robot.rm_set_manual_tool_frame(vendor_frame)
-            except Exception as error:
+        try:
+            vendor_frame = _vendor_tool_frame(frame)
+            with self._sdk_lock:
+                result = robot.rm_set_manual_tool_frame(vendor_frame)
+        except Exception as error:
+            with self._lock:
                 self._set_failure_locked(-1, str(error))
-                return -1
+            return -1
+        with self._lock:
             return self._finish_command_locked(result, "SDK tool frame update failed")
 
     def set_work_frame(self, frame: Any) -> int:
         with self._lock:
             status = self._ready_status_locked()
-            if status is not None:
-                return status
-            try:
-                pose = [*frame.xyz_m, *frame.quaternion_wxyz]
-                if self.mock_mode:
-                    self._mock_work_frame_name = str(frame.controller_name)
+            robot = self._robot
+            mock_mode = self.mock_mode
+        if status is not None:
+            return status
+        try:
+            pose = [*frame.xyz_m, *frame.quaternion_wxyz]
+            if mock_mode:
+                frame_name = str(frame.controller_name)
+                with self._lock:
+                    if not self._connected:
+                        self._set_failure_locked(-1, "robot is not connected")
+                        return -1
+                    self._mock_work_frame_name = frame_name
                     self._set_success_locked()
                     return 0
-                result = self._robot.rm_set_manual_work_frame(frame.controller_name, pose)
-            except Exception as error:
+            with self._sdk_lock:
+                result = robot.rm_set_manual_work_frame(frame.controller_name, pose)
+        except Exception as error:
+            with self._lock:
                 self._set_failure_locked(-1, str(error))
-                return -1
+            return -1
+        with self._lock:
             return self._finish_command_locked(result, "SDK work frame update failed")
 
     def change_tool_frame(self, controller_name: str) -> int:
@@ -293,8 +346,14 @@ class RealManSdkAdapter:
                 self._mock_work_frame_name = controller_name
         return status
 
-    def _command(self, method_name: str, failure_message: str, *args: Any) -> int:
-        """Serialize a single nonblocking vendor request and preserve its status."""
+    def _command(
+        self,
+        method_name: str,
+        failure_message: str,
+        *args: Any,
+        bypass_sdk_lock: bool = False,
+    ) -> int:
+        """Issue a vendor command with state snapshots outside the adapter lock."""
         with self._lock:
             if self.mock_mode:
                 status = self._ready_status_locked()
@@ -303,34 +362,47 @@ class RealManSdkAdapter:
                     return 0
                 return status
             status = self._ready_status_locked()
-            if status is not None:
-                return status
-            try:
-                result = getattr(self._robot, method_name)(*args)
-            except Exception as error:
+            robot = self._robot
+        if status is not None:
+            return status
+        try:
+            if bypass_sdk_lock:
+                result = getattr(robot, method_name)(*args)
+            else:
+                with self._sdk_lock:
+                    result = getattr(robot, method_name)(*args)
+        except Exception as error:
+            with self._lock:
                 self._set_failure_locked(-1, str(error))
-                return -1
+            return -1
+        with self._lock:
             return self._finish_command_locked(result, failure_message)
 
-    def _query(self, method_name: str, failure_message: str) -> Any:
+    def _query(self, method_name: str, failure_message: str, *, mock_success: Any = None) -> Any:
         with self._lock:
             if self.mock_mode:
                 status = self._ready_status_locked()
-                return (status, None) if status is not None else (0, {})
+                if status is not None:
+                    return status, None
+                return (0, {}) if mock_success is None else mock_success
             status = self._ready_status_locked()
-            if status is not None:
-                return status, None
-            try:
-                result = getattr(self._robot, method_name)()
-            except Exception as error:
+            robot = self._robot
+        if status is not None:
+            return status, None
+        try:
+            with self._sdk_lock:
+                result = getattr(robot, method_name)()
+        except Exception as error:
+            with self._lock:
                 self._set_failure_locked(-1, str(error))
-                return -1, None
-            result_status, _ = _unpack_result(result)
+            return -1, None
+        result_status, _ = _unpack_result(result)
+        with self._lock:
             if result_status == 0:
                 self._set_success_locked()
-            elif isinstance(result, (tuple, list)):
+            else:
                 self._set_failure_locked(result_status, failure_message)
-            return result
+        return result
 
     def _ready_status_locked(self) -> int | None:
         if not self._connected:
@@ -373,12 +445,14 @@ class RealManSdkAdapter:
             if self.mock_mode:
                 return RobotState((0.0,) * 6, True, self.robot_model, 0)
             readiness_status = self._ready_status_locked()
-            if readiness_status is not None:
-                return RobotState((), False, self.robot_model, readiness_status)
+            robot = self._robot
+        if readiness_status is not None:
+            return RobotState((), False, self.robot_model, readiness_status)
 
-            try:
-                result = self._robot.rm_get_joint_degree()
-                status, data = _unpack_result(result)
+        try:
+            result = robot.rm_get_joint_degree()
+            status, data = _unpack_result(result)
+            with self._lock:
                 if status != 0:
                     self._set_failure_locked(status, "SDK joint state request failed")
                     if status in {-1, -2}:
@@ -386,14 +460,18 @@ class RealManSdkAdapter:
                     return RobotState((), self._connected, self.robot_model, status)
                 if not isinstance(data, (list, tuple)) or not data:
                     self._set_failure_locked(-1, "SDK returned an invalid joint state")
-                    return RobotState((), True, self.robot_model, -1)
+                    return RobotState((), self._connected, self.robot_model, -1)
+                try:
+                    joint_degrees = tuple(float(value) for value in data)
+                except (TypeError, ValueError) as error:
+                    self._set_failure_locked(-1, str(error))
+                    return RobotState((), self._connected, self.robot_model, -1)
                 self._set_success_locked()
-                return RobotState(
-                    tuple(float(value) for value in data), True, self.robot_model, status
-                )
-            except Exception as error:
+                return RobotState(joint_degrees, self._connected, self.robot_model, status)
+        except Exception as error:
+            with self._lock:
                 self._set_failure_locked(-1, str(error))
-                return RobotState((), True, self.robot_model, -1)
+                return RobotState((), self._connected, self.robot_model, -1)
 
 
 def _vendor_tool_frame(frame: Any) -> Any:

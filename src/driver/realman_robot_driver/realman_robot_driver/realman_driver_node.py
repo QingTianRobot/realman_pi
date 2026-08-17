@@ -227,6 +227,7 @@ class RealManDriverNode(Node):
 
     def _connect_to_robot(self) -> int:
         self._last_connect_attempt = time.monotonic()
+        was_connected = self.adapter.connected
         code = self.adapter.connect()
         if code == 0:
             callback_status = self.adapter.register_event_callback(
@@ -239,7 +240,9 @@ class RealManDriverNode(Node):
                 )
                 self.adapter.disconnect()
                 return callback_status
-            if not self.motion_coordinator.reconcile_after_connect():
+            if not self.motion_coordinator.reconcile_after_connect(
+                connection_reset=not was_connected
+            ):
                 self.get_logger().warn(
                     "RealMan trajectory reconciliation did not prove an inactive, "
                     "error-free trajectory; motion remains safety gated"

@@ -118,7 +118,8 @@ def test_disconnect_service_exposes_shutdown_failure_even_when_sdk_disconnect_su
 def test_connect_reconciles_physical_lockout_with_read_only_trajectory_state():
     source = NODE_PATH.read_text(encoding="utf-8")
 
-    assert "self.motion_coordinator.reconcile_after_connect()" in source
+    assert "was_connected = self.adapter.connected" in source
+    assert "connection_reset=not was_connected" in source
 
 
 def test_stop_service_delegates_fast_stop_to_coordinator():

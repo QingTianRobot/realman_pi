@@ -158,6 +158,7 @@ class MotionCoordinator:
         self._shutdown_generation: int | None = None
         self._cancel_generation: int | None = None
         self._lockout = False
+        self._owns_ownership = False
 
     @property
     def active_generation(self) -> int | None:
@@ -193,6 +194,7 @@ class MotionCoordinator:
             if not self.ownership.acquire(self.arm_id):
                 self._log("warn", f"Rejecting motion goal: arm {self.arm_id} is busy")
                 return self.goal_response_type.REJECT
+            self._owns_ownership = True
             self._reservation = _Reservation(goal_request)
         return self.goal_response_type.ACCEPT
 
@@ -246,7 +248,7 @@ class MotionCoordinator:
             0,
             "validating motion goal",
         )
-        reserved_terminal = self._consume_reservation_terminal(request)
+        reserved_terminal = self._consume_reservation_terminal(request, goal_handle)
         if reserved_terminal is not None:
             terminal_state, api2_status, message = reserved_terminal
             return self._finish_unowned(
@@ -266,7 +268,7 @@ class MotionCoordinator:
 
         generation = self._activate(goal_handle, request)
         if generation is None:
-            reserved_terminal = self._consume_reservation_terminal(request)
+            reserved_terminal = self._consume_reservation_terminal(request, goal_handle)
             if reserved_terminal is not None:
                 terminal_state, api2_status, message = reserved_terminal
                 return self._finish_unowned(
@@ -619,6 +621,7 @@ class MotionCoordinator:
             else:
                 if not self.ownership.acquire(self.arm_id):
                     return None
+                self._owns_ownership = True
             self._generation += 1
             generation = self._generation
             self._active_goal = goal_handle
@@ -652,10 +655,11 @@ class MotionCoordinator:
                 return None, interruption
             try:
                 submit_status = self._submit(goal)
-            except Exception:
+            except Exception as error:
                 submit_status = _nonzero_status(
                     getattr(self.adapter, "last_error", -1)
                 )
+                self._log("error", f"motion submission adapter call failed: {error}")
             return submit_status, None
 
     def _submission_interruption_locked(
@@ -700,12 +704,29 @@ class MotionCoordinator:
             self._cancel_generation == generation
             or bool(getattr(goal_handle, "is_cancel_requested", False))
         ):
+            if not bool(getattr(goal_handle, "is_cancel_requested", False)):
+                if not self._wait_for_canceling_witness_locked(goal_handle):
+                    return (
+                        TerminalState.ABORTED,
+                        -1,
+                        "cancel request was not acknowledged before motion submission",
+                    )
             return (
                 TerminalState.CANCELED,
                 0,
                 "motion canceled before submission",
             )
         return None
+
+    def _wait_for_canceling_witness_locked(self, goal_handle: object) -> bool:
+        """Wait briefly for rclpy to expose the goal's CANCELING state."""
+        deadline = time.monotonic() + self._stop_timeout_sec
+        while not bool(getattr(goal_handle, "is_cancel_requested", False)):
+            remaining = deadline - time.monotonic()
+            if remaining <= 0.0:
+                return False
+            self._condition.wait(min(remaining, self._poll_period_sec))
+        return True
 
     def _submit(self, goal: ValidatedGoal) -> int:
         if goal.command == CommandType.MOVEJ:
@@ -891,6 +912,7 @@ class MotionCoordinator:
                     return status
                 if self._lockout or not self.ownership.acquire(self.arm_id):
                     return -1
+                self._owns_ownership = True
                 idle_stop = _IdleFastStop()
                 self._idle_fast_stop = idle_stop
 
@@ -971,7 +993,9 @@ class MotionCoordinator:
             if self._idle_fast_stop is idle_stop:
                 idle_stop.status = status
                 self._idle_fast_stop = None
-                release = status == 0 and not self._lockout
+                release = status == 0 and not self._lockout and self._owns_ownership
+                if release:
+                    self._owns_ownership = False
                 self._condition.notify_all()
         if release:
             self.ownership.release(self.arm_id)
@@ -1124,12 +1148,15 @@ class MotionCoordinator:
                 and self._active_goal is None
                 and self._reservation is None
                 and self._idle_fast_stop is None
+                and self._owns_ownership
             )
+            if release:
+                self._owns_ownership = False
         if release:
             self.ownership.release(self.arm_id)
 
-    def reconcile_after_connect(self) -> bool:
-        """Clear physical lockout only after an inactive, error-free readback."""
+    def reconcile_after_connect(self, *, connection_reset: bool = False) -> bool:
+        """Reconcile safety state after a newly created SDK connection."""
         status, trajectory_active = self._read_trajectory()
         if status != 0 or trajectory_active is not False:
             return False
@@ -1141,11 +1168,18 @@ class MotionCoordinator:
                 or self._idle_fast_stop is not None
             ):
                 return False
-            self._lockout = False
-            self._event_channel_quarantined = False
-            self._event = None
-            self._event_channel_cleared_through_generation = self._generation
-            release = True
+            if not self._owns_ownership and self.ownership.is_busy(self.arm_id):
+                return False
+            if self._lockout and not self._owns_ownership:
+                return False
+            if self._lockout:
+                self._lockout = False
+                release = True
+                self._owns_ownership = False
+            if connection_reset:
+                self._event_channel_quarantined = False
+                self._event = None
+                self._event_channel_cleared_through_generation = self._generation
         if release:
             self.ownership.release(self.arm_id)
         return True
@@ -1153,7 +1187,8 @@ class MotionCoordinator:
     def _read_state(self) -> tuple[int, tuple[float, ...], bool | None]:
         try:
             state = self.adapter.get_state()
-        except Exception:
+        except Exception as error:
+            self._log("error", f"get_state adapter call failed: {error}")
             return _nonzero_status(getattr(self.adapter, "last_error", -1)), (), None
         status = _int_value(_field(state, "error_code", 0), default=-1)
         connected = _field(state, "connected", None)
@@ -1180,7 +1215,8 @@ class MotionCoordinator:
     def _read_trajectory(self) -> tuple[int, bool | None]:
         try:
             raw = self.adapter.current_trajectory()
-        except Exception:
+        except Exception as error:
+            self._log("error", f"current_trajectory adapter call failed: {error}")
             return _nonzero_status(getattr(self.adapter, "last_error", -1)), None
         status = 0
         payload = raw
@@ -1217,7 +1253,8 @@ class MotionCoordinator:
             if self._event is None or self._event[0] != generation:
                 return None
             _, state = self._event
-            self._event = None
+            if not state:
+                self._event = None
             return state
 
     def _confirm_completion_event(self, generation: int) -> None:
@@ -1275,16 +1312,18 @@ class MotionCoordinator:
                 and request is self._reservation.request
             ):
                 self._reservation = None
-                release = not self._lockout
+                release = not self._lockout and self._owns_ownership
+                if release:
+                    self._owns_ownership = False
         if release:
             self.ownership.release(self.arm_id)
 
     def _consume_reservation_terminal(
-        self, request: object | None
+        self, request: object | None, goal_handle: object
     ) -> tuple[TerminalState, int, str] | None:
         if request is None:
             return None
-        with self._lock:
+        with self._condition:
             reservation = self._reservation
             if (
                 reservation is None
@@ -1306,6 +1345,15 @@ class MotionCoordinator:
                     return None
             if reservation.terminal_state is None:
                 return None
+            if (
+                reservation.terminal_state == TerminalState.CANCELED
+                and not self._wait_for_canceling_witness_locked(goal_handle)
+            ):
+                reservation.terminal_state = TerminalState.ABORTED
+                reservation.api2_status = -1
+                reservation.message = (
+                    "cancel request was not acknowledged before execution"
+                )
             return (
                 reservation.terminal_state,
                 reservation.api2_status,
@@ -1386,7 +1434,9 @@ class MotionCoordinator:
                 # A confirmed physical stop can release arm ownership even if
                 # a generation-less callback channel remains quarantined.
                 # goal_callback still refuses ordinary motion until disconnect.
-                release = not self._lockout
+                release = not self._lockout and self._owns_ownership
+                if release:
+                    self._owns_ownership = False
                 self._condition.notify_all()
         if release:
             self.ownership.release(self.arm_id)

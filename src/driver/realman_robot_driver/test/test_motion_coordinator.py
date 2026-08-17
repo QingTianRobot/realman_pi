@@ -841,6 +841,8 @@ def test_activated_pre_submit_shutdown_failure_aborts_with_original_status():
     assert results[0].terminal_state == FakeResult.ABORTED
     assert results[0].api2_status == 67
     assert not any(call[0] == "movej" for call in adapter.calls)
+    assert ownership.is_busy("l") is True
+    coordinator.clear_lockout_after_disconnect()
     assert ownership.is_busy("l") is False
 
 
@@ -875,7 +877,7 @@ def test_stop_before_submission_never_allows_a_later_movej(
     try:
         assert activated.wait(timeout=1.0)
         if interrupt == "shutdown":
-            assert coordinator.shutdown(timeout_sec=0.0) == 0
+            assert coordinator.shutdown(timeout_sec=0.0) != 0
         else:
             assert coordinator.fast_stop() == 0
     finally:
@@ -887,6 +889,9 @@ def test_stop_before_submission_never_allows_a_later_movej(
     assert result_holder[0].terminal_state == terminal_state
     assert stop_call in adapter.calls
     assert [call for call in adapter.calls if call[0] == "movej"] == []
+    if interrupt == "shutdown":
+        assert ownership.is_busy("l") is True
+        coordinator.clear_lockout_after_disconnect()
     assert ownership.is_busy("l") is False
 
 
@@ -1099,6 +1104,41 @@ def test_shutdown_waits_for_inflight_idle_fast_stop_and_times_out_fail_closed():
 
     assert stop_thread.is_alive() is False
     assert stop_results == [0]
+    coordinator.clear_lockout_after_disconnect()
+    assert ownership.is_busy("l") is False
+
+
+def test_shutdown_times_out_active_execution_and_keeps_safety_ownership():
+    coordinator, adapter, _, ownership = make_coordinator(stop_timeout_sec=0.2)
+    trajectory_started = threading.Event()
+    release_trajectory = threading.Event()
+    execution_results = []
+    original_trajectory = adapter.current_trajectory
+
+    def blocking_trajectory():
+        trajectory_started.set()
+        assert release_trajectory.wait(timeout=1.0)
+        return original_trajectory()
+
+    adapter.current_trajectory = blocking_trajectory
+    execute_thread = threading.Thread(
+        target=lambda: execution_results.append(
+            coordinator.execute(FakeGoalHandle(movej_goal(timeout_sec=10.0)))
+        )
+    )
+    execute_thread.start()
+    assert trajectory_started.wait(timeout=1.0)
+
+    status = coordinator.shutdown(timeout_sec=0.01)
+
+    assert status != 0
+    assert execute_thread.is_alive() is True
+    assert ownership.is_busy("l") is True
+    release_trajectory.set()
+    execute_thread.join(timeout=1.0)
+
+    assert execute_thread.is_alive() is False
+    assert len(execution_results) == 1
     coordinator.clear_lockout_after_disconnect()
     assert ownership.is_busy("l") is False
 

@@ -545,6 +545,10 @@ class MotionCoordinator:
                 if remaining <= 0.0:
                     break
                 self._condition.wait(remaining)
+            still_active = self._active_generation == generation
+        if still_active:
+            self._enter_lockout()
+            return status if status != 0 else -1
         return status
 
     def _validate(self, request: object) -> GoalValidationResult:

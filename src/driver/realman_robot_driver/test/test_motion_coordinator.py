@@ -1070,6 +1070,39 @@ def test_concurrent_idle_fast_stops_share_the_confirmed_result():
     assert ownership.is_busy("l") is False
 
 
+def test_shutdown_waits_for_inflight_idle_fast_stop_and_times_out_fail_closed():
+    coordinator, adapter, _, ownership = make_coordinator(stop_timeout_sec=0.2)
+    trajectory_started = threading.Event()
+    release_trajectory = threading.Event()
+    stop_results = []
+    original_trajectory = adapter.current_trajectory
+
+    def blocking_trajectory():
+        trajectory_started.set()
+        assert release_trajectory.wait(timeout=1.0)
+        return original_trajectory()
+
+    adapter.current_trajectory = blocking_trajectory
+    stop_thread = threading.Thread(
+        target=lambda: stop_results.append(coordinator.fast_stop())
+    )
+    stop_thread.start()
+    assert trajectory_started.wait(timeout=1.0)
+
+    status = coordinator.shutdown(timeout_sec=0.01)
+
+    assert status != 0
+    assert stop_thread.is_alive() is True
+    assert ownership.is_busy("l") is True
+    release_trajectory.set()
+    stop_thread.join(timeout=1.0)
+
+    assert stop_thread.is_alive() is False
+    assert stop_results == [0]
+    coordinator.clear_lockout_after_disconnect()
+    assert ownership.is_busy("l") is False
+
+
 def test_reserved_fast_stop_requires_inactive_trajectory_before_releasing_arm():
     adapter = FakeAdapter()
     adapter.fast_stop_completes_trajectory = False

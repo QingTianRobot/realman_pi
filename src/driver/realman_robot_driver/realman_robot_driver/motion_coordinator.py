@@ -481,7 +481,8 @@ class MotionCoordinator:
 
     def shutdown(self, timeout_sec: float | None = None) -> int:
         """Request one controlled stop and wait briefly for active execution to unwind."""
-        with self._lock:
+        idle_stop = None
+        with self._condition:
             generation = self._active_generation
             if generation is None:
                 reservation = self._reservation
@@ -492,6 +493,7 @@ class MotionCoordinator:
                         reservation.stop_status = _STOP_IN_PROGRESS
                         wait_for_reservation = False
                 else:
+                    idle_stop = self._idle_fast_stop
                     wait_for_reservation = False
             else:
                 reservation = None
@@ -525,6 +527,12 @@ class MotionCoordinator:
                             f"with API2 status {status}"
                         )
                     self._condition.notify_all()
+            return status
+        if idle_stop is not None:
+            status = self._wait_for_idle_fast_stop_status(idle_stop, timeout_sec)
+            if status is None:
+                self._enter_lockout()
+                return -1
             return status
         if generation is None:
             return 0
@@ -972,9 +980,15 @@ class MotionCoordinator:
             self.ownership.release(self.arm_id)
 
     def _wait_for_idle_fast_stop_status(
-        self, idle_stop: _IdleFastStop
+        self, idle_stop: _IdleFastStop, timeout_sec: float | None = None
     ) -> int | None:
-        deadline = self._monotonic() + self._stop_timeout_sec
+        if timeout_sec is None:
+            clock = self._monotonic
+            duration = self._stop_timeout_sec
+        else:
+            clock = time.monotonic
+            duration = max(0.0, timeout_sec)
+        deadline = clock() + duration
         with self._condition:
             while True:
                 status = idle_stop.status
@@ -982,7 +996,7 @@ class MotionCoordinator:
                     return int(status or 0)
                 if self._idle_fast_stop is not idle_stop:
                     return None
-                remaining = deadline - self._monotonic()
+                remaining = deadline - clock()
                 if remaining <= 0.0:
                     return None
                 self._condition.wait(min(remaining, self._poll_period_sec))

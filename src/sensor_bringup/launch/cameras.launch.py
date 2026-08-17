@@ -1,17 +1,14 @@
 """
 统一启动 RealSense 和 Orbbec 相机。
 
-用法:
-    ros2 launch sensor_bringup cameras.launch.py
+注意：图像帧已改为走局域网推流（src/camera_stream），不再由 ROS2 节点出图。
+相机设备现在由推流进程独占，本 launch 的出图节点默认已关闭，避免与推流进程争用 USB 设备。
 
-等价于同时执行:
-    ros2 launch realsense2_camera rs_align_depth_launch.py \
-        depth_module.depth_profile:=1280x720x30 \
-        rgb_camera.color_profile:=1280x720x30 \
-        camera_namespace:=camera_rm \
-        camera_name:=camera_rm
+如需临时恢复 ROS2 出图（仅调试用），取消下方 return 列表里被注释的 realsense_launch /
+orbbec_launch 两行即可；但必须同时停掉 src/camera_stream 的推流进程，否则设备冲突。
 
-    ros2 launch orbbec_camera multi_camera_synced.launch.py
+推流启动方式:
+    cd src/camera_stream && ./scripts/start_streaming.sh
 """
 
 from launch import LaunchDescription
@@ -77,6 +74,7 @@ def generate_launch_description():
         declare_camera_namespace,
         declare_depth_profile,
         declare_color_profile,
-        realsense_launch,
-        orbbec_launch,
+        # 出图节点已迁移到 src/camera_stream 局域网推流，默认关闭以释放 USB 设备。
+        # realsense_launch,
+        # orbbec_launch,
     ])

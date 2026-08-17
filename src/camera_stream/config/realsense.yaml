@@ -1,0 +1,27 @@
+# 全局相机 RealSense D435 推流配置
+camera:
+  name: realsense          # RTSP 路径段 / 日志前缀
+  serial: "262322074840"   # 留空则取第一台设备
+  rtsp_path: /realsense/color
+  # 推给本机 mediamtx；消费端用 http://<本机IP>:8554 或 rtsp://<本机IP>:8554/realsense/color
+  rtsp_url: rtsp://127.0.0.1:8554/realsense/color
+
+color:
+  width: 1280
+  height: 720
+  fps: 30
+  encoder: libx264         # PyAV wheel 不带 NVENC；如需 NVENC 需自建 PyAV 或用 GStreamer
+  bitrate_kbps: 8000
+
+depth:
+  enable: true
+  width: 848
+  height: 480
+  fps: 30
+  port: 8100               # 深度 TCP 通道监听端口
+  bind: 0.0.0.0
+  lz4_compress: false      # 千兆网带宽够用可关；带宽紧张时置 true
+
+bridge:
+  camera_info_topic: /camera_rm/camera_info
+  frame_id: camera_rm_color_optical_frame

@@ -1,0 +1,11 @@
+# mediamtx 配置：允许推流端(publisher)动态创建任意路径
+logLevel: info
+rtsp: yes
+rtspAddress: :8554
+rtmp: no
+hls: no
+webrtc: no
+paths:
+  all:
+    source: publisher
+    sourceOnDemand: no

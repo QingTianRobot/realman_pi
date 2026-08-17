@@ -1,0 +1,25 @@
+# 相机内参/外参（供 ros2_bridge.py 发布 CameraInfo 与静态 TF）。
+# 目前是占位值：请用标定结果替换。intrinsics/distortion 留空则发零内参并告警。
+# 手眼外参 (base -> camera optical) 尚未标定，translation/quaternion 留空则发单位变换。
+
+camera_rm:                     # 全局相机 RealSense（与 realsense.yaml 对应）
+  camera_info_topic: /camera_rm/camera_info
+  frame_id: camera_rm_color_optical_frame
+  width: 1280
+  height: 720
+  intrinsics: [0.0, 0.0, 0.0, 0.0]        # fx, fy, cx, cy
+  distortion: [0.0, 0.0, 0.0, 0.0, 0.0]   # k1,k2,p1,p2,k3 (plumb_bob)
+  extrinsics:
+    translation: []                         # [x, y, z]
+    quaternion: []                          # [x, y, z, w]
+
+camera_l:                      # 手眼相机 Orbbec Gemini 305（与 orbbec.yaml 对应）
+  camera_info_topic: /camera_l/camera_info
+  frame_id: camera_l_color_optical_frame
+  width: 1280
+  height: 720
+  intrinsics: [0.0, 0.0, 0.0, 0.0]
+  distortion: [0.0, 0.0, 0.0, 0.0, 0.0]
+  extrinsics:
+    translation: []
+    quaternion: []

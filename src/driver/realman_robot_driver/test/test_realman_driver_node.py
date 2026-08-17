@@ -573,6 +573,28 @@ def test_node_source_registers_execute_motion_action_with_all_lifecycle_callback
     assert "callback_group=self.motion_callback_group" in source
 
 
+def test_node_source_registers_cartesian_velocity_action_and_command_topic():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert "from realman_msgs.action import CartesianVelocity" in source
+    assert "from geometry_msgs.msg import TwistStamped" in source
+    assert '"cartesian_velocity"' in source
+    assert "execute_callback=self.velocity_session.execute" in source
+    assert "goal_callback=self.velocity_session.goal_callback" in source
+    assert "cancel_callback=self.velocity_session.cancel_callback" in source
+    assert "handle_accepted_callback=self.velocity_session.accepted_callback" in source
+    assert '"cartesian_velocity/command"' in source
+    assert "self.velocity_session.accept_command" in source
+
+
+def test_node_shutdown_stops_velocity_before_disconnect():
+    source = NODE_PATH.read_text(encoding="utf-8")
+    destroy_source = source[source.index("    def destroy_node"):]
+    assert destroy_source.index("self.velocity_session.shutdown()") < destroy_source.index(
+        "self.adapter.disconnect()"
+    )
+
+
 def test_node_source_stops_coordinator_before_adapter_disconnect():
     tree = ast.parse(NODE_PATH.read_text(encoding="utf-8"))
     destroy = next(

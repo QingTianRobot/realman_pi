@@ -13,7 +13,8 @@ from rclpy.action import ActionServer
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
-from realman_msgs.action import ExecuteMotion
+from geometry_msgs.msg import TwistStamped
+from realman_msgs.action import CartesianVelocity, ExecuteMotion
 from realman_msgs.srv import SelectFrame, VerifyCoordinates
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
@@ -26,6 +27,7 @@ from .coordinate_services import (
     run_coordinate_operation,
     run_startup_coordinate_policy,
 )
+from .cartesian_velocity_session import CartesianVelocitySession
 from .motion_coordinator import ArmOwnership, MotionCoordinator
 from .motion_types import MotionSettings, ReferenceState, ReferenceType
 from .realman_sdk_adapter import RealManSdkAdapter, RobotState
@@ -152,6 +154,27 @@ class RealManDriverNode(Node):
             joint_goal_tolerance_deg=self.motion_settings.joint_goal_tolerance_deg,
             logger=self.get_logger(),
         )
+        self._active_velocity_frames = {
+            ReferenceType.BASE: ("base", f"{self.arm_id}/base"),
+            ReferenceType.WORK: (
+                profile.works[profile.work_default].controller_name,
+                profile.works[profile.work_default].ros_frame_id,
+            ),
+            ReferenceType.TOOL: (
+                profile.tools[profile.tool_default].controller_name,
+                profile.tools[profile.tool_default].ros_frame_id,
+            ),
+        }
+        self.velocity_session = CartesianVelocitySession(
+            arm_id=self.arm_id,
+            adapter=self.adapter,
+            ownership=self.arm_ownership,
+            settings=self.motion_settings,
+            active_frame=self._active_velocity_frames,
+            coordinate_manager=self.coordinate_manager,
+            logger=self.get_logger(),
+            action_type=CartesianVelocity,
+        )
         self.execute_motion_action_server = ActionServer(
             self,
             ExecuteMotion,
@@ -160,6 +183,23 @@ class RealManDriverNode(Node):
             goal_callback=self.motion_coordinator.goal_callback,
             cancel_callback=self.motion_coordinator.cancel_callback,
             handle_accepted_callback=self.motion_coordinator.accepted_callback,
+            callback_group=self.motion_callback_group,
+        )
+        self.cartesian_velocity_action_server = ActionServer(
+            self,
+            CartesianVelocity,
+            "cartesian_velocity",
+            execute_callback=self.velocity_session.execute,
+            goal_callback=self.velocity_session.goal_callback,
+            cancel_callback=self.velocity_session.cancel_callback,
+            handle_accepted_callback=self.velocity_session.accepted_callback,
+            callback_group=self.motion_callback_group,
+        )
+        self.cartesian_velocity_command_subscription = self.create_subscription(
+            TwistStamped,
+            "cartesian_velocity/command",
+            self._velocity_command,
+            10,
             callback_group=self.motion_callback_group,
         )
         self.joint_state_publisher = self.create_publisher(JointState, "joint_states", 10)
@@ -316,8 +356,30 @@ class RealManDriverNode(Node):
     def _update_active_references(self, result: CoordinateOperationResult) -> None:
         if result.current_tool:
             self._active_references[ReferenceType.TOOL] = result.current_tool
+            frame = self._frame_for_controller(ReferenceType.TOOL, result.current_tool)
+            if frame is not None:
+                self._active_velocity_frames[ReferenceType.TOOL] = frame
         if result.current_work:
             self._active_references[ReferenceType.WORK] = result.current_work
+            frame = self._frame_for_controller(ReferenceType.WORK, result.current_work)
+            if frame is not None:
+                self._active_velocity_frames[ReferenceType.WORK] = frame
+
+    def _frame_for_controller(
+        self, reference_type: ReferenceType, controller_name: str
+    ) -> tuple[str, str] | None:
+        profile = self.coordinate_manager.profiles[self.arm_id]
+        frames = profile.tools if reference_type == ReferenceType.TOOL else profile.works
+        for frame in frames.values():
+            if frame.controller_name == controller_name:
+                return frame.controller_name, frame.ros_frame_id
+        return None
+
+    def _velocity_command(self, command: TwistStamped) -> None:
+        try:
+            self.velocity_session.accept_command(command)
+        except (RuntimeError, ValueError) as error:
+            self.get_logger().warn(f"Cartesian velocity command rejected: {error}")
 
     @staticmethod
     def _fill_verify_response(
@@ -435,6 +497,11 @@ class RealManDriverNode(Node):
             self.get_logger().info("RealMan state stream recovered")
 
     def destroy_node(self) -> bool:
+        velocity_status = self.velocity_session.shutdown()
+        if velocity_status != 0:
+            self.get_logger().error(
+                f"RealMan Cartesian velocity shutdown failed with status {velocity_status}"
+            )
         shutdown_status = self.motion_coordinator.shutdown()
         if shutdown_status != 0:
             self.get_logger().error(
@@ -443,6 +510,8 @@ class RealManDriverNode(Node):
             )
         if self.execute_motion_action_server is not None:
             self.execute_motion_action_server.destroy()
+        if self.cartesian_velocity_action_server is not None:
+            self.cartesian_velocity_action_server.destroy()
         if self.adapter.disconnect() == 0:
             self.motion_coordinator.clear_lockout_after_disconnect()
         return super().destroy_node()
@@ -460,6 +529,7 @@ def main(args: Any = None) -> None:
             node.get_logger().info("RealMan driver shutdown requested")
     finally:
         try:
+            node.velocity_session.shutdown()
             node.motion_coordinator.shutdown()
             executor.shutdown()
             node.destroy_node()

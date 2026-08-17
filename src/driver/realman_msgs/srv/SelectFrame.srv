@@ -1,0 +1,6 @@
+string name
+---
+bool success
+int32 api2_status
+string active_name
+string message

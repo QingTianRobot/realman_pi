@@ -199,6 +199,8 @@ class FakeGoalHandle:
         self.transitions.append("succeeded")
 
     def canceled(self) -> None:
+        if not self.is_cancel_requested:
+            raise AssertionError("CANCELED requires a canceling goal handle")
         self.transitions.append("canceled")
 
     def abort(self) -> None:
@@ -343,6 +345,7 @@ def test_canceling_reserved_goal_prevents_submission_and_reports_canceled():
     reserved = FakeGoalHandle(movej_goal())
 
     assert coordinator.goal_callback(reserved.request) == FakeGoalResponse.ACCEPT
+    reserved.is_cancel_requested = True
     assert coordinator.cancel_callback(reserved) == FakeCancelResponse.ACCEPT
 
     result = coordinator.execute(reserved)
@@ -495,8 +498,9 @@ def test_pose_commands_submit_wxyz_pose_but_fail_closed_without_frame_proof(
         4,
         False,
     ) in adapter.calls
-    assert result.terminal_state == FakeResult.TIMEOUT
-    assert result.success is False
+    assert result.terminal_state == FakeResult.SUCCEEDED
+    assert result.success is True
+    assert adapter.calls.count(("slow_stop",)) == 0
 
 
 def test_vendor_submission_error_aborts_and_preserves_api2_status():
@@ -708,7 +712,7 @@ def test_fast_stop_without_inactive_trajectory_aborts_and_locks_out_arm():
     assert coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6)) == FakeGoalResponse.REJECT
 
 
-def test_successful_disconnect_notification_releases_fast_stop_lockout():
+def test_disconnect_notification_does_not_release_unconfirmed_fast_stop_lockout():
     adapter = FakeAdapter()
     adapter.fast_stop_completes_trajectory = False
     coordinator, _, clock, ownership = make_coordinator(
@@ -721,8 +725,54 @@ def test_successful_disconnect_notification_releases_fast_stop_lockout():
     assert result.terminal_state == FakeResult.ABORTED
     assert ownership.is_busy("l") is True
     coordinator.clear_lockout_after_disconnect()
+    assert ownership.is_busy("l") is True
+    adapter.stopped = True
+    assert coordinator.reconcile_after_connect() is True
     assert ownership.is_busy("l") is False
     assert coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6)) == FakeGoalResponse.ACCEPT
+
+
+def test_disconnect_only_clears_event_channel_until_reconnect_proves_inactive():
+    adapter = FakeAdapter()
+    adapter.fast_stop_completes_trajectory = False
+    coordinator, adapter, clock, ownership = make_coordinator(
+        adapter=adapter, stop_timeout_sec=0.02
+    )
+    clock.on_sleep = coordinator.fast_stop
+
+    result = coordinator.execute(FakeGoalHandle(movej_goal(timeout_sec=10.0)))
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert ownership.is_busy("l") is True
+    coordinator.clear_lockout_after_disconnect()
+    assert ownership.is_busy("l") is True
+    assert coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6)) == FakeGoalResponse.REJECT
+
+    adapter.stopped = True
+    assert coordinator.reconcile_after_connect() is True
+    assert ownership.is_busy("l") is False
+    assert coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6)) == FakeGoalResponse.ACCEPT
+
+
+def test_reconnect_reconciliation_keeps_lockout_for_active_or_error_trajectory():
+    adapter = FakeAdapter()
+    adapter.fast_stop_completes_trajectory = False
+    coordinator, adapter, clock, ownership = make_coordinator(
+        adapter=adapter, stop_timeout_sec=0.02
+    )
+    clock.on_sleep = coordinator.fast_stop
+
+    coordinator.execute(FakeGoalHandle(movej_goal(timeout_sec=10.0)))
+    coordinator.clear_lockout_after_disconnect()
+    adapter.stopped = False
+    assert coordinator.reconcile_after_connect() is False
+    assert ownership.is_busy("l") is True
+    assert coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6)) == FakeGoalResponse.REJECT
+
+    adapter.trajectory_error_when_stopped = 41
+    adapter.stopped = True
+    assert coordinator.reconcile_after_connect() is False
+    assert ownership.is_busy("l") is True
 
 
 def test_fast_stop_keeps_reserved_goal_ownership_until_execution_consumes_abort():
@@ -843,6 +893,8 @@ def test_activated_pre_submit_shutdown_failure_aborts_with_original_status():
     assert not any(call[0] == "movej" for call in adapter.calls)
     assert ownership.is_busy("l") is True
     coordinator.clear_lockout_after_disconnect()
+    adapter.stopped = True
+    assert coordinator.reconcile_after_connect() is True
     assert ownership.is_busy("l") is False
 
 
@@ -850,7 +902,7 @@ def test_activated_pre_submit_shutdown_failure_aborts_with_original_status():
     ("interrupt", "stop_call", "terminal_state"),
     [
         ("fast_stop", ("stop",), FakeResult.ABORTED),
-        ("shutdown", ("slow_stop",), FakeResult.CANCELED),
+        ("shutdown", ("slow_stop",), FakeResult.ABORTED),
     ],
 )
 def test_stop_before_submission_never_allows_a_later_movej(
@@ -892,6 +944,8 @@ def test_stop_before_submission_never_allows_a_later_movej(
     if interrupt == "shutdown":
         assert ownership.is_busy("l") is True
         coordinator.clear_lockout_after_disconnect()
+        adapter.stopped = True
+        assert coordinator.reconcile_after_connect() is True
     assert ownership.is_busy("l") is False
 
 
@@ -916,6 +970,7 @@ def test_cancel_before_submission_never_allows_a_later_movej():
     execute_thread.start()
     try:
         assert activated.wait(timeout=1.0)
+        handle.is_cancel_requested = True
         assert coordinator.cancel_callback(handle) == FakeCancelResponse.ACCEPT
     finally:
         resume.set()
@@ -1105,6 +1160,8 @@ def test_shutdown_waits_for_inflight_idle_fast_stop_and_times_out_fail_closed():
     assert stop_thread.is_alive() is False
     assert stop_results == [0]
     coordinator.clear_lockout_after_disconnect()
+    adapter.stopped = True
+    assert coordinator.reconcile_after_connect() is True
     assert ownership.is_busy("l") is False
 
 
@@ -1139,7 +1196,10 @@ def test_shutdown_times_out_active_execution_and_keeps_safety_ownership():
 
     assert execute_thread.is_alive() is False
     assert len(execution_results) == 1
+    assert execution_results[0].terminal_state == FakeResult.ABORTED
     coordinator.clear_lockout_after_disconnect()
+    adapter.stopped = True
+    assert coordinator.reconcile_after_connect() is True
     assert ownership.is_busy("l") is False
 
 

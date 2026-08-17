@@ -355,9 +355,19 @@ _MOTION_FIELDS = frozenset(
         "max_linear_accel_mps2",
         "max_angular_accel_radps2",
         "joint_goal_tolerance_deg",
-        "pose_position_tolerance_m",
-        "pose_orientation_tolerance_rad",
         "stop_timeout_sec",
+    }
+)
+
+_REQUIRED_MOTION_FIELDS = frozenset(
+    {
+        "default_timeout_sec",
+        "max_linear_speed_mps",
+        "max_angular_speed_radps",
+        "velocity_control_period_ms",
+        "velocity_watchdog_ms",
+        "max_linear_accel_mps2",
+        "max_angular_accel_radps2",
     }
 )
 
@@ -372,8 +382,6 @@ class MotionSettings:
     max_linear_accel_mps2: float
     max_angular_accel_radps2: float
     joint_goal_tolerance_deg: float
-    pose_position_tolerance_m: float
-    pose_orientation_tolerance_rad: float
     stop_timeout_sec: float
 
     @property
@@ -425,7 +433,7 @@ class MotionSettings:
             if not isinstance(values, Mapping):
                 raise ValueError(f"robots.{robot} must be a mapping")
             _expect_keys(values, set(_MOTION_FIELDS), f"robots.{robot}")
-            missing = sorted(_MOTION_FIELDS - set(values))
+            missing = sorted(_REQUIRED_MOTION_FIELDS - set(values))
             if missing:
                 raise ValueError(f"robots.{robot} missing required key(s): {', '.join(missing)}")
             parsed[robot] = cls(
@@ -452,19 +460,11 @@ class MotionSettings:
                     values["max_angular_accel_radps2"], f"robots.{robot}.max_angular_accel_radps2"
                 ),
                 joint_goal_tolerance_deg=_positive_finite(
-                    values["joint_goal_tolerance_deg"],
+                    values.get("joint_goal_tolerance_deg", 0.25),
                     f"robots.{robot}.joint_goal_tolerance_deg",
                 ),
-                pose_position_tolerance_m=_positive_finite(
-                    values["pose_position_tolerance_m"],
-                    f"robots.{robot}.pose_position_tolerance_m",
-                ),
-                pose_orientation_tolerance_rad=_positive_finite(
-                    values["pose_orientation_tolerance_rad"],
-                    f"robots.{robot}.pose_orientation_tolerance_rad",
-                ),
                 stop_timeout_sec=_positive_finite(
-                    values["stop_timeout_sec"], f"robots.{robot}.stop_timeout_sec"
+                    values.get("stop_timeout_sec", 2.0), f"robots.{robot}.stop_timeout_sec"
                 ),
             )
         return parsed[arm]

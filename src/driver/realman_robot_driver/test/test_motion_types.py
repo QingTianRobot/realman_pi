@@ -181,8 +181,6 @@ def settings_data() -> dict[str, object]:
         "max_linear_accel_mps2": 0.10,
         "max_angular_accel_radps2": 0.50,
         "joint_goal_tolerance_deg": 0.25,
-        "pose_position_tolerance_m": 0.002,
-        "pose_orientation_tolerance_rad": 0.035,
         "stop_timeout_sec": 2.0,
     }
     return {"robots": {arm: dict(arm_settings) for arm in ("l", "m", "r")}}
@@ -216,17 +214,34 @@ def test_motion_settings_parse_per_arm_completion_and_stop_safety_limits(tmp_pat
     path = write_settings(
         tmp_path,
         joint_goal_tolerance_deg=0.25,
-        pose_position_tolerance_m=0.002,
-        pose_orientation_tolerance_rad=0.035,
         stop_timeout_sec=2.0,
     )
 
     settings = MotionSettings.from_yaml(path, "l")
 
     assert settings.joint_goal_tolerance_deg == pytest.approx(0.25)
-    assert settings.pose_position_tolerance_m == pytest.approx(0.002)
-    assert settings.pose_orientation_tolerance_rad == pytest.approx(0.035)
     assert settings.stop_timeout_sec == pytest.approx(2.0)
+
+
+def test_motion_settings_default_optional_completion_limits_for_legacy_config(tmp_path: Path):
+    data = settings_data()
+    for values in data["robots"].values():  # type: ignore[union-attr]
+        values.pop("joint_goal_tolerance_deg", None)  # type: ignore[union-attr]
+        values.pop("stop_timeout_sec", None)  # type: ignore[union-attr]
+    path = tmp_path / "legacy_realman_motion.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="ascii")
+
+    settings = MotionSettings.from_yaml(path, "l")
+
+    assert settings.joint_goal_tolerance_deg == pytest.approx(0.25)
+    assert settings.stop_timeout_sec == pytest.approx(2.0)
+
+
+def test_motion_settings_reject_removed_pose_tolerance_fields(tmp_path: Path):
+    path = write_settings(tmp_path, pose_position_tolerance_m=0.002)
+
+    with pytest.raises(ValueError, match="unknown key"):
+        MotionSettings.from_yaml(path, "l")
 
 
 def test_motion_settings_millisecond_fields_reject_fractional_and_boolean_values(tmp_path: Path):

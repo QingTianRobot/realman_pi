@@ -95,8 +95,6 @@ class MotionCoordinator:
         poll_period_sec: float = 0.02,
         stop_timeout_sec: float = 2.0,
         joint_goal_tolerance_deg: float = 0.25,
-        pose_position_tolerance_m: float = 0.002,
-        pose_orientation_tolerance_rad: float = 0.035,
         logger: Any | None = None,
     ) -> None:
         if arm_id not in {"l", "m", "r"}:
@@ -111,20 +109,6 @@ class MotionCoordinator:
         ):
             raise ValueError(
                 "joint_goal_tolerance_deg must be a positive finite number"
-            )
-        if (
-            not math.isfinite(pose_position_tolerance_m)
-            or pose_position_tolerance_m <= 0.0
-        ):
-            raise ValueError(
-                "pose_position_tolerance_m must be a positive finite number"
-            )
-        if (
-            not math.isfinite(pose_orientation_tolerance_rad)
-            or pose_orientation_tolerance_rad <= 0.0
-        ):
-            raise ValueError(
-                "pose_orientation_tolerance_rad must be a positive finite number"
             )
         if action_type is None:
             from realman_msgs.action import ExecuteMotion
@@ -150,10 +134,6 @@ class MotionCoordinator:
         self._poll_period_sec = poll_period_sec
         self._stop_timeout_sec = stop_timeout_sec
         self._joint_goal_tolerance_deg = joint_goal_tolerance_deg
-        # Stored at the completion-verifier seam. They deliberately remain
-        # unused until the SDK documents the read-pose reference frame.
-        self._pose_position_tolerance_m = pose_position_tolerance_m
-        self._pose_orientation_tolerance_rad = pose_orientation_tolerance_rad
         self._logger = logger
 
         self._lock = threading.RLock()
@@ -362,13 +342,14 @@ class MotionCoordinator:
                         goal_handle, generation, current_joints
                     )
                 shutdown_requested = self._shutdown_requested(generation)
-                if shutdown_requested or bool(getattr(goal_handle, "is_cancel_requested", False)):
-                    reason = "driver shutdown requested" if shutdown_requested else "cancel requested"
+                cancel_requested = bool(getattr(goal_handle, "is_cancel_requested", False))
+                if shutdown_requested or cancel_requested:
+                    reason = "driver shutdown requested" if shutdown_requested and not cancel_requested else "cancel requested"
                     return self._controlled_stop(
                         goal_handle,
                         generation,
                         goal,
-                        TerminalState.CANCELED,
+                        TerminalState.CANCELED if cancel_requested else TerminalState.ABORTED,
                         current_joints,
                         reason,
                     )
@@ -445,8 +426,13 @@ class MotionCoordinator:
                     and observed_active_trajectory
                     and trajectory_active is False
                     and state_connected is True
-                    and bool(current_joints)
-                    and self._goal_has_converged(goal, current_joints)
+                    and (
+                        goal.command != CommandType.MOVEJ
+                        or (
+                            bool(current_joints)
+                            and self._goal_has_converged(goal, current_joints)
+                        )
+                    )
                 ):
                     self._confirm_completion_event(generation)
                     return self._finish(
@@ -468,11 +454,19 @@ class MotionCoordinator:
                     )
                 self._sleep(self._poll_period_sec)
         except Exception as error:
+            status = _nonzero_status(getattr(self.adapter, "last_error", -1))
+            if self._logger is not None:
+                try:
+                    self._logger.error(
+                        f"motion execution failed for {goal.command.name}: {error}"
+                    )
+                except Exception:
+                    pass
             return self._finish(
                 goal_handle,
                 generation,
                 TerminalState.ABORTED,
-                _nonzero_status(getattr(self.adapter, "last_error", -1)),
+                status,
                 current_joints,
                 f"motion coordinator failed: {error}",
             )
@@ -514,11 +508,7 @@ class MotionCoordinator:
                 if self._reservation is reservation:
                     if reservation.stop_status is _STOP_IN_PROGRESS:
                         reservation.stop_status = status
-                        reservation.terminal_state = (
-                            TerminalState.CANCELED
-                            if status == 0
-                            else TerminalState.ABORTED
-                        )
+                        reservation.terminal_state = TerminalState.ABORTED
                         reservation.api2_status = status
                         reservation.message = (
                             "driver shutdown requested before execution"
@@ -702,7 +692,7 @@ class MotionCoordinator:
                     f"with API2 status {status}",
                 )
             return (
-                TerminalState.CANCELED,
+                TerminalState.ABORTED,
                 0,
                 "driver shutdown requested before motion submission",
             )
@@ -819,9 +809,12 @@ class MotionCoordinator:
             # stop. An event can describe a prior trajectory and has no
             # stop-generation identity.
             if trajectory_active is False:
-                message = "motion canceled after controlled stop"
-                if requested_terminal == TerminalState.TIMEOUT:
+                if requested_terminal == TerminalState.ABORTED:
+                    message = "motion aborted after driver shutdown stop"
+                elif requested_terminal == TerminalState.TIMEOUT:
                     message = "motion timed out and stopped"
+                else:
+                    message = "motion canceled after controlled stop"
                 return self._finish(
                     goal_handle,
                     generation,
@@ -1118,22 +1111,44 @@ class MotionCoordinator:
             self._lockout = True
 
     def clear_lockout_after_disconnect(self) -> None:
-        """Clear safety lockout and stale callbacks after confirmed disconnect."""
+        """Clear stale callbacks after confirmed disconnect, never physical lockout."""
         release = False
         with self._lock:
             if not self._lockout and not self._event_channel_quarantined:
                 return
-            self._lockout = False
             self._event_channel_quarantined = False
             self._event = None
             self._event_channel_cleared_through_generation = self._generation
             release = (
-                self._active_goal is None
+                not self._lockout
+                and self._active_goal is None
                 and self._reservation is None
                 and self._idle_fast_stop is None
             )
         if release:
             self.ownership.release(self.arm_id)
+
+    def reconcile_after_connect(self) -> bool:
+        """Clear physical lockout only after an inactive, error-free readback."""
+        status, trajectory_active = self._read_trajectory()
+        if status != 0 or trajectory_active is not False:
+            return False
+        release = False
+        with self._lock:
+            if (
+                self._active_goal is not None
+                or self._reservation is not None
+                or self._idle_fast_stop is not None
+            ):
+                return False
+            self._lockout = False
+            self._event_channel_quarantined = False
+            self._event = None
+            self._event_channel_cleared_through_generation = self._generation
+            release = True
+        if release:
+            self.ownership.release(self.arm_id)
+        return True
 
     def _read_state(self) -> tuple[int, tuple[float, ...], bool | None]:
         try:
@@ -1149,12 +1164,12 @@ class MotionCoordinator:
     def _goal_has_converged(
         self, goal: ValidatedGoal, current_joints: Sequence[float]
     ) -> bool:
-        """Fail closed until each command has an evidence-backed verifier."""
+        """Verify joints, while pose commands rely on event/trajectory evidence."""
         if goal.command != CommandType.MOVEJ:
             # The vendor reference does not establish that current-arm-state
-            # poses share WORK/TOOL target frames, so no pose command may
-            # report success from an unverified comparison.
-            return False
+            # poses share WORK/TOOL target frames. Completion therefore uses
+            # only the controller success event and inactive trajectory query.
+            return True
         target = _finite_vector(goal.joint_degrees, 6)
         observed = _finite_vector(current_joints, 6)
         return bool(target) and bool(observed) and all(

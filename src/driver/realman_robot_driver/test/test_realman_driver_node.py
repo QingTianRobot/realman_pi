@@ -107,6 +107,20 @@ def test_node_source_clears_motion_lockout_only_after_successful_disconnect():
     assert "if self.adapter.disconnect() == 0:\n            self.motion_coordinator.clear_lockout_after_disconnect()" in source
 
 
+def test_disconnect_service_exposes_shutdown_failure_even_when_sdk_disconnect_succeeds():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert "shutdown_status = self.motion_coordinator.shutdown()" in source
+    assert "response.success = shutdown_status == 0 and code == 0" in source
+    assert "shutdown_status" in source
+
+
+def test_connect_reconciles_physical_lockout_with_read_only_trajectory_state():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert "self.motion_coordinator.reconcile_after_connect()" in source
+
+
 def test_stop_service_delegates_fast_stop_to_coordinator():
     tree = ast.parse(NODE_PATH.read_text(encoding="utf-8"))
     stop = next(
@@ -126,14 +140,6 @@ def test_node_source_passes_motion_completion_and_stop_safety_limits():
     assert "stop_timeout_sec=self.motion_settings.stop_timeout_sec" in source
     assert (
         "joint_goal_tolerance_deg=self.motion_settings.joint_goal_tolerance_deg"
-        in source
-    )
-    assert (
-        "pose_position_tolerance_m=self.motion_settings.pose_position_tolerance_m"
-        in source
-    )
-    assert (
-        "pose_orientation_tolerance_rad=self.motion_settings.pose_orientation_tolerance_rad"
         in source
     )
 

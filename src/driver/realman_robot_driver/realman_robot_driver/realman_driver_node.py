@@ -141,8 +141,6 @@ class RealManDriverNode(Node):
             action_type=ExecuteMotion,
             stop_timeout_sec=self.motion_settings.stop_timeout_sec,
             joint_goal_tolerance_deg=self.motion_settings.joint_goal_tolerance_deg,
-            pose_position_tolerance_m=self.motion_settings.pose_position_tolerance_m,
-            pose_orientation_tolerance_rad=self.motion_settings.pose_orientation_tolerance_rad,
             logger=self.get_logger(),
         )
         self.execute_motion_action_server = ActionServer(
@@ -189,12 +187,24 @@ class RealManDriverNode(Node):
     def _disconnect(
         self, _request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
-        self.motion_coordinator.shutdown()
+        shutdown_status = self.motion_coordinator.shutdown()
         code = self.adapter.disconnect()
         if code == 0:
             self.motion_coordinator.clear_lockout_after_disconnect()
-        response.success = code == 0
-        response.message = "disconnected" if code == 0 else f"disconnect failed with status {code}"
+        response.success = shutdown_status == 0 and code == 0
+        if shutdown_status != 0:
+            response.message = (
+                f"disconnect completed with shutdown failure status {shutdown_status}"
+                if code == 0
+                else f"shutdown failed with status {shutdown_status}; "
+                f"disconnect failed with status {code}"
+            )
+            self.get_logger().error(response.message)
+        elif code != 0:
+            response.message = f"disconnect failed with status {code}"
+            self.get_logger().error(response.message)
+        else:
+            response.message = "disconnected"
         return response
 
     def _stop(self, _request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
@@ -229,6 +239,11 @@ class RealManDriverNode(Node):
                 )
                 self.adapter.disconnect()
                 return callback_status
+            if not self.motion_coordinator.reconcile_after_connect():
+                self.get_logger().warn(
+                    "RealMan trajectory reconciliation did not prove an inactive, "
+                    "error-free trajectory; motion remains safety gated"
+                )
             verification = self.coordinate_manager.verify(self.adapter, self.arm_id)
             self._active_references[ReferenceType.TOOL] = (
                 verification.current_tool
@@ -297,7 +312,12 @@ class RealManDriverNode(Node):
             self.get_logger().info("RealMan state stream recovered")
 
     def destroy_node(self) -> bool:
-        self.motion_coordinator.shutdown()
+        shutdown_status = self.motion_coordinator.shutdown()
+        if shutdown_status != 0:
+            self.get_logger().error(
+                f"RealMan shutdown failed with status {shutdown_status}; "
+                "physical safety lockout is retained"
+            )
         if self.execute_motion_action_server is not None:
             self.execute_motion_action_server.destroy()
         if self.adapter.disconnect() == 0:

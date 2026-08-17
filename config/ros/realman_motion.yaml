@@ -19,10 +19,6 @@ robots:
     max_angular_accel_radps2: 0.50
     # Per-joint terminal tolerance in degrees; success requires every joint to converge.
     joint_goal_tolerance_deg: 0.25
-    # Cartesian position terminal tolerance in metres for a verified common frame.
-    pose_position_tolerance_m: 0.002
-    # Quaternion angular-distance tolerance in radians for a verified common frame.
-    pose_orientation_tolerance_rad: 0.035
     # Maximum seconds to wait for one commanded stop to be reported complete.
     stop_timeout_sec: 2.0
   m:
@@ -42,10 +38,6 @@ robots:
     max_angular_accel_radps2: 0.50
     # Per-joint terminal tolerance in degrees; success requires every joint to converge.
     joint_goal_tolerance_deg: 0.25
-    # Cartesian position terminal tolerance in metres for a verified common frame.
-    pose_position_tolerance_m: 0.002
-    # Quaternion angular-distance tolerance in radians for a verified common frame.
-    pose_orientation_tolerance_rad: 0.035
     # Maximum seconds to wait for one commanded stop to be reported complete.
     stop_timeout_sec: 2.0
   r:
@@ -65,9 +57,5 @@ robots:
     max_angular_accel_radps2: 0.50
     # Per-joint terminal tolerance in degrees; success requires every joint to converge.
     joint_goal_tolerance_deg: 0.25
-    # Cartesian position terminal tolerance in metres for a verified common frame.
-    pose_position_tolerance_m: 0.002
-    # Quaternion angular-distance tolerance in radians for a verified common frame.
-    pose_orientation_tolerance_rad: 0.035
     # Maximum seconds to wait for one commanded stop to be reported complete.
     stop_timeout_sec: 2.0

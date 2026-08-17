@@ -260,18 +260,21 @@ class RealManSdkAdapter:
             return self._finish_command_locked(result, "SDK tool frame update failed")
 
     def set_work_frame(self, frame: Any) -> int:
-        pose = [*frame.xyz_m, *frame.quaternion_wxyz]
         with self._lock:
-            if self.mock_mode and self._connected:
-                self._mock_work_frame_name = str(frame.controller_name)
-                self._set_success_locked()
-                return 0
-        return self._command(
-            "rm_set_manual_work_frame",
-            "SDK work frame update failed",
-            frame.controller_name,
-            pose,
-        )
+            status = self._ready_status_locked()
+            if status is not None:
+                return status
+            try:
+                pose = [*frame.xyz_m, *frame.quaternion_wxyz]
+                if self.mock_mode:
+                    self._mock_work_frame_name = str(frame.controller_name)
+                    self._set_success_locked()
+                    return 0
+                result = self._robot.rm_set_manual_work_frame(frame.controller_name, pose)
+            except Exception as error:
+                self._set_failure_locked(-1, str(error))
+                return -1
+            return self._finish_command_locked(result, "SDK work frame update failed")
 
     def change_tool_frame(self, controller_name: str) -> int:
         status = self._command(
@@ -370,8 +373,9 @@ class RealManSdkAdapter:
                 return RobotState((), False, self.robot_model, self._last_error or -1)
             if self.mock_mode:
                 return RobotState((0.0,) * 6, True, self.robot_model, 0)
-            if self._robot is None:
-                return RobotState((), False, self.robot_model, -1)
+            readiness_status = self._ready_status_locked()
+            if readiness_status is not None:
+                return RobotState((), False, self.robot_model, readiness_status)
 
             try:
                 result = self._robot.rm_get_joint_degree()

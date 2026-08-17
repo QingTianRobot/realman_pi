@@ -211,6 +211,38 @@ def test_connected_without_handle_fails_closed_without_calling_sdk(adapter, fake
     assert adapter.last_error_message == "SDK robot handle is unavailable"
 
 
+@pytest.mark.parametrize("handle", [None, SimpleNamespace(id=-1)])
+def test_get_state_without_valid_handle_fails_closed_without_calling_sdk(
+    adapter, fake_robot, handle
+):
+    adapter._handle = handle
+
+    state = adapter.get_state()
+
+    assert state.joint_degrees == ()
+    assert state.connected is False
+    assert state.error_code == -1
+    assert fake_robot.calls == []
+    assert adapter.last_error == -1
+    assert adapter.last_error_message
+
+
+def test_set_work_frame_malformed_input_returns_error_without_calling_sdk(
+    adapter, fake_robot
+):
+    class MalformedFrame:
+        @property
+        def xyz_m(self):
+            raise RuntimeError("malformed work frame")
+
+    status = adapter.set_work_frame(MalformedFrame())
+
+    assert status == -1
+    assert fake_robot.calls == []
+    assert adapter.last_error == -1
+    assert adapter.last_error_message == "malformed work frame"
+
+
 def test_velocity_init_and_nonzero_status_are_forwarded(adapter, fake_robot):
     fake_robot.results["rm_set_movev_canfd_init"] = 11
 
@@ -444,6 +476,7 @@ def test_state_error_is_retained_until_a_successful_read():
     )
     robot = FakeRobot()
     adapter._robot = robot
+    adapter._handle = SimpleNamespace(id=17)
     adapter._connected = True
 
     failed_state = adapter.get_state()
@@ -473,6 +506,7 @@ def test_communication_error_marks_connection_for_retry():
     robot = FakeRobot()
     robot.joint_result = (-2, [])
     adapter._robot = robot
+    adapter._handle = SimpleNamespace(id=17)
     adapter._connected = True
 
     state = adapter.get_state()

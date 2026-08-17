@@ -6,7 +6,8 @@ from dataclasses import dataclass
 from enum import IntEnum
 import math
 from pathlib import Path
-from typing import Mapping, Sequence
+from types import MappingProxyType
+from typing import Any, Mapping, Protocol, Sequence
 
 import yaml
 
@@ -37,6 +38,32 @@ class FeedbackPhase(IntEnum):
     SUBMITTING = 1
     EXECUTING = 2
     STOPPING = 3
+
+
+class ReferenceResolver(Protocol):
+    """Resolve whether a named frame is configured for a reference type."""
+
+    def is_configured(self, reference_type: ReferenceType, reference_name: str) -> bool: ...
+
+
+@dataclass(frozen=True)
+class ReferenceState:
+    """Immutable configured-reference snapshot for motion validation."""
+
+    names_by_type: Mapping[ReferenceType, frozenset[str]]
+
+    def __post_init__(self) -> None:
+        names_by_type: dict[ReferenceType, frozenset[str]] = {}
+        for reference_type, names in self.names_by_type.items():
+            if not isinstance(reference_type, ReferenceType):
+                raise ValueError("reference state keys must be ReferenceType values")
+            if not isinstance(names, frozenset) or not all(isinstance(name, str) for name in names):
+                raise ValueError("reference state names must be frozensets of strings")
+            names_by_type[reference_type] = names
+        object.__setattr__(self, "names_by_type", MappingProxyType(names_by_type))
+
+    def is_configured(self, reference_type: ReferenceType, reference_name: str) -> bool:
+        return reference_name in self.names_by_type.get(reference_type, frozenset())
 
 
 # These aliases make the action vocabulary available without coupling this
@@ -140,7 +167,7 @@ def _vector(value: object, expected_length: int, field: str) -> tuple[tuple[floa
 
 def _enum(value: object, enum_type: type[IntEnum], field: str) -> tuple[IntEnum | None, str | None]:
     try:
-        if isinstance(value, bool):
+        if isinstance(value, bool) or not isinstance(value, int):
             raise ValueError
         return enum_type(value), None
     except (TypeError, ValueError):
@@ -154,12 +181,12 @@ def validate_goal(
     connected: bool | None = True,
     active_reference_type: ReferenceType | int | None = None,
     active_reference_name: str | None = None,
-    reference_config: object | None = None,
+    reference_resolver: ReferenceResolver | None = None,
 ) -> GoalValidationResult:
     """Validate an action-like goal without reaching into a ROS node.
 
-    ``active_reference_*`` and ``reference_config`` are explicit seams for
-    controller/coordinate state.  Omitting them skips that state check; the
+    ``active_reference_*`` and ``reference_resolver`` are explicit seams for
+    controller/coordinate state. Omitting them skips that state check; the
     validator never guesses or mutates controller state.
     """
 
@@ -194,9 +221,8 @@ def validate_goal(
     if active_reference_name is not None and reference_name != active_reference_name:
         errors.append("reference_name does not match active frame")
 
-    if reference_value is not None and reference_config is not None:
-        configured = _configured_reference_names(reference_config, reference_value)
-        if configured is not None and reference_name not in configured:
+    if reference_value is not None and reference_resolver is not None:
+        if not reference_resolver.is_configured(reference_value, reference_name):
             errors.append("reference_name is not configured for reference_type")
 
     joints: tuple[float, ...] = ()
@@ -279,39 +305,6 @@ def validate_goal(
     )
 
 
-def _configured_reference_names(config: object, reference_type: ReferenceType) -> set[str] | None:
-    """Read a small explicit mapping used by tests or a coordinate seam."""
-
-    if not isinstance(config, Mapping):
-        return None
-    value: object = None
-    for key in (reference_type, int(reference_type), reference_type.name, reference_type.name.lower()):
-        if key in config:
-            value = config[key]
-            break
-    if value is None:
-        return None
-    if isinstance(value, str):
-        return {value}
-    if isinstance(value, Mapping):
-        for key in ("names", "allowed", "frames"):
-            if key in value:
-                value = value[key]
-                break
-        else:
-            name = value.get("name")
-            if isinstance(name, str):
-                return {name}
-            frame_names = {key for key in value if isinstance(key, str)}
-            if frame_names:
-                return frame_names
-    if isinstance(value, Sequence) and not isinstance(value, (str, bytes)):
-        return {item for item in value if isinstance(item, str)}
-    if isinstance(value, set):
-        return {item for item in value if isinstance(item, str)}
-    return None
-
-
 def limit_vector_delta(
     previous: Sequence[object], target: Sequence[object], max_acceleration: object, dt: object
 ) -> tuple[float, ...]:
@@ -370,8 +363,8 @@ class MotionSettings:
     default_timeout_sec: float
     max_linear_speed_mps: float
     max_angular_speed_radps: float
-    velocity_control_period_ms: float
-    velocity_watchdog_ms: float
+    velocity_control_period_ms: int
+    velocity_watchdog_ms: int
     max_linear_accel_mps2: float
     max_angular_accel_radps2: float
 
@@ -386,7 +379,7 @@ class MotionSettings:
     # Short aliases are useful to non-ROS control code while preserving the
     # names in the YAML schema as the authoritative fields.
     @property
-    def period_ms(self) -> float:
+    def period_ms(self) -> int:
         return self.velocity_control_period_ms
 
     @property
@@ -418,7 +411,7 @@ class MotionSettings:
             missing = sorted(_ARMS - robot_ids)
             extra = sorted(robot_ids - _ARMS)
             raise ValueError(f"robots must contain exactly l, m, r; missing={missing} extra={extra}")
-        parsed: dict[str, dict[str, float]] = {}
+        parsed: dict[str, MotionSettings] = {}
         for robot in sorted(_ARMS):
             values = robots[robot]
             if not isinstance(values, Mapping):
@@ -427,11 +420,31 @@ class MotionSettings:
             missing = sorted(_MOTION_FIELDS - set(values))
             if missing:
                 raise ValueError(f"robots.{robot} missing required key(s): {', '.join(missing)}")
-            parsed[robot] = {
-                field: _positive_finite(values[field], f"robots.{robot}.{field}")
-                for field in _MOTION_FIELDS
-            }
-        return cls(**parsed[arm])
+            parsed[robot] = cls(
+                default_timeout_sec=_positive_finite(
+                    values["default_timeout_sec"], f"robots.{robot}.default_timeout_sec"
+                ),
+                max_linear_speed_mps=_positive_finite(
+                    values["max_linear_speed_mps"], f"robots.{robot}.max_linear_speed_mps"
+                ),
+                max_angular_speed_radps=_positive_finite(
+                    values["max_angular_speed_radps"], f"robots.{robot}.max_angular_speed_radps"
+                ),
+                velocity_control_period_ms=_positive_int(
+                    values["velocity_control_period_ms"],
+                    f"robots.{robot}.velocity_control_period_ms",
+                ),
+                velocity_watchdog_ms=_positive_int(
+                    values["velocity_watchdog_ms"], f"robots.{robot}.velocity_watchdog_ms"
+                ),
+                max_linear_accel_mps2=_positive_finite(
+                    values["max_linear_accel_mps2"], f"robots.{robot}.max_linear_accel_mps2"
+                ),
+                max_angular_accel_radps2=_positive_finite(
+                    values["max_angular_accel_radps2"], f"robots.{robot}.max_angular_accel_radps2"
+                ),
+            )
+        return parsed[arm]
 
 
 def _expect_keys(data: Mapping[Any, Any], allowed: set[str], context: str) -> None:
@@ -449,6 +462,12 @@ def _positive_finite(value: object, context: str) -> float:
     return result
 
 
+def _positive_int(value: object, context: str) -> int:
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{context} must be a positive integer")
+    return value
+
+
 __all__ = [
     "CommandType",
     "FeedbackPhase",
@@ -460,6 +479,8 @@ __all__ = [
     "MotionSettings",
     "MotionTerminalState",
     "ReferenceType",
+    "ReferenceResolver",
+    "ReferenceState",
     "ResultState",
     "TerminalPhase",
     "TerminalStatus",

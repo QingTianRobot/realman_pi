@@ -3,15 +3,18 @@ from __future__ import annotations
 import math
 from dataclasses import FrozenInstanceError
 from pathlib import Path
+import typing
 
 import pytest
 import yaml
 
+from realman_robot_driver import motion_types
 from realman_robot_driver.motion_types import (
     CommandType,
     FeedbackPhase,
     Goal,
     MotionSettings,
+    ReferenceState,
     ReferenceType,
     TerminalState,
     limit_vector_delta,
@@ -126,14 +129,39 @@ def test_connection_and_active_reference_are_explicit_validation_inputs():
     assert "reference_name does not match active frame" in mismatch.errors
 
 
-def test_reference_config_mismatch_is_rejected():
+def test_reference_resolver_rejects_an_unconfigured_reference():
     result = validate_goal(
         valid_goal(reference_type=ReferenceType.WORK, reference_name="fixture"),
-        reference_config={ReferenceType.WORK: {"cell"}},
+        reference_resolver=ReferenceState({ReferenceType.WORK: frozenset({"cell"})}),
     )
 
     assert not result.valid
     assert "reference_name is not configured for reference_type" in result.errors
+
+
+def test_reference_resolver_accepts_a_configured_reference():
+    result = validate_goal(
+        valid_goal(reference_type=ReferenceType.WORK, reference_name="cell"),
+        reference_resolver=ReferenceState({ReferenceType.WORK: frozenset({"cell"})}),
+    )
+
+    assert result.valid
+
+
+@pytest.mark.parametrize(
+    ("field", "value"),
+    [
+        ("command", 0.0),
+        ("command", True),
+        ("reference_type", 0.0),
+        ("reference_type", False),
+    ],
+)
+def test_goal_validation_rejects_non_integer_ros_enum_values(field: str, value: object):
+    result = validate_goal(valid_goal(**{field: value}))
+
+    assert not result.valid
+    assert any(error.startswith(f"{field} must be one of") for error in result.errors)
 
 
 def test_limit_vector_delta_preserves_direction():
@@ -176,6 +204,26 @@ def test_motion_settings_parse_existing_schema_and_units(tmp_path: Path):
     assert settings.velocity_watchdog_ms == 100
     assert settings.control_period_sec == pytest.approx(0.020)
     assert settings.watchdog_sec == pytest.approx(0.100)
+    assert isinstance(settings.velocity_control_period_ms, int)
+    assert isinstance(settings.velocity_watchdog_ms, int)
+
+
+def test_motion_settings_millisecond_fields_reject_fractional_and_boolean_values(tmp_path: Path):
+    for field, value in (
+        ("velocity_control_period_ms", 20.5),
+        ("velocity_watchdog_ms", 100.5),
+        ("velocity_control_period_ms", True),
+        ("velocity_watchdog_ms", False),
+    ):
+        path = write_settings(tmp_path, **{field: value})
+        with pytest.raises(ValueError, match=field):
+            MotionSettings.from_yaml(path, "l")
+
+
+def test_motion_type_hints_resolve_private_mapping_helper():
+    hints = typing.get_type_hints(motion_types._expect_keys)
+
+    assert hints["data"] == typing.Mapping[typing.Any, typing.Any]
 
 
 @pytest.mark.parametrize(

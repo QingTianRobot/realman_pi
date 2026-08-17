@@ -123,6 +123,37 @@ def test_velocity_vector_is_not_converted_to_euler(adapter, fake_robot):
     assert fake_robot.calls[-1][1] == [0.1, 0, 0, 0, 0.2, 0]
 
 
+@pytest.mark.parametrize(
+    ("method_name", "result", "expected_status"),
+    [
+        ("movej", 31, 31),
+        ("movel", 32, 32),
+        ("movej_p", 33, 33),
+        ("movev", 34, 34),
+    ],
+)
+def test_motion_commands_return_nonzero_vendor_status_unchanged(
+    adapter, fake_robot, method_name, result, expected_status
+):
+    fake_robot.results[
+        {
+            "movej": "rm_movej",
+            "movel": "rm_movel",
+            "movej_p": "rm_movej_p",
+            "movev": "rm_movev_canfd",
+        }[method_name]
+    ] = result
+
+    arguments = {
+        "movej": ([0.0] * 6, 20, 0, False),
+        "movel": ([0.0] * 7, 20, 0, False),
+        "movej_p": ([0.0] * 7, 20, 0, False),
+        "movev": ([0.0] * 6, True, 0, 0),
+    }[method_name]
+
+    assert getattr(adapter, method_name)(*arguments) == expected_status
+
+
 def test_stop_motion_and_state_calls_preserve_vendor_results(adapter, fake_robot):
     trajectory = {"trajectory_state": 3}
     arm_state = (6, {"joint": [1.0] * 6})
@@ -153,6 +184,31 @@ def test_event_callback_is_registered_and_retained(adapter, fake_robot):
     assert adapter.register_event_callback(callback) == 0
     assert fake_robot.calls[-1] == ("rm_get_arm_event_call_back", callback)
     assert adapter._event_callback is callback
+
+
+def test_event_callback_reference_changes_only_after_successful_registration(adapter, fake_robot):
+    first = lambda event: ("first", event)
+    second = lambda event: ("second", event)
+
+    fake_robot.results["rm_get_arm_event_call_back"] = 41
+    assert adapter.register_event_callback(first) == 41
+    assert adapter._event_callback is None
+
+    fake_robot.results["rm_get_arm_event_call_back"] = 0
+    assert adapter.register_event_callback(first) == 0
+    assert adapter._event_callback is first
+
+    fake_robot.results["rm_get_arm_event_call_back"] = 42
+    assert adapter.register_event_callback(second) == 42
+    assert adapter._event_callback is first
+
+
+def test_connected_without_handle_fails_closed_without_calling_sdk(adapter, fake_robot):
+    adapter._handle = None
+
+    assert adapter.movej([0.0] * 6, 20, 0, False) == -1
+    assert fake_robot.calls == []
+    assert adapter.last_error_message == "SDK robot handle is unavailable"
 
 
 def test_velocity_init_and_nonzero_status_are_forwarded(adapter, fake_robot):
@@ -281,6 +337,44 @@ def test_coordinate_adapter_protocol_uses_one_adapter_arm_and_vendor_frames(
     )
     assert adapter.change_tool_frame("gripper") == 0
     assert adapter.change_work_frame("cell") == 0
+
+
+def test_coordinate_operations_return_nonzero_vendor_status_unchanged(
+    adapter, fake_robot, monkeypatch
+):
+    _install_frame_types(monkeypatch)
+    tool = ToolFrame(
+        controller_name="gripper",
+        ros_frame_id="l/tool",
+        xyz_m=(0.1, 0.2, 0.3),
+        quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+        payload_kg=1.5,
+        center_of_mass_m=(0.01, 0.02, 0.03),
+    )
+    work = WorkFrame(
+        controller_name="cell",
+        ros_frame_id="l/cell",
+        xyz_m=(0.4, 0.5, 0.6),
+        quaternion_wxyz=(0.5, 0.5, 0.5, 0.5),
+    )
+
+    fake_robot.results.update(
+        {
+            "rm_get_current_tool_frame": (51, {"frame_name": "bad-tool"}),
+            "rm_get_current_work_frame": (52, {"frame_name": "bad-work"}),
+            "rm_set_manual_tool_frame": 53,
+            "rm_set_manual_work_frame": 54,
+            "rm_change_tool_frame": 55,
+            "rm_change_work_frame": 56,
+        }
+    )
+
+    assert adapter.current_tool_frame() == (51, {"frame_name": "bad-tool"})
+    assert adapter.current_work_frame() == (52, {"frame_name": "bad-work"})
+    assert adapter.set_tool_frame(tool) == 53
+    assert adapter.set_work_frame(work) == 54
+    assert adapter.change_tool_frame("gripper") == 55
+    assert adapter.change_work_frame("cell") == 56
 
 
 def test_mock_adapter_is_safe_and_deterministic():

@@ -223,10 +223,12 @@ class RealManSdkAdapter:
 
     def register_event_callback(self, callback: Callable[[Any], Any]) -> int:
         with self._lock:
-            self._event_callback = callback
-        return self._command(
-            "rm_get_arm_event_call_back", "SDK event callback registration failed", callback
-        )
+            status = self._command(
+                "rm_get_arm_event_call_back", "SDK event callback registration failed", callback
+            )
+            if status == 0:
+                self._event_callback = callback
+            return status
 
     def current_tool_frame(self) -> Any:
         with self._lock:
@@ -337,7 +339,10 @@ class RealManSdkAdapter:
         if self._robot is None:
             self._set_failure_locked(-1, "SDK robot instance is unavailable")
             return -1
-        if self._handle is not None and not _is_valid_handle(self._handle):
+        if self._handle is None:
+            self._set_failure_locked(-1, "SDK robot handle is unavailable")
+            return -1
+        if not _is_valid_handle(self._handle):
             self._set_failure_locked(-1, "SDK returned an invalid robot handle")
             return -1
         return None

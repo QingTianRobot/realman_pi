@@ -418,7 +418,7 @@ def test_submission_callback_before_sdk_returns_is_ignored_as_stale():
     ("state_status", "trajectory_status", "expected_status"),
     [(23, 0, 23), (0, 47, 47), (23, 47, 23)],
 )
-def test_nonzero_monitor_status_aborts_without_reporting_success(
+def test_nonzero_monitor_status_aborts_and_locks_arm_without_reporting_success(
     state_status: int,
     trajectory_status: int,
     expected_status: int,
@@ -439,7 +439,8 @@ def test_nonzero_monitor_status_aborts_without_reporting_success(
     assert result.success is False
     assert result.api2_status == expected_status
     assert handle.transitions == ["aborted"]
-    assert ownership.is_busy("l") is False
+    assert ownership.is_busy("l") is True
+    assert coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6)) == FakeGoalResponse.REJECT
 
 
 def test_revalidation_failure_after_acceptance_releases_reservation_for_next_goal():
@@ -936,11 +937,12 @@ def test_reserved_goal_invalidations_are_consumed_before_the_next_reservation():
         assert result.terminal_state == FakeResult.ABORTED
         assert ownership.is_busy("l") is False
 
-    assert adapter.calls == [("stop",), ("stop",)]
+    assert adapter.calls.count(("stop",)) == 2
+    assert adapter.calls.count(("current_trajectory",)) == 2
     assert [call for call in adapter.calls if call[0] == "movej"] == []
 
 
-def test_fast_stop_calls_adapter_when_no_goal_and_returns_status():
+def test_failed_idle_fast_stop_locks_arm_after_returning_adapter_status():
     adapter = FakeAdapter()
     adapter.fast_stop_status = 19
     coordinator, adapter, _, ownership = make_coordinator(adapter=adapter)
@@ -949,7 +951,190 @@ def test_fast_stop_calls_adapter_when_no_goal_and_returns_status():
 
     assert status == 19
     assert adapter.calls == [("stop",)]
+    assert ownership.is_busy("l") is True
+    assert coordinator.goal_callback(movej_goal()) == FakeGoalResponse.REJECT
+
+
+def test_idle_fast_stop_reserves_arm_until_stop_is_confirmed_before_goal_can_submit():
+    coordinator, adapter, _, _ = make_coordinator()
+    stop_started = threading.Event()
+    release_stop = threading.Event()
+    move_attempted = threading.Event()
+    stop_results = []
+    goal_results = []
+    original_stop = adapter.stop
+    original_movej = adapter.movej
+
+    def blocking_stop() -> int:
+        stop_started.set()
+        assert release_stop.wait(timeout=1.0)
+        return original_stop()
+
+    def tracked_movej(*args, **kwargs) -> int:
+        move_attempted.set()
+        return original_movej(*args, **kwargs)
+
+    def submit_goal_during_stop() -> None:
+        handle = FakeGoalHandle(movej_goal(timeout_sec=10.0))
+        if coordinator.goal_callback(handle.request) == FakeGoalResponse.ACCEPT:
+            goal_results.append(coordinator.execute(handle))
+
+    adapter.stop = blocking_stop
+    adapter.movej = tracked_movej
+    stop_thread = threading.Thread(
+        target=lambda: stop_results.append(coordinator.fast_stop())
+    )
+    stop_thread.start()
+    assert stop_started.wait(timeout=1.0)
+    goal_thread = threading.Thread(target=submit_goal_during_stop)
+    goal_thread.start()
+    try:
+        assert move_attempted.wait(timeout=0.05) is False
+    finally:
+        release_stop.set()
+    stop_thread.join(timeout=1.0)
+    goal_thread.join(timeout=1.0)
+
+    assert stop_thread.is_alive() is False
+    assert goal_thread.is_alive() is False
+    assert stop_results == [0]
+    assert goal_results == []
+    assert not any(call[0] == "movej" for call in adapter.calls)
+
+
+def test_idle_fast_stop_cannot_cross_goal_ownership_reservation_gap():
+    coordinator, adapter, _, ownership = make_coordinator()
+    ownership_acquired = threading.Event()
+    release_acquire = threading.Event()
+    stop_results = []
+    goal_results = []
+    original_acquire = ownership.acquire
+
+    def blocked_first_acquire(arm: str) -> bool:
+        ownership_acquired.set()
+        assert release_acquire.wait(timeout=1.0)
+        return original_acquire(arm)
+
+    ownership.acquire = blocked_first_acquire
+    goal = FakeGoalHandle(movej_goal())
+    goal_thread = threading.Thread(
+        target=lambda: goal_results.append(coordinator.goal_callback(goal.request))
+    )
+    goal_thread.start()
+    assert ownership_acquired.wait(timeout=1.0)
+    stop_thread = threading.Thread(
+        target=lambda: stop_results.append(coordinator.fast_stop())
+    )
+    stop_thread.start()
+    try:
+        assert stop_thread.is_alive() is True
+    finally:
+        release_acquire.set()
+    goal_thread.join(timeout=1.0)
+    stop_thread.join(timeout=1.0)
+
+    assert goal_thread.is_alive() is False
+    assert stop_thread.is_alive() is False
+    assert goal_results == [FakeGoalResponse.ACCEPT]
+    assert stop_results == [0]
+    assert adapter.calls.count(("stop",)) == 1
+    assert ownership.is_busy("l") is True
+
+
+def test_concurrent_idle_fast_stops_share_the_confirmed_result():
+    coordinator, adapter, _, ownership = make_coordinator()
+    stop_started = threading.Event()
+    release_stop = threading.Event()
+    original_stop = adapter.stop
+    results = []
+
+    def blocking_stop() -> int:
+        stop_started.set()
+        assert release_stop.wait(timeout=1.0)
+        return original_stop()
+
+    adapter.stop = blocking_stop
+    first = threading.Thread(target=lambda: results.append(coordinator.fast_stop()))
+    second = threading.Thread(target=lambda: results.append(coordinator.fast_stop()))
+    first.start()
+    assert stop_started.wait(timeout=1.0)
+    second.start()
+    release_stop.set()
+    first.join(timeout=1.0)
+    second.join(timeout=1.0)
+
+    assert first.is_alive() is False
+    assert second.is_alive() is False
+    assert sorted(results) == [0, 0]
+    assert adapter.calls.count(("stop",)) == 1
     assert ownership.is_busy("l") is False
+
+
+def test_reserved_fast_stop_requires_inactive_trajectory_before_releasing_arm():
+    adapter = FakeAdapter()
+    adapter.fast_stop_completes_trajectory = False
+    coordinator, adapter, _, ownership = make_coordinator(
+        adapter=adapter, stop_timeout_sec=0.02
+    )
+    reserved = FakeGoalHandle(movej_goal())
+
+    assert coordinator.goal_callback(reserved.request) == FakeGoalResponse.ACCEPT
+    assert coordinator.fast_stop() != 0
+
+    result = coordinator.execute(reserved)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert result.api2_status != 0
+    assert ownership.is_busy("l") is True
+    assert (
+        coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6))
+        == FakeGoalResponse.REJECT
+    )
+
+
+def test_timeout_without_a_consumed_event_quarantines_stale_event_channel():
+    coordinator, adapter, clock, ownership = make_coordinator()
+    first = FakeGoalHandle(movej_goal(timeout_sec=0.02))
+
+    first_result = coordinator.execute(first)
+
+    assert first_result.terminal_state == FakeResult.TIMEOUT
+    assert ownership.is_busy("l") is False
+
+    target = (2.0,) * 6
+    stale_event_emitted = False
+    original_movej = adapter.movej
+
+    def start_second_motion(*args, **kwargs) -> int:
+        status = original_movej(*args, **kwargs)
+        adapter.stopped = False
+        adapter.joints = target
+        return status
+
+    def deliver_first_goal_success_after_second_goal_submits() -> None:
+        nonlocal stale_event_emitted
+        if stale_event_emitted:
+            return
+        stale_event_emitted = True
+        adapter.stopped = True
+        coordinator.handle_event(
+            SimpleNamespace(event_type=1, trajectory_state=True, device=0)
+        )
+
+    adapter.movej = start_second_motion
+    clock.on_sleep = deliver_first_goal_success_after_second_goal_submits
+    second = FakeGoalHandle(movej_goal(joint_degrees=target, timeout_sec=10.0))
+
+    second_response = coordinator.goal_callback(second.request)
+    result = coordinator.execute(second)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert result.success is False
+    assert second_response == FakeGoalResponse.REJECT
+    assert stale_event_emitted is False
+    assert [call for call in adapter.calls if call[0] == "movej"] == [
+        ("movej", [1.0, 2.0, 3.0, 4.0, 5.0, 6.0], 20, 0, False)
+    ]
 
 
 def test_frame_mismatch_rejects_before_motion_and_invalid_execute_aborts_without_sdk_calls():

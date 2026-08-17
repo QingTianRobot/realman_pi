@@ -68,6 +68,13 @@ class _Reservation:
     stop_status: int | object | None = None
 
 
+@dataclass
+class _IdleFastStop:
+    """An idle stop that owns the arm until trajectory inactivity is proven."""
+
+    status: int | object = _STOP_IN_PROGRESS
+
+
 class MotionCoordinator:
     """Coordinate validation, submission, feedback, stop, and terminal state."""
 
@@ -154,9 +161,14 @@ class MotionCoordinator:
         self._reservation: _Reservation | None = None
         self._active_goal: object | None = None
         self._active_generation: int | None = None
+        self._idle_fast_stop: _IdleFastStop | None = None
         self._generation = 0
         self._accept_events = False
         self._event: tuple[int, bool] | None = None
+        self._submitted_generation: int | None = None
+        self._confirmed_event_generation: int | None = None
+        self._event_channel_quarantined = False
+        self._event_channel_cleared_through_generation = 0
         self._terminal_generation: int | None = None
         self._terminal_result: Any | None = None
         self._stop_generation: int | None = None
@@ -177,7 +189,7 @@ class MotionCoordinator:
 
     def goal_callback(self, goal_request: object) -> Any:
         with self._lock:
-            if self._lockout:
+            if self._lockout or self._event_channel_quarantined:
                 self._log(
                     "error",
                     f"Rejecting motion goal: arm {self.arm_id} is safety locked",
@@ -187,16 +199,19 @@ class MotionCoordinator:
         if not validation.valid:
             self._log("warn", f"Rejecting motion goal: {validation.message}")
             return self.goal_response_type.REJECT
-        if not self.ownership.acquire(self.arm_id):
-            self._log("warn", f"Rejecting motion goal: arm {self.arm_id} is busy")
-            return self.goal_response_type.REJECT
-        with self._lock:
+        with self._condition:
             if (
                 self._lockout
+                or self._event_channel_quarantined
+                or self._idle_fast_stop is not None
                 or self._reservation is not None
                 or self._active_goal is not None
             ):
-                self.ownership.release(self.arm_id)
+                return self.goal_response_type.REJECT
+            # Linearize ownership acquisition with reservation publication so
+            # an idle fast stop cannot cross a half-accepted goal.
+            if not self.ownership.acquire(self.arm_id):
+                self._log("warn", f"Rejecting motion goal: arm {self.arm_id} is busy")
                 return self.goal_response_type.REJECT
             self._reservation = _Reservation(goal_request)
         return self.goal_response_type.ACCEPT
@@ -328,6 +343,7 @@ class MotionCoordinator:
             with self._lock:
                 if self._active_generation == generation:
                     self._accept_events = True
+                    self._submitted_generation = generation
 
             self._publish_feedback(
                 goal_handle,
@@ -379,6 +395,7 @@ class MotionCoordinator:
                         initial_joints = observed_joints
                 api2_status = _first_nonzero(state_status, trajectory_status)
                 if api2_status != 0:
+                    self._enter_lockout()
                     return self._finish(
                         goal_handle,
                         generation,
@@ -431,6 +448,7 @@ class MotionCoordinator:
                     and bool(current_joints)
                     and self._goal_has_converged(goal, current_joints)
                 ):
+                    self._confirm_completion_event(generation)
                     return self._finish(
                         goal_handle,
                         generation,
@@ -576,7 +594,12 @@ class MotionCoordinator:
 
     def _activate(self, goal_handle: object, request: object) -> int | None:
         with self._lock:
-            if self._active_goal is not None:
+            if (
+                self._active_goal is not None
+                or self._lockout
+                or self._event_channel_quarantined
+                or self._idle_fast_stop is not None
+            ):
                 return None
             if (
                 self._reservation is not None
@@ -600,6 +623,8 @@ class MotionCoordinator:
             self._active_generation = generation
             self._accept_events = False
             self._event = None
+            self._submitted_generation = None
+            self._confirmed_event_generation = None
             self._terminal_generation = None
             self._terminal_result = None
             self._stop_generation = None
@@ -826,12 +851,13 @@ class MotionCoordinator:
         return status
 
     def fast_stop(self) -> int:
-        """Request the adapter's fast stop and abort the active generation."""
+        """Request a fast stop while retaining ownership through confirmation."""
         with self._condition:
             generation = self._active_generation
             if self._terminal_generation == generation:
                 generation = None
             reserved = None
+            idle_stop = None
             if generation is not None:
                 if self._fast_stop_generation == generation:
                     status = self._wait_for_fast_stop_status(generation)
@@ -850,6 +876,18 @@ class MotionCoordinator:
                         return -1
                     return status
                 reserved.stop_status = _STOP_IN_PROGRESS
+            else:
+                idle_stop = self._idle_fast_stop
+                if idle_stop is not None:
+                    status = self._wait_for_idle_fast_stop_status(idle_stop)
+                    if status is None:
+                        self._enter_lockout()
+                        return -1
+                    return status
+                if self._lockout or not self.ownership.acquire(self.arm_id):
+                    return -1
+                idle_stop = _IdleFastStop()
+                self._idle_fast_stop = idle_stop
 
         try:
             status = int(self.adapter.stop())
@@ -858,20 +896,96 @@ class MotionCoordinator:
 
         if generation is None:
             if reserved is not None:
-                with self._condition:
-                    if self._reservation is reserved:
-                        if reserved.stop_status is _STOP_IN_PROGRESS:
-                            reserved.stop_status = status
-                            reserved.terminal_state = TerminalState.ABORTED
-                            reserved.api2_status = status
-                            reserved.message = "fast stop requested before execution"
-                        self._condition.notify_all()
+                if status != 0:
+                    self._complete_reserved_fast_stop(
+                        reserved,
+                        status,
+                        "fast stop failed before execution",
+                    )
+                    self._enter_lockout()
+                    return status
+                confirmation_status = self._confirm_fast_stop_inactive()
+                if confirmation_status != 0:
+                    self._enter_lockout()
+                    self._complete_reserved_fast_stop(
+                        reserved,
+                        confirmation_status,
+                        "fast stop could not be confirmed inactive before execution",
+                    )
+                    return confirmation_status
+                self._complete_reserved_fast_stop(
+                    reserved,
+                    0,
+                    "fast stop confirmed before execution",
+                )
+                return 0
+            if idle_stop is not None:
+                if status != 0:
+                    self._enter_lockout()
+                    self._complete_idle_fast_stop(idle_stop, status)
+                    return status
+                confirmation_status = self._confirm_fast_stop_inactive()
+                if confirmation_status != 0:
+                    self._enter_lockout()
+                    self._complete_idle_fast_stop(idle_stop, confirmation_status)
+                    return confirmation_status
+                self._complete_idle_fast_stop(idle_stop, 0)
             return status
         with self._condition:
             if self._fast_stop_generation == generation:
                 self._fast_stop_status = status
                 self._condition.notify_all()
             return status
+
+    def _confirm_fast_stop_inactive(self) -> int:
+        deadline = self._monotonic() + self._stop_timeout_sec
+        while True:
+            trajectory_status, trajectory_active = self._read_trajectory()
+            if trajectory_status != 0:
+                return trajectory_status
+            if trajectory_active is False:
+                return 0
+            if self._monotonic() >= deadline:
+                return -1
+            self._sleep(self._poll_period_sec)
+
+    def _complete_reserved_fast_stop(
+        self, reservation: _Reservation, status: int, message: str
+    ) -> None:
+        with self._condition:
+            if self._reservation is reservation:
+                reservation.stop_status = status
+                reservation.terminal_state = TerminalState.ABORTED
+                reservation.api2_status = status
+                reservation.message = message
+                self._condition.notify_all()
+
+    def _complete_idle_fast_stop(self, idle_stop: _IdleFastStop, status: int) -> None:
+        release = False
+        with self._condition:
+            if self._idle_fast_stop is idle_stop:
+                idle_stop.status = status
+                self._idle_fast_stop = None
+                release = status == 0 and not self._lockout
+                self._condition.notify_all()
+        if release:
+            self.ownership.release(self.arm_id)
+
+    def _wait_for_idle_fast_stop_status(
+        self, idle_stop: _IdleFastStop
+    ) -> int | None:
+        deadline = self._monotonic() + self._stop_timeout_sec
+        with self._condition:
+            while True:
+                status = idle_stop.status
+                if status is not _STOP_IN_PROGRESS:
+                    return int(status or 0)
+                if self._idle_fast_stop is not idle_stop:
+                    return None
+                remaining = deadline - self._monotonic()
+                if remaining <= 0.0:
+                    return None
+                self._condition.wait(min(remaining, self._poll_period_sec))
 
     def _fast_stop_requested(self, generation: int) -> bool:
         with self._condition:
@@ -986,13 +1100,20 @@ class MotionCoordinator:
             self._lockout = True
 
     def clear_lockout_after_disconnect(self) -> None:
-        """Release a fail-closed arm only after the node confirms disconnect."""
+        """Clear safety lockout and stale callbacks after confirmed disconnect."""
         release = False
         with self._lock:
-            if not self._lockout:
+            if not self._lockout and not self._event_channel_quarantined:
                 return
             self._lockout = False
-            release = self._active_goal is None and self._reservation is None
+            self._event_channel_quarantined = False
+            self._event = None
+            self._event_channel_cleared_through_generation = self._generation
+            release = (
+                self._active_goal is None
+                and self._reservation is None
+                and self._idle_fast_stop is None
+            )
         if release:
             self.ownership.release(self.arm_id)
 
@@ -1065,6 +1186,12 @@ class MotionCoordinator:
             _, state = self._event
             self._event = None
             return state
+
+    def _confirm_completion_event(self, generation: int) -> None:
+        """Record the only event state safe enough to reuse the channel."""
+        with self._lock:
+            if self._active_generation == generation:
+                self._confirmed_event_generation = generation
 
     def _shutdown_requested(self, generation: int) -> bool:
         with self._lock:
@@ -1208,13 +1335,24 @@ class MotionCoordinator:
         release = False
         with self._condition:
             if self._active_generation == generation:
+                if (
+                    self._submitted_generation == generation
+                    and self._confirmed_event_generation != generation
+                    and generation > self._event_channel_cleared_through_generation
+                ):
+                    self._event_channel_quarantined = True
                 self._active_goal = None
                 self._active_generation = None
                 self._accept_events = False
                 self._event = None
+                self._submitted_generation = None
+                self._confirmed_event_generation = None
                 self._fast_stop_generation = None
                 self._fast_stop_status = None
                 self._shutdown_generation = None
+                # A confirmed physical stop can release arm ownership even if
+                # a generation-less callback channel remains quarantined.
+                # goal_callback still refuses ordinary motion until disconnect.
                 release = not self._lockout
                 self._condition.notify_all()
         if release:

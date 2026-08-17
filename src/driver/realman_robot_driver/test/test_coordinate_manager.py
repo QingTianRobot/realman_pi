@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import math
 from pathlib import Path
 from types import SimpleNamespace
 
@@ -436,6 +437,29 @@ def test_quaternion_sign_and_small_finite_readback_error_match(profile_path: Pat
     result = manager.verify(adapter, "l")
 
     assert result.matched is True
+    assert manager.motion_allowed("l") is True
+
+
+def test_work_frame_euler_quantization_within_sdk_precision_matches(
+    profile_path: Path,
+):
+    manager = CoordinateManager.from_yaml(profile_path)
+    adapter = FakeAdapter()
+    half_turn = 0.0005
+    adapter.tool = (0, _controller_tool("tcpgrip"))
+    adapter.work = (
+        0,
+        _controller_work(
+            "cell",
+            quaternion_wxyz=(math.cos(half_turn), 0.0, 0.0, math.sin(half_turn)),
+        ),
+    )
+
+    result = manager.verify(adapter, "l")
+
+    assert result.matched is True
+    assert result.tool_matched is True
+    assert result.work_matched is True
     assert manager.motion_allowed("l") is True
 
 

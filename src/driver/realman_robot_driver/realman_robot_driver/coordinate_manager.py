@@ -24,7 +24,9 @@ _ARMS = frozenset({"l", "m", "r"})
 _CONTROLLER_NAME = re.compile(r"^[A-Za-z0-9_-]{1,9}$")
 _ROS_FRAME_ID = re.compile(r"^[A-Za-z][A-Za-z0-9_]*(?:/[A-Za-z][A-Za-z0-9_]*)*$")
 _LINEAR_TOLERANCE_M = 1.0e-5
-_ORIENTATION_TOLERANCE_RAD = 1.0e-5
+_TOOL_ORIENTATION_TOLERANCE_RAD = 1.0e-5
+# The controller's documented Euler readback precision is about 0.001 rad.
+_WORK_ORIENTATION_TOLERANCE_RAD = 1.5e-3
 _PAYLOAD_TOLERANCE_KG = 1.0e-4
 
 
@@ -650,7 +652,14 @@ def _frame_mismatches(
         mismatches.append(f"{frame_kind}.controller_name")
     if not _vectors_close(current.xyz_m, desired.xyz_m, _LINEAR_TOLERANCE_M):
         mismatches.append(f"{frame_kind}.xyz_m")
-    if not _orientations_close(current.quaternion_wxyz, desired.quaternion_wxyz):
+    orientation_tolerance = (
+        _TOOL_ORIENTATION_TOLERANCE_RAD
+        if frame_kind == "tool"
+        else _WORK_ORIENTATION_TOLERANCE_RAD
+    )
+    if not _orientations_close(
+        current.quaternion_wxyz, desired.quaternion_wxyz, orientation_tolerance
+    ):
         mismatches.append(f"{frame_kind}.quaternion_wxyz")
     if include_payload:
         assert isinstance(desired, ToolFrame)
@@ -684,10 +693,11 @@ def _vectors_close(
 def _orientations_close(
     current: tuple[float, float, float, float],
     desired: tuple[float, float, float, float],
+    tolerance: float,
 ) -> bool:
     dot = abs(sum(actual * expected for actual, expected in zip(current, desired)))
     angular_error = 2.0 * math.acos(min(1.0, dot))
-    return angular_error <= _ORIENTATION_TOLERANCE_RAD
+    return angular_error <= tolerance
 
 
 def _write_frame(adapter: Any, method_name: str, value: Any) -> tuple[int, str]:

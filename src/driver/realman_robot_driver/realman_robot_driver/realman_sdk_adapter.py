@@ -431,13 +431,13 @@ class RealManSdkAdapter:
             mock_mode = self.mock_mode
         if status is not None:
             return status
+        try:
+            controller_frame = _controller_frame_from_profile(frame, is_tool=True)
+        except Exception as error:
+            with self._lock:
+                self._set_failure_locked(-1, str(error))
+            return -1
         if mock_mode:
-            try:
-                controller_frame = _controller_frame_from_profile(frame, is_tool=True)
-            except Exception as error:
-                with self._lock:
-                    self._set_failure_locked(-1, str(error))
-                return -1
             with self._lock:
                 if not self._connected:
                     self._set_failure_locked(-1, "robot is not connected")
@@ -447,7 +447,7 @@ class RealManSdkAdapter:
                 self._set_success_locked()
                 return 0
         try:
-            vendor_frame = _vendor_tool_frame(frame)
+            vendor_frame = _vendor_tool_frame(controller_frame)
             result, token, error, _, readiness_status = self._invoke_vendor(
                 "rm_set_manual_tool_frame", (vendor_frame,)
             )
@@ -793,7 +793,11 @@ def _controller_frame_from_profile(frame: Any, *, is_tool: bool) -> ControllerFr
     if is_tool:
         controller_name = str(frame.controller_name)
     xyz_m = _finite_vector(frame.xyz_m, 3, "xyz_m")
-    quaternion_wxyz = _normalized_quaternion(frame.quaternion_wxyz)
+    quaternion_wxyz = (
+        _unit_quaternion(frame.quaternion_wxyz)
+        if is_tool
+        else _normalized_quaternion(frame.quaternion_wxyz)
+    )
     if is_tool:
         payload_kg = _finite_scalar(frame.payload_kg, "payload", minimum=0.0)
         center_of_mass_m = _finite_vector(
@@ -903,6 +907,16 @@ def _normalized_quaternion(value: Any) -> tuple[float, float, float, float]:
     scaled = tuple(component / scale for component in quaternion)
     norm = math.sqrt(sum(component * component for component in scaled))
     return tuple(component / norm for component in scaled)  # type: ignore[return-value]
+
+
+def _unit_quaternion(value: Any) -> tuple[float, float, float, float]:
+    quaternion = _finite_vector(value, 4, "quaternion")
+    norm = math.sqrt(sum(component * component for component in quaternion))
+    if norm == 0.0:
+        raise ValueError("quaternion must have non-zero norm")
+    if not math.isclose(norm, 1.0, rel_tol=0.0, abs_tol=1.0e-6):
+        raise ValueError("quaternion must be unit length")
+    return tuple(component / norm for component in quaternion)  # type: ignore[return-value]
 
 
 def _quaternion_from_euler(

@@ -474,6 +474,34 @@ def test_mock_connected_malformed_tool_frame_returns_error_without_raising():
     assert adapter.last_error_message == "malformed tool frame"
 
 
+@pytest.mark.parametrize(
+    "quaternion_wxyz",
+    [
+        (float("nan"), 0.0, 0.0, 0.0),
+        (float("inf"), 0.0, 0.0, 0.0),
+        (0.0, 0.0, 0.0, 0.0),
+        (2.0, 0.0, 0.0, 0.0),
+    ],
+)
+def test_nonmock_tool_frame_rejects_invalid_or_nonunit_quaternion_before_sdk(
+    adapter, fake_robot, monkeypatch, quaternion_wxyz
+):
+    _install_frame_types(monkeypatch)
+    tool = ToolFrame(
+        controller_name="gripper",
+        ros_frame_id="l/tool",
+        xyz_m=(0.1, 0.2, 0.3),
+        quaternion_wxyz=quaternion_wxyz,
+        payload_kg=1.5,
+        center_of_mass_m=(0.01, 0.02, 0.03),
+    )
+
+    assert adapter.set_tool_frame(tool) == -1
+    assert fake_robot.calls == []
+    assert adapter.last_error == -1
+    assert adapter.last_error_message
+
+
 class FakePose:
     def __init__(self):
         self.position = SimpleNamespace(x=0.0, y=0.0, z=0.0)

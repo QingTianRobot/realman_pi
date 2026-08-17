@@ -220,6 +220,16 @@ def test_motion_settings_millisecond_fields_reject_fractional_and_boolean_values
             MotionSettings.from_yaml(path, "l")
 
 
+@pytest.mark.parametrize("field", ["velocity_control_period_ms", "velocity_watchdog_ms"])
+def test_motion_settings_millisecond_fields_reject_values_that_overflow_seconds(
+    tmp_path: Path, field: str
+):
+    path = write_settings(tmp_path, **{field: 10**309})
+
+    with pytest.raises(ValueError, match=field):
+        MotionSettings.from_yaml(path, "l")
+
+
 def test_motion_type_hints_resolve_private_mapping_helper():
     hints = typing.get_type_hints(motion_types._expect_keys)
 

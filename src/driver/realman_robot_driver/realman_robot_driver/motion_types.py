@@ -465,6 +465,12 @@ def _positive_finite(value: object, context: str) -> float:
 def _positive_int(value: object, context: str) -> int:
     if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
         raise ValueError(f"{context} must be a positive integer")
+    try:
+        seconds = value / 1000.0
+    except OverflowError as error:
+        raise ValueError(f"{context} must convert to finite seconds") from error
+    if not math.isfinite(seconds):
+        raise ValueError(f"{context} must convert to finite seconds")
     return value
 
 

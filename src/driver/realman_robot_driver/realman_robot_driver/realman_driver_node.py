@@ -14,11 +14,17 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from realman_msgs.action import ExecuteMotion
+from realman_msgs.srv import SelectFrame, VerifyCoordinates
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool
 from std_srvs.srv import Trigger
 
 from .coordinate_manager import CoordinateManager
+from .coordinate_services import (
+    CoordinateOperationResult,
+    run_coordinate_operation,
+    run_startup_coordinate_policy,
+)
 from .motion_coordinator import ArmOwnership, MotionCoordinator
 from .motion_types import MotionSettings, ReferenceState, ReferenceType
 from .realman_sdk_adapter import RealManSdkAdapter, RobotState
@@ -160,6 +166,26 @@ class RealManDriverNode(Node):
             self.create_service(Trigger, "disconnect", self._disconnect),
             self.create_service(Trigger, "stop", self._stop),
             self.create_service(Trigger, "status", self._status),
+            self.create_service(
+                VerifyCoordinates,
+                "coordinates/verify",
+                self._verify_coordinates,
+            ),
+            self.create_service(
+                VerifyCoordinates,
+                "coordinates/apply",
+                self._apply_coordinates,
+            ),
+            self.create_service(
+                SelectFrame,
+                "coordinates/select_tool",
+                self._select_tool_frame,
+            ),
+            self.create_service(
+                SelectFrame,
+                "coordinates/select_work",
+                self._select_work_frame,
+            ),
         ]
         period = 1.0 / self.state_publish_rate
         self.state_timer = self.create_timer(period, self._publish_state)
@@ -225,6 +251,89 @@ class RealManDriverNode(Node):
             response.message += f" detail={self.adapter.last_error_message}"
         return response
 
+    def _verify_coordinates(
+        self,
+        _request: VerifyCoordinates.Request,
+        response: VerifyCoordinates.Response,
+    ) -> VerifyCoordinates.Response:
+        result = self._run_coordinate_operation("verify")
+        return self._fill_verify_response(response, result)
+
+    def _apply_coordinates(
+        self,
+        _request: VerifyCoordinates.Request,
+        response: VerifyCoordinates.Response,
+    ) -> VerifyCoordinates.Response:
+        result = self._run_coordinate_operation("apply")
+        return self._fill_verify_response(response, result)
+
+    def _select_tool_frame(
+        self,
+        request: SelectFrame.Request,
+        response: SelectFrame.Response,
+    ) -> SelectFrame.Response:
+        result = self._run_coordinate_operation("select_tool", request.name)
+        return self._fill_select_response(response, result)
+
+    def _select_work_frame(
+        self,
+        request: SelectFrame.Request,
+        response: SelectFrame.Response,
+    ) -> SelectFrame.Response:
+        result = self._run_coordinate_operation("select_work", request.name)
+        return self._fill_select_response(response, result)
+
+    def _run_coordinate_operation(
+        self, operation: str, name: str = ""
+    ) -> CoordinateOperationResult:
+        result = run_coordinate_operation(
+            self.coordinate_manager,
+            self.adapter,
+            self.arm_ownership,
+            self.arm_id,
+            operation,
+            name,
+        )
+        self._update_active_references(result)
+        if not result.success or not result.matched:
+            self.get_logger().warn(
+                f"RealMan coordinate {operation} did not establish a full match: "
+                f"{result.message}"
+            )
+        else:
+            self.get_logger().info(
+                f"RealMan coordinate {operation} succeeded: {result.message}"
+            )
+        return result
+
+    def _update_active_references(self, result: CoordinateOperationResult) -> None:
+        if result.current_tool:
+            self._active_references[ReferenceType.TOOL] = result.current_tool
+        if result.current_work:
+            self._active_references[ReferenceType.WORK] = result.current_work
+
+    @staticmethod
+    def _fill_verify_response(
+        response: VerifyCoordinates.Response,
+        result: CoordinateOperationResult,
+    ) -> VerifyCoordinates.Response:
+        response.success = result.success
+        response.matched = result.matched
+        response.api2_status = result.api2_status
+        response.message = result.message
+        return response
+
+    @staticmethod
+    def _fill_select_response(
+        response: SelectFrame.Response,
+        result: CoordinateOperationResult,
+    ) -> SelectFrame.Response:
+        response.success = result.success
+        response.api2_status = result.api2_status
+        response.active_name = result.active_name
+        response.message = result.message
+        return response
+
     def _connect_to_robot(self) -> int:
         self._last_connect_attempt = time.monotonic()
         was_connected = self.adapter.connected
@@ -247,15 +356,13 @@ class RealManDriverNode(Node):
                     "RealMan trajectory reconciliation did not prove an inactive, "
                     "error-free trajectory; motion remains safety gated"
                 )
-            verification = self.coordinate_manager.verify(self.adapter, self.arm_id)
-            self._active_references[ReferenceType.TOOL] = (
-                verification.current_tool
-                or self._active_references[ReferenceType.TOOL]
+            verification = run_startup_coordinate_policy(
+                self.coordinate_manager,
+                self.adapter,
+                self.arm_ownership,
+                self.arm_id,
             )
-            self._active_references[ReferenceType.WORK] = (
-                verification.current_work
-                or self._active_references[ReferenceType.WORK]
-            )
+            self._update_active_references(verification)
             if not verification.matched:
                 self.get_logger().warn(
                     f"RealMan coordinate verification blocked motion: {verification.message}"

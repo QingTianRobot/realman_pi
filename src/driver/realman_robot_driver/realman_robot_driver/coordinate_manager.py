@@ -136,8 +136,8 @@ class CoordinateManager:
             on_start=_required_string(policy_data, "on_start", "policy"),
             on_mismatch=_required_string(policy_data, "on_mismatch", "policy"),
         )
-        if policy.on_start != "verify":
-            raise ValueError("policy.on_start must be 'verify'")
+        if policy.on_start not in {"verify", "apply"}:
+            raise ValueError("policy.on_start must be 'verify' or 'apply'")
         if policy.on_mismatch != "block_motion":
             raise ValueError("policy.on_mismatch must be 'block_motion'")
 

@@ -301,7 +301,7 @@ def test_rejects_missing_defaults_and_nonexact_robot_profiles(tmp_path: Path, ch
         CoordinateManager.from_yaml(path)
 
 
-@pytest.mark.parametrize("key, value", [("on_start", "apply"), ("on_mismatch", "warn")])
+@pytest.mark.parametrize("key, value", [("on_start", "write"), ("on_mismatch", "warn")])
 def test_rejects_unsupported_policy_values(tmp_path: Path, key: str, value: str):
     data = profile_data()
     data["policy"][key] = value
@@ -310,6 +310,17 @@ def test_rejects_unsupported_policy_values(tmp_path: Path, key: str, value: str)
 
     with pytest.raises(ValueError, match=key):
         CoordinateManager.from_yaml(path)
+
+
+def test_accepts_explicit_apply_startup_policy(tmp_path: Path):
+    data = profile_data()
+    data["policy"]["on_start"] = "apply"
+    path = tmp_path / "coordinates.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="ascii")
+
+    manager = CoordinateManager.from_yaml(path)
+
+    assert manager.policy.on_start == "apply"
 
 
 def test_mismatch_blocks_motion_by_default(fake_adapter: FakeAdapter, profile_path: Path):

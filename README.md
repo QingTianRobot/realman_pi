@@ -109,8 +109,8 @@ controllers and publishes `/l/joint_states`, `/m/joint_states`, and
 
 ```text
 l: 192.168.30.123
-m: 192.168.30.124
-r: 192.168.30.125
+m: 192.168.30.125
+r: 192.168.30.124
 ```
 
 Start the real driver and RViz 2 without the Xbox input chain:

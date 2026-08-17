@@ -30,7 +30,7 @@
   ros__parameters:
     robot_model: RM65-B
     # Middle arm controller IPv4 address.
-    robot_ip: 192.168.30.124
+    robot_ip: 192.168.30.125
     robot_port: 8080
     thread_mode: RM_TRIPLE_MODE_E
     mock_mode: false
@@ -43,7 +43,7 @@
   ros__parameters:
     robot_model: RM65-B
     # Right arm controller IPv4 address.
-    robot_ip: 192.168.30.125
+    robot_ip: 192.168.30.124
     robot_port: 8080
     thread_mode: RM_TRIPLE_MODE_E
     mock_mode: false

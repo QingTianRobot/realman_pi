@@ -70,7 +70,7 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 | 参数 | 默认策略 | 约束 |
 | --- | --- | --- |
 | `robot_model` | `RM65-B` | 必须与控制器和 URDF 型号一致 |
-| `robot_ip` | `l=192.168.30.123`、`m=192.168.30.124`、`r=192.168.30.125` | 必须与现场控制器网络一致 |
+| `robot_ip` | `l=192.168.30.123`、`m=192.168.30.125`、`r=192.168.30.124` | 必须与现场控制器网络一致 |
 | `robot_port` | `8080` | 有效 TCP/SDK 端口范围 `1..65535` |
 | `thread_mode` | `RM_TRIPLE_MODE_E` | 单/双/三线程官方枚举名；UDP 后续功能需要三线程 |
 | `mock_mode` | `false` | `true` 时不导入 SDK，不访问任何控制器 |
@@ -119,6 +119,32 @@ ros2 service call /r/status std_srvs/srv/Trigger {}
 ```
 
 `joint_states.position` 是弧度，不是睿尔曼 SDK 的角度制。三台驱动使用独立 SDK 句柄，分别对应 `l/m/r` 和上面的三个 IP。
+
+## 单臂 SDK 最小探针
+
+当需要区分控制器网络/SDK 连接问题与 ROS 2、TF 或 RViz 编排问题时，可运行驱动包内的
+只读 Python 探针。它只执行 `rm_create_robot_arm()`、`rm_get_joint_degree()` 和资源释放，
+不会发送运动、停止、IO 或配置指令。
+
+在远程主机上先将目标控制器地址放入当前 shell，再使用无图形的 Compose 服务执行：
+
+```bash
+export REALMAN_ROBOT_IP='<controller-ip>'
+docker compose run --rm --no-deps realman_bringup_remote \
+  python3 -m realman_robot_driver.connection_probe \
+  --robot-ip "$REALMAN_ROBOT_IP" \
+  --robot-port 8080 \
+  --connect-level 3 \
+  --thread-mode 2 \
+  --refresh-interval 0.05 \
+  --print-every 4 \
+  --samples 8
+```
+
+这里的 `--thread-mode 2` 是 SDK 的 `RM_TRIPLE_MODE_E` 数值，`--connect-level 3` 与
+官方 `rm_create_robot_arm()` 默认连接等级一致。成功时应看到 `connected` 和若干
+`joint_degrees` 样本；失败时命令以非零状态退出，并保留 API2 返回码。只需验证句柄和
+一次状态读取时，将 `--samples` 设为 `1`。
 
 `auto_connect` 对真实和 mock 模式都生效。mock 模式启动后立即建立内存连接并以
 `state_publish_rate` 发布六轴零位，因此可以在没有控制器的情况下验证 ROS 图、单位转换和

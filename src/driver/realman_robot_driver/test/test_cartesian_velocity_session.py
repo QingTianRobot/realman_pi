@@ -325,6 +325,48 @@ def test_canceling_reserved_goal_releases_ownership_without_sdk_stop():
     assert session.result.terminal_state == VelocityTerminalState.CANCELED
 
 
+def test_cancel_reserved_cleanup_allows_new_goal_and_rejects_late_old_execute():
+    ownership = ArmOwnership()
+    session = make_session(ownership=ownership)
+    old_goal = valid_goal()
+    new_goal = valid_goal()
+    assert bool(session.goal_callback(old_goal)) is True
+    assert bool(session.cancel_callback(SimpleNamespace(request=old_goal))) is True
+
+    assert bool(session.goal_callback(new_goal)) is True
+    assert session.start(old_goal) is False
+    assert session.start(new_goal) is True
+    session.shutdown()
+
+
+def test_shutdown_reserved_cleanup_allows_a_new_goal():
+    ownership = ArmOwnership()
+    session = make_session(ownership=ownership)
+    old_goal = valid_goal()
+    new_goal = valid_goal()
+    assert bool(session.goal_callback(old_goal)) is True
+    assert session.shutdown() == 0
+
+    assert bool(session.goal_callback(new_goal)) is True
+    assert session.start(old_goal) is False
+    assert session.start(new_goal) is True
+    session.shutdown()
+
+
+def test_fast_stop_reserved_cleanup_allows_a_new_goal():
+    ownership = ArmOwnership()
+    session = make_session(ownership=ownership)
+    old_goal = valid_goal()
+    new_goal = valid_goal()
+    assert bool(session.goal_callback(old_goal)) is True
+    assert session.fast_stop_if_owned() == 0
+
+    assert bool(session.goal_callback(new_goal)) is True
+    assert session.start(old_goal) is False
+    assert session.start(new_goal) is True
+    session.shutdown()
+
+
 def test_fast_stop_active_session_sends_zero_then_calls_adapter_stop_once():
     ownership = ArmOwnership()
     adapter = FakeAdapter()

@@ -111,6 +111,7 @@ class CartesianVelocitySession:
         self._running = False
         self._owns_ownership = False
         self._reservation: _Reservation | None = None
+        self._completed_reservations: list[_Reservation] = []
         self._active_request: Any | None = None
         self._fast_stop_in_progress = False
         self._last_fast_stop_status: int | None = None
@@ -151,6 +152,11 @@ class CartesianVelocitySession:
                     return False
                 while self._fast_stop_in_progress:
                     self._condition.wait()
+            completed = self._completed_reservation_locked(goal)
+            if completed is not None:
+                if not self._running and self._reservation is None:
+                    self._result = completed.result
+                return False
             if self._running:
                 self._set_result_locked(False, VelocityTerminalState.ABORTED, -1, "session is already running")
                 return False
@@ -158,7 +164,7 @@ class CartesianVelocitySession:
             if reservation is not None and goal is not reservation.request:
                 return False
             if reservation is not None and reservation.result is not None:
-                self._reservation = None
+                self._complete_reservation_locked(reservation, reservation.result)
                 self._result = reservation.result
                 self._condition.notify_all()
                 return False
@@ -185,17 +191,18 @@ class CartesianVelocitySession:
             try:
                 validated = self._validate_owned_goal(goal)
             except Exception as error:
+                result = VelocityResult(
+                    False,
+                    VelocityTerminalState.ABORTED,
+                    -1,
+                    f"velocity goal revalidation failed: {error}",
+                )
                 if reservation is not None:
-                    self._reservation = None
+                    self._complete_reservation_locked(reservation, result)
                 self._release_ownership_locked()
                 self._condition.notify_all()
                 if reservation is not None:
-                    self._set_result_locked(
-                        False,
-                        VelocityTerminalState.ABORTED,
-                        -1,
-                        f"velocity goal revalidation failed: {error}",
-                    )
+                    self._result = result
                     return False
                 raise
             if reservation is not None:
@@ -208,11 +215,27 @@ class CartesianVelocitySession:
                 ))
             except Exception as error:
                 self._release_ownership_locked()
-                self._set_result_locked(False, VelocityTerminalState.ABORTED, -1, f"velocity initialization failed: {error}")
+                result = VelocityResult(
+                    False,
+                    VelocityTerminalState.ABORTED,
+                    -1,
+                    f"velocity initialization failed: {error}",
+                )
+                if reservation is not None:
+                    self._complete_reservation_locked(reservation, result)
+                self._result = result
                 return False
             if init_status != 0:
                 self._release_ownership_locked()
-                self._set_result_locked(False, VelocityTerminalState.ABORTED, init_status, "velocity initialization failed")
+                result = VelocityResult(
+                    False,
+                    VelocityTerminalState.ABORTED,
+                    init_status,
+                    "velocity initialization failed",
+                )
+                if reservation is not None:
+                    self._complete_reservation_locked(reservation, result)
+                self._result = result
                 return False
             try:
                 zero_status = _status(self.adapter.movev(
@@ -220,11 +243,27 @@ class CartesianVelocitySession:
                 ))
             except Exception as error:
                 self._release_ownership_locked()
-                self._set_result_locked(False, VelocityTerminalState.ABORTED, -1, f"zero velocity initialization failed: {error}")
+                result = VelocityResult(
+                    False,
+                    VelocityTerminalState.ABORTED,
+                    -1,
+                    f"zero velocity initialization failed: {error}",
+                )
+                if reservation is not None:
+                    self._complete_reservation_locked(reservation, result)
+                self._result = result
                 return False
             if zero_status != 0:
                 self._release_ownership_locked()
-                self._set_result_locked(False, VelocityTerminalState.ABORTED, zero_status, "zero velocity initialization failed")
+                result = VelocityResult(
+                    False,
+                    VelocityTerminalState.ABORTED,
+                    zero_status,
+                    "zero velocity initialization failed",
+                )
+                if reservation is not None:
+                    self._complete_reservation_locked(reservation, result)
+                self._result = result
                 return False
             now = self._monotonic()
             self._goal = validated
@@ -370,7 +409,7 @@ class CartesianVelocitySession:
 
         with self._condition:
             if reserved and self._reservation is reservation:
-                self._reservation.result = result
+                self._complete_reservation_locked(reservation, result)
             self._result = result
             self._active_request = None
             self._stop_sent = True
@@ -418,12 +457,15 @@ class CartesianVelocitySession:
                 if self._fast_stop_in_progress:
                     return _cancel_accept()
                 if self._reservation.result is None:
-                    self._reservation.result = VelocityResult(
+                    result = VelocityResult(
                         True,
                         VelocityTerminalState.CANCELED,
                         0,
                         "velocity session canceled before execution",
                     )
+                    reservation = self._reservation
+                    self._complete_reservation_locked(reservation, result)
+                    self._result = result
                     self._release_ownership_locked()
                 self._condition.notify_all()
                 return _cancel_accept()
@@ -461,6 +503,23 @@ class CartesianVelocitySession:
         return self._ros_result(result)
 
     # Internals ---------------------------------------------------------------
+    def _complete_reservation_locked(
+        self, reservation: _Reservation, result: VelocityResult
+    ) -> None:
+        reservation.result = result
+        if self._reservation is reservation:
+            self._reservation = None
+        self._completed_reservations.append(reservation)
+        # Retain recent request identities so late Action execution callbacks
+        # cannot reacquire the arm, while bounding references held by a node.
+        del self._completed_reservations[:-32]
+
+    def _completed_reservation_locked(self, request: Any) -> _Reservation | None:
+        for reservation in reversed(self._completed_reservations):
+            if reservation.request is request:
+                return reservation
+        return None
+
     def _validate_owned_goal(self, goal: Any) -> _ValidatedGoal:
         if not self._owns_ownership:
             raise RuntimeError("velocity goal validation requires arm ownership")
@@ -556,9 +615,13 @@ class CartesianVelocitySession:
             while self._fast_stop_in_progress:
                 self._condition.wait()
             if self._reservation is not None and not self._running:
-                if self._reservation.result is None:
-                    self._reservation.result = VelocityResult(True, state, 0, message)
-                self._result = self._reservation.result
+                reservation = self._reservation
+                if reservation.result is None:
+                    self._complete_reservation_locked(
+                        reservation,
+                        VelocityResult(True, state, 0, message),
+                    )
+                self._result = reservation.result
                 self._release_ownership_locked()
                 self._condition.notify_all()
                 return self._result

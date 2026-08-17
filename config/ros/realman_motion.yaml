@@ -1,0 +1,49 @@
+# Conservative per-arm limits for future motion_types.py consumers.
+# CoordinateManager intentionally does not load this file: coordinate desired state
+# and motion limits have separate ownership and change at different cadences.
+robots:
+  l:
+    # Action deadline in seconds; bounds a stalled operation without an infinite wait.
+    default_timeout_sec: 10.0
+    # Cartesian translation speed in m/s; low by default for shared-cell commissioning.
+    max_linear_speed_mps: 0.05
+    # Cartesian rotation speed in rad/s; keep below abrupt wrist motion limits.
+    max_angular_speed_radps: 0.25
+    # Velocity command interval in ms; controller commands must be refreshed regularly.
+    velocity_control_period_ms: 20
+    # Stop velocity control after this many ms without a refresh for fail-safe behavior.
+    velocity_watchdog_ms: 100
+    # Cartesian translation acceleration in m/s^2; limits payload impulse.
+    max_linear_accel_mps2: 0.10
+    # Cartesian rotation acceleration in rad/s^2; limits wrist impulse.
+    max_angular_accel_radps2: 0.50
+  m:
+    # Action deadline in seconds; bounds a stalled operation without an infinite wait.
+    default_timeout_sec: 10.0
+    # Cartesian translation speed in m/s; low by default for shared-cell commissioning.
+    max_linear_speed_mps: 0.05
+    # Cartesian rotation speed in rad/s; keep below abrupt wrist motion limits.
+    max_angular_speed_radps: 0.25
+    # Velocity command interval in ms; controller commands must be refreshed regularly.
+    velocity_control_period_ms: 20
+    # Stop velocity control after this many ms without a refresh for fail-safe behavior.
+    velocity_watchdog_ms: 100
+    # Cartesian translation acceleration in m/s^2; limits payload impulse.
+    max_linear_accel_mps2: 0.10
+    # Cartesian rotation acceleration in rad/s^2; limits wrist impulse.
+    max_angular_accel_radps2: 0.50
+  r:
+    # Action deadline in seconds; bounds a stalled operation without an infinite wait.
+    default_timeout_sec: 10.0
+    # Cartesian translation speed in m/s; low by default for shared-cell commissioning.
+    max_linear_speed_mps: 0.05
+    # Cartesian rotation speed in rad/s; keep below abrupt wrist motion limits.
+    max_angular_speed_radps: 0.25
+    # Velocity command interval in ms; controller commands must be refreshed regularly.
+    velocity_control_period_ms: 20
+    # Stop velocity control after this many ms without a refresh for fail-safe behavior.
+    velocity_watchdog_ms: 100
+    # Cartesian translation acceleration in m/s^2; limits payload impulse.
+    max_linear_accel_mps2: 0.10
+    # Cartesian rotation acceleration in rad/s^2; limits wrist impulse.
+    max_angular_accel_radps2: 0.50

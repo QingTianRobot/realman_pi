@@ -14,7 +14,11 @@ setup(
         (f"share/{package_name}/launch", glob("launch/*.launch.py")),
         (
             f"share/{package_name}/config/ros",
-            glob("../../../config/ros/realman_driver*.yaml"),
+            [
+                *glob("../../../config/ros/realman_driver*.yaml"),
+                "../../../config/ros/realman_coordinates.yaml",
+                "../../../config/ros/realman_motion.yaml",
+            ],
         ),
     ],
     install_requires=["setuptools"],

@@ -111,6 +111,7 @@ class MotionCoordinator:
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
         self._reserved_request: object | None = None
+        self._invalidated_request_ids: set[int] = set()
         self._active_goal: object | None = None
         self._active_generation: int | None = None
         self._generation = 0
@@ -243,7 +244,7 @@ class MotionCoordinator:
                 "motion executing",
             )
             deadline = self._monotonic() + goal.timeout_sec
-            completion_event: bool | None = None
+            observed_active_trajectory = False
             while True:
                 fast_stop_status = self._fast_stop_status_for(generation)
                 if fast_stop_status is not None:
@@ -312,9 +313,9 @@ class MotionCoordinator:
                         current_joints,
                         "robot connection lost during state monitoring",
                     )
-                latest_event = self._take_event(generation)
-                if latest_event is not None:
-                    completion_event = latest_event
+                if trajectory_active is True:
+                    observed_active_trajectory = True
+                completion_event = self._take_event(generation)
                 fast_stop_status = self._fast_stop_status_for(generation)
                 if fast_stop_status is not None:
                     return self._finish(
@@ -347,7 +348,9 @@ class MotionCoordinator:
                     )
                 if (
                     completion_event is True
+                    and observed_active_trajectory
                     and trajectory_active is False
+                    and state_connected is True
                     and bool(current_joints)
                 ):
                     return self._finish(
@@ -385,8 +388,11 @@ class MotionCoordinator:
         with self._lock:
             generation = self._active_generation
             if generation is None:
+                invalidated_reserved = False
                 if self._reserved_request is not None:
-                    self._reserved_request = None
+                    self._invalidate_reserved_request_locked()
+                    invalidated_reserved = True
+                if invalidated_reserved:
                     self.ownership.release(self.arm_id)
                 return 0
             self._shutdown_generation = generation
@@ -457,6 +463,9 @@ class MotionCoordinator:
     def _activate(self, goal_handle: object, request: object) -> int | None:
         with self._lock:
             if self._active_goal is not None:
+                return None
+            if id(request) in self._invalidated_request_ids:
+                self._invalidated_request_ids.discard(id(request))
                 return None
             if self._reserved_request is request:
                 self._reserved_request = None
@@ -641,6 +650,7 @@ class MotionCoordinator:
             generation = self._active_generation
             if self._terminal_generation == generation:
                 generation = None
+            invalidated_reserved = False
             if generation is not None:
                 if self._fast_stop_generation == generation:
                     while self._fast_stop_status is _STOP_IN_PROGRESS:
@@ -648,6 +658,9 @@ class MotionCoordinator:
                     return int(self._fast_stop_status or 0)
                 self._fast_stop_generation = generation
                 self._fast_stop_status = _STOP_IN_PROGRESS
+            elif self._reserved_request is not None:
+                self._invalidate_reserved_request_locked()
+                invalidated_reserved = True
 
         try:
             status = int(self.adapter.stop())
@@ -655,6 +668,8 @@ class MotionCoordinator:
             status = _nonzero_status(getattr(self.adapter, "last_error", -1))
 
         if generation is None:
+            if invalidated_reserved:
+                self.ownership.release(self.arm_id)
             return status
         with self._condition:
             if self._fast_stop_generation == generation:
@@ -772,6 +787,11 @@ class MotionCoordinator:
                 release = True
         if release:
             self.ownership.release(self.arm_id)
+
+    def _invalidate_reserved_request_locked(self) -> None:
+        if self._reserved_request is not None:
+            self._invalidated_request_ids.add(id(self._reserved_request))
+            self._reserved_request = None
 
     def _finish(
         self,

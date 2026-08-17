@@ -81,32 +81,57 @@ class FakeAdapter:
         self.tool = (0, "other_tool")
         self.work = (0, "other_work")
         self.calls: list[tuple[object, ...]] = []
+        self.raise_from: str | None = None
+        self.on_call = None
+
+    def _record(self, *call: object) -> None:
+        self.calls.append(call)
+        if self.on_call is not None:
+            self.on_call()
+        if self.raise_from == call[0]:
+            raise RuntimeError(f"forced {call[0]} failure")
 
     def current_tool_frame(self):
-        self.calls.append(("current_tool_frame",))
+        self._record("current_tool_frame")
         return self.tool
 
     def current_work_frame(self):
-        self.calls.append(("current_work_frame",))
+        self._record("current_work_frame")
         return self.work
 
     def set_tool_frame(self, frame: object) -> int:
-        self.calls.append(("set_tool_frame", frame))
+        self._record("set_tool_frame", frame)
         return 0
 
     def set_work_frame(self, frame: object) -> int:
-        self.calls.append(("set_work_frame", frame))
+        self._record("set_work_frame", frame)
         return 0
 
     def change_tool_frame(self, name: str) -> int:
-        self.calls.append(("change_tool_frame", name))
+        self._record("change_tool_frame", name)
         self.tool = (0, name)
         return 0
 
     def change_work_frame(self, name: str) -> int:
-        self.calls.append(("change_work_frame", name))
+        self._record("change_work_frame", name)
         self.work = (0, name)
         return 0
+
+
+class AtomicOwner:
+    def __init__(self) -> None:
+        self.owned: set[str] = set()
+        self.released: list[str] = []
+
+    def acquire(self, arm: str) -> bool:
+        if arm in self.owned:
+            return False
+        self.owned.add(arm)
+        return True
+
+    def release(self, arm: str) -> None:
+        self.owned.remove(arm)
+        self.released.append(arm)
 
 
 @pytest.fixture
@@ -117,6 +142,11 @@ def profile_path(tmp_path: Path) -> Path:
 @pytest.fixture
 def fake_adapter() -> FakeAdapter:
     return FakeAdapter()
+
+
+@pytest.fixture
+def atomic_owner() -> AtomicOwner:
+    return AtomicOwner()
 
 
 def test_loads_exact_robot_ids_and_normalizes_quaternions(profile_path: Path):
@@ -208,6 +238,30 @@ def test_rejects_unknown_tool_pose_key(tmp_path: Path):
         CoordinateManager.from_yaml(path)
 
 
+@pytest.mark.parametrize("section, alias", [("tools", 7), ("work_frames", "")])
+def test_rejects_non_string_or_empty_frame_alias(
+    tmp_path: Path, section: str, alias: str | int
+):
+    data = profile_data()
+    frames = data["robots"]["l"][section]
+    frames[alias] = next(iter(frames.values()))
+    path = tmp_path / "coordinates.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="ascii")
+
+    with pytest.raises(ValueError, match=rf"robots\.l\.{section}.*alias"):
+        CoordinateManager.from_yaml(path)
+
+
+def test_rejects_unknown_default_tool_alias(tmp_path: Path):
+    data = profile_data()
+    data["robots"]["l"]["default_tool"] = "unknown"
+    path = tmp_path / "coordinates.yaml"
+    path.write_text(yaml.safe_dump(data), encoding="ascii")
+
+    with pytest.raises(ValueError, match="default_tool"):
+        CoordinateManager.from_yaml(path)
+
+
 @pytest.mark.parametrize("change", ["missing_default", "missing_robot", "extra_robot"])
 def test_rejects_missing_defaults_and_nonexact_robot_profiles(tmp_path: Path, change: str):
     data = profile_data()
@@ -248,8 +302,14 @@ def test_mismatch_blocks_motion_by_default(fake_adapter: FakeAdapter, profile_pa
     assert manager.motion_allowed("l") is False
 
 
-def test_apply_writes_defaults_and_reads_back(fake_adapter: FakeAdapter, profile_path: Path):
-    manager = CoordinateManager.from_yaml(profile_path)
+def test_apply_writes_defaults_and_reads_back(
+    atomic_owner: AtomicOwner, fake_adapter: FakeAdapter, profile_path: Path
+):
+    manager = CoordinateManager.from_yaml(
+        profile_path,
+        acquire_arm=atomic_owner.acquire,
+        release_arm=atomic_owner.release,
+    )
 
     result = manager.apply(fake_adapter, "l")
 
@@ -258,18 +318,38 @@ def test_apply_writes_defaults_and_reads_back(fake_adapter: FakeAdapter, profile
     assert manager.motion_allowed("l") is True
     assert ("set_tool_frame", manager.profiles["l"].tools["tcpgrip"]) in fake_adapter.calls
     assert ("set_work_frame", manager.profiles["l"].works["cell"]) in fake_adapter.calls
+    assert atomic_owner.owned == set()
+    assert atomic_owner.released == ["l"]
 
 
 def test_apply_refuses_busy_arm_before_any_adapter_call(
     fake_adapter: FakeAdapter, profile_path: Path
 ):
-    busy = False
-    manager = CoordinateManager.from_yaml(profile_path, is_arm_busy=lambda _arm: busy)
+    manager = CoordinateManager.from_yaml(profile_path, is_arm_busy=lambda _arm: True)
+
+    result = manager.apply(fake_adapter, "l")
+
+    assert result.matched is False
+    assert result.status != 0
+    assert "busy" in result.message
+    assert result.expected_tool == "tcpgrip"
+    assert fake_adapter.calls == []
+    assert manager.motion_allowed("l") is False
+
+
+def test_apply_refuses_atomically_owned_arm_without_adapter_calls(
+    atomic_owner: AtomicOwner, fake_adapter: FakeAdapter, profile_path: Path
+):
+    manager = CoordinateManager.from_yaml(
+        profile_path,
+        acquire_arm=atomic_owner.acquire,
+        release_arm=atomic_owner.release,
+    )
     fake_adapter.work = (0, "cell")
     selected = manager.select_tool(fake_adapter, "l", "camera")
     assert selected.matched is True
     fake_adapter.calls.clear()
-    busy = True
+    assert atomic_owner.acquire("l") is True
 
     result = manager.apply(fake_adapter, "l")
 
@@ -278,7 +358,58 @@ def test_apply_refuses_busy_arm_before_any_adapter_call(
     assert "busy" in result.message
     assert result.expected_tool == "camera"
     assert fake_adapter.calls == []
-    assert manager.motion_allowed("l") is False
+    assert atomic_owner.owned == {"l"}
+
+
+def test_apply_holds_atomic_ownership_until_readback_completes(
+    atomic_owner: AtomicOwner, fake_adapter: FakeAdapter, profile_path: Path
+):
+    manager = CoordinateManager.from_yaml(
+        profile_path,
+        acquire_arm=atomic_owner.acquire,
+        release_arm=atomic_owner.release,
+    )
+    fake_adapter.on_call = lambda: _assert_arm_remains_owned(atomic_owner)
+
+    result = manager.apply(fake_adapter, "l")
+
+    assert result.matched is True
+    assert atomic_owner.owned == set()
+    assert atomic_owner.released == ["l"]
+
+
+@pytest.mark.parametrize("failure", ["set_tool_frame", "current_tool_frame"])
+def test_apply_releases_atomic_ownership_after_adapter_failure(
+    atomic_owner: AtomicOwner,
+    fake_adapter: FakeAdapter,
+    profile_path: Path,
+    failure: str,
+):
+    manager = CoordinateManager.from_yaml(
+        profile_path,
+        acquire_arm=atomic_owner.acquire,
+        release_arm=atomic_owner.release,
+    )
+    fake_adapter.raise_from = failure
+
+    result = manager.apply(fake_adapter, "l")
+
+    assert result.matched is False
+    assert atomic_owner.owned == set()
+    assert atomic_owner.released == ["l"]
+
+
+def test_mutations_fail_closed_without_atomic_owner(
+    fake_adapter: FakeAdapter, profile_path: Path
+):
+    manager = CoordinateManager.from_yaml(profile_path)
+
+    result = manager.select_tool(fake_adapter, "l", "camera")
+
+    assert result.matched is False
+    assert result.status != 0
+    assert "ownership" in result.message
+    assert fake_adapter.calls == []
 
 
 def test_select_refuses_busy_arm(profile_path: Path, fake_adapter: FakeAdapter):
@@ -296,9 +427,13 @@ def test_select_refuses_busy_arm(profile_path: Path, fake_adapter: FakeAdapter):
 
 
 def test_select_tool_updates_selection_and_verifies_readback(
-    profile_path: Path, fake_adapter: FakeAdapter
+    atomic_owner: AtomicOwner, profile_path: Path, fake_adapter: FakeAdapter
 ):
-    manager = CoordinateManager.from_yaml(profile_path)
+    manager = CoordinateManager.from_yaml(
+        profile_path,
+        acquire_arm=atomic_owner.acquire,
+        release_arm=atomic_owner.release,
+    )
     fake_adapter.work = (0, "cell")
 
     result = manager.select_tool(fake_adapter, "l", "camera")
@@ -307,12 +442,18 @@ def test_select_tool_updates_selection_and_verifies_readback(
     assert (result.expected_tool, result.current_tool) == ("camera", "camera")
     assert (result.expected_work, result.current_work) == ("cell", "cell")
     assert ("change_tool_frame", "camera") in fake_adapter.calls
+    assert atomic_owner.owned == set()
+    assert atomic_owner.released == ["l"]
 
 
 def test_select_work_updates_selection_and_verifies_readback(
-    profile_path: Path, fake_adapter: FakeAdapter
+    atomic_owner: AtomicOwner, profile_path: Path, fake_adapter: FakeAdapter
 ):
-    manager = CoordinateManager.from_yaml(profile_path)
+    manager = CoordinateManager.from_yaml(
+        profile_path,
+        acquire_arm=atomic_owner.acquire,
+        release_arm=atomic_owner.release,
+    )
     fake_adapter.tool = (0, "tcpgrip")
 
     result = manager.select_work(fake_adapter, "l", "fixture")
@@ -321,6 +462,8 @@ def test_select_work_updates_selection_and_verifies_readback(
     assert (result.expected_tool, result.current_tool) == ("tcpgrip", "tcpgrip")
     assert (result.expected_work, result.current_work) == ("fixture", "fixture")
     assert ("change_work_frame", "fixture") in fake_adapter.calls
+    assert atomic_owner.owned == set()
+    assert atomic_owner.released == ["l"]
 
 
 def test_does_not_expose_unapproved_selection_query_methods(profile_path: Path):
@@ -374,3 +517,7 @@ def test_loads_checked_in_coordinate_profile():
     assert set(manager.profiles) == {"l", "m", "r"}
     assert manager.profiles["l"].tool_default == "tcpgrip"
     assert manager.profiles["l"].work_default == "cell"
+
+
+def _assert_arm_remains_owned(owner: AtomicOwner) -> None:
+    assert owner.acquire("l") is False

@@ -98,10 +98,16 @@ class CoordinateManager:
         profiles: Mapping[str, ArmCoordinateDefaults],
         *,
         is_arm_busy: Callable[[str], bool] | None = None,
+        acquire_arm: Callable[[str], bool] | None = None,
+        release_arm: Callable[[str], None] | None = None,
     ) -> None:
+        if (acquire_arm is None) != (release_arm is None):
+            raise ValueError("acquire_arm and release_arm must be configured together")
         self.policy = policy
         self.profiles = MappingProxyType(dict(profiles))
         self._is_arm_busy = is_arm_busy or (lambda _arm: False)
+        self._acquire_arm = acquire_arm
+        self._release_arm = release_arm
         self._selected_tools = {arm: profile.tool_default for arm, profile in profiles.items()}
         self._selected_works = {arm: profile.work_default for arm, profile in profiles.items()}
         # Every arm starts blocked until a successful readback proves its profile.
@@ -113,6 +119,8 @@ class CoordinateManager:
         path: str | Path,
         *,
         is_arm_busy: Callable[[str], bool] | None = None,
+        acquire_arm: Callable[[str], bool] | None = None,
+        release_arm: Callable[[str], None] | None = None,
     ) -> "CoordinateManager":
         with Path(path).open(encoding="utf-8") as stream:
             data = yaml.safe_load(stream)
@@ -149,7 +157,13 @@ class CoordinateManager:
                 raise ValueError(f"ros_frame_id values must be unique: {sorted(duplicate_ids)}")
             ros_frame_ids.update(frame_ids)
             profiles[arm] = profile
-        return cls(policy, profiles, is_arm_busy=is_arm_busy)
+        return cls(
+            policy,
+            profiles,
+            is_arm_busy=is_arm_busy,
+            acquire_arm=acquire_arm,
+            release_arm=release_arm,
+        )
 
     def verify(self, adapter: CoordinateAdapter, arm: str) -> CoordinateVerification:
         """Read controller frame selection and update the motion permission state."""
@@ -191,25 +205,29 @@ class CoordinateManager:
     def apply(self, adapter: CoordinateAdapter, arm: str) -> CoordinateVerification:
         """Explicitly write and select the arm defaults, then read them back."""
         profile = self._profile(arm)
-        if self._is_arm_busy(arm):
-            return self._failure(arm, -1, f"arm {arm} is busy; coordinate apply refused")
-        identity_error = _adapter_identity_error(adapter, arm)
-        if identity_error:
-            return self._failure(arm, -1, identity_error)
-        self._selected_tools[arm] = profile.tool_default
-        self._selected_works[arm] = profile.work_default
-        operations = (
-            ("set_tool_frame", profile.tools[profile.tool_default]),
-            ("set_work_frame", profile.works[profile.work_default]),
-            ("change_tool_frame", profile.tools[profile.tool_default].controller_name),
-            ("change_work_frame", profile.works[profile.work_default].controller_name),
-        )
-        for method_name, value in operations:
-            status, error = _write_frame(adapter, method_name, value)
-            if status != 0:
-                self._motion_allowed[arm] = False
-                return self._failure(arm, status, error)
-        return self.verify(adapter, arm)
+        ownership_error = self._acquire_mutation(arm)
+        if ownership_error:
+            return self._failure(arm, -1, ownership_error)
+        try:
+            identity_error = _adapter_identity_error(adapter, arm)
+            if identity_error:
+                return self._failure(arm, -1, identity_error)
+            self._selected_tools[arm] = profile.tool_default
+            self._selected_works[arm] = profile.work_default
+            operations = (
+                ("set_tool_frame", profile.tools[profile.tool_default]),
+                ("set_work_frame", profile.works[profile.work_default]),
+                ("change_tool_frame", profile.tools[profile.tool_default].controller_name),
+                ("change_work_frame", profile.works[profile.work_default].controller_name),
+            )
+            for method_name, value in operations:
+                status, error = _write_frame(adapter, method_name, value)
+                if status != 0:
+                    self._motion_allowed[arm] = False
+                    return self._failure(arm, status, error)
+            return self.verify(adapter, arm)
+        finally:
+            self._release_mutation(arm)
 
     def select_tool(
         self, adapter: CoordinateAdapter, arm: str, name: str
@@ -218,16 +236,20 @@ class CoordinateManager:
         profile = self._profile(arm)
         if name not in profile.tools:
             return self._failure(arm, -1, f"unknown configured tool frame: {name}")
-        if self._is_arm_busy(arm):
-            return self._failure(arm, -1, f"arm {arm} is busy; tool frame selection refused")
-        identity_error = _adapter_identity_error(adapter, arm)
-        if identity_error:
-            return self._failure(arm, -1, identity_error)
-        status, error = _write_frame(adapter, "change_tool_frame", profile.tools[name].controller_name)
-        if status != 0:
-            return self._failure(arm, status, error)
-        self._selected_tools[arm] = name
-        return self.verify(adapter, arm)
+        ownership_error = self._acquire_mutation(arm)
+        if ownership_error:
+            return self._failure(arm, -1, ownership_error)
+        try:
+            identity_error = _adapter_identity_error(adapter, arm)
+            if identity_error:
+                return self._failure(arm, -1, identity_error)
+            status, error = _write_frame(adapter, "change_tool_frame", profile.tools[name].controller_name)
+            if status != 0:
+                return self._failure(arm, status, error)
+            self._selected_tools[arm] = name
+            return self.verify(adapter, arm)
+        finally:
+            self._release_mutation(arm)
 
     def select_work(
         self, adapter: CoordinateAdapter, arm: str, name: str
@@ -236,21 +258,42 @@ class CoordinateManager:
         profile = self._profile(arm)
         if name not in profile.works:
             return self._failure(arm, -1, f"unknown configured work frame: {name}")
-        if self._is_arm_busy(arm):
-            return self._failure(arm, -1, f"arm {arm} is busy; work frame selection refused")
-        identity_error = _adapter_identity_error(adapter, arm)
-        if identity_error:
-            return self._failure(arm, -1, identity_error)
-        status, error = _write_frame(adapter, "change_work_frame", profile.works[name].controller_name)
-        if status != 0:
-            return self._failure(arm, status, error)
-        self._selected_works[arm] = name
-        return self.verify(adapter, arm)
+        ownership_error = self._acquire_mutation(arm)
+        if ownership_error:
+            return self._failure(arm, -1, ownership_error)
+        try:
+            identity_error = _adapter_identity_error(adapter, arm)
+            if identity_error:
+                return self._failure(arm, -1, identity_error)
+            status, error = _write_frame(adapter, "change_work_frame", profile.works[name].controller_name)
+            if status != 0:
+                return self._failure(arm, status, error)
+            self._selected_works[arm] = name
+            return self.verify(adapter, arm)
+        finally:
+            self._release_mutation(arm)
 
     def motion_allowed(self, arm: str) -> bool:
         """Return true only after a successful verification of current selections."""
         self._profile(arm)
         return self._motion_allowed[arm]
+
+    def _acquire_mutation(self, arm: str) -> str:
+        if self._acquire_arm is None or self._release_arm is None:
+            if self._is_arm_busy(arm):
+                return f"arm {arm} is busy; coordinate mutation refused"
+            return f"arm {arm} atomic ownership is not configured; coordinate mutation refused"
+        try:
+            acquired = self._acquire_arm(arm)
+        except Exception as error:
+            return f"arm {arm} ownership acquire failed: {error}"
+        if not acquired:
+            return f"arm {arm} is busy; coordinate mutation refused"
+        return ""
+
+    def _release_mutation(self, arm: str) -> None:
+        assert self._release_arm is not None
+        self._release_arm(arm)
 
     def _profile(self, arm: str) -> ArmCoordinateDefaults:
         if arm not in self.profiles:
@@ -288,6 +331,8 @@ def _profile_from_data(
     work_data = _mapping(data.get("work_frames"), f"robots.{arm}.work_frames")
     if not tool_data or not work_data:
         raise ValueError(f"robots.{arm} requires non-empty tools and work_frames")
+    _expect_frame_aliases(tool_data, f"robots.{arm}.tools")
+    _expect_frame_aliases(work_data, f"robots.{arm}.work_frames")
 
     tools = {
         name: _tool_frame(arm, name, _mapping(value, f"robots.{arm}.tools.{name}"))
@@ -371,6 +416,14 @@ def _expect_keys(data: Mapping[Any, Any], allowed: set[str], context: str) -> No
     unknown = [repr(key) for key in data if key not in allowed]
     if unknown:
         raise ValueError(f"{context} contains unknown key(s): {', '.join(sorted(unknown))}")
+
+
+def _expect_frame_aliases(data: Mapping[Any, Any], context: str) -> None:
+    for alias in data:
+        if not isinstance(alias, str) or not _CONTROLLER_NAME.fullmatch(alias):
+            raise ValueError(
+                f"{context} frame alias must be a non-empty 1-9 character ASCII string"
+            )
 
 
 def _required_string(data: Mapping[str, Any], key: str, context: str) -> str:

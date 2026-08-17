@@ -504,8 +504,12 @@ class MotionCoordinator:
                 return status
             try:
                 status = int(self.adapter.slow_stop())
-            except Exception:
+            except Exception as error:
                 status = _nonzero_status(getattr(self.adapter, "last_error", -1))
+                self._log(
+                    "error",
+                    f"pre-submit shutdown slow_stop adapter call failed: {error}",
+                )
             with self._condition:
                 if self._reservation is reservation:
                     if reservation.stop_status is _STOP_IN_PROGRESS:
@@ -665,58 +669,64 @@ class MotionCoordinator:
     def _submission_interruption_locked(
         self, goal_handle: object, generation: int
     ) -> tuple[TerminalState, int, str] | None:
-        if self._fast_stop_generation == generation:
-            status = self._wait_for_fast_stop_status(generation)
-            if status is None:
-                self._enter_lockout()
-                return (
-                    TerminalState.ABORTED,
-                    -1,
-                    "fast stop status did not arrive before motion submission",
-                )
-            return (
-                TerminalState.ABORTED,
-                status,
-                "fast stop requested before motion submission",
-            )
-        if self._shutdown_generation == generation:
-            status = self._wait_for_slow_stop_status(generation)
-            if status is None:
-                self._enter_lockout()
-                return (
-                    TerminalState.ABORTED,
-                    -1,
-                    "controlled stop status did not arrive before motion submission",
-                )
-            if status != 0:
-                return (
-                    TerminalState.ABORTED,
-                    status,
-                    "controlled stop failed before motion submission "
-                    f"with API2 status {status}",
-                )
-            return (
-                TerminalState.ABORTED,
-                0,
-                "driver shutdown requested before motion submission",
-            )
-        if (
-            self._cancel_generation == generation
-            or bool(getattr(goal_handle, "is_cancel_requested", False))
-        ):
-            if not bool(getattr(goal_handle, "is_cancel_requested", False)):
-                if not self._wait_for_canceling_witness_locked(goal_handle):
+        while True:
+            if self._fast_stop_generation == generation:
+                status = self._wait_for_fast_stop_status(generation)
+                if status is None:
+                    self._enter_lockout()
                     return (
                         TerminalState.ABORTED,
                         -1,
-                        "cancel request was not acknowledged before motion submission",
+                        "fast stop status did not arrive before motion submission",
                     )
-            return (
-                TerminalState.CANCELED,
-                0,
-                "motion canceled before submission",
-            )
-        return None
+                if status != 0:
+                    self._enter_lockout()
+                return (
+                    TerminalState.ABORTED,
+                    status,
+                    "fast stop requested before motion submission",
+                )
+            if self._shutdown_generation == generation:
+                status = self._wait_for_slow_stop_status(generation)
+                if status is None:
+                    self._enter_lockout()
+                    return (
+                        TerminalState.ABORTED,
+                        -1,
+                        "controlled stop status did not arrive before motion submission",
+                    )
+                if status != 0:
+                    return (
+                        TerminalState.ABORTED,
+                        status,
+                        "controlled stop failed before motion submission "
+                        f"with API2 status {status}",
+                    )
+                return (
+                    TerminalState.ABORTED,
+                    0,
+                    "driver shutdown requested before motion submission",
+                )
+            if (
+                self._cancel_generation == generation
+                or bool(getattr(goal_handle, "is_cancel_requested", False))
+            ):
+                if not bool(getattr(goal_handle, "is_cancel_requested", False)):
+                    if not self._wait_for_canceling_witness_locked(goal_handle):
+                        return (
+                            TerminalState.ABORTED,
+                            -1,
+                            "cancel request was not acknowledged before motion submission",
+                        )
+                    # Condition.wait() releases the coordinator lock. Recheck
+                    # higher-priority safety interrupts before transitioning.
+                    continue
+                return (
+                    TerminalState.CANCELED,
+                    0,
+                    "motion canceled before submission",
+                )
+            return None
 
     def _wait_for_canceling_witness_locked(self, goal_handle: object) -> bool:
         """Wait briefly for rclpy to expose the goal's CANCELING state."""
@@ -869,8 +879,9 @@ class MotionCoordinator:
             self._stop_status = _STOP_IN_PROGRESS
         try:
             status = int(self.adapter.slow_stop())
-        except Exception:
+        except Exception as error:
             status = _nonzero_status(getattr(self.adapter, "last_error", -1))
+            self._log("error", f"active slow_stop adapter call failed: {error}")
         with self._condition:
             self._stop_status = status
             self._condition.notify_all()
@@ -918,8 +929,9 @@ class MotionCoordinator:
 
         try:
             status = int(self.adapter.stop())
-        except Exception:
+        except Exception as error:
             status = _nonzero_status(getattr(self.adapter, "last_error", -1))
+            self._log("error", f"fast_stop adapter call failed: {error}")
 
         if generation is None:
             if reserved is not None:

@@ -358,6 +358,52 @@ def test_adapter_exceptions_log_operation_and_detail():
     )
 
 
+def test_stop_adapter_exceptions_log_operation_and_detail():
+    logger = FakeLogger()
+
+    reserved_coordinator, reserved_adapter, _, _ = make_coordinator()
+    reserved_coordinator._logger = logger
+    reserved_adapter.last_error = 31
+    reserved = FakeGoalHandle(movej_goal())
+    assert reserved_coordinator.goal_callback(reserved.request) == FakeGoalResponse.ACCEPT
+    reserved_adapter.slow_stop = lambda: (_ for _ in ()).throw(
+        RuntimeError("reserved slow stop exploded")
+    )
+    assert reserved_coordinator.shutdown(timeout_sec=0.0) == 31
+
+    active_coordinator, active_adapter, _, _ = make_coordinator()
+    active_coordinator._logger = logger
+    active_adapter.last_error = 32
+    active_adapter.slow_stop = lambda: (_ for _ in ()).throw(
+        RuntimeError("active slow stop exploded")
+    )
+    with active_coordinator._condition:
+        active_coordinator._active_generation = 1
+    assert active_coordinator._request_stop_once(1) == 32
+
+    fast_coordinator, fast_adapter, _, _ = make_coordinator()
+    fast_coordinator._logger = logger
+    fast_adapter.last_error = 33
+    fast_adapter.stop = lambda: (_ for _ in ()).throw(
+        RuntimeError("fast stop exploded")
+    )
+    assert fast_coordinator.fast_stop() == 33
+
+    assert any(
+        "pre-submit shutdown slow_stop adapter call failed: reserved slow stop exploded"
+        in entry
+        for entry in logger.errors
+    )
+    assert any(
+        "active slow_stop adapter call failed: active slow stop exploded" in entry
+        for entry in logger.errors
+    )
+    assert any(
+        "fast_stop adapter call failed: fast stop exploded" in entry
+        for entry in logger.errors
+    )
+
+
 def test_goal_callback_rejects_busy_arm_atomically():
     coordinator, _, _, ownership = make_coordinator()
 
@@ -1104,6 +1150,71 @@ def test_pending_cancel_without_canceling_witness_aborts_legally_before_submissi
     assert handle.transitions == ["aborted"]
     assert [call for call in adapter.calls if call[0] == "movej"] == []
     assert ownership.is_busy("l") is False
+
+
+def test_cancel_witness_rechecks_concurrent_fast_stop_failure_before_terminal_state():
+    adapter = FakeAdapter()
+    adapter.fast_stop_status = 61
+    coordinator, adapter, _, ownership = make_coordinator(
+        adapter=adapter, stop_timeout_sec=0.2
+    )
+    handle = FakeGoalHandle(movej_goal())
+    activated = threading.Event()
+    resume = threading.Event()
+    result_holder = []
+    stop_results = []
+    stop_thread = None
+    original_activate = coordinator._activate
+    original_wait = coordinator._condition.wait
+    wait_interleaved = False
+
+    def pause_after_activation(goal_handle: object, request: object) -> int | None:
+        generation = original_activate(goal_handle, request)
+        activated.set()
+        assert resume.wait(timeout=1.0)
+        return generation
+
+    def request_fast_stop_then_acknowledge_cancel() -> None:
+        stop_results.append(coordinator.fast_stop())
+        handle.is_cancel_requested = True
+        with coordinator._condition:
+            coordinator._condition.notify_all()
+
+    def interleave_fast_stop_with_cancel_wait(timeout: float | None = None) -> bool:
+        nonlocal stop_thread, wait_interleaved
+        if not wait_interleaved:
+            wait_interleaved = True
+            stop_thread = threading.Thread(
+                target=request_fast_stop_then_acknowledge_cancel
+            )
+            stop_thread.start()
+        return original_wait(timeout)
+
+    coordinator._activate = pause_after_activation
+    coordinator._condition.wait = interleave_fast_stop_with_cancel_wait
+    execute_thread = threading.Thread(
+        target=lambda: result_holder.append(coordinator.execute(handle))
+    )
+    execute_thread.start()
+    try:
+        assert activated.wait(timeout=1.0)
+        assert coordinator.cancel_callback(handle) == FakeCancelResponse.ACCEPT
+    finally:
+        resume.set()
+    execute_thread.join(timeout=1.0)
+    assert stop_thread is not None
+    stop_thread.join(timeout=1.0)
+
+    assert execute_thread.is_alive() is False
+    assert stop_thread.is_alive() is False
+    assert stop_results == [61]
+    assert len(result_holder) == 1
+    assert result_holder[0].terminal_state == FakeResult.ABORTED
+    assert result_holder[0].api2_status == 61
+    assert handle.transitions == ["aborted"]
+    assert [call for call in adapter.calls if call[0] == "movej"] == []
+    assert ownership.is_busy("l") is True
+    assert coordinator.goal_callback(movej_goal(joint_degrees=(2.0,) * 6)) == FakeGoalResponse.REJECT
 
 
 def test_reserved_goal_invalidations_are_consumed_before_the_next_reservation():

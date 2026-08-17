@@ -14,25 +14,47 @@ def profile_data() -> dict:
         "policy": {"on_start": "verify", "on_mismatch": "block_motion"},
         "robots": {
             arm: {
-                "default_tool": "gripper",
-                "default_work": "table",
-                "tool_frames": {
-                    "gripper": {
-                        "controller_name": f"{arm}_tool",
-                        "ros_frame_id": f"{arm}/tool0",
-                        "xyz_m": [0.0, 0.0, 0.1],
-                        "quaternion_wxyz": [2.0, 0.0, 0.0, 0.0],
+                "default_tool": "tcpgrip",
+                "default_work": "cell",
+                "tools": {
+                    "tcpgrip": {
+                        "controller_name": "tcpgrip",
+                        "ros_frame_id": f"{arm}/tool/tcpgrip",
+                        "pose": {
+                            "xyz_m": [0.0, 0.0, 0.1],
+                            "quaternion_wxyz": [2.0, 0.0, 0.0, 0.0],
+                        },
                         "payload_kg": 0.5,
                         "center_of_mass_m": [0.0, 0.0, 0.02],
-                    }
+                    },
+                    "camera": {
+                        "controller_name": "camera",
+                        "ros_frame_id": f"{arm}/tool/camera",
+                        "pose": {
+                            "xyz_m": [0.0, 0.0, 0.2],
+                            "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
+                        },
+                        "payload_kg": 0.2,
+                        "center_of_mass_m": [0.0, 0.0, 0.01],
+                    },
                 },
                 "work_frames": {
-                    "table": {
-                        "controller_name": f"{arm}_work",
-                        "ros_frame_id": f"{arm}/work0",
-                        "xyz_m": [0.4, 0.0, 0.0],
-                        "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
-                    }
+                    "cell": {
+                        "controller_name": "cell",
+                        "ros_frame_id": f"{arm}/work/cell",
+                        "pose": {
+                            "xyz_m": [0.4, 0.0, 0.0],
+                            "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
+                        },
+                    },
+                    "fixture": {
+                        "controller_name": "fixture",
+                        "ros_frame_id": f"{arm}/work/fixture",
+                        "pose": {
+                            "xyz_m": [0.5, 0.0, 0.0],
+                            "quaternion_wxyz": [1.0, 0.0, 0.0, 0.0],
+                        },
+                    },
                 },
             }
             for arm in ("l", "m", "r")
@@ -42,7 +64,12 @@ def profile_data() -> dict:
 
 def write_profile(tmp_path: Path, **tool_overrides: object) -> Path:
     data = profile_data()
-    data["robots"]["l"]["tool_frames"]["gripper"].update(tool_overrides)
+    tool = data["robots"]["l"]["tools"]["tcpgrip"]
+    for key, value in tool_overrides.items():
+        if key in {"xyz_m", "quaternion_wxyz"}:
+            tool["pose"][key] = value
+        else:
+            tool[key] = value
     path = tmp_path / "coordinates.yaml"
     path.write_text(yaml.safe_dump(data), encoding="ascii")
     return path
@@ -95,8 +122,8 @@ def test_loads_exact_robot_ids_and_normalizes_quaternions(profile_path: Path):
     manager = CoordinateManager.from_yaml(profile_path)
 
     assert set(manager.profiles) == {"l", "m", "r"}
-    assert manager.profiles["l"].tools["gripper"].quaternion_wxyz == (1.0, 0.0, 0.0, 0.0)
-    assert manager.profiles["m"].tool_default == "gripper"
+    assert manager.profiles["l"].tools["tcpgrip"].quaternion_wxyz == (1.0, 0.0, 0.0, 0.0)
+    assert manager.profiles["m"].tool_default == "tcpgrip"
     assert manager.policy.on_start == "verify"
     assert manager.policy.on_mismatch == "block_motion"
 
@@ -121,7 +148,7 @@ def test_normalizes_large_finite_quaternion(tmp_path: Path):
 
     manager = CoordinateManager.from_yaml(path)
 
-    assert manager.profiles["l"].tools["gripper"].quaternion_wxyz == (1.0, 0.0, 0.0, 0.0)
+    assert manager.profiles["l"].tools["tcpgrip"].quaternion_wxyz == (1.0, 0.0, 0.0, 0.0)
 
 
 @pytest.mark.parametrize("controller_name", ["", "0123456789"])
@@ -142,7 +169,7 @@ def test_rejects_invalid_or_unnamespaced_ros_frame_id(tmp_path: Path, ros_frame_
 
 def test_rejects_duplicate_ros_frame_ids(tmp_path: Path):
     data = profile_data()
-    data["robots"]["l"]["work_frames"]["table"]["ros_frame_id"] = "l/tool0"
+    data["robots"]["l"]["work_frames"]["cell"]["ros_frame_id"] = "l/tool/tcpgrip"
     path = tmp_path / "coordinates.yaml"
     path.write_text(yaml.safe_dump(data), encoding="ascii")
 
@@ -183,9 +210,9 @@ def test_mismatch_blocks_motion_by_default(fake_adapter: FakeAdapter, profile_pa
     result = manager.verify(fake_adapter, "l")
 
     assert result.matched is False
-    assert result.expected_tool == "l_tool"
+    assert result.expected_tool == "tcpgrip"
     assert result.current_tool == "other_tool"
-    assert result.expected_work == "l_work"
+    assert result.expected_work == "cell"
     assert result.current_work == "other_work"
     assert manager.motion_allowed("l") is False
 
@@ -198,20 +225,47 @@ def test_apply_writes_defaults_and_reads_back(fake_adapter: FakeAdapter, profile
     assert result.matched is True
     assert result.status == 0
     assert manager.motion_allowed("l") is True
-    assert ("set_tool_frame", "l", manager.profiles["l"].tools["gripper"]) in fake_adapter.calls
-    assert ("set_work_frame", "l", manager.profiles["l"].works["table"]) in fake_adapter.calls
+    assert ("set_tool_frame", "l", manager.profiles["l"].tools["tcpgrip"]) in fake_adapter.calls
+    assert ("set_work_frame", "l", manager.profiles["l"].works["cell"]) in fake_adapter.calls
 
 
 def test_select_refuses_busy_arm(profile_path: Path, fake_adapter: FakeAdapter):
     manager = CoordinateManager.from_yaml(profile_path, is_arm_busy=lambda arm: arm == "l")
 
-    result = manager.select_tool(fake_adapter, "l", "gripper")
+    result = manager.select_tool(fake_adapter, "l", "tcpgrip")
 
     assert result.matched is False
     assert result.status != 0
     assert "busy" in result.message
     assert manager.motion_allowed("l") is False
+    assert manager.selected_tool("l") == "tcpgrip"
     assert not any(call[0] == "change_tool_frame" for call in fake_adapter.calls)
+
+
+def test_select_tool_updates_selection_and_verifies_readback(
+    profile_path: Path, fake_adapter: FakeAdapter
+):
+    manager = CoordinateManager.from_yaml(profile_path)
+    fake_adapter.work = (0, "cell")
+
+    result = manager.select_tool(fake_adapter, "l", "camera")
+
+    assert result.matched is True
+    assert manager.selected_tool("l") == "camera"
+    assert ("change_tool_frame", "l", "camera") in fake_adapter.calls
+
+
+def test_select_work_updates_selection_and_verifies_readback(
+    profile_path: Path, fake_adapter: FakeAdapter
+):
+    manager = CoordinateManager.from_yaml(profile_path)
+    fake_adapter.tool = (0, "tcpgrip")
+
+    result = manager.select_work(fake_adapter, "l", "fixture")
+
+    assert result.matched is True
+    assert manager.selected_work("l") == "fixture"
+    assert ("change_work_frame", "l", "fixture") in fake_adapter.calls
 
 
 def test_adapter_read_failure_blocks_motion(profile_path: Path):
@@ -220,7 +274,7 @@ def test_adapter_read_failure_blocks_motion(profile_path: Path):
             return (42, None)
 
         def current_work_frame(self, arm: str):
-            return (0, "l_work")
+            return (0, "cell")
 
     manager = CoordinateManager.from_yaml(profile_path)
     result = manager.verify(FailingAdapter(), "l")
@@ -228,3 +282,13 @@ def test_adapter_read_failure_blocks_motion(profile_path: Path):
     assert result.status == 42
     assert result.matched is False
     assert manager.motion_allowed("l") is False
+
+
+def test_loads_checked_in_coordinate_profile():
+    path = Path(__file__).resolve().parents[4] / "config/ros/realman_coordinates.yaml"
+
+    manager = CoordinateManager.from_yaml(path)
+
+    assert set(manager.profiles) == {"l", "m", "r"}
+    assert manager.profiles["l"].tool_default == "tcpgrip"
+    assert manager.profiles["l"].work_default == "cell"

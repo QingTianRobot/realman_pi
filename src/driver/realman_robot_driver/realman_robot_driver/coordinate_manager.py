@@ -232,6 +232,16 @@ class CoordinateManager:
         self._profile(arm)
         return self._motion_allowed[arm]
 
+    def selected_tool(self, arm: str) -> str:
+        """Return the configured tool name selected for the next verification."""
+        self._profile(arm)
+        return self._selected_tools[arm]
+
+    def selected_work(self, arm: str) -> str:
+        """Return the configured work-frame name selected for the next verification."""
+        self._profile(arm)
+        return self._selected_works[arm]
+
     def _profile(self, arm: str) -> ArmCoordinateDefaults:
         if arm not in self.profiles:
             raise ValueError(f"unknown arm: {arm}")
@@ -259,10 +269,10 @@ def _profile_from_data(
 ) -> tuple[ArmCoordinateDefaults, set[str]]:
     tool_default = _required_string(data, "default_tool", f"robots.{arm}")
     work_default = _required_string(data, "default_work", f"robots.{arm}")
-    tool_data = _mapping(data.get("tool_frames"), f"robots.{arm}.tool_frames")
+    tool_data = _mapping(data.get("tools"), f"robots.{arm}.tools")
     work_data = _mapping(data.get("work_frames"), f"robots.{arm}.work_frames")
     if not tool_data or not work_data:
-        raise ValueError(f"robots.{arm} requires non-empty tool_frames and work_frames")
+        raise ValueError(f"robots.{arm} requires non-empty tools and work_frames")
 
     tools = {name: _tool_frame(arm, name, _mapping(value, name)) for name, value in tool_data.items()}
     works = {name: _work_frame(arm, name, _mapping(value, name)) for name, value in work_data.items()}
@@ -285,22 +295,24 @@ def _profile_from_data(
 
 
 def _tool_frame(arm: str, name: str, data: Mapping[str, Any]) -> ToolFrame:
+    pose = _mapping(data.get("pose"), f"tools.{name}.pose")
     return ToolFrame(
         _controller_name(data, arm, name),
         _ros_frame_id(data, arm, name),
-        _finite_vector(data.get("xyz_m"), 3, f"tool_frames.{name}.xyz_m"),
-        _quaternion(data.get("quaternion_wxyz"), f"tool_frames.{name}.quaternion_wxyz"),
-        _finite_scalar(data.get("payload_kg"), f"tool_frames.{name}.payload_kg", minimum=0.0),
-        _finite_vector(data.get("center_of_mass_m"), 3, f"tool_frames.{name}.center_of_mass_m"),
+        _finite_vector(pose.get("xyz_m"), 3, f"tools.{name}.pose.xyz_m"),
+        _quaternion(pose.get("quaternion_wxyz"), f"tools.{name}.pose.quaternion_wxyz"),
+        _finite_scalar(data.get("payload_kg"), f"tools.{name}.payload_kg", minimum=0.0),
+        _finite_vector(data.get("center_of_mass_m"), 3, f"tools.{name}.center_of_mass_m"),
     )
 
 
 def _work_frame(arm: str, name: str, data: Mapping[str, Any]) -> WorkFrame:
+    pose = _mapping(data.get("pose"), f"work_frames.{name}.pose")
     return WorkFrame(
         _controller_name(data, arm, name),
         _ros_frame_id(data, arm, name),
-        _finite_vector(data.get("xyz_m"), 3, f"work_frames.{name}.xyz_m"),
-        _quaternion(data.get("quaternion_wxyz"), f"work_frames.{name}.quaternion_wxyz"),
+        _finite_vector(pose.get("xyz_m"), 3, f"work_frames.{name}.pose.xyz_m"),
+        _quaternion(pose.get("quaternion_wxyz"), f"work_frames.{name}.pose.quaternion_wxyz"),
     )
 
 

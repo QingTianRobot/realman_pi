@@ -10,61 +10,67 @@ policy:
 
 robots:
   l:
-    default_tool: gripper
-    default_work: table
-    tool_frames:
-      gripper:
+    default_tool: tcpgrip
+    default_work: cell
+    tools:
+      tcpgrip:
         # RealMan controller names are limited to 9 usable ASCII characters.
-        controller_name: l_tool
+        controller_name: tcpgrip
         # TF frame IDs are namespaced to prevent collisions between arms.
-        ros_frame_id: l/tool0
-        # Tool origin in metres; Euler angles are intentionally not authoritative.
-        xyz_m: [0.0, 0.0, 0.0]
-        # Unit quaternion in w, x, y, z order; loader normalizes valid input.
-        quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+        ros_frame_id: l/tool/tcpgrip
+        pose:
+          # Tool origin in metres; Euler angles are intentionally not authoritative.
+          xyz_m: [0.0, 0.0, 0.120]
+          # Unit quaternion in w, x, y, z order; loader normalizes valid input.
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
         # Payload mass in kilograms and centre of mass in metres from tool origin.
-        payload_kg: 0.0
-        center_of_mass_m: [0.0, 0.0, 0.0]
+        payload_kg: 0.80
+        center_of_mass_m: [0.0, 0.0, 0.060]
     work_frames:
-      table:
-        controller_name: l_work
-        ros_frame_id: l/work0
-        # Work origin in metres; use calibrated values only after explicit apply.
-        xyz_m: [0.0, 0.0, 0.0]
-        quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+      cell:
+        controller_name: cell
+        ros_frame_id: l/work/cell
+        pose:
+          # Work origin in metres; use calibrated values only after explicit apply.
+          xyz_m: [0.0, 0.0, 0.0]
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
 
   m:
-    default_tool: gripper
-    default_work: table
-    tool_frames:
-      gripper:
-        controller_name: m_tool
-        ros_frame_id: m/tool0
-        xyz_m: [0.0, 0.0, 0.0]
-        quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
-        payload_kg: 0.0
-        center_of_mass_m: [0.0, 0.0, 0.0]
+    default_tool: tcpgrip
+    default_work: cell
+    tools:
+      tcpgrip:
+        controller_name: tcpgrip
+        ros_frame_id: m/tool/tcpgrip
+        pose:
+          xyz_m: [0.0, 0.0, 0.120]
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+        payload_kg: 0.80
+        center_of_mass_m: [0.0, 0.0, 0.060]
     work_frames:
-      table:
-        controller_name: m_work
-        ros_frame_id: m/work0
-        xyz_m: [0.0, 0.0, 0.0]
-        quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+      cell:
+        controller_name: cell
+        ros_frame_id: m/work/cell
+        pose:
+          xyz_m: [0.0, 0.0, 0.0]
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
 
   r:
-    default_tool: gripper
-    default_work: table
-    tool_frames:
-      gripper:
-        controller_name: r_tool
-        ros_frame_id: r/tool0
-        xyz_m: [0.0, 0.0, 0.0]
-        quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
-        payload_kg: 0.0
-        center_of_mass_m: [0.0, 0.0, 0.0]
+    default_tool: tcpgrip
+    default_work: cell
+    tools:
+      tcpgrip:
+        controller_name: tcpgrip
+        ros_frame_id: r/tool/tcpgrip
+        pose:
+          xyz_m: [0.0, 0.0, 0.120]
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+        payload_kg: 0.80
+        center_of_mass_m: [0.0, 0.0, 0.060]
     work_frames:
-      table:
-        controller_name: r_work
-        ros_frame_id: r/work0
-        xyz_m: [0.0, 0.0, 0.0]
-        quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+      cell:
+        controller_name: cell
+        ros_frame_id: r/work/cell
+        pose:
+          xyz_m: [0.0, 0.0, 0.0]
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]

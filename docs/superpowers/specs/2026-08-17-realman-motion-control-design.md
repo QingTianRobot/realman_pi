@@ -54,7 +54,7 @@ uint8 reference_type
 string reference_name
 float64[6] joint_degrees
 float64[3] pose_position_m
-float64[7] pose_quaternion_wxyz
+float64[4] pose_quaternion_wxyz
 uint32 velocity_percent
 uint32 blend_radius_percent
 bool connect
@@ -109,6 +109,7 @@ robots:
     tools:
       tcpgrip:
         controller_name: tcpgrip
+        ros_frame_id: l/tool/tcpgrip
         pose:
           xyz_m: [0.0, 0.0, 0.120]
           quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
@@ -117,12 +118,13 @@ robots:
     work_frames:
       cell:
         controller_name: cell
+        ros_frame_id: l/work/cell
         pose:
           xyz_m: [0.0, 0.0, 0.0]
           quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
 ```
 
-The schema is repeated for `l`, `m`, and `r`. Controller frame names must obey the vendor length limit; ROS TF frame IDs are separate values. Positions and centre-of-mass values are metres, quaternions use `wxyz` order, and payload is kilograms. The implementation must validate all finite numeric values, frame names, robot IDs, and quaternion norms before launch. Euler angles are not part of the authoritative configuration schema.
+The schema is repeated for `l`, `m`, and `r`. Controller frame names must obey the vendor length limit; each separate `ros_frame_id` must be non-empty, unique, and use the arm namespace prefix. Positions and centre-of-mass values are metres, quaternions use `wxyz` order, and payload is kilograms. The implementation must validate all finite numeric values, frame names, robot IDs, and quaternion norms before launch. Euler angles are not part of the authoritative configuration schema.
 
 Startup behavior is `connect -> read current controller frames -> compare -> allow or block motion`. `on_start=apply` is an explicit maintenance choice. The driver must expose separate short operations for `/{arm}/coordinates/verify`, `/{arm}/coordinates/apply`, `/{arm}/coordinates/select_tool`, and `/{arm}/coordinates/select_work`; applying or selecting a frame writes through `rm_set_manual_tool_frame()`, `rm_change_tool_frame()`, `rm_set_manual_work_frame()`, or `rm_change_work_frame()` and then reads back the result. Frame selection is rejected while an arm is moving. An Action goal never changes the active frame implicitly.
 

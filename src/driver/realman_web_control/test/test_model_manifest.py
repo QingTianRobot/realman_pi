@@ -35,3 +35,14 @@ def test_model_asset_resolution_rejects_path_traversal():
     with pytest.raises(ValueError):
         resolve_model_asset(description, "../package.xml")
 
+
+def test_manifest_accepts_symlink_installed_description_root(tmp_path):
+    layout, motion, coordinates, source_description = paths()
+    installed_description = tmp_path / "rm65_description_share"
+    installed_description.mkdir()
+    (installed_description / "urdf").symlink_to(source_description / "urdf", target_is_directory=True)
+
+    manifest = build_manifest(layout, motion, coordinates, installed_description)
+
+    assert manifest["robots"][0]["model"] == "RM65-B"
+    assert resolve_model_asset(installed_description, "urdf/RM65-B.urdf").is_file()

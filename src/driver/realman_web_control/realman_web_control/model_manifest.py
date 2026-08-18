@@ -106,8 +106,8 @@ def build_manifest(
         model = robot.get("model")
         if not isinstance(model, str) or not MODEL_PATTERN.fullmatch(model):
             raise ValueError(f"layout.robots.{arm}.model is invalid")
-        urdf_path = (description_root / "urdf" / f"{model}.urdf").resolve()
-        if urdf_path.parent != (description_root / "urdf").resolve() or not urdf_path.is_file():
+        urdf_path = description_root / "urdf" / f"{model}.urdf"
+        if not urdf_path.is_file():
             raise ValueError(f"configured URDF does not exist: {model}")
         transform = {
             field: _finite(robot.get(field), f"layout.robots.{arm}.{field}")
@@ -160,8 +160,10 @@ def resolve_model_asset(description_root: str | Path, relative_path: str) -> Pat
     """Resolve a model request below the package root and reject traversal."""
 
     root = Path(description_root).resolve()
-    candidate = (root / relative_path).resolve()
-    if candidate == root or root not in candidate.parents or not candidate.is_file():
+    requested = Path(relative_path)
+    if requested.is_absolute() or ".." in requested.parts:
         raise ValueError("model asset is outside rm65_description or does not exist")
-    return candidate
-
+    candidate = root / requested
+    if not candidate.is_file():
+        raise ValueError("model asset is outside rm65_description or does not exist")
+    return candidate.resolve()

@@ -92,7 +92,7 @@ def test_motion_action_contracts_are_exact():
                 "float64 max_angular_accel_radps2",
                 "bool follow",
                 "uint8 trajectory_mode",
-                "uint8 radio",
+                "uint16 radio",
             ],
             [
                 "uint8 SUCCEEDED=0",

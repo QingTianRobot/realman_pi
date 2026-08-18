@@ -10,9 +10,11 @@ from typing import Any
 from ament_index_python.packages import get_package_share_directory
 import rclpy
 from rclpy.action import ActionServer
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
+from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
 from geometry_msgs.msg import TwistStamped
 from realman_msgs.action import CartesianVelocity, ExecuteMotion
 from realman_msgs.srv import SelectFrame, VerifyCoordinates
@@ -174,7 +176,9 @@ class RealManDriverNode(Node):
             coordinate_manager=self.coordinate_manager,
             logger=self.get_logger(),
             action_type=CartesianVelocity,
+            ros_time_now_ns=lambda: self.get_clock().now().nanoseconds,
         )
+        self.velocity_command_callback_group = MutuallyExclusiveCallbackGroup()
         self.execute_motion_action_server = ActionServer(
             self,
             ExecuteMotion,
@@ -199,8 +203,15 @@ class RealManDriverNode(Node):
             TwistStamped,
             "cartesian_velocity/command",
             self._velocity_command,
-            10,
-            callback_group=self.motion_callback_group,
+            QoSProfile(
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=1,
+                durability=QoSDurabilityPolicy.VOLATILE,
+                lifespan=Duration(
+                    nanoseconds=self.motion_settings.velocity_watchdog_ms * 1_000_000
+                ),
+            ),
+            callback_group=self.velocity_command_callback_group,
         )
         self.joint_state_publisher = self.create_publisher(JointState, "joint_states", 10)
         self.connected_publisher = self.create_publisher(Bool, "connected", 10)
@@ -397,9 +408,12 @@ class RealManDriverNode(Node):
 
     def _velocity_command(self, command: TwistStamped) -> None:
         try:
+            stamp = getattr(getattr(command, "header", None), "stamp", None)
+            if stamp is None or (stamp.sec == 0 and stamp.nanosec == 0):
+                raise ValueError("TwistStamped header.stamp must be set")
             self.velocity_session.accept_command(command)
         except (RuntimeError, ValueError) as error:
-            self.get_logger().warn(f"Cartesian velocity command rejected: {error}")
+            self.get_logger().debug(f"Cartesian velocity command rejected: {error}")
 
     @staticmethod
     def _fill_verify_response(

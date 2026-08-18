@@ -83,6 +83,7 @@ class CartesianVelocitySession:
         monotonic: Callable[[], float] = time.monotonic,
         logger: Any | None = None,
         action_type: Any | None = None,
+        ros_time_now_ns: Callable[[], int] | None = None,
         avoid_singularity_flag: int = 1,
     ) -> None:
         if arm_id not in _ARMS:
@@ -105,6 +106,7 @@ class CartesianVelocitySession:
         self._monotonic = monotonic
         self._logger = logger
         self.action_type = action_type
+        self._ros_time_now_ns = ros_time_now_ns
         self._avoid_singularity_flag = avoid_singularity_flag
 
         self._lock = threading.RLock()
@@ -124,6 +126,8 @@ class CartesianVelocitySession:
         self._command = _ZERO
         self._limited_command = _ZERO
         self._command_received_at = 0.0
+        self._session_epoch_ns: int | None = None
+        self._last_command_stamp_ns: int | None = None
         self._last_tick_at = 0.0
         self._stop_sent = False
         self._result: VelocityResult | None = None
@@ -326,6 +330,8 @@ class CartesianVelocitySession:
                 self._command = _ZERO
                 self._limited_command = _ZERO
                 self._command_received_at = now
+                self._session_epoch_ns = self._read_ros_time_ns()
+                self._last_command_stamp_ns = None
                 self._last_tick_at = now
                 self._last_api2_status = 0
                 self._phase = VelocityFeedbackPhase.EXECUTING
@@ -394,6 +400,7 @@ class CartesianVelocitySession:
     def accept_command(self, command: Any) -> bool:
         """Accept a finite, frame-matched TwistStamped command."""
         vector, frame_id = _twist_vector(command)
+        stamp_ns = _twist_stamp_ns(command)
         with self._condition:
             if not self._running or self._goal is None:
                 if self._result is not None:
@@ -403,6 +410,29 @@ class CartesianVelocitySession:
                 raise ValueError(
                     f"TwistStamped header.frame_id must equal active frame_id {self._goal.ros_frame_id!r}"
                 )
+            command_age_sec = 0.0
+            if self._ros_time_now_ns is not None:
+                if stamp_ns is None or stamp_ns <= 0:
+                    raise ValueError("TwistStamped header.stamp must be set")
+                now_ns = self._read_ros_time_ns()
+                epoch_ns = self._session_epoch_ns
+                if epoch_ns is None:
+                    raise ValueError("TwistStamped stamp has no active session epoch")
+                if stamp_ns < epoch_ns:
+                    raise ValueError("TwistStamped stamp belongs to a previous session")
+                age_ns = now_ns - stamp_ns
+                if age_ns < 0:
+                    raise ValueError("TwistStamped stamp is in the future")
+                if age_ns > self._goal.watchdog_ms * 1_000_000:
+                    raise ValueError("TwistStamped command is stale")
+                if (
+                    self._last_command_stamp_ns is not None
+                    and stamp_ns <= self._last_command_stamp_ns
+                ):
+                    raise ValueError(
+                        "TwistStamped stamp must be newer than the last accepted command"
+                    )
+                command_age_sec = age_ns / 1_000_000_000.0
             linear_speed = math.hypot(*vector[:3])
             angular_speed = math.hypot(*vector[3:])
             if linear_speed > self.settings.max_linear_speed_mps + 1.0e-12:
@@ -410,7 +440,9 @@ class CartesianVelocitySession:
             if angular_speed > self.settings.max_angular_speed_radps + 1.0e-12:
                 raise ValueError("angular speed exceeds configured limit")
             self._command = vector
-            self._command_received_at = self._monotonic()
+            self._command_received_at = self._monotonic() - command_age_sec
+            if self._ros_time_now_ns is not None:
+                self._last_command_stamp_ns = stamp_ns
             self._condition.notify_all()
             return True
 
@@ -488,6 +520,22 @@ class CartesianVelocitySession:
 
     def shutdown(self) -> int:
         """Stop the loop before releasing ownership; return the stop API status."""
+        with self._condition:
+            if (
+                not self._owns_ownership
+                and not self._lockout
+                and self._thread is None
+                and self._safety_thread is None
+                and not self._running
+                and not self._starting
+                and not self._movev_in_progress
+                and not self._slow_stop_call_in_progress
+                and not self._slow_stop_in_progress
+                and not self._fast_stop_in_progress
+                and self._reservation is None
+                and not self._velocity_initialized
+            ):
+                return 0
         result = self._stop_and_join(VelocityTerminalState.CANCELED, "velocity session shutdown")
         return result.api2_status
 
@@ -858,6 +906,9 @@ class CartesianVelocitySession:
                 if self._stop_event.wait(wait):
                     break
                 self.tick()
+                completed_at = self._monotonic()
+                if completed_at > deadline:
+                    deadline = completed_at
         except Exception as error:
             with self._condition:
                 abort = (
@@ -1214,6 +1265,17 @@ class CartesianVelocitySession:
         if method is not None:
             method(message)
 
+    def _read_ros_time_ns(self) -> int | None:
+        if self._ros_time_now_ns is None:
+            return None
+        try:
+            value = int(self._ros_time_now_ns())
+        except (TypeError, ValueError, OverflowError):
+            raise ValueError("ROS clock must return an integer nanosecond timestamp") from None
+        if value < 0:
+            raise ValueError("ROS clock timestamp must not be negative")
+        return value
+
 
 def _twist_vector(command: Any) -> tuple[tuple[float, ...], str]:
     header = getattr(command, "header", None)
@@ -1236,6 +1298,21 @@ def _twist_vector(command: Any) -> tuple[tuple[float, ...], str]:
     if not all(math.isfinite(value) for value in values):
         raise ValueError("TwistStamped values must be finite")
     return values, frame_id
+
+
+def _twist_stamp_ns(command: Any) -> int | None:
+    header = getattr(command, "header", None)
+    stamp = getattr(header, "stamp", None)
+    if stamp is None:
+        return None
+    try:
+        seconds = int(getattr(stamp, "sec"))
+        nanoseconds = int(getattr(stamp, "nanosec"))
+    except (AttributeError, TypeError, ValueError, OverflowError):
+        raise ValueError("TwistStamped header.stamp must contain sec/nanosec") from None
+    if seconds < 0 or not 0 <= nanoseconds < 1_000_000_000:
+        raise ValueError("TwistStamped header.stamp must be a valid ROS time")
+    return seconds * 1_000_000_000 + nanoseconds
 
 
 def _clip_speed(vector: Sequence[float], settings: MotionSettings) -> tuple[float, ...]:

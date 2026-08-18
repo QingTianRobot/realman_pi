@@ -5,9 +5,9 @@ description: RealMan Python SDK 的 ROS 2 Humble 驱动边界、三臂接口、�
 
 # 睿尔曼关节状态驱动
 
-`realman_robot_driver` 是 `src/driver/` 下的 ROS 2 Humble Python 包。第一个可用功能是通过睿尔曼 Python SDK 周期性读取当前关节角度，并发布为 ROS 2 `sensor_msgs/msg/JointState`，供 `robot_state_publisher` 和 RViz 2 实时显示。
+`realman_robot_driver` 是 `src/driver/` 下的 ROS 2 Humble Python 包。驱动通过睿尔曼 Python SDK 发布关节状态，并提供普通运动 Action 与六轴笛卡尔速度 session。离线测试使用独立的 mock 配置文件，不连接控制器。
 
-真实配置默认连接三台 RM65-B 控制器，但驱动只执行连接和只读状态回读，不发送运动命令。离线测试使用独立的 mock 配置文件。
+运动接口已经实现，但尚未在真实 RM65 控制器上完成验证。真机使用必须经过本页末尾的运行门槛，不能把 mock 测试结果视为现场安全验证。
 
 ## 模块边界
 
@@ -48,6 +48,9 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 /l/realman_driver
 ├── /l/joint_states       sensor_msgs/msg/JointState
 ├── /l/connected          std_msgs/msg/Bool
+├── /l/execute_motion     realman_msgs/action/ExecuteMotion
+├── /l/cartesian_velocity realman_msgs/action/CartesianVelocity
+├── /l/cartesian_velocity/command geometry_msgs/msg/TwistStamped
 ├── /l/connect            std_srvs/srv/Trigger
 ├── /l/disconnect         std_srvs/srv/Trigger
 ├── /l/stop               std_srvs/srv/Trigger
@@ -62,6 +65,26 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 未连接或 SDK 状态查询失败时不发布不可用的关节状态；mock 连接后发布六轴零位。通信错误 `-1/-2` 会将当前连接标记为失效，节点按 `reconnect_interval` 自动重连。`connected` 表示连接生命周期，调用方还应检查 `/status` 返回的 `last_error`。
 
 `stop` 当前映射到官方 `rm_set_arm_stop()`，表示最快关节速度受控停止且轨迹不可恢复。它不是断电急停，也不替代现场安全回路。
+
+## 笛卡尔速度 session
+
+`cartesian_velocity` Action 持有单臂运动 ownership，`cartesian_velocity/command` 只更新该 session 的最新六轴目标。`TwistStamped.twist` 的前三项是线速度 `vx/vy/vz`（m/s），后三项是角速度 `wx/wy/wz`（rad/s）；实现不使用 Euler 角。
+
+BASE session 的 `header.frame_id` 必须是 namespaced `l/m/r/base_link`。WORK 和 TOOL session 必须使用当前已验证且激活的 ROS frame。目标还受 `config/ros/realman_motion.yaml` 的线速度、角速度和加速度限制。
+
+命令订阅使用 `KEEP_LAST` depth 1、`VOLATILE`，DDS lifespan 等于该臂配置的 `velocity_watchdog_ms`。订阅拥有独立的 `MutuallyExclusiveCallbackGroup`，不与 Reentrant 的运动 Action callback group 共用。每条命令必须提供非零 `header.stamp`，并满足以下条件：
+
+- 时间戳不得早于当前 Action session 的启动 epoch；
+- 时间戳不得晚于节点 ROS clock，也不得比 Action watchdog 更旧；
+- 同一 session 中必须严格晚于上一条已接受命令。
+
+上述比较使用节点 ROS clock，因此 `use_sim_time` 测试可以控制时间来源。零时间戳、旧 session backlog、乱序或过期命令都在进入 SDK 控制循环前被拒绝，拒绝日志使用 DEBUG，避免高率无效输入刷 WARN。
+
+控制线程按 `control_period_ms` 调用 SDK；SDK 调用超过 deadline 时跳过过期 tick，并从调用完成时间重排下一周期，不补发 0 ms 间隔的追赶命令。watchdog 由独立监督线程执行，命令时间戳的已有年龄也计入 watchdog。
+
+`trajectory_mode` 为 `0/1/2` 时，`radio` 分别限制为 `0`、`0..100`、`0..1000`。Action IDL 使用 `uint16 radio`，可完整表达滤波模式的官方范围。
+
+session 终止结果保留原始 API2 status 和 message 给 Action 调用方。已停止、无 ownership、无 lockout、无 worker 或 pending reservation 时，后续 `shutdown()` 返回 `0`；仍有停止失败 lockout 时继续返回真实非零状态。这样成功的 `/disconnect` 不会被历史 Action 错误误报为失败，同时当前未解决的物理安全状态仍会阻止成功结果。
 
 ## 参数
 
@@ -78,6 +101,7 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 | `reconnect_interval` | `5.0` 秒 | 连接失败或断线后的重连周期；`0.0` 禁用 |
 | `state_publish_rate` | `10.0` Hz | 必须大于零；后续应按网络和控制器能力测定 |
 | `joint_names` | `joint_1` 到 `joint_6` | 数量必须与 SDK 返回的自由度一致 |
+| `motion_config_file` | `config/ros/realman_motion.yaml` | 每臂速度、加速度、控制周期、watchdog 和停止超时的权威配置 |
 
 真机地址只能在根目录 `config/ros/realman_driver.yaml` 修改。不要把 IP、端口或型号散落到 launch 文件、Dockerfile 或源代码中。
 
@@ -223,5 +247,5 @@ ros2 run tf2_ros tf2_echo world r/link_6
 - SDK 版本由 `config/python/realman-sdk-requirements.txt` 锁定；真实控制器、网络连通性和固件兼容性仍需现场确认。
 - 连接和状态读取当前在 ROS executor 线程中同步执行；生产实现需要避免网络阻塞占用关键回调线程。
 - 已实现基础连接重试；尚未实现状态陈旧检测、诊断消息和 QoS 专项配置。
-- 未实现轨迹 action、速度命令、力控、IO、Modbus、UDP 和末端设备接口。
+- 已实现普通运动 Action 和笛卡尔速度 session；尚未实现力控、IO、Modbus、UDP 和末端设备接口。
 - 未验证真实 RM65 控制器；所有真机参数和固件兼容性仍需现场确认。

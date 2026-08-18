@@ -587,6 +587,49 @@ def test_node_source_registers_cartesian_velocity_action_and_command_topic():
     assert "self.velocity_session.accept_command" in source
 
 
+def test_velocity_command_uses_dedicated_serial_qos_and_freshness_boundary():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert "MutuallyExclusiveCallbackGroup" in source
+    assert "self.velocity_command_callback_group" in source
+    assert "QoSProfile" in source
+    assert "QoSHistoryPolicy.KEEP_LAST" in source
+    assert "QoSDurabilityPolicy.VOLATILE" in source
+    assert "lifespan" in source
+    assert "velocity_watchdog_ms" in source
+    assert "header.stamp" in source or "stamp" in source
+
+
+@requires_ros_action_runtime
+def test_mock_node_velocity_command_has_depth_one_volatile_watchdog_qos():
+    from rclpy.callback_groups import MutuallyExclusiveCallbackGroup
+    from rclpy.qos import QoSDurabilityPolicy
+
+    rclpy.init()
+    node = None
+    try:
+        node = RealManDriverNode(
+            namespace="l",
+            parameter_overrides=[
+                rclpy.parameter.Parameter("robot_ip", value="127.0.0.1"),
+                rclpy.parameter.Parameter("mock_mode", value=True),
+                rclpy.parameter.Parameter("auto_connect", value=False),
+            ],
+        )
+        subscription = node.cartesian_velocity_command_subscription
+        qos = subscription.qos_profile
+
+        assert isinstance(node.velocity_command_callback_group, MutuallyExclusiveCallbackGroup)
+        assert node.velocity_command_callback_group is not node.motion_callback_group
+        assert qos.depth == 1
+        assert qos.durability == QoSDurabilityPolicy.VOLATILE
+        assert qos.lifespan.nanoseconds == node.motion_settings.velocity_watchdog_ms * 1_000_000
+    finally:
+        if node is not None:
+            node.destroy_node()
+        rclpy.shutdown()
+
+
 def test_node_uses_namespaced_base_link_for_base_velocity_commands():
     source = NODE_PATH.read_text(encoding="utf-8")
 
@@ -678,6 +721,34 @@ def test_disconnect_service_exposes_all_shutdown_failures_when_sdk_disconnect_su
     assert "velocity shutdown failed" in source
     assert "motion shutdown failed" in source
     assert "velocity lockout cleanup failed" in source
+
+
+@requires_ros_action_runtime
+def test_disconnect_succeeds_when_velocity_historical_error_is_safely_inactive():
+    errors = []
+    velocity = SimpleNamespace(
+        result=SimpleNamespace(api2_status=23),
+        shutdown=lambda: 0,
+        clear_lockout_after_disconnect=lambda: True,
+    )
+    motion = SimpleNamespace(
+        shutdown=lambda: 0,
+        clear_lockout_after_disconnect=lambda: None,
+    )
+    adapter = SimpleNamespace(disconnect=lambda: 0)
+    node = SimpleNamespace(
+        velocity_session=velocity,
+        motion_coordinator=motion,
+        adapter=adapter,
+        get_logger=lambda: SimpleNamespace(error=errors.append),
+    )
+    response = SimpleNamespace(success=False, message="")
+
+    result = RealManDriverNode._disconnect(node, None, response)
+
+    assert result.success is True
+    assert result.message == "disconnected"
+    assert errors == []
 
 
 def test_destroy_node_logs_velocity_lockout_cleanup_failure():

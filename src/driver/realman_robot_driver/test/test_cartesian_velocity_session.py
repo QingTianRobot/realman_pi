@@ -32,6 +32,14 @@ class Clock:
         self.value += seconds
 
 
+class RosClock:
+    def __init__(self, value_ns: int) -> None:
+        self.value_ns = value_ns
+
+    def __call__(self) -> int:
+        return self.value_ns
+
+
 class FakeAdapter:
     def __init__(
         self,
@@ -104,9 +112,20 @@ def settings(
     )
 
 
-def twist(frame: str, linear=(0.0, 0.0, 0.0), angular=(0.0, 0.0, 0.0)):
+def twist(
+    frame: str,
+    linear=(0.0, 0.0, 0.0),
+    angular=(0.0, 0.0, 0.0),
+    stamp_ns: int | None = None,
+):
+    stamp = SimpleNamespace(sec=0, nanosec=0)
+    if stamp_ns is not None:
+        stamp = SimpleNamespace(
+            sec=stamp_ns // 1_000_000_000,
+            nanosec=stamp_ns % 1_000_000_000,
+        )
     return SimpleNamespace(
-        header=SimpleNamespace(frame_id=frame),
+        header=SimpleNamespace(frame_id=frame, stamp=stamp),
         twist=SimpleNamespace(
             linear=SimpleNamespace(x=linear[0], y=linear[1], z=linear[2]),
             angular=SimpleNamespace(x=angular[0], y=angular[1], z=angular[2]),
@@ -130,7 +149,16 @@ def valid_goal(**changes):
     return SimpleNamespace(**values)
 
 
-def make_session(adapter=None, clock=None, ownership=None, session_settings=None):
+def make_session(
+    adapter=None,
+    clock=None,
+    ownership=None,
+    session_settings=None,
+    ros_clock=None,
+):
+    kwargs = {}
+    if ros_clock is not None:
+        kwargs["ros_time_now_ns"] = ros_clock
     return CartesianVelocitySession(
         arm_id="l",
         adapter=adapter or FakeAdapter(),
@@ -139,6 +167,7 @@ def make_session(adapter=None, clock=None, ownership=None, session_settings=None
         active_frame=lambda reference_type: ("tcpgrip", "l/tool/tcpgrip"),
         motion_allowed=lambda arm: True,
         monotonic=clock or Clock(),
+        **kwargs,
     )
 
 
@@ -152,6 +181,147 @@ def test_start_initializes_zero_command_and_claims_arm():
     assert adapter.velocity_calls[0][0] == [0.0] * 6
     assert ownership.is_busy("l") is True
     session.shutdown()
+
+
+def test_shutdown_is_idempotent_after_initialization_failure_and_preserves_result():
+    session = make_session(adapter=FakeAdapter(init_status=23))
+
+    assert session.start(valid_goal()) is False
+    historical = session.result
+    assert historical.api2_status == 23
+    assert session.shutdown() == 0
+    assert session.result == historical
+
+
+def test_shutdown_is_idempotent_after_command_failure_when_stop_succeeds():
+    class FailNonzeroCommandAdapter(FakeAdapter):
+        def movev(self, vector, follow, trajectory_mode, radio):
+            self.velocity_calls.append((list(vector), follow, trajectory_mode, radio))
+            if any(vector):
+                return 11
+            return 0
+
+    clock = Clock()
+    adapter = FailNonzeroCommandAdapter()
+    session = make_session(
+        adapter=adapter,
+        clock=clock,
+        session_settings=settings(velocity_watchdog_ms=1000),
+    )
+    assert session.start(valid_goal(watchdog_ms=1000)) is True
+    thread = session.thread
+    session._stop_event.set()
+    assert thread is not None
+    thread.join(timeout=1.0)
+    session.accept_command(twist("l/tool/tcpgrip", linear=(0.1, 0.0, 0.0)))
+    clock.advance(0.02)
+
+    result = session.tick()
+
+    assert result is not None
+    assert result.api2_status == 11
+    assert session.shutdown() == 0
+    assert session.result == result
+
+
+def test_shutdown_repeats_real_status_while_stop_failure_lockout_is_active():
+    session = make_session(adapter=FakeAdapter(stop_status=23))
+    assert session.start(valid_goal()) is True
+
+    assert session.shutdown() == 23
+    assert session.shutdown() == 23
+    assert session.result.api2_status == 23
+
+
+def test_stamp_is_required_and_stale_commands_cannot_refresh_watchdog():
+    ros_clock = RosClock(1_000_000_000)
+    session = make_session(ros_clock=ros_clock)
+    assert session.start(valid_goal()) is True
+
+    with pytest.raises(ValueError, match="stamp"):
+        session.accept_command(twist("l/tool/tcpgrip"))
+    ros_clock.value_ns = 1_200_000_000
+    with pytest.raises(ValueError, match="stale"):
+        session.accept_command(
+            twist("l/tool/tcpgrip", linear=(0.1, 0.0, 0.0), stamp_ns=1_000_000_000)
+        )
+    session.shutdown()
+
+
+def test_previous_session_stamp_is_rejected_after_new_session_epoch():
+    ros_clock = RosClock(1_000_000_000)
+    session = make_session(ros_clock=ros_clock)
+    assert session.start(valid_goal()) is True
+    session.shutdown()
+
+    ros_clock.value_ns = 2_000_000_000
+    assert session.start(valid_goal()) is True
+    with pytest.raises(ValueError, match="session"):
+        session.accept_command(
+            twist("l/tool/tcpgrip", linear=(0.1, 0.0, 0.0), stamp_ns=1_900_000_000)
+        )
+    session.shutdown()
+
+
+def test_older_stamp_cannot_overwrite_newer_command_in_same_session():
+    ros_clock = RosClock(1_000_000_000)
+    session = make_session(ros_clock=ros_clock)
+    assert session.start(valid_goal()) is True
+    ros_clock.value_ns = 1_020_000_000
+    assert session.accept_command(
+        twist("l/tool/tcpgrip", linear=(0.2, 0.0, 0.0), stamp_ns=1_020_000_000)
+    )
+
+    ros_clock.value_ns = 1_030_000_000
+    with pytest.raises(ValueError, match="newer"):
+        session.accept_command(
+            twist("l/tool/tcpgrip", linear=(0.1, 0.0, 0.0), stamp_ns=1_010_000_000)
+        )
+
+    assert session._command[:3] == (0.2, 0.0, 0.0)
+    session.shutdown()
+
+
+def test_run_loop_rebases_after_overrun_instead_of_catching_up_ticks():
+    class FakeStopEvent:
+        def __init__(self):
+            self.stopped = False
+
+        def is_set(self):
+            return self.stopped
+
+        def set(self):
+            self.stopped = True
+
+        def wait(self, timeout):
+            clock.advance(timeout)
+            return self.stopped
+
+    clock = Clock()
+    session = make_session(clock=clock)
+    session._goal = session._validate_goal(valid_goal())
+    session._running = True
+    session._stop_event = FakeStopEvent()
+    tick_starts = []
+    tick_ends = []
+
+    def fake_tick():
+        tick_starts.append(clock.value)
+        if len(tick_starts) == 1:
+            clock.advance(0.065)
+        tick_ends.append(clock.value)
+        if len(tick_starts) == 4:
+            session._stop_event.set()
+        return None
+
+    session.tick = fake_tick
+    session._run_loop()
+
+    assert len(tick_starts) == 4
+    assert all(
+        later - earlier >= 0.02 - 1.0e-12
+        for earlier, later in zip(tick_starts, tick_starts[1:])
+    )
 
 
 def test_tick_limits_linear_and_angular_delta_norms_independently():

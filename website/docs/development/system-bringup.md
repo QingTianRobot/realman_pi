@@ -231,6 +231,11 @@ rm65_docker_remote_rviz_start 166
 rm65_docker_remote_rviz_status
 ```
 
+`realman_bringup_remote` 是 headless 生产端服务，Compose 配置了
+`restart: unless-stopped`。用 `docker compose up -d realman_bringup_remote`
+创建或重建容器后，Docker 会在主机重启、Docker daemon 重启或容器异常退出后自动恢复该
+ROS 图；如果运维人员显式执行 `docker compose stop realman_bringup_remote`，则不会自动重启。
+
 后台方式会立即归还终端，但 RViz 节点和窗口会持续运行。`rm65_docker_remote_rviz_logs -f`
 跟踪容器日志，`rm65_docker_remote_rviz_stop` 停止节点。需要让 RViz 生命周期跟随当前终端时，
 使用 `rm65_docker_remote_rviz 166`；关闭窗口或按 `Ctrl-C` 即停止前台容器。

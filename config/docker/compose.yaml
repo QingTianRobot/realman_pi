@@ -163,6 +163,10 @@ services:
   # host on the same ROS_DOMAIN_ID to exercise the controller node without USB.
   realman_bringup_remote:
     <<: *realman-common
+    # Keep the production ROS graph available after host reboot, Docker daemon
+    # restart, or an unexpected launch/container exit. Operators can still stop
+    # it intentionally with `docker compose stop realman_bringup_remote`.
+    restart: unless-stopped
     command:
       - ros2
       - launch

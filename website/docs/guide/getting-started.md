@@ -48,11 +48,15 @@ rm65_project_help
 | `rm65_docker_rviz [model]` | 启动单臂 RViz，型号默认 `RM65-B` |
 | `rm65_docker_three_rviz` | 启动配置驱动的三臂 RViz |
 | `rm65_docker_xbox_test` | 只启动实体手柄输入链路 |
+| `rm65_docker_driver_test` / `rm65_docker_driver_rviz` | 使用 mock 驱动测试，或显示真实关节状态 |
 | `rm65_docker_bringup` | 启动三臂、RViz、Joy 和 Xbox 输入 |
 | `rm65_docker_bringup_custom` | 按 `.env` 中的 launch 开关启动参数化 bringup |
 | `rm65_docker_bringup_model` / `hardware` / `headless` | 启动模型、真机 RViz 或无 GUI 预设 |
-| `rm65_docker_bringup_input` / `web` | 只启动输入链路或真机 Web 控制 |
+| `rm65_docker_bringup_input` / `web` | 只启动输入链路，或启动真机与 Web 控制 |
 | `rm65_docker_bringup_custom_args ...` | 临时透传 `system.launch.py` 参数 |
+| `rm65_docker_web_control[_start]` | 前台或后台启动浏览器 Action 控制台 |
+| `rm65_docker_web_control_status` / `logs` / `stop` | 查看、跟踪或停止 Web 控制台 |
+| `rm65_web_control_url [host]` | 输出浏览器访问地址，默认端口 `8765` |
 | `rm65_docker_bringup_remote` | 启动远程 headless 目标 |
 | `rm65_docker_remote_rviz [domain]` | 在当前桌面前台显示远程 ROS 图 |
 | `rm65_docker_remote_rviz_start [domain]` | 在当前桌面后台持续运行远程 RViz |
@@ -106,6 +110,57 @@ rm65_docker_remote_rviz_status
 | RViz 窗口出现但没有 `/l`、`/m`、`/r` 数据 | 工控机和笔记本的 `ROS_DOMAIN_ID` 是否相同，且两端 `ROS_LOCALHOST_ONLY=0`、DDS UDP/组播未被防火墙阻断。 |
 | `socket connect err` 或 `invalid robot handle` 出现在笔记本 | 误用了 `realman_driver_rviz`；笔记本应使用 `realman_remote_rviz`，SDK 连接只在工控机完成。 |
 | `permission denied while trying to connect to the Docker API` | 当前用户没有 Docker socket 权限；先修复 Docker 用户组或使用有权限的终端，再重试函数。 |
+
+## `.env` 与 Bringup 预设
+
+从仓库根目录执行 `docker compose` 时会自动读取根目录 `.env`。文件中的每个变量都带有候选值
+注释，模板默认不会启用真实运动控制，也不会包含密钥。命令行显式设置的变量优先级更高：
+
+```bash
+${EDITOR:-vi} .env
+ROS_DOMAIN_ID=166 docker compose config --quiet
+```
+
+`realman_bringup_custom` 会把 `.env` 中的开关透传给 `system.launch.py`。常用变量如下：
+
+| 变量 | 作用 |
+| --- | --- |
+| `REALMAN_START_ROBOTS` | 启动或关闭 `/l`、`/m`、`/r` 描述和 TF |
+| `REALMAN_START_DRIVER` | 启动真实 RealMan 状态驱动；离线测试可改用 mock 配置 |
+| `REALMAN_USE_RVIZ` / `REALMAN_USE_GUI` | 启动三臂 RViz 或关节状态 GUI |
+| `REALMAN_START_JOY_DRIVER` / `REALMAN_START_CONTROLLER` | 启用 SDL Joy 和 Xbox 按键节点 |
+| `REALMAN_START_WEB_CONTROL` | 在同一 ROS 图中启动 WebSocket、Action 和 URDF 控制桥 |
+| `REALMAN_*_CONFIG_FILE` | 覆盖驱动、坐标、运动和 Web 控制配置路径 |
+| `ROS_DOMAIN_ID` / `REALMAN_JOY_DEVICE` | 设置 DDS 域和手柄设备路径 |
+
+修改运行时 `.env` 变量后重新启动服务即可生效，不需要重新构建镜像；修改 Docker/ROS/PyPI
+镜像变量时需要重新构建对应服务。常用预设已经在
+`functions.zsh` 中封装，并在子 shell 中覆盖变量，不会污染当前终端：
+
+| 函数 | 启动内容 |
+| --- | --- |
+| `rm65_docker_bringup_model` | 三臂描述、TF 和 RViz；不连接真机 |
+| `rm65_docker_bringup_hardware` | 三台真实驱动和 RViz；不启动输入 |
+| `rm65_docker_bringup_headless` | 三台真实驱动和 Xbox 处理；无 GUI |
+| `rm65_docker_bringup_input` | 只测试 Joy/Xbox 输入，并等待设备出现 |
+| `rm65_docker_bringup_web` | 三台真实驱动和 Web 控制；不启动 RViz |
+
+需要后台运行或查看日志时，使用：
+
+```zsh
+rm65_docker_bringup_custom_start
+rm65_docker_bringup_custom_status
+rm65_docker_bringup_custom_logs -f
+rm65_docker_bringup_custom_stop
+```
+
+需要临时传入 launch 参数时，不修改 `.env`：
+
+```zsh
+rm65_docker_bringup_custom_args \
+  start_driver:=false start_joy_driver:=false start_controller:=false \
+  use_gui:=true use_rviz:=true
+```
 
 ## Docker 启动
 
@@ -227,6 +282,56 @@ ROS_DOMAIN_ID=65 docker compose run --rm realman_bringup_remote
 
 远程 Humble 主机设置相同的 `ROS_DOMAIN_ID=65` 和 `ROS_LOCALHOST_ONLY=0`，向 `/input/joy` 发布 `sensor_msgs/msg/Joy` 即可驱动输入节点。两台主机之间还需要允许 DDS UDP 网络通信。
 
+### 浏览器 Web 控制台
+
+Web 控制台运行在连接机械臂的工控机上，浏览器只通过 WebSocket 访问它，不会在笔记本上创建
+RealMan SDK 连接。先确认真实驱动已经运行，再构建并启动独立的 Web 服务：
+
+```bash
+docker compose build realman_web_control
+docker compose up -d realman_web_control
+docker compose ps realman_web_control
+```
+
+控制台默认监听 `0.0.0.0:8765`。使用浏览器打开下面的地址，`<industrial-host>` 替换为工控机
+在路由器局域网中的地址：
+
+```text
+http://<industrial-host>:8765/
+```
+
+空 token 时页面仍显示三臂连接状态、实时关节角和 URDF，但控制按钮保持只读。需要启用控制时，
+只在工控机的部署环境中设置长随机 token，不要写入 Git 或网页源码：
+
+```bash
+export REALMAN_WEB_CONTROL_TOKEN="$(openssl rand -hex 32)"
+docker compose up -d --force-recreate realman_web_control
+curl http://127.0.0.1:8765/healthz
+```
+
+也可以使用 Zsh 快捷函数：
+
+```zsh
+source /path/to/realman_pi/functions.zsh
+rm65_docker_web_control_start
+rm65_web_control_url <industrial-host>
+rm65_docker_web_control_status
+rm65_docker_web_control_logs -f
+```
+
+页面支持以下操作：
+
+| 操作 | 行为 |
+| --- | --- |
+| 关节滑轨 | 生成橙色半透明的目标影子，实体 URDF 继续显示真实回读位置 |
+| `MOVEJ` | 提交六轴关节角 Action，并实时显示阶段、进度、feedback 和 result |
+| 末端速度 | 建立六轴 `vx, vy, vz, wx, wy, wz` 速度 Action，按周期发送最新命令 |
+| 取消 Action | 取消当前浏览器发起的 Action，并由驱动执行受控 slow-stop |
+| 软件停止 | 直接调用当前机械臂的 `/stop` 服务；它不是控制柜物理急停 |
+
+Action、坐标系、四元数和安全边界的开发契约见[Action 开发与测试](../development/realman-action-development)，
+WebSocket 消息与 URDF 影子实现见[WebSocket 浏览器控制与 URDF 影子](../development/realman-web-control)。
+
 ### 在本机显示远程机械臂
 
 如果真实驱动运行在另一台工控机，而 RViz 要显示在当前桌面机上，请让工控机只运行
@@ -238,6 +343,10 @@ ROS domain；下面使用 `166` 作为示例。
 ```bash
 ROS_DOMAIN_ID=166 docker compose up -d realman_bringup_remote
 ```
+
+`realman_bringup_remote` 是无 GUI 的生产端 ROS 图，Compose 配置会让它在主机重启、
+Docker daemon 重启或异常退出后自动恢复。只有显式执行
+`docker compose stop realman_bringup_remote` 时，Docker 才会把它视为人工停止。
 
 当前桌面机：
 

@@ -33,8 +33,8 @@ RUN python3 -m pip install --no-cache-dir \
 
 RUN . /opt/ros/humble/setup.sh \
     && colcon build --symlink-install \
-        --packages-up-to realman_bringup realman_robot_driver \
-    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup \
+        --packages-up-to realman_bringup realman_robot_driver realman_msgs \
+    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs \
     && colcon test-result --verbose
 
 COPY docker/ros_entrypoint.sh /ros_entrypoint.sh

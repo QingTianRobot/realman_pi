@@ -1,0 +1,44 @@
+# Goal constants
+uint8 MOVEJ=0
+uint8 MOVEL=1
+uint8 MOVEJ_P=2
+uint8 BASE=0
+uint8 WORK=1
+uint8 TOOL=2
+
+uint8 command
+uint8 reference_type
+string reference_name
+float64[6] joint_degrees
+float64[3] pose_position_m
+float64[4] pose_quaternion_wxyz
+uint32 velocity_percent
+uint32 blend_radius_percent
+bool connect
+float32 timeout_sec
+---
+# Result constants
+uint8 SUCCEEDED=0
+uint8 CANCELED=1
+uint8 ABORTED=2
+uint8 TIMEOUT=3
+
+bool success
+uint8 terminal_state
+int32 api2_status
+float64[6] final_joint_degrees
+string message
+---
+# Feedback constants
+uint8 VALIDATING=0
+uint8 SUBMITTING=1
+uint8 EXECUTING=2
+uint8 STOPPING=3
+
+uint8 phase
+float32 progress
+float64[6] current_joint_degrees
+uint8 active_reference_type
+string active_reference_name
+int32 api2_status
+string detail

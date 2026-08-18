@@ -1,0 +1,41 @@
+# Goal constants
+uint8 BASE=0
+uint8 WORK=1
+uint8 TOOL=2
+
+uint8 reference_type
+string reference_name
+uint32 control_period_ms
+uint32 watchdog_ms
+float64 max_linear_accel_mps2
+float64 max_angular_accel_radps2
+bool follow
+uint8 trajectory_mode
+uint16 radio
+---
+# Result constants
+uint8 SUCCEEDED=0
+uint8 CANCELED=1
+uint8 ABORTED=2
+uint8 WATCHDOG_STOP=3
+
+bool success
+uint8 terminal_state
+int32 api2_status
+string message
+---
+# Feedback constants
+uint8 VALIDATING=0
+uint8 EXECUTING=1
+uint8 STOPPING=2
+
+float64[3] commanded_linear_velocity_mps
+float64[3] commanded_angular_velocity_radps
+float64[3] limited_linear_velocity_mps
+float64[3] limited_angular_velocity_radps
+uint8 phase
+uint8 active_reference_type
+string active_reference_name
+uint32 command_age_ms
+int32 api2_status
+string detail

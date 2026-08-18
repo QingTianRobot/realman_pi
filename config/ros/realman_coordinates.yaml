@@ -1,0 +1,76 @@
+# Desired controller coordinate profiles for the three fixed RM65 arms.
+# These are desired state only: startup verifies and blocks motion on a mismatch;
+# it never writes controller frames without an explicit apply/select request.
+version: 1
+policy:
+  # Startup reads the active controller frames. No controller write is implicit.
+  on_start: verify
+  # A controller/profile discrepancy is a safety boundary for later motion actions.
+  on_mismatch: block_motion
+
+robots:
+  l:
+    default_tool: tcpgrip
+    default_work: cell
+    tools:
+      tcpgrip:
+        # RealMan controller names are limited to 9 usable ASCII characters.
+        controller_name: tcpgrip
+        # TF frame IDs are namespaced to prevent collisions between arms.
+        ros_frame_id: l/tool/tcpgrip
+        pose:
+          # Tool origin in metres; Euler angles are intentionally not authoritative.
+          xyz_m: [0.0, 0.0, 0.120]
+          # Unit quaternion in w, x, y, z order; loader normalizes valid input.
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+        # Payload mass in kilograms and centre of mass in metres from tool origin.
+        payload_kg: 0.80
+        center_of_mass_m: [0.0, 0.0, 0.060]
+    work_frames:
+      cell:
+        controller_name: cell
+        ros_frame_id: l/work/cell
+        pose:
+          # Work origin in metres; use calibrated values only after explicit apply.
+          xyz_m: [0.0, 0.0, 0.0]
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+
+  m:
+    default_tool: tcpgrip
+    default_work: cell
+    tools:
+      tcpgrip:
+        controller_name: tcpgrip
+        ros_frame_id: m/tool/tcpgrip
+        pose:
+          xyz_m: [0.0, 0.0, 0.120]
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+        payload_kg: 0.80
+        center_of_mass_m: [0.0, 0.0, 0.060]
+    work_frames:
+      cell:
+        controller_name: cell
+        ros_frame_id: m/work/cell
+        pose:
+          xyz_m: [0.0, 0.0, 0.0]
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+
+  r:
+    default_tool: tcpgrip
+    default_work: cell
+    tools:
+      tcpgrip:
+        controller_name: tcpgrip
+        ros_frame_id: r/tool/tcpgrip
+        pose:
+          xyz_m: [0.0, 0.0, 0.120]
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+        payload_kg: 0.80
+        center_of_mass_m: [0.0, 0.0, 0.060]
+    work_frames:
+      cell:
+        controller_name: cell
+        ros_frame_id: r/work/cell
+        pose:
+          xyz_m: [0.0, 0.0, 0.0]
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]

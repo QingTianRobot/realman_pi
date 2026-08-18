@@ -272,13 +272,16 @@ class WebControlServer:
         from aiohttp import web
 
         relative = request.match_info["path"] or "index.html"
-        candidate = (self.static_root / relative).resolve()
-        if self.static_root not in candidate.parents and candidate != self.static_root:
+        requested = Path(relative)
+        if requested.is_absolute() or ".." in requested.parts:
             raise web.HTTPNotFound()
+        candidate = self.static_root / requested
         if candidate.is_file():
             return web.FileResponse(candidate)
-        if "." not in Path(relative).name:
-            return web.FileResponse(self.static_root / "index.html")
+        if "." not in requested.name:
+            index_file = self.static_root / "index.html"
+            if index_file.is_file():
+                return web.FileResponse(index_file)
         raise web.HTTPNotFound()
 
     async def _send_event(self, event: dict[str, Any], client_id: str | None) -> None:
@@ -291,4 +294,3 @@ class WebControlServer:
         for socket in targets:
             if not socket.closed:
                 await socket.send_str(payload)
-

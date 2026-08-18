@@ -6,12 +6,19 @@ import weakref
 
 import pytest
 
+import realman_robot_driver.cartesian_velocity_session as velocity_module
 from realman_robot_driver.cartesian_velocity_session import (
     CartesianVelocitySession,
     VelocityTerminalState,
 )
-from realman_robot_driver.motion_coordinator import ArmOwnership
-from realman_robot_driver.motion_types import MotionSettings, ReferenceType
+from realman_robot_driver.motion_coordinator import ArmOwnership, MotionCoordinator
+from realman_robot_driver.motion_types import (
+    CommandType,
+    Goal,
+    MotionSettings,
+    ReferenceState,
+    ReferenceType,
+)
 
 
 class Clock:
@@ -180,6 +187,17 @@ def test_rejects_frame_mismatch_and_non_finite_command():
     session.shutdown()
 
 
+@pytest.mark.parametrize("value", [math.inf, -math.inf])
+def test_rejects_infinite_twist_components(value):
+    session = make_session()
+    session.start(valid_goal())
+
+    with pytest.raises(ValueError, match="finite"):
+        session.accept_command(twist("l/tool/tcpgrip", angular=(0.0, value, 0.0)))
+
+    session.shutdown()
+
+
 def test_watchdog_sends_zero_then_stops_once_and_rejects_commands():
     clock = Clock()
     adapter = FakeAdapter()
@@ -194,6 +212,226 @@ def test_watchdog_sends_zero_then_stops_once_and_rejects_commands():
     assert session.result.success is False
     with pytest.raises(RuntimeError, match="terminated"):
         session.accept_command(twist("l/tool/tcpgrip"))
+
+
+def test_safety_supervisor_stops_blocked_movev_without_terminal_overwrite():
+    move_entered = threading.Event()
+    allow_move = threading.Event()
+    stop_called = threading.Event()
+
+    class BlockingCommandAdapter(FakeAdapter):
+        def movev(self, vector, follow, trajectory_mode, radio):
+            self.velocity_calls.append((list(vector), follow, trajectory_mode, radio))
+            if len(self.velocity_calls) > 1:
+                move_entered.set()
+                assert allow_move.wait(timeout=1.0)
+                return 41
+            return 0
+
+        def slow_stop(self):
+            self.slow_stop_calls += 1
+            stop_called.set()
+            return 29
+
+    clock = Clock()
+    ownership = ArmOwnership()
+    adapter = BlockingCommandAdapter()
+    session = make_session(adapter=adapter, clock=clock, ownership=ownership)
+    session._thread_join_timeout_sec = 0.02
+    assert session.start(valid_goal(watchdog_ms=100)) is True
+    control_thread = session.thread
+    session.accept_command(twist("l/tool/tcpgrip", linear=(0.1, 0.0, 0.0)))
+    assert move_entered.wait(timeout=1.0)
+
+    clock.advance(0.101)
+    with session._condition:
+        session._condition.notify_all()
+    stop_was_immediate = stop_called.wait(timeout=0.05)
+    if not stop_was_immediate:
+        allow_move.set()
+        session.shutdown()
+
+    assert stop_was_immediate is True
+    assert session._done_event.wait(timeout=0.2)
+    terminal_result = session.result
+    assert terminal_result.terminal_state == VelocityTerminalState.ABORTED
+    assert terminal_result.api2_status == 29
+    assert "zero velocity command skipped" in terminal_result.message
+    assert "slow_stop status 29" in terminal_result.message
+    assert "timeout" in terminal_result.message
+    assert len(adapter.velocity_calls) == 2
+    assert ownership.is_busy("l") is True
+
+    allow_move.set()
+    assert control_thread is not None
+    control_thread.join(timeout=1.0)
+
+    assert control_thread.is_alive() is False
+    assert session.result == terminal_result
+    assert session.result.api2_status == 29
+    assert ownership.is_busy("l") is True
+
+
+@pytest.mark.parametrize("operation", ["shutdown", "fast_stop"])
+def test_stop_operations_join_control_and_safety_supervisor_threads(operation):
+    ownership = ArmOwnership()
+    session = make_session(ownership=ownership)
+    assert session.start(valid_goal(watchdog_ms=100)) is True
+    control_thread = session.thread
+    safety_thread = session._safety_thread
+
+    if operation == "shutdown":
+        assert session.shutdown() == 0
+    else:
+        assert session.fast_stop_if_owned() == 0
+
+    assert control_thread is not None
+    assert safety_thread is not None
+    assert control_thread.is_alive() is False
+    assert safety_thread.is_alive() is False
+    assert session.thread is None
+    assert session._safety_thread is None
+    assert ownership.is_busy("l") is False
+
+
+def test_shutdown_joins_safety_thread_after_waiting_for_its_stop_result():
+    class PendingSafetyThread:
+        def __init__(self):
+            self.joined = False
+
+        def join(self, timeout=None):
+            self.joined = True
+
+        def is_alive(self):
+            return not self.joined
+
+    session = make_session()
+    pending_safety = PendingSafetyThread()
+    session._slow_stop_in_progress = True
+    session._safety_thread = pending_safety
+    session._result = velocity_module.VelocityResult(
+        False,
+        VelocityTerminalState.WATCHDOG_STOP,
+        0,
+        "velocity command watchdog expired",
+    )
+    wait_entered = threading.Event()
+    original_wait = session._condition.wait
+
+    def observed_wait(timeout=None):
+        wait_entered.set()
+        return original_wait(timeout=timeout)
+
+    session._condition.wait = observed_wait
+    results = []
+    shutdown_thread = threading.Thread(
+        target=lambda: results.append(session.shutdown())
+    )
+    shutdown_thread.start()
+    assert wait_entered.wait(timeout=1.0)
+
+    with session._condition:
+        session._slow_stop_in_progress = False
+        session._condition.notify_all()
+    shutdown_thread.join(timeout=1.0)
+
+    assert results == [0]
+    assert pending_safety.joined is True
+
+
+def test_action_waits_for_watchdog_stop_result_before_returning():
+    slow_stop_entered = threading.Event()
+    allow_slow_stop = threading.Event()
+
+    class BlockingSlowStopAdapter(FakeAdapter):
+        def slow_stop(self):
+            self.slow_stop_calls += 1
+            slow_stop_entered.set()
+            assert allow_slow_stop.wait(timeout=1.0)
+            return self.stop_status
+
+    clock = Clock()
+    adapter = BlockingSlowStopAdapter()
+    session = make_session(adapter=adapter, clock=clock)
+    goal = valid_goal(watchdog_ms=100)
+    assert bool(session.goal_callback(goal)) is True
+    handle = FakeGoalHandle(goal)
+    action_results = []
+    action_thread = threading.Thread(
+        target=lambda: action_results.append(session.execute(handle))
+    )
+    action_thread.start()
+    with session._condition:
+        assert session._condition.wait_for(lambda: session._running, timeout=1.0)
+
+    clock.advance(0.101)
+    with session._condition:
+        session._condition.notify_all()
+    assert slow_stop_entered.wait(timeout=1.0)
+
+    action_thread.join(timeout=0.15)
+    returned_before_stop = not action_thread.is_alive()
+    allow_slow_stop.set()
+    action_thread.join(timeout=1.0)
+
+    assert returned_before_stop is False
+    assert action_thread.is_alive() is False
+    assert action_results == [session.result]
+    assert action_results[0].terminal_state == VelocityTerminalState.WATCHDOG_STOP
+    assert action_results[0].api2_status == 0
+    assert handle.terminal == "aborted"
+
+
+def test_safety_supervisor_thread_start_failure_stops_control_thread(monkeypatch):
+    original_start = threading.Thread.start
+    started_threads = []
+
+    def start_with_safety_failure(thread):
+        if thread.name.endswith("-safety"):
+            raise RuntimeError("safety thread start failed")
+        started_threads.append(thread)
+        return original_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", start_with_safety_failure)
+    ownership = ArmOwnership()
+    adapter = FakeAdapter()
+    session = make_session(adapter=adapter, ownership=ownership)
+
+    started = session.start(valid_goal())
+
+    assert started is False
+    assert len(started_threads) == 1
+    assert started_threads[0].is_alive() is False
+    assert session.thread is None
+    assert session._safety_thread is None
+    assert adapter.slow_stop_calls == 1
+    assert len(adapter.velocity_calls) == 2
+    assert session.result.terminal_state == VelocityTerminalState.ABORTED
+    assert session.result.api2_status == -1
+    assert "safety supervisor thread start failed" in session.result.message
+    assert ownership.is_busy("l") is False
+
+
+def test_action_reports_safety_thread_start_failure_result(monkeypatch):
+    original_start = threading.Thread.start
+
+    def start_with_safety_failure(thread):
+        if thread.name.endswith("-safety"):
+            raise RuntimeError("safety thread start failed")
+        return original_start(thread)
+
+    monkeypatch.setattr(threading.Thread, "start", start_with_safety_failure)
+    session = make_session()
+    goal = valid_goal()
+    assert bool(session.goal_callback(goal)) is True
+    handle = FakeGoalHandle(goal)
+
+    result = session.execute(handle)
+
+    assert handle.terminal == "aborted"
+    assert result.terminal_state == VelocityTerminalState.ABORTED
+    assert result.api2_status == -1
+    assert "safety supervisor thread start failed" in result.message
 
 
 def test_cancel_sends_zero_and_slow_stop():
@@ -722,6 +960,129 @@ def test_delayed_action_completion_is_consumed_once_without_touching_new_reserva
     assert new_handle.terminal == "canceled"
 
 
+def test_completed_action_cache_is_bounded_and_evicted_execute_cannot_touch_reservation():
+    limit = 128
+    assert velocity_module._COMPLETED_ACTION_RESULT_LIMIT == limit
+    ownership = ArmOwnership()
+    session = make_session(ownership=ownership)
+    oldest_goal = valid_goal()
+    assert bool(session.goal_callback(oldest_goal)) is True
+    assert bool(
+        session.cancel_callback(SimpleNamespace(request=oldest_goal))
+    ) is True
+
+    retained_goals = []
+    for _ in range(limit):
+        goal = valid_goal()
+        retained_goals.append(goal)
+        assert bool(session.goal_callback(goal)) is True
+        assert bool(session.cancel_callback(SimpleNamespace(request=goal))) is True
+
+    assert len(session._completed_action_results) == limit
+    assert id(oldest_goal) not in session._completed_action_results
+
+    current_goal = valid_goal()
+    assert bool(session.goal_callback(current_goal)) is True
+    old_handle = FakeGoalHandle(oldest_goal)
+    old_result = session.execute(old_handle)
+
+    assert old_handle.terminal == "aborted"
+    assert old_result.terminal_state == VelocityTerminalState.ABORTED
+    assert "no longer executable" in old_result.message
+    assert ownership.is_busy("l") is True
+    current_handle = FakeGoalHandle(current_goal, cancel_requested=True)
+    session.execute(current_handle)
+    assert current_handle.terminal == "canceled"
+
+
+@pytest.mark.parametrize("watchdog_ms", [20, 80])
+def test_action_feedback_wait_is_slower_than_control_and_independent_of_watchdog(
+    watchdog_ms
+):
+    class CancelOnFirstWait:
+        def __init__(self, session):
+            self.session = session
+            self.timeouts = []
+
+        def clear(self):
+            pass
+
+        def set(self):
+            pass
+
+        def wait(self, timeout):
+            self.timeouts.append(timeout)
+            self.session.cancel()
+            return True
+
+    session = make_session()
+    goal = valid_goal(watchdog_ms=watchdog_ms)
+    assert bool(session.goal_callback(goal)) is True
+    done_event = CancelOnFirstWait(session)
+    session._done_event = done_event
+
+    result = session.execute(FakeGoalHandle(goal))
+
+    assert result.terminal_state == VelocityTerminalState.CANCELED
+    assert done_event.timeouts == [pytest.approx(0.1)]
+    assert done_event.timeouts[0] > goal.control_period_ms / 1000.0
+
+
+def test_motion_coordinator_and_velocity_session_share_real_arm_ownership():
+    class Responses:
+        REJECT = False
+        ACCEPT = True
+
+    class Coordinates:
+        def motion_allowed(self, arm):
+            return arm == "l"
+
+    references = ReferenceState(
+        {
+            ReferenceType.BASE: frozenset({"base"}),
+            ReferenceType.WORK: frozenset({"cell"}),
+            ReferenceType.TOOL: frozenset({"tcpgrip"}),
+        }
+    )
+    motion_goal = Goal(
+        command=CommandType.MOVEJ,
+        reference_type=ReferenceType.BASE,
+        reference_name="base",
+        joint_degrees=(1.0, 2.0, 3.0, 4.0, 5.0, 6.0),
+        velocity_percent=20,
+        blend_radius_percent=0,
+        timeout_sec=1.0,
+    )
+
+    def make_motion(ownership):
+        adapter = FakeAdapter()
+        adapter.connected = True
+        return MotionCoordinator(
+            arm_id="l",
+            adapter=adapter,
+            coordinate_manager=Coordinates(),
+            ownership=ownership,
+            reference_resolver=references,
+            active_reference=lambda reference_type: "base",
+            action_type=SimpleNamespace,
+            goal_response_type=Responses,
+            cancel_response_type=Responses,
+        )
+
+    motion_owned = ArmOwnership()
+    motion = make_motion(motion_owned)
+    velocity = make_session(ownership=motion_owned)
+    assert bool(motion.goal_callback(motion_goal)) is True
+    assert bool(velocity.goal_callback(valid_goal())) is False
+
+    velocity_owned = ArmOwnership()
+    motion = make_motion(velocity_owned)
+    velocity = make_session(ownership=velocity_owned)
+    assert bool(velocity.goal_callback(valid_goal())) is True
+    assert bool(motion.goal_callback(motion_goal)) is False
+    assert velocity.shutdown() == 0
+
+
 def test_fast_stop_invalidates_start_while_velocity_init_is_blocked():
     init_entered = threading.Event()
     allow_init = threading.Event()
@@ -1165,6 +1526,7 @@ def test_confirmed_disconnect_clears_velocity_lockout_and_releases_ownership():
     ("field", "value"),
     [
         ("_thread", threading.current_thread()),
+        ("_safety_thread", threading.current_thread()),
         ("_starting", True),
         ("_movev_in_progress", True),
         ("_slow_stop_call_in_progress", True),

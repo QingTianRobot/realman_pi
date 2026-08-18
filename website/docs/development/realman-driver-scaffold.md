@@ -7,6 +7,9 @@ description: RealMan Python SDK 的 ROS 2 Humble 三臂回读、运动 Action、
 
 `realman_robot_driver` 是 `src/driver/` 下的 ROS 2 Humble Python 包。驱动通过睿尔曼 Python SDK 发布关节状态，并提供普通运动 Action 与六轴笛卡尔速度 session。离线测试使用独立的 mock 配置文件，不连接控制器。
 
+需要扩展 Action、理解 reservation/generation/lockout 状态机或查找逐项测试用例时，先看
+[睿尔曼 Action 开发与测试](./realman-action-development)；本页保留运行时 ROS 图、配置和真机放行清单。
+
 运动接口已经实现，但尚未在真实 RM65 控制器上完成验证。真机使用必须经过本页末尾的运行门槛，不能把 mock 测试结果视为现场安全验证。
 
 ## 模块边界

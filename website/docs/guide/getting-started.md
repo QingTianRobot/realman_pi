@@ -49,6 +49,10 @@ rm65_project_help
 | `rm65_docker_three_rviz` | 启动配置驱动的三臂 RViz |
 | `rm65_docker_xbox_test` | 只启动实体手柄输入链路 |
 | `rm65_docker_bringup` | 启动三臂、RViz、Joy 和 Xbox 输入 |
+| `rm65_docker_bringup_custom` | 按 `.env` 中的 launch 开关启动参数化 bringup |
+| `rm65_docker_bringup_model` / `hardware` / `headless` | 启动模型、真机 RViz 或无 GUI 预设 |
+| `rm65_docker_bringup_input` / `web` | 只启动输入链路或真机 Web 控制 |
+| `rm65_docker_bringup_custom_args ...` | 临时透传 `system.launch.py` 参数 |
 | `rm65_docker_bringup_remote` | 启动远程 headless 目标 |
 | `rm65_docker_remote_rviz [domain]` | 在当前桌面前台显示远程 ROS 图 |
 | `rm65_docker_remote_rviz_start [domain]` | 在当前桌面后台持续运行远程 RViz |
@@ -60,6 +64,10 @@ rm65_project_help
 这些函数不会自动写入 `~/.zshrc`，也不会隐藏底层参数。需要函数未覆盖的 Compose、
 colcon 或 launch 选项时，继续使用本页的原始命令。`rm65_docker_xbox_test` 不启动
 三臂和 RViz，适合先验证实体手柄是否能产生 Joy 消息和按键日志。
+
+参数化 bringup 的完整开关和组合说明见
+[系统 Bringup：参数化组合](../development/system-bringup#参数化组合)。每个函数在子 shell
+中覆盖对应变量，执行结束后不会改变当前终端的环境变量。
 
 ### 远程 RViz 函数详解
 
@@ -108,6 +116,9 @@ git clone git@github.com:QingTianRobot/realman_pi.git
 cd realman_pi
 docker compose build rm65_rviz
 ```
+
+默认构建使用国内 Docker Hub、Ubuntu、ROS 2 和 PyPI 镜像。镜像地址及切回官方源的方法见
+[系统 Bringup：国内镜像与官方源切换](../development/system-bringup#国内镜像与官方源切换)。
 
 启动默认型号：
 

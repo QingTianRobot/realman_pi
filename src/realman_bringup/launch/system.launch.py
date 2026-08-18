@@ -38,6 +38,7 @@ def generate_launch_description():
     description_share = Path(get_package_share_directory("rm65_description"))
     three_robots_launch = description_share / "launch" / "three_robots.launch.py"
     driver_share = Path(get_package_share_directory("realman_robot_driver"))
+    web_control_share = Path(get_package_share_directory("realman_web_control"))
     three_drivers_launch = driver_share / "launch" / "three_realman_drivers.launch.py"
     # Docker mounts the repository configuration at REALMAN_CONFIG_ROOT so edits
     # are picked up on restart. Installed config remains the local build fallback.
@@ -66,6 +67,8 @@ def generate_launch_description():
     driver_config_file = LaunchConfiguration("driver_config_file")
     coordinates_config_file = LaunchConfiguration("coordinates_config_file")
     motion_config_file = LaunchConfiguration("motion_config_file")
+    start_web_control = LaunchConfiguration("start_web_control")
+    web_control_config_file = LaunchConfiguration("web_control_config_file")
     wait_for_joy_device = LaunchConfiguration("wait_for_joy_device")
     joy_device_path = LaunchConfiguration("joy_device_path")
     joy_poll_interval = LaunchConfiguration("joy_poll_interval")
@@ -161,6 +164,16 @@ def generate_launch_description():
                 description="RealMan motion safety limits under root config/ros.",
             ),
             DeclareLaunchArgument(
+                "start_web_control",
+                default_value="false",
+                description="Start the authenticated browser WebSocket/action bridge.",
+            ),
+            DeclareLaunchArgument(
+                "web_control_config_file",
+                default_value=str(config_root / "ros" / "realman_web_control.yaml"),
+                description="Browser bridge settings under the project-root config/ directory.",
+            ),
+            DeclareLaunchArgument(
                 "wait_for_joy_device",
                 default_value="false",
                 description="Keep polling until the configured joystick device appears.",
@@ -192,6 +205,18 @@ def generate_launch_description():
                     "config_file": driver_config_file,
                     "coordinates_config_file": coordinates_config_file,
                     "motion_config_file": motion_config_file,
+                }.items(),
+            ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    str(web_control_share / "launch" / "web_control.launch.py")
+                ),
+                condition=IfCondition(start_web_control),
+                launch_arguments={
+                    "web_control_config_file": web_control_config_file,
+                    "layout_config_file": str(three_robots_config),
+                    "motion_config_file": motion_config_file,
+                    "coordinates_config_file": coordinates_config_file,
                 }.items(),
             ),
             Node(

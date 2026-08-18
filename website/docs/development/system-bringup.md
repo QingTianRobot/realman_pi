@@ -41,6 +41,10 @@ ros2 launch realman_bringup system.launch.py \
 | `use_rviz` | `true` | 使用三臂 RViz 配置启动 `rviz2` |
 | `start_driver` | `true` | 启动三台真实关节状态驱动，并禁用三臂假关节状态源 |
 | `driver_config_file` | `config/ros/realman_driver.yaml` | 指定根目录下的真实或 mock 驱动配置 |
+| `coordinates_config_file` | `config/ros/realman_coordinates.yaml` | 指定 BASE/WORK/TOOL 坐标配置 |
+| `motion_config_file` | `config/ros/realman_motion.yaml` | 指定运动速度、加速度和 watchdog 限制 |
+| `start_web_control` | `false` | 启动认证 WebSocket、Action 和 URDF 控制桥 |
+| `web_control_config_file` | `config/ros/realman_web_control.yaml` | 指定浏览器控制桥配置 |
 | `wait_for_joy_device` | `false` | 输入设备不存在时持续轮询；Docker 输入服务设为 `true` |
 | `joy_device_path` | `${REALMAN_JOY_DEVICE:-auto}` | 设备路径、glob，或自动扫描 `/dev/input` |
 | `joy_poll_interval` | `1.0` | 轮询间隔，单位秒，最小 `0.1` |
@@ -88,6 +92,7 @@ realman_bringup/system.launch.py
 | --- | --- | --- | --- |
 | `realman_bringup` | 完整本地系统 | 需要 `DISPLAY`、`XAUTHORITY` | 等待并读取 `${REALMAN_JOY_DEVICE:-auto}` |
 | `realman_bringup_remote` | 远程/headless 调试 | 不需要 X11 | 不映射设备，不启动 Joy 驱动 |
+| `realman_bringup_custom` | `.env` 参数化组合 | 可选 X11 | 按 `.env` 开关映射并启动 |
 | `realman_remote_rviz` | 只在本机显示远程 ROS 图 | 需要 X11 | 不启动驱动或手柄 |
 | `xbox_controller_test` | 独立手柄测试 | 不需要 X11 | 等待并读取 `${REALMAN_JOY_DEVICE:-auto}` |
 | `realman_driver_rviz` | 三臂真实关节回读与 RViz | 需要 X11 | 不启动手柄 |
@@ -106,6 +111,105 @@ docker compose run --rm realman_bringup
 docker compose build realman_driver_rviz
 docker compose run --rm realman_driver_rviz
 ```
+
+### 参数化组合
+
+参数化组合使用 `realman_bringup_custom`。它把下列 launch 参数映射到根目录 `.env`，修改
+`.env` 后重新启动即可生效，不需要编辑 Compose：
+
+模板默认只启动描述和 TF，不连接真实机械臂、不启动 RViz 或输入节点；这样首次验证参数
+不会触发 SDK 连接。需要真机、RViz 或输入时，使用下方预设，或在 `.env` 中明确打开对应开关。
+
+| `.env` 变量 | 传给 launch 的参数 | 常用值 |
+| --- | --- | --- |
+| `REALMAN_START_ROBOTS` | `start_robots` | `true` / `false` |
+| `REALMAN_START_DRIVER` | `start_driver` | `true` / `false` |
+| `REALMAN_START_JOY_DRIVER` | `start_joy_driver` | `true` / `false` |
+| `REALMAN_START_CONTROLLER` | `start_controller` | `true` / `false` |
+| `REALMAN_USE_GUI` | `use_gui` | `true` / `false` |
+| `REALMAN_USE_RVIZ` | `use_rviz` | `true` / `false` |
+| `REALMAN_START_WEB_CONTROL` | `start_web_control` | `true` / `false` |
+| `REALMAN_WAIT_FOR_JOY_DEVICE` | `wait_for_joy_device` | `true` / `false` |
+| `REALMAN_JOY_POLL_INTERVAL` | `joy_poll_interval` | `0.1` 以上的秒数 |
+
+前台运行和后台运行：
+
+```bash
+docker compose run --rm realman_bringup_custom
+docker compose up -d realman_bringup_custom
+docker compose ps realman_bringup_custom
+docker compose logs -f realman_bringup_custom
+docker compose stop realman_bringup_custom
+```
+
+常用模式已经封装在 `functions.zsh` 中：
+
+| 函数 | 参数组合 |
+| --- | --- |
+| `rm65_docker_bringup_model` | 只启动三臂描述和 RViz，不连接真机、不启动输入 |
+| `rm65_docker_bringup_hardware` | 连接三台真机并显示 RViz，不启动输入 |
+| `rm65_docker_bringup_headless` | 连接三台真机和 Xbox 处理节点，不启动 GUI |
+| `rm65_docker_bringup_input` | 只启动 Joy/Xbox 输入，并等待设备出现 |
+| `rm65_docker_bringup_web` | 连接三台真机并启动 Web 控制，不启动 RViz |
+
+需要临时传入任意 launch 参数时，使用：
+
+```zsh
+rm65_docker_bringup_custom_args \
+  start_driver:=false start_joy_driver:=false start_controller:=false \
+  use_gui:=true use_rviz:=true
+```
+
+该函数使用图形版 Compose 服务的挂载，但只把参数直接交给
+`realman_bringup/system.launch.py`；不会修改当前 shell 或 `.env`。
+
+### 国内镜像与官方源切换
+
+Compose 默认通过国内镜像加速首次构建，具体值都以 Docker build argument 传入，权威配置在
+`config/docker/compose.yaml` 和 `config/docker/ros2-humble-rviz.Dockerfile`：
+
+| 变量 | 默认值 | 下载内容 |
+| --- | --- | --- |
+| `ROS_BASE_IMAGE` | `docker.m.daocloud.io/library/ros:humble-ros-base` | Docker Hub 的 ROS Humble 基础镜像代理 |
+| `UBUNTU_APT_MIRROR` | `https://mirrors.aliyun.com/ubuntu` | amd64 Ubuntu Jammy 软件包 |
+| `UBUNTU_PORTS_APT_MIRROR` | `https://mirrors.aliyun.com/ubuntu-ports` | arm64 Ubuntu Jammy 软件包 |
+| `ROS2_APT_MIRROR` | `https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu` | ROS 2 Humble 软件包 |
+| `PYPI_INDEX_URL` | `https://pypi.tuna.tsinghua.edu.cn/simple` | `Robotic_Arm` Python SDK |
+
+镜像 URL 不要带末尾 `/`。若某个公共镜像暂时不可用，可只覆盖该项；需要完全使用官方源时：
+
+```bash
+ROS_BASE_IMAGE=ros:humble-ros-base \
+UBUNTU_APT_MIRROR=https://archive.ubuntu.com/ubuntu \
+UBUNTU_PORTS_APT_MIRROR=http://ports.ubuntu.com/ubuntu-ports \
+ROS2_APT_MIRROR=http://packages.ros.org/ros2/ubuntu \
+PYPI_INDEX_URL=https://pypi.org/simple \
+docker compose build realman_bringup
+```
+
+这些变量只影响镜像构建，不进入机械臂运行配置。公共镜像属于第三方基础设施；发布到生产前
+应核对最终基础镜像 digest，或改用组织内部已审计的 registry/软件仓库。
+
+### 项目 `.env` 自动加载
+
+从仓库根目录执行 `docker compose` 时，Compose 会自动读取根目录 `.env`。项目已提供一份
+无密钥模板，变量旁边的注释列出常用候选值；修改后直接执行构建或启动命令即可：
+
+```bash
+${EDITOR:-vi} .env
+docker compose build realman_bringup
+docker compose run --rm realman_bringup
+```
+
+命令行显式写入的变量优先级高于 `.env`，适合临时切换 ROS 域或镜像：
+
+```bash
+ROS_DOMAIN_ID=166 docker compose run --rm realman_bringup_remote
+```
+
+`REALMAN_WEB_CONTROL_TOKEN` 留空时 Web 控制保持只读；启用控制前请在 `.env` 中填写仅限
+可信局域网使用的随机 token。不要把真实 token 写入文档、YAML 或提交记录；`.dockerignore`
+也会阻止 `.env` 进入 Docker 构建上下文。
 
 远程目标启动：
 
@@ -306,6 +410,7 @@ find logs -maxdepth 2 -type f -name '*.log' -print
 | 日志没有落在项目目录 | `REALMAN_LOG_ROOT` 是否可写，宿主 `logs/` 是否正确挂载 |
 | RViz/GUI 报 Qt/X11 错误 | 图形服务需要有效 `DISPLAY`、`XAUTHORITY` 和 `/tmp/.X11-unix` |
 | 修改 YAML 后行为未变化 | Docker 需重启服务；本地安装需重新构建 `realman_bringup` |
+| Docker 拉取基础镜像或 APT 超时 | 检查上表镜像变量；单独切换故障源，或临时恢复官方源后重建 |
 
 ## 当前限制
 

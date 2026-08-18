@@ -41,6 +41,12 @@ world -> base_link -> link_1 -> link_2 -> link_3 -> link_4 -> link_5 -> link_6
 
 ## Run with Docker
 
+Docker Compose automatically loads the repository-root `.env` file. It contains
+commented candidate values for ROS domain, robot model, RViz/X11, Web control,
+and domestic build mirrors. Keep `REALMAN_WEB_CONTROL_TOKEN` empty for the
+default read-only Web console, and set a private random value only in a trusted
+deployment environment.
+
 Graphical RViz services require the active desktop session to provide both
 `DISPLAY` and `XAUTHORITY`. The headless `realman_bringup_remote` service does
 not require either variable.

@@ -6,6 +6,14 @@ x-realman-common: &realman-common
   build:
     context: .
     dockerfile: config/docker/ros2-humble-rviz.Dockerfile
+    args:
+      # Domestic defaults accelerate first-time builds. Every value can be
+      # replaced by an official upstream or an internal mirror at invocation.
+      ROS_BASE_IMAGE: ${ROS_BASE_IMAGE:-docker.m.daocloud.io/library/ros:humble-ros-base}
+      UBUNTU_APT_MIRROR: ${UBUNTU_APT_MIRROR:-https://mirrors.aliyun.com/ubuntu}
+      UBUNTU_PORTS_APT_MIRROR: ${UBUNTU_PORTS_APT_MIRROR:-https://mirrors.aliyun.com/ubuntu-ports}
+      ROS2_APT_MIRROR: ${ROS2_APT_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu}
+      PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
   network_mode: host
   ipc: host
   environment:
@@ -17,6 +25,8 @@ x-realman-common: &realman-common
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
     # The launch file scans this path/glob and waits when it is not present.
     REALMAN_JOY_DEVICE: ${REALMAN_JOY_DEVICE:-auto}
+    # The value is intentionally supplied only through the deployment environment.
+    REALMAN_WEB_CONTROL_TOKEN: ${REALMAN_WEB_CONTROL_TOKEN:-}
   volumes:
     # Runtime config edits take effect on the next launch without rebuilding.
     - ./config:/opt/rm65_ws/config:ro
@@ -33,6 +43,7 @@ x-rm65-rviz-common: &rm65-rviz-common
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
     REALMAN_JOY_DEVICE: ${REALMAN_JOY_DEVICE:-auto}
+    REALMAN_WEB_CONTROL_TOKEN: ${REALMAN_WEB_CONTROL_TOKEN:-}
     # Forward the active desktop display and force software rendering to avoid
     # host/container OpenGL driver mismatches.
     DISPLAY: ${DISPLAY:-}
@@ -112,6 +123,42 @@ services:
       - use_gui:=${RM65_USE_GUI:-false}
       - use_rviz:=${RM65_USE_RVIZ:-true}
 
+  # Parameterized bringup for development and diagnostics. The fixed services
+  # above remain the stable operator presets; this target exposes the launch
+  # package switches through .env without requiring a Compose-file edit.
+  realman_bringup_custom:
+    <<: *rm65-rviz-common
+    volumes:
+      - ./config:/opt/rm65_ws/config:ro
+      - ./logs:/opt/rm65_ws/logs
+      - /tmp/.X11-unix:/tmp/.X11-unix:rw
+      - ${XAUTHORITY:-/dev/null}:/tmp/.Xauthority:ro
+      - ./config:/opt/rm65_ws/install/rm65_description/share/rm65_description/config:ro
+      # The Joy node is optional, but mapping the input directory lets one
+      # .env profile switch it on without changing the service definition.
+      - /dev/input:/dev/input:ro
+    device_cgroup_rules:
+      - "c 13:* r"
+    command:
+      - ros2
+      - launch
+      - realman_bringup
+      - system.launch.py
+      - start_robots:=${REALMAN_START_ROBOTS:-true}
+      - start_driver:=${REALMAN_START_DRIVER:-true}
+      - start_joy_driver:=${REALMAN_START_JOY_DRIVER:-false}
+      - start_controller:=${REALMAN_START_CONTROLLER:-false}
+      - use_gui:=${REALMAN_USE_GUI:-false}
+      - use_rviz:=${REALMAN_USE_RVIZ:-false}
+      - start_web_control:=${REALMAN_START_WEB_CONTROL:-false}
+      - wait_for_joy_device:=${REALMAN_WAIT_FOR_JOY_DEVICE:-false}
+      - joy_device_path:=${REALMAN_JOY_DEVICE:-auto}
+      - joy_poll_interval:=${REALMAN_JOY_POLL_INTERVAL:-1.0}
+      - driver_config_file:=${REALMAN_DRIVER_CONFIG_FILE:-/opt/rm65_ws/config/ros/realman_driver.yaml}
+      - coordinates_config_file:=${REALMAN_COORDINATES_CONFIG_FILE:-/opt/rm65_ws/config/ros/realman_coordinates.yaml}
+      - motion_config_file:=${REALMAN_MOTION_CONFIG_FILE:-/opt/rm65_ws/config/ros/realman_motion.yaml}
+      - web_control_config_file:=${REALMAN_WEB_CONTROL_CONFIG_FILE:-/opt/rm65_ws/config/ros/realman_web_control.yaml}
+
   # Headless remote-debug target. Publish sensor_msgs/Joy from another Humble
   # host on the same ROS_DOMAIN_ID to exercise the controller node without USB.
   realman_bringup_remote:
@@ -124,6 +171,17 @@ services:
       - start_joy_driver:=false
       - use_gui:=false
       - use_rviz:=false
+      - start_web_control:=${REALMAN_START_WEB_CONTROL:-false}
+
+  # Browser action console. It joins an existing ROS graph and serves the
+  # packaged URDF/static UI on http://<industrial-host>:8765/.
+  realman_web_control:
+    <<: *realman-common
+    command:
+      - ros2
+      - launch
+      - realman_web_control
+      - web_control.launch.py
 
   # RViz-only viewer for a remote realman_bringup_remote ROS graph. It does not
   # start a local driver, robot_state_publisher, or fake joint-state publisher.

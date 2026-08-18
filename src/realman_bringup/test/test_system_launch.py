@@ -23,6 +23,7 @@ def test_disabled_system_launch_expands_without_starting_processes(tmp_path, mon
             "start_controller",
             "use_gui",
             "use_rviz",
+            "start_web_control",
         )
     ]
     service = LaunchService()

@@ -16,6 +16,7 @@
   <exec_depend>launch_ros</exec_depend>
   <exec_depend>rm65_description</exec_depend>
   <exec_depend>realman_robot_driver</exec_depend>
+  <exec_depend>realman_web_control</exec_depend>
   <exec_depend>rviz2</exec_depend>
   <exec_depend>xbox_controller_driver</exec_depend>
 

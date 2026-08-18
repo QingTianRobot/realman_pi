@@ -11,6 +11,8 @@ const { defineConfig, devices } = requireFromWebsite("@playwright/test");
 
 export default defineConfig({
   testDir: resolve(websiteDirectory, "tests"),
+  // The browser action console has its own Vite server and configuration.
+  testIgnore: ["web-control/**"],
   outputDir: resolve(websiteDirectory, "test-results"),
   fullyParallel: false,
   workers: 1,

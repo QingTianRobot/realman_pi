@@ -1,0 +1,18 @@
+# Browser-to-ROS bridge settings for the three RealMan arms.
+#
+# The Web UI is intentionally read-only until both control_enabled is true and
+# the environment variable named by control_token_env contains a non-empty token.
+server:
+  # Listen on every interface so a laptop can open the industrial PC's address.
+  bind_host: 0.0.0.0
+  port: 8765
+  control_enabled: true
+  # Export this variable before Compose startup; never commit its value here.
+  control_token_env: REALMAN_WEB_CONTROL_TOKEN
+  # same-origin accepts browsers that loaded the UI from this server. Add exact
+  # http(s) origins only when a separate trusted frontend is deliberately used.
+  allowed_origins: [same-origin]
+  max_clients: 8
+  # Reject oversized WebSocket frames before parsing JSON.
+  max_message_bytes: 65536
+

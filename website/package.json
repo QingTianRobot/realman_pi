@@ -6,8 +6,11 @@
     "sync-assets": "node scripts/sync-three-robots.mjs",
     "dev": "npm run sync-assets && vitepress dev docs",
     "build": "npm run sync-assets && vitepress build docs",
+    "dev:web-control": "vite --config ../config/web-control/vite.config.mjs",
+    "build:web-control": "vite build --config ../config/web-control/vite.config.mjs",
     "preview": "vitepress preview docs",
-    "test:e2e": "playwright test --config ../config/website/playwright.config.mjs"
+    "test:e2e": "playwright test --config ../config/website/playwright.config.mjs",
+    "test:web-control": "playwright test --config ../config/web-control/playwright.config.mjs"
   },
   "dependencies": {
     "three": "0.185.1",

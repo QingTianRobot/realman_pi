@@ -2,6 +2,7 @@ build/
 install/
 log/
 .git/
+.env
 src/.agents/
 src/.codex/
 src/.git/

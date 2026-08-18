@@ -574,7 +574,7 @@ def test_coordinate_adapter_protocol_uses_one_adapter_arm_and_vendor_frames(
     fake_robot.results["rm_get_current_tool_frame"] = (
         0,
         {
-            "frame_name": "gripper",
+            "name": "gripper",
             "pose": {
                 "position": {"x": 0.1, "y": 0.2, "z": 0.3},
                 "quaternion": {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0},
@@ -587,7 +587,7 @@ def test_coordinate_adapter_protocol_uses_one_adapter_arm_and_vendor_frames(
     )
     fake_robot.results["rm_get_current_work_frame"] = (
         0,
-        {"frame_name": "cell", "pose": [0.4, 0.5, 0.6, 0.0, 0.0, 0.0]},
+        {"name": "cell", "pose": [0.4, 0.5, 0.6, 0.0, 0.0, 0.0]},
     )
 
     assert adapter.arm_id == "l"

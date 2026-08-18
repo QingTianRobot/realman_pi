@@ -61,6 +61,7 @@ class RealManSdkAdapter:
         self._last_error_message = ""
         # The SDK may keep only a native callback pointer, so retain Python ownership.
         self._event_callback: Callable[[Any], Any] | None = None
+        self._vendor_event_callback: Any | None = None
         self._pending_event_callback: Callable[[Any], Any] | None = None
         self._pending_event_callback_marker: object | None = None
         self._mock_tool_frames: dict[str, ControllerFrame] = {}
@@ -125,6 +126,7 @@ class RealManSdkAdapter:
                 self._destroying = False
                 self._connected = False
                 self._event_callback = None
+                self._vendor_event_callback = None
                 self._pending_event_callback = None
                 self._pending_event_callback_marker = None
             robot: Any | None = None
@@ -198,6 +200,7 @@ class RealManSdkAdapter:
                 self._robot = None
                 self._handle = None
                 self._event_callback = None
+                self._vendor_event_callback = None
                 self._pending_event_callback = None
                 self._pending_event_callback_marker = None
                 self._mock_trajectory_active = False
@@ -232,6 +235,7 @@ class RealManSdkAdapter:
             self._robot = None
             self._handle = None
             self._event_callback = None
+            self._vendor_event_callback = None
             self._pending_event_callback = None
             self._pending_event_callback_marker = None
             self._disconnecting = False
@@ -384,8 +388,16 @@ class RealManSdkAdapter:
             pending_marker = object()
             self._pending_event_callback = callback
             self._pending_event_callback_marker = pending_marker
+            robot = self._robot
+        try:
+            vendor_callback = _vendor_event_callback(robot, callback)
+        except Exception as error:
+            with self._lock:
+                self._clear_pending_event_callback_locked(pending_marker)
+                self._set_failure_locked(-1, str(error))
+            return -1
         result, token, error, _, readiness_status = self._invoke_vendor(
-            "rm_get_arm_event_call_back", (callback,)
+            "rm_get_arm_event_call_back", (vendor_callback,)
         )
         if readiness_status is not None:
             with self._lock:
@@ -406,6 +418,7 @@ class RealManSdkAdapter:
                 return -1
             if status == 0:
                 self._event_callback = callback
+                self._vendor_event_callback = vendor_callback
                 self._set_success_locked()
             else:
                 self._set_failure_locked(status, "SDK event callback registration failed")
@@ -860,7 +873,9 @@ def _controller_frame_from_profile(frame: Any, *, is_tool: bool) -> ControllerFr
 
 
 def _controller_frame_from_vendor(frame: Any, *, is_tool: bool) -> ControllerFrame:
-    name_value = _field(frame, "frame_name")
+    name_value = _optional_field(frame, "frame_name")
+    if name_value is None:
+        name_value = _field(frame, "name")
     if isinstance(name_value, bytes):
         controller_name = name_value.split(b"\0", 1)[0].decode("ascii")
     elif isinstance(name_value, str):
@@ -1004,6 +1019,45 @@ def _is_valid_handle(handle: Any) -> bool:
         return handle_id >= 0
     except Exception:
         return False
+
+
+def _vendor_event_callback(
+    robot: Any | None, callback: Callable[[Any], Any]
+) -> Any:
+    """Adapt the Python callback to the SDK's ctypes callback ABI.
+
+    The vendor wrapper declares ``rm_event_callback_ptr`` as the argument type;
+    passing a regular bound method raises a ctypes ``TypeError`` at runtime.
+    Keep fake SDKs and mock adapters on the direct callback path so tests remain
+    independent of the optional vendor package.
+    """
+    module_name = getattr(type(robot), "__module__", "")
+    if not module_name.startswith("Robotic_Arm"):
+        return callback
+
+    from Robotic_Arm.rm_ctypes_wrap import rm_event_callback_ptr
+
+    def bridge(event: Any) -> None:
+        try:
+            callback(_event_to_mapping(event))
+        except Exception:
+            # Exceptions must not cross the ctypes callback boundary.
+            pass
+
+    return rm_event_callback_ptr(bridge)
+
+
+def _event_to_mapping(event: Any) -> dict[str, Any]:
+    """Convert the vendor event structure into the coordinator's neutral shape."""
+    fields = (
+        "handle_id",
+        "event_type",
+        "trajectory_state",
+        "device",
+        "trajectory_connect",
+        "program_id",
+    )
+    return {field: getattr(event, field) for field in fields}
 
 
 def _unpack_result(result: Any) -> tuple[int, Any]:

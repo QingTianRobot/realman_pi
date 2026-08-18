@@ -207,6 +207,13 @@ BASE 的 ROS frame 由驱动固定为 `l/base_link`（中、右臂对应 `m/base
 
 SDK 依赖由根目录 `config/python/realman-sdk-requirements.txt` 锁定为 `Robotic_Arm==1.1.6`，Docker 构建时安装。
 
+真实三线程模式下，SDK 的 `rm_get_arm_event_call_back()` 要求
+`rm_event_callback_ptr`（ctypes 回调指针），不能直接传入普通 Python callable。
+`RealManSdkAdapter` 在硬件模式下负责创建并保留这个桥接指针，把
+`rm_event_push_data_t` 转成 Action 协调器使用的字典；mock 模式仍使用普通 Python
+回调。回调注册失败会保留 API2 状态并关闭连接，驱动随后按 `reconnect_interval` 重试，
+不会把未确认的轨迹报告为成功。
+
 ## 独立启动
 
 Docker mock 测试，不会访问 `192.168.30.*`：

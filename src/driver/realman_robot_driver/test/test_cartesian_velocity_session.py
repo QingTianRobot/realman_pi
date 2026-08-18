@@ -382,6 +382,130 @@ def test_action_waits_for_watchdog_stop_result_before_returning():
     assert handle.terminal == "aborted"
 
 
+def test_control_worker_yields_to_safety_supervisor_watchdog_stop():
+    slow_stop_entered = threading.Event()
+    allow_slow_stop = threading.Event()
+
+    class BlockingSlowStopAdapter(FakeAdapter):
+        def slow_stop(self):
+            self.slow_stop_calls += 1
+            slow_stop_entered.set()
+            assert allow_slow_stop.wait(timeout=1.0)
+            return self.stop_status
+
+    clock = Clock()
+    ownership = ArmOwnership()
+    adapter = BlockingSlowStopAdapter()
+    session = make_session(adapter=adapter, clock=clock, ownership=ownership)
+    session._thread_join_timeout_sec = 0.02
+    assert session.start(valid_goal(watchdog_ms=100)) is True
+    control_thread = session.thread
+    safety_thread = session._safety_thread
+    assert control_thread is not None
+    assert safety_thread is not None
+
+    original_stop_and_join = session._stop_and_join
+    control_stop_entered = threading.Event()
+    allow_control_stop = threading.Event()
+    control_stop_returned = threading.Event()
+
+    def observed_stop_and_join(*args, **kwargs):
+        current = threading.current_thread()
+        if current is control_thread:
+            control_stop_entered.set()
+            assert allow_control_stop.wait(timeout=1.0)
+        elif current is safety_thread:
+            assert control_stop_entered.wait(timeout=1.0)
+        result = original_stop_and_join(*args, **kwargs)
+        if current is control_thread:
+            control_stop_returned.set()
+        return result
+
+    session._stop_and_join = observed_stop_and_join
+    clock.advance(0.101)
+    with session._condition:
+        session._condition.notify_all()
+    assert control_stop_entered.wait(timeout=1.0)
+    assert slow_stop_entered.wait(timeout=1.0)
+
+    allow_control_stop.set()
+    control_yielded_while_slow_stop_blocked = control_stop_returned.wait(
+        timeout=0.1
+    )
+    allow_slow_stop.set()
+    control_thread.join(timeout=1.0)
+    safety_thread.join(timeout=1.0)
+
+    assert control_yielded_while_slow_stop_blocked is True
+    assert control_thread.is_alive() is False
+    assert safety_thread.is_alive() is False
+    assert adapter.slow_stop_calls == 1
+    assert session.result.terminal_state == VelocityTerminalState.WATCHDOG_STOP
+    assert session.result.api2_status == 0
+    assert "timeout" not in session.result.message
+    assert session._lockout is False
+    assert ownership.is_busy("l") is False
+
+
+def test_control_worker_yields_when_fast_stop_preempts_controlled_stop():
+    slow_stop_entered = threading.Event()
+    allow_slow_stop = threading.Event()
+    fast_stop_called = threading.Event()
+
+    class CommandFailureAdapter(FakeAdapter):
+        def movev(self, vector, follow, trajectory_mode, radio):
+            self.velocity_calls.append((list(vector), follow, trajectory_mode, radio))
+            if len(self.velocity_calls) == 2:
+                return 37
+            return 0
+
+        def slow_stop(self):
+            self.slow_stop_calls += 1
+            slow_stop_entered.set()
+            assert allow_slow_stop.wait(timeout=1.0)
+            return self.stop_status
+
+        def stop(self):
+            self.fast_stop_calls += 1
+            fast_stop_called.set()
+            return self.fast_stop_status
+
+    ownership = ArmOwnership()
+    adapter = CommandFailureAdapter()
+    session = make_session(adapter=adapter, ownership=ownership)
+    session._thread_join_timeout_sec = 0.02
+    assert session.start(valid_goal(watchdog_ms=100)) is True
+    control_thread = session.thread
+    safety_thread = session._safety_thread
+    assert control_thread is not None
+    assert safety_thread is not None
+    assert slow_stop_entered.wait(timeout=1.0)
+
+    stop_results = []
+    stop_thread = threading.Thread(
+        target=lambda: stop_results.append(session.fast_stop_if_owned())
+    )
+    stop_thread.start()
+    assert fast_stop_called.wait(timeout=1.0)
+    allow_slow_stop.set()
+    stop_thread.join(timeout=1.0)
+    control_thread.join(timeout=1.0)
+    safety_thread.join(timeout=1.0)
+
+    assert stop_thread.is_alive() is False
+    assert control_thread.is_alive() is False
+    assert safety_thread.is_alive() is False
+    assert adapter.slow_stop_calls == 1
+    assert adapter.fast_stop_calls == 1
+    assert stop_results == [0]
+    assert session.result.terminal_state == VelocityTerminalState.ABORTED
+    assert session.result.api2_status == 0
+    assert "velocity session fast-stopped" in session.result.message
+    assert "timeout" not in session.result.message
+    assert session._lockout is False
+    assert ownership.is_busy("l") is False
+
+
 def test_safety_supervisor_thread_start_failure_stops_control_thread(monkeypatch):
     original_start = threading.Thread.start
     started_threads = []

@@ -932,14 +932,14 @@ class CartesianVelocitySession:
     ) -> VelocityResult:
         with self._condition:
             if self._fast_stop_in_progress:
-                if threading.current_thread() is self._safety_thread:
+                if self._caller_is_session_worker_locked():
                     return self._result or VelocityResult(
                         False, state, -1, message
                     )
                 while self._fast_stop_in_progress:
                     self._condition.wait()
             if self._slow_stop_in_progress:
-                if threading.current_thread() is self._safety_thread:
+                if self._caller_is_session_worker_locked():
                     return self._result or VelocityResult(
                         False, state, -1, message
                     )
@@ -1078,11 +1078,15 @@ class CartesianVelocitySession:
     ) -> VelocityResult:
         self._slow_stop_in_progress = False
         self._condition.notify_all()
-        if threading.current_thread() is self._safety_thread:
+        if self._caller_is_session_worker_locked():
             return self._result or VelocityResult(False, state, -1, message)
         while self._fast_stop_in_progress:
             self._condition.wait()
         return self._result or VelocityResult(False, state, -1, message)
+
+    def _caller_is_session_worker_locked(self) -> bool:
+        current = threading.current_thread()
+        return current is self._thread or current is self._safety_thread
 
     def _wait_for_calls_to_stop(
         self, *threads: threading.Thread | None

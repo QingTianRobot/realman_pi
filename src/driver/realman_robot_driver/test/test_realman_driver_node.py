@@ -643,11 +643,23 @@ def test_node_source_stops_coordinator_before_adapter_disconnect():
     )
 
 
-def test_node_source_clears_motion_lockout_only_after_successful_disconnect():
+def test_node_source_clears_lockouts_only_after_successful_disconnect():
     source = NODE_PATH.read_text(encoding="utf-8")
 
-    assert "if code == 0:\n            self.motion_coordinator.clear_lockout_after_disconnect()" in source
-    assert "if self.adapter.disconnect() == 0:\n            self.motion_coordinator.clear_lockout_after_disconnect()" in source
+    assert (
+        "if code == 0:\n"
+        "            velocity_clear_ok = (\n"
+        "                self.velocity_session.clear_lockout_after_disconnect()\n"
+        "            )\n"
+        "            self.motion_coordinator.clear_lockout_after_disconnect()"
+    ) in source
+    assert (
+        "if self.adapter.disconnect() == 0:\n"
+        "            velocity_clear_ok = (\n"
+        "                self.velocity_session.clear_lockout_after_disconnect()\n"
+        "            )\n"
+        "            self.motion_coordinator.clear_lockout_after_disconnect()"
+    ) in source
 
 
 def test_disconnect_service_exposes_all_shutdown_failures_when_sdk_disconnect_succeeds():
@@ -660,10 +672,27 @@ def test_disconnect_service_exposes_all_shutdown_failures_when_sdk_disconnect_su
         "            velocity_shutdown_status == 0\n"
         "            and motion_shutdown_status == 0\n"
         "            and code == 0\n"
+        "            and velocity_clear_ok\n"
         "        )"
     ) in source
     assert "velocity shutdown failed" in source
     assert "motion shutdown failed" in source
+    assert "velocity lockout cleanup failed" in source
+
+
+def test_destroy_node_logs_velocity_lockout_cleanup_failure():
+    tree = ast.parse(NODE_PATH.read_text(encoding="utf-8"))
+    destroy = next(
+        node
+        for node in ast.walk(tree)
+        if isinstance(node, ast.FunctionDef) and node.name == "destroy_node"
+    )
+    source = ast.unparse(destroy)
+
+    assert "velocity_clear_ok = self.velocity_session.clear_lockout_after_disconnect()" in source
+    assert "if not velocity_clear_ok:" in source
+    assert "self.get_logger().error" in source
+    assert "velocity lockout cleanup failed" in source
 
 
 def test_connect_reconciles_physical_lockout_with_read_only_trajectory_state():

@@ -259,12 +259,17 @@ class RealManDriverNode(Node):
         velocity_shutdown_status = self.velocity_session.shutdown()
         motion_shutdown_status = self.motion_coordinator.shutdown()
         code = self.adapter.disconnect()
+        velocity_clear_ok = True
         if code == 0:
+            velocity_clear_ok = (
+                self.velocity_session.clear_lockout_after_disconnect()
+            )
             self.motion_coordinator.clear_lockout_after_disconnect()
         response.success = (
             velocity_shutdown_status == 0
             and motion_shutdown_status == 0
             and code == 0
+            and velocity_clear_ok
         )
         failures = []
         if velocity_shutdown_status != 0:
@@ -277,6 +282,8 @@ class RealManDriverNode(Node):
             )
         if code != 0:
             failures.append(f"disconnect failed with status {code}")
+        if not velocity_clear_ok:
+            failures.append("velocity lockout cleanup failed after disconnect")
         if failures:
             response.message = "; ".join(failures)
             self.get_logger().error(response.message)
@@ -526,7 +533,14 @@ class RealManDriverNode(Node):
         if self.cartesian_velocity_action_server is not None:
             self.cartesian_velocity_action_server.destroy()
         if self.adapter.disconnect() == 0:
+            velocity_clear_ok = (
+                self.velocity_session.clear_lockout_after_disconnect()
+            )
             self.motion_coordinator.clear_lockout_after_disconnect()
+            if not velocity_clear_ok:
+                self.get_logger().error(
+                    "RealMan velocity lockout cleanup failed after disconnect"
+                )
         return super().destroy_node()
 
 

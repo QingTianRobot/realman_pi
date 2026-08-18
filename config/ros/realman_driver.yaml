@@ -13,7 +13,7 @@
     robot_ip: 192.168.30.123
     # RealMan API2 control port; the official Python quick-start example uses 8080.
     robot_port: 8080
-    # UDP state callbacks require triple-thread mode; use single/dual only when needed.
+    # Required: ordinary motion completion uses API2 event callbacks available in triple mode.
     thread_mode: RM_TRIPLE_MODE_E
     # Read the real controller by default. Set true only for offline mock tests.
     mock_mode: false

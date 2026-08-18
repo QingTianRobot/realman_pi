@@ -1,4 +1,4 @@
-# Conservative per-arm limits for future motion_types.py consumers.
+# Conservative per-arm limits for ordinary motions and Cartesian velocity sessions.
 # CoordinateManager intentionally does not load this file: coordinate desired state
 # and motion limits have separate ownership and change at different cadences.
 robots:

@@ -67,6 +67,8 @@ class RealManSdkAdapter:
         self._mock_work_frames: dict[str, ControllerFrame] = {}
         self._mock_tool_frame: ControllerFrame | None = None
         self._mock_work_frame: ControllerFrame | None = None
+        self._mock_trajectory_active = False
+        self._mock_trajectory_reads_remaining = 0
 
     @property
     def connected(self) -> bool:
@@ -103,6 +105,8 @@ class RealManSdkAdapter:
                     self._disconnecting = False
                     self._destroying = False
                     self._connected = True
+                    self._mock_trajectory_active = False
+                    self._mock_trajectory_reads_remaining = 0
                     self._set_success_locked()
                     return 0
 
@@ -196,6 +200,8 @@ class RealManSdkAdapter:
                 self._event_callback = None
                 self._pending_event_callback = None
                 self._pending_event_callback_marker = None
+                self._mock_trajectory_active = False
+                self._mock_trajectory_reads_remaining = 0
                 self._disconnecting = False
                 self._destroying = False
                 self._generation += 1
@@ -330,6 +336,32 @@ class RealManSdkAdapter:
         )
 
     def current_trajectory(self) -> Any:
+        if self.mock_mode:
+            callback: Callable[[Any], Any] | None = None
+            event: dict[str, Any] | None = None
+            with self._lock:
+                status = self._ready_status_locked()
+                if status is not None:
+                    return status, None
+                if not self._mock_trajectory_active:
+                    return {"trajectory_type": 0}
+                if self._mock_trajectory_reads_remaining > 0:
+                    self._mock_trajectory_reads_remaining -= 1
+                    return {"trajectory_type": 1}
+                self._mock_trajectory_active = False
+                callback = self._event_callback
+                event = {
+                    "event_type": 1,
+                    "device": 0,
+                    "trajectory_state": True,
+                    "trajectory_connect": 0,
+                }
+            if callback is not None and event is not None:
+                try:
+                    callback(event)
+                except Exception:
+                    pass
+            return {"trajectory_type": 0}
         return self._query(
             "rm_get_arm_current_trajectory", "SDK trajectory query failed", mock_success={}
         )
@@ -566,6 +598,17 @@ class RealManSdkAdapter:
                     return 0
                 status = self._ready_status_locked()
                 if status is None:
+                    if method_name in {"rm_movej", "rm_movel", "rm_movej_p"}:
+                        self._mock_trajectory_active = True
+                        self._mock_trajectory_reads_remaining = 1
+                    elif method_name in {
+                        "rm_set_arm_stop",
+                        "rm_set_arm_slow_stop",
+                        "rm_set_delete_current_trajectory",
+                        "rm_set_arm_delete_trajectory",
+                    }:
+                        self._mock_trajectory_active = False
+                        self._mock_trajectory_reads_remaining = 0
                     self._set_success_locked()
                     return 0
                 return status

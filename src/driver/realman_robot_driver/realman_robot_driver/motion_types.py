@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+from collections.abc import Iterable, Mapping as MappingABC, Set as SetABC
 from dataclasses import dataclass
 from enum import IntEnum
 import math
@@ -152,9 +153,13 @@ def _finite_number(value: object, field: str) -> float | None:
 
 def _vector(value: object, expected_length: int, field: str) -> tuple[tuple[float, ...] | None, str | None]:
     length_text = {3: "three", 4: "four", 6: "six"}.get(expected_length, str(expected_length))
-    if isinstance(value, (str, bytes)) or not isinstance(value, Sequence):
+    if isinstance(value, (str, bytes, MappingABC, SetABC)) or not isinstance(value, Iterable):
         return None, f"{field} must contain exactly {length_text} values"
-    if len(value) != expected_length:
+    try:
+        length = len(value)  # type: ignore[arg-type]
+    except TypeError:
+        return None, f"{field} must contain exactly {length_text} values"
+    if length != expected_length:
         return None, f"{field} must contain exactly {length_text} values"
     result: list[float] = []
     for item in value:

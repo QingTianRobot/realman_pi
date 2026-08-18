@@ -5,6 +5,7 @@ from dataclasses import FrozenInstanceError
 from pathlib import Path
 import typing
 
+import numpy as np
 import pytest
 import yaml
 
@@ -72,6 +73,26 @@ def test_valid_goal_normalizes_quaternion_and_result_is_immutable():
     assert result.goal.pose_quaternion_wxyz == (1.0, 0.0, 0.0, 0.0)
     with pytest.raises(FrozenInstanceError):
         result.valid = False  # type: ignore[misc]
+
+
+@pytest.mark.parametrize("command", [CommandType.MOVEJ, CommandType.MOVEL, CommandType.MOVEJ_P])
+def test_goal_validation_accepts_ros_generated_fixed_arrays(command: CommandType):
+    result = validate_goal(
+        valid_goal(
+            command=command,
+            joint_degrees=np.array([0.0, 1.0, 2.0, 3.0, 4.0, 5.0]),
+            pose_position_m=np.array([0.1, 0.2, 0.3]),
+            pose_quaternion_wxyz=np.array([1.0, 0.0, 0.0, 0.0]),
+        )
+    )
+
+    assert result.valid
+    assert result.goal is not None
+    if command == CommandType.MOVEJ:
+        assert result.goal.joint_degrees == (0.0, 1.0, 2.0, 3.0, 4.0, 5.0)
+    else:
+        assert result.goal.pose_position_m == (0.1, 0.2, 0.3)
+        assert result.goal.pose_quaternion_wxyz == (1.0, 0.0, 0.0, 0.0)
 
 
 @pytest.mark.parametrize(

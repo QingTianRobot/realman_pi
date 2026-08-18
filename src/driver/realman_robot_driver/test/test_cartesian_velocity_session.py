@@ -93,6 +93,12 @@ class FakeGoalHandle:
         pass
 
 
+def _goal_response_is_accepted(response) -> bool:
+    if isinstance(response, bool):
+        return response
+    return getattr(response, "name", None) == "ACCEPT"
+
+
 def settings(
     *,
     max_linear_speed_mps=1.0,
@@ -913,7 +919,7 @@ def test_concurrent_goal_callbacks_reserve_exactly_one_request():
     for thread in threads:
         thread.join(timeout=1.0)
 
-    assert sorted(bool(result) for result in results) == [False, True]
+    assert sorted(_goal_response_is_accepted(result) for result in results) == [False, True]
     assert ownership.is_busy("l") is True
     session.shutdown()
     assert ownership.is_busy("l") is False
@@ -1367,13 +1373,13 @@ def test_motion_coordinator_and_velocity_session_share_real_arm_ownership():
     motion = make_motion(motion_owned)
     velocity = make_session(ownership=motion_owned)
     assert bool(motion.goal_callback(motion_goal)) is True
-    assert bool(velocity.goal_callback(valid_goal())) is False
+    assert _goal_response_is_accepted(velocity.goal_callback(valid_goal())) is False
 
     velocity_owned = ArmOwnership()
     motion = make_motion(velocity_owned)
     velocity = make_session(ownership=velocity_owned)
     assert bool(velocity.goal_callback(valid_goal())) is True
-    assert bool(motion.goal_callback(motion_goal)) is False
+    assert _goal_response_is_accepted(motion.goal_callback(motion_goal)) is False
     assert velocity.shutdown() == 0
 
 
@@ -1562,8 +1568,10 @@ def test_overlapping_ticks_do_not_duplicate_velocity_sdk_calls():
     adapter = BlockingMoveAdapter()
     session = make_session(adapter=adapter)
     session.start(valid_goal())
+    control_thread = session.thread
+    assert control_thread is not None
     session._stop_event.set()
-    session.thread.join(timeout=1.0)
+    control_thread.join(timeout=1.0)
     adapter.block_movev = True
 
     first_tick = threading.Thread(target=session.tick)

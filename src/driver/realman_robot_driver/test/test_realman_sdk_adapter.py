@@ -399,8 +399,33 @@ def test_mock_current_trajectory_uses_documented_raw_dict_shape():
     )
 
     assert adapter.connect() == 0
-    assert adapter.current_trajectory() == {}
+    assert adapter.current_trajectory() == {"trajectory_type": 0}
     assert adapter.current_arm_state() == (0, {})
+
+
+def test_mock_motion_reports_active_then_completed_trajectory_event():
+    adapter = RealManSdkAdapter(
+        ip="192.0.2.123",
+        port=8080,
+        thread_mode="RM_TRIPLE_MODE_E",
+        robot_model="RM65-B",
+        mock_mode=True,
+    )
+    events: list[object] = []
+
+    assert adapter.connect() == 0
+    assert adapter.register_event_callback(events.append) == 0
+    assert adapter.movej([0.0] * 6, 10, 0, connect=False) == 0
+    assert adapter.current_trajectory() == {"trajectory_type": 1}
+    assert adapter.current_trajectory() == {"trajectory_type": 0}
+    assert events == [
+        {
+            "event_type": 1,
+            "device": 0,
+            "trajectory_state": True,
+            "trajectory_connect": 0,
+        }
+    ]
 
 
 def test_disconnect_clears_event_callback_and_reconnect_does_not_retain_it():

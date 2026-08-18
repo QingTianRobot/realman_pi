@@ -88,6 +88,10 @@ class FakeCoordinateAdapter:
         self._work = _controller_work(name)
         return 0
 
+    def disconnect(self):
+        self.calls.append(("disconnect",))
+        return 0
+
 
 def _controller_tool(name: str):
     if name == "tcpgrip":
@@ -218,6 +222,7 @@ ROS_ACTION_RUNTIME_AVAILABLE = all(
 if ROS_ACTION_RUNTIME_AVAILABLE:
     import rclpy
 
+    from rclpy.action import get_action_names_and_types
     from rclpy.callback_groups import ReentrantCallbackGroup
     from realman_msgs.srv import SelectFrame, VerifyCoordinates
     from realman_robot_driver.realman_driver_node import RealManDriverNode
@@ -225,6 +230,7 @@ if ROS_ACTION_RUNTIME_AVAILABLE:
     from sensor_msgs.msg import JointState
 else:
     rclpy = None
+    get_action_names_and_types = None
     ReentrantCallbackGroup = None
     RealManDriverNode = None
     RobotState = None
@@ -237,6 +243,16 @@ requires_ros_action_runtime = pytest.mark.skipif(
     not ROS_ACTION_RUNTIME_AVAILABLE,
     reason="generated realman_msgs and the ROS 2 Python runtime are required",
 )
+
+
+def _destroy_ros_nodes_and_shutdown(*nodes) -> None:
+    try:
+        for node in nodes:
+            if node is not None:
+                node.destroy_node()
+    finally:
+        if rclpy is not None and rclpy.ok():
+            rclpy.shutdown()
 
 
 def test_coordinates_verify_reports_mismatch_without_writes():
@@ -625,9 +641,7 @@ def test_mock_node_velocity_command_has_depth_one_volatile_watchdog_qos():
         assert qos.durability == QoSDurabilityPolicy.VOLATILE
         assert qos.lifespan.nanoseconds == node.motion_settings.velocity_watchdog_ms * 1_000_000
     finally:
-        if node is not None:
-            node.destroy_node()
-        rclpy.shutdown()
+        _destroy_ros_nodes_and_shutdown(node)
 
 
 def test_node_uses_namespaced_base_link_for_base_velocity_commands():
@@ -852,13 +866,14 @@ def test_mock_node_constructs_and_exposes_services():
         } <= service_names
         assert node.adapter.arm_id == "l"
         assert isinstance(node.motion_callback_group, ReentrantCallbackGroup)
-        assert ("/l/execute_motion", ["realman_msgs/action/ExecuteMotion"]) in (
-            node.get_action_names_and_types()
-        )
+        actions = get_action_names_and_types(node)
+        assert ("/l/execute_motion", ["realman_msgs/action/ExecuteMotion"]) in actions
+        assert (
+            "/l/cartesian_velocity",
+            ["realman_msgs/action/CartesianVelocity"],
+        ) in actions
     finally:
-        if node is not None:
-            node.destroy_node()
-        rclpy.shutdown()
+        _destroy_ros_nodes_and_shutdown(node)
 
 
 @requires_ros_action_runtime
@@ -906,9 +921,7 @@ def test_coordinate_callbacks_fill_generated_service_responses():
         assert "busy" in busy.message
         assert adapter.calls == []
     finally:
-        if node is not None:
-            node.destroy_node()
-        rclpy.shutdown()
+        _destroy_ros_nodes_and_shutdown(node)
 
 @requires_ros_action_runtime
 def test_vendor_degrees_are_published_as_ros_radians():
@@ -928,7 +941,7 @@ def test_vendor_degrees_are_published_as_ros_radians():
         received = []
         listener.create_subscription(
             JointState,
-            "/joint_states",
+            "/l/joint_states",
             received.append,
             10,
         )
@@ -951,11 +964,7 @@ def test_vendor_degrees_are_published_as_ros_radians():
             [0.0, math.pi / 2, -math.pi / 2, math.pi, math.pi / 4, -math.pi / 4]
         )
     finally:
-        if listener is not None:
-            listener.destroy_node()
-        if node is not None:
-            node.destroy_node()
-        rclpy.shutdown()
+        _destroy_ros_nodes_and_shutdown(listener, node)
 
 @requires_ros_action_runtime
 def test_auto_connect_mock_mode_publishes_zero_state():
@@ -975,7 +984,7 @@ def test_auto_connect_mock_mode_publishes_zero_state():
         received = []
         listener.create_subscription(
             JointState,
-            "/joint_states",
+            "/l/joint_states",
             received.append,
             10,
         )
@@ -991,11 +1000,7 @@ def test_auto_connect_mock_mode_publishes_zero_state():
         assert received
         assert received[0].position == pytest.approx([0.0] * 6)
     finally:
-        if listener is not None:
-            listener.destroy_node()
-        if node is not None:
-            node.destroy_node()
-        rclpy.shutdown()
+        _destroy_ros_nodes_and_shutdown(listener, node)
 
 
 @requires_ros_action_runtime
@@ -1027,6 +1032,4 @@ def test_node_fails_closed_for_unknown_namespace_and_nontriple_thread_mode():
                 )
             )
     finally:
-        for node in nodes:
-            node.destroy_node()
-        rclpy.shutdown()
+        _destroy_ros_nodes_and_shutdown(*nodes)

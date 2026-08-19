@@ -26,15 +26,15 @@ def message_to_json(message: Any) -> Any:
         return [message_to_json(value) for value in message]
     if isinstance(message, dict):
         return {str(key): message_to_json(value) for key, value in message.items()}
-    # rosidl fixed arrays are commonly exposed as array.array rather than list.
-    if isinstance(message, Iterable) and not isinstance(message, (str, bytes)):
-        return [message_to_json(value) for value in message]
     fields = getattr(message, "get_fields_and_field_types", None)
     if callable(fields):
         return {
             name: message_to_json(getattr(message, name))
             for name in fields()
         }
+    # rosidl fixed arrays are commonly exposed as array.array rather than list.
+    if isinstance(message, Iterable) and not isinstance(message, (str, bytes)):
+        return [message_to_json(value) for value in message]
     raise TypeError(f"value of type {type(message).__name__} is not JSON serializable")
 
 

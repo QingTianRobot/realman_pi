@@ -12,9 +12,21 @@ class FakeMessage:
         return {"value": "int32", "items": "int32[]"}
 
 
+class IterableFakeMessage(FakeMessage):
+    def __iter__(self):
+        yield "wrong"
+
+
 def test_message_conversion_and_owner_event():
     message = FakeMessage()
     assign_fields(message, {"value": 4, "items": array("d", [1, 2])})
     assert message_to_json(message) == {"value": 4, "items": [1, 2]}
     record = ActionRecord("l", "execute_motion", "client", "request")
     assert action_event(record, "accepted")["request_id"] == "request"
+
+
+def test_message_conversion_prefers_ros_fields_over_iterable_protocol():
+    message = IterableFakeMessage()
+    assign_fields(message, {"value": 4, "items": array("d", [1, 2])})
+
+    assert message_to_json(message) == {"value": 4, "items": [1, 2]}

@@ -9,15 +9,6 @@ from typing import Any
 
 ARMS = frozenset({"l", "m", "r"})
 ACTION_NAMES = frozenset({"execute_motion", "cartesian_velocity"})
-MUTATING_TYPES = frozenset(
-    {
-        "execute_motion",
-        "start_cartesian_velocity",
-        "velocity_command",
-        "cancel_action",
-        "software_stop",
-    }
-)
 MAX_REQUEST_ID_LENGTH = 96
 
 
@@ -119,8 +110,6 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
         raise ProtocolError("invalid_message", "message must be a JSON object")
 
     message_type = _string(message.get("type"), "type", maximum=48)
-    if message_type == "authenticate":
-        return {"type": message_type, "token": _string(message.get("token"), "token", maximum=512)}
     if message_type == "ping":
         return {"type": "ping"}
 
@@ -194,13 +183,3 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
     if message_type == "software_stop":
         return {"type": message_type, "request_id": _request_id(message, required=False), "arm": arm}
     raise ProtocolError("unsupported_type", f"unsupported message type: {message_type}")
-
-
-def require_control(message: dict[str, Any], *, authenticated: bool, enabled: bool) -> None:
-    if message.get("type") not in MUTATING_TYPES:
-        return
-    if not enabled:
-        raise ProtocolError("control_disabled", "web control is read-only on this server")
-    if not authenticated:
-        raise ProtocolError("authentication_required", "authenticate before sending control commands")
-

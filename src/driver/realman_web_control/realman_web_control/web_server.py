@@ -4,9 +4,7 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
-import hmac
 import json
-import os
 from pathlib import Path
 import threading
 from typing import Any, Callable
@@ -16,15 +14,13 @@ import uuid
 import yaml
 
 from .model_manifest import resolve_model_asset
-from .protocol import ProtocolError, parse_message, require_control
+from .protocol import ProtocolError, parse_message
 
 
 @dataclass(frozen=True)
 class WebServerConfig:
     bind_host: str
     port: int
-    control_enabled: bool
-    control_token_env: str
     allowed_origins: tuple[str, ...]
     max_clients: int
     max_message_bytes: int
@@ -37,12 +33,9 @@ def load_server_config(path: str | Path) -> WebServerConfig:
         raise ValueError("web control config must contain a server mapping")
     server = document["server"]
     bind_host = server.get("bind_host")
-    token_env = server.get("control_token_env")
     origins = server.get("allowed_origins")
     if not isinstance(bind_host, str) or not bind_host:
         raise ValueError("server.bind_host must be a non-empty string")
-    if not isinstance(token_env, str) or not token_env:
-        raise ValueError("server.control_token_env must be a non-empty string")
     if not isinstance(origins, list) or not origins or not all(
         isinstance(origin, str) and origin for origin in origins
     ):
@@ -50,8 +43,6 @@ def load_server_config(path: str | Path) -> WebServerConfig:
     config = WebServerConfig(
         bind_host=bind_host,
         port=int(server.get("port", 8765)),
-        control_enabled=bool(server.get("control_enabled", False)),
-        control_token_env=token_env,
         allowed_origins=tuple(origins),
         max_clients=int(server.get("max_clients", 8)),
         max_message_bytes=int(server.get("max_message_bytes", 65536)),
@@ -84,19 +75,16 @@ class WebControlServer:
         self.description_root = Path(description_root).resolve()
         self.on_command = on_command
         self.logger = logger
-        self._token = os.environ.get(config.control_token_env, "")
-        self._control_available = bool(config.control_enabled and self._token)
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
         self._startup_error: BaseException | None = None
         self._clients: dict[str, Any] = {}
-        self._authenticated: set[str] = set()
         self._runner: Any = None
 
     @property
     def read_only(self) -> bool:
-        return not self._control_available
+        return False
 
     def start(self, timeout_sec: float = 5.0) -> None:
         if self._thread is not None:
@@ -216,7 +204,6 @@ class WebControlServer:
                 "type": "hello",
                 "client_id": client_id,
                 "read_only": self.read_only,
-                "authentication_required": not self.read_only,
                 "layout": self.manifest,
             }
         )
@@ -234,28 +221,14 @@ class WebControlServer:
                         incoming.data,
                         max_bytes=self.config.max_message_bytes,
                     )
-                    if message["type"] == "authenticate":
-                        if not self._control_available:
-                            raise ProtocolError("control_disabled", "web control is read-only on this server")
-                        if not hmac.compare_digest(message["token"], self._token):
-                            raise ProtocolError("authentication_failed", "control token is invalid")
-                        self._authenticated.add(client_id)
-                        await socket.send_json({"type": "authenticated", "client_id": client_id})
-                        continue
                     if message["type"] == "ping":
                         await socket.send_json({"type": "pong"})
                         continue
-                    require_control(
-                        message,
-                        authenticated=client_id in self._authenticated,
-                        enabled=self._control_available,
-                    )
                     self.on_command(client_id, message)
                 except ProtocolError as error:
                     await socket.send_json(error.event())
         finally:
             self._clients.pop(client_id, None)
-            self._authenticated.discard(client_id)
             self.on_command(client_id, {"type": "client_disconnected"})
         return socket
 

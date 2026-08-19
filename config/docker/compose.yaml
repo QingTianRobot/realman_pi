@@ -25,8 +25,6 @@ x-realman-common: &realman-common
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
     # The launch file scans this path/glob and waits when it is not present.
     REALMAN_JOY_DEVICE: ${REALMAN_JOY_DEVICE:-auto}
-    # The value is intentionally supplied only through the deployment environment.
-    REALMAN_WEB_CONTROL_TOKEN: ${REALMAN_WEB_CONTROL_TOKEN:-}
   volumes:
     # Runtime config edits take effect on the next launch without rebuilding.
     - ./config:/opt/rm65_ws/config:ro
@@ -43,7 +41,6 @@ x-rm65-rviz-common: &rm65-rviz-common
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
     REALMAN_JOY_DEVICE: ${REALMAN_JOY_DEVICE:-auto}
-    REALMAN_WEB_CONTROL_TOKEN: ${REALMAN_WEB_CONTROL_TOKEN:-}
     # Forward the active desktop display and force software rendering to avoid
     # host/container OpenGL driver mismatches.
     DISPLAY: ${DISPLAY:-}

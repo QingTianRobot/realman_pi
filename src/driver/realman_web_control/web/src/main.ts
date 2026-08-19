@@ -29,8 +29,8 @@ app.innerHTML = `
     <div class="brand"><span class="brand-mark">RM</span><div><strong>RealMan Web Control</strong><small>ROS 2 action console</small></div></div>
     <label class="arm-picker">ARM <select id="arm-select"><option value="l">LEFT / 123</option><option value="m">MIDDLE / 125</option><option value="r">RIGHT / 124</option></select></label>
     <span id="connection" class="status-pill offline">OFFLINE</span>
-    <span id="mode" class="status-pill">READ ONLY</span>
-    <button id="auth-button" class="button secondary" type="button">授权</button>
+    <span id="mode" class="status-pill ready">CONTROL READY</span>
+    <span id="auth-button" class="status-pill ready">CONTROL OPEN</span>
     <button id="cancel-motion" class="button ghost" type="button" disabled>取消 Action</button>
     <button id="stop-button" class="button danger" type="button" disabled>■ 软件停止</button>
   </header>
@@ -46,7 +46,6 @@ app.innerHTML = `
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">ACTION MONITOR</span><h2>运行反馈</h2></div><span id="action-state" class="mini-state">IDLE</span></div><div class="progress-track"><div id="progress" class="progress-bar"></div></div><div id="feedback" class="feedback">尚未发送 Action</div><pre id="result" class="result" aria-live="polite">等待结果…</pre></section>
     </aside>
   </main>
-  <dialog id="auth-dialog"><form method="dialog"><h2>控制授权</h2><p>输入部署端的 REALMAN_WEB_CONTROL_TOKEN。没有 token 时仅可查看状态和 URDF。</p><input id="token" type="password" autocomplete="off" placeholder="control token" /><div class="dialog-actions"><button class="button ghost" value="cancel">取消</button><button id="authenticate" class="button primary" value="default">连接控制</button></div></form></dialog>
 `;
 
 const $ = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
@@ -72,8 +71,7 @@ let selectedArm: ArmId = "l";
 let targetJoints: number[] = [];
 let currentJoints: number[] = [];
 let socket: WebSocket | undefined;
-let authenticated = false;
-let readOnly = true;
+let readOnly = false;
 let activeMotionRequest = "";
 let activeVelocityRequest = "";
 let velocityTimer = 0;
@@ -86,7 +84,7 @@ let shadowRobot: any;
 
 function robot() { return manifest.robots.find((item) => item.id === selectedArm)!; }
 function requestId(prefix: string) { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`; }
-function canWrite() { return !readOnly && authenticated && socket?.readyState === WebSocket.OPEN; }
+function canWrite() { return !readOnly && socket?.readyState === WebSocket.OPEN; }
 function send(message: Message) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
@@ -251,11 +249,6 @@ function handleMessage(message: Message) {
     mode.textContent = readOnly ? "READ ONLY" : "CONTROL READY";
     mode.classList.toggle("ready", !readOnly);
     if (message.layout) loadManifest(message.layout);
-  } else if (message.type === "authenticated") {
-    authenticated = true;
-    mode.textContent = "CONTROL READY";
-    mode.classList.add("ready");
-    updateButtons();
   } else if (message.type === "connection" && message.arm === selectedArm) {
     setConnection(Boolean(message.connected));
   } else if (message.type === "joint_state" && message.arm === selectedArm) {
@@ -302,7 +295,7 @@ function connect() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   socket = new WebSocket(`${protocol}://${location.host}/ws`);
   socket.addEventListener("open", () => setConnection(true));
-  socket.addEventListener("close", () => { setConnection(false); authenticated = false; updateButtons(); window.setTimeout(connect, 2000); });
+  socket.addEventListener("close", () => { setConnection(false); updateButtons(); window.setTimeout(connect, 2000); });
   socket.addEventListener("message", (event) => { try { handleMessage(JSON.parse(event.data)); } catch { result.textContent = "收到无法解析的服务器消息"; } });
 }
 
@@ -352,8 +345,5 @@ startVelocityButton.addEventListener("click", () => {
 cancelVelocityButton.addEventListener("click", () => { send({ type: "cancel_action", arm: selectedArm, action: "cartesian_velocity" }); window.clearInterval(velocityTimer); velocityTimer = 0; });
 cancelMotionButton.addEventListener("click", () => { send({ type: "cancel_action", arm: selectedArm, action: "execute_motion" }); });
 stopButton.addEventListener("click", () => { send({ type: "software_stop", request_id: requestId("stop"), arm: selectedArm }); });
-$("#auth-button").addEventListener("click", () => ($("#auth-dialog") as HTMLDialogElement).showModal());
-$("#authenticate").addEventListener("click", (event) => { event.preventDefault(); send({ type: "authenticate", token: ($("#token") as HTMLInputElement).value }); ($("#auth-dialog") as HTMLDialogElement).close(); });
-
 fetch("/api/layout").then((response) => response.json()).then(loadManifest).catch((error) => { viewerState.textContent = `布局加载失败: ${String(error)}`; });
 connect();

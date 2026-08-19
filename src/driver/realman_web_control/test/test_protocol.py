@@ -2,7 +2,7 @@ import json
 
 import pytest
 
-from realman_web_control.protocol import ProtocolError, parse_message, require_control
+from realman_web_control.protocol import ProtocolError, parse_message
 
 
 def valid_motion():
@@ -41,17 +41,8 @@ def test_nan_and_wrong_arm_are_rejected():
         parse_message(json.dumps(message))
 
 
-def test_control_requires_authentication_and_can_be_read_only():
-    with pytest.raises(ProtocolError, match="authenticate"):
-        require_control(valid_motion(), authenticated=False, enabled=True)
-    with pytest.raises(ProtocolError, match="read-only"):
-        require_control(valid_motion(), authenticated=True, enabled=False)
-    require_control({"type": "ping"}, authenticated=False, enabled=False)
-
-
 def test_unknown_messages_and_oversized_payloads_are_rejected():
     with pytest.raises(ProtocolError, match="unsupported"):
         parse_message('{"type":"launch_missiles","arm":"l"}')
     with pytest.raises(ProtocolError, match="exceeds"):
         parse_message("x" * 32, max_bytes=16)
-

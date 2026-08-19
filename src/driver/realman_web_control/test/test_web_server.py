@@ -21,8 +21,6 @@ def _server(static_root: Path) -> WebControlServer:
     config = WebServerConfig(
         bind_host="127.0.0.1",
         port=8765,
-        control_enabled=False,
-        control_token_env="REALMAN_WEB_CONTROL_TOKEN",
         allowed_origins=("same-origin",),
         max_clients=8,
         max_message_bytes=65536,
@@ -48,6 +46,14 @@ def test_static_root_serves_index_when_index_is_symlink(tmp_path):
     response = asyncio.run(_server(static_root)._static_asset(FakeRequest("")))
 
     assert response.status == 200
+
+
+def test_web_control_is_open_without_browser_authentication(tmp_path):
+    static_root = tmp_path / "static"
+    static_root.mkdir()
+    (static_root / "index.html").write_text("ok", encoding="utf-8")
+
+    assert _server(static_root).read_only is False
 
 
 def test_static_root_rejects_parent_traversal(tmp_path):

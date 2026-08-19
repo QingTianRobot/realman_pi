@@ -1,4 +1,4 @@
-"""ROS 2 node bridging authenticated WebSocket commands to RealMan interfaces."""
+"""ROS 2 node bridging WebSocket commands to RealMan interfaces."""
 
 from __future__ import annotations
 
@@ -136,14 +136,10 @@ class WebControlNode(Node):
             self._drain_commands,
             callback_group=self._callback_group,
         )
-        mode = "read-only" if self._server.read_only else "token-protected control"
         self.get_logger().info(
-            f"RealMan Web control listening on {web_config.bind_host}:{web_config.port} ({mode})"
+            f"RealMan Web control listening on {web_config.bind_host}:{web_config.port} "
+            "(direct control enabled)"
         )
-        if self._server.read_only:
-            self.get_logger().warn(
-                f"Web mutations are disabled; set {web_config.control_token_env} to a non-empty token"
-            )
 
     def _parameter(self, name: str) -> str:
         value = self.get_parameter(name).value

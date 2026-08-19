@@ -1,6 +1,6 @@
 ---
 title: WebSocket 浏览器控制与 URDF 影子
-description: realman_web_control 的 WebSocket 协议、Action 反馈、软件停止、安全授权、URDF 预览和测试方法。
+description: realman_web_control 的 WebSocket 协议、Action 反馈、软件停止、URDF 预览和测试方法。
 ---
 
 # WebSocket 浏览器控制与 URDF 影子
@@ -22,13 +22,12 @@ realman_web_control (aiohttp 线程 + ROS 2 executor)
 RealMan SDK / 三台控制器
 ```
 
-## 启动和授权
+## 启动
 
 配置在 `config/ros/realman_web_control.yaml`。Web 服务默认监听 `0.0.0.0:8765`，所以
 笔记本访问：
 
 ```bash
-export REALMAN_WEB_CONTROL_TOKEN='在可信部署环境生成的长随机字符串'
 source functions.zsh
 rm65_docker_web_control_start
 rm65_web_control_url 192.168.30.10
@@ -49,19 +48,13 @@ export REALMAN_START_WEB_CONTROL=true
 docker compose run --rm realman_bringup_remote
 ```
 
-没有 `REALMAN_WEB_CONTROL_TOKEN` 时，服务仍提供 joint state、连接状态和 URDF，但所有
-运动、取消和软件停止消息都返回 `authentication_required` 或 `control_disabled`。token
-只通过环境变量注入，不能写进 YAML、网页源码或 Git。HTTP token 只适合可信局域网；跨不
-可信网络应在反向代理中使用 TLS，并限制 `allowed_origins` 为明确的 HTTPS 来源。
+浏览器连接 `/ws` 后即可发送运动、取消和软件停止消息，不需要额外输入 token。该服务应
+只部署在受信任、隔离的机器人局域网；它仍然经过既有 driver 的 ownership、坐标 gate、
+watchdog 和 lockout，不会直接调用 SDK。
 
 ## WebSocket 协议
 
-连接 `/ws` 后首先收到 `hello`，其中包含 `read_only`、`client_id` 和完整的 `layout`。
-控制客户端发送：
-
-```json
-{"type":"authenticate","token":"..."}
-```
+连接 `/ws` 后首先收到 `hello`，其中包含 `read_only=false`、`client_id` 和完整的 `layout`。
 
 服务端会广播以下状态事件：
 
@@ -155,6 +148,5 @@ npm run test:web-control
 
 Playwright 测试应覆盖桌面和移动视口、canvas 非空、实体/影子同时存在、滑轨后画布改变、
 feedback/result 实时更新、cancel 和 software stop 的协议消息。真机测试前先用 mock driver
-启动同一 Web 服务验证授权、ownership 和断开清理，再在低速率和明确物理安全员在场时切换
+启动同一 Web 服务验证 ownership 和断开清理，再在低速率和明确物理安全员在场时切换
 到实际控制器。
-

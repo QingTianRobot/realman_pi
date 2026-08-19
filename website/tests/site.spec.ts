@@ -125,10 +125,11 @@ test("documentation routes render", async ({ page }) => {
 
 test("documentation tables share the content width without touching navigation", async ({ page }) => {
   await page.goto("development/startup-entries");
+  await page.waitForSelector('.VPDoc .vp-doc table', { timeout: 10_000 });
 
   const layout = await page.evaluate(() => {
-    const content = document.querySelector<HTMLElement>(".VPDoc .content");
-    const tables = [...document.querySelectorAll<HTMLTableElement>(".VPDoc table")];
+    const content = document.querySelector<HTMLElement>(".VPDoc .content-container");
+    const tables = [...document.querySelectorAll<HTMLTableElement>(".VPDoc .vp-doc table")];
     const contentRect = content?.getBoundingClientRect();
     return {
       documentWidth: document.documentElement.scrollWidth,

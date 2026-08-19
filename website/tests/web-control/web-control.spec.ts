@@ -24,6 +24,7 @@ test.beforeEach(async ({ page }) => {
       sent: string[] = [];
       constructor() {
         (window as any).__webMessages = this.sent;
+        (window as any).__webSocket = this;
         setTimeout(() => {
           this.readyState = 1;
           this.emit("open", {});
@@ -110,6 +111,23 @@ test("loads configured URDF scene and sends MOVEJ/cancel protocol", async ({ pag
   await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
   await expect(page.locator(".fleet-chip[data-arm=\"m\"]")).toContainText("6 joints");
   await expect(page.locator(".fleet-chip[data-arm=\"r\"]")).toContainText("6 joints");
+  const middleChip = await page.locator(".fleet-chip[data-arm=\"m\"]").elementHandle();
+  await page.evaluate(() => {
+    const webSocket = (window as any).__webSocket;
+    const positions = {
+      l: [0, 0, 0, 0, 0, 0],
+      m: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6],
+      r: [0.2, 0.4, 0.6, 0.8, 1.0, 1.2],
+    };
+    for (let stamp = 100; stamp < 200; stamp += 1) {
+      for (const arm of ["l", "m", "r"] as const) {
+        webSocket.emit("message", {
+          data: JSON.stringify({ type: "joint_state", arm, positions_rad: positions[arm], stamp_ns: stamp }),
+        });
+      }
+    }
+  });
+  expect(await middleChip!.evaluate((element) => element.isConnected)).toBe(true);
   await page.locator(".fleet-chip[data-arm=\"m\"]").click();
   await expect(page.locator("#arm-select")).toHaveValue("m");
   await expect(page.locator("#selected-arm-label")).toContainText("M");

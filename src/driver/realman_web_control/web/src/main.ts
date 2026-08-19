@@ -189,7 +189,8 @@ function renderCoordinateState() {
 }
 function renderFleetStrip() {
   if (!manifest) return;
-  fleetStrip.innerHTML = manifest.robots.map((robotInfo) => {
+  const configuredArms = new Set(manifest.robots.map((robotInfo) => robotInfo.id));
+  for (const robotInfo of manifest.robots) {
     const arm = robotInfo.id;
     const selected = arm === selectedArm;
     const coordinate = coordinateStates[arm];
@@ -197,21 +198,32 @@ function renderFleetStrip() {
     const label = connected === undefined ? "WAIT" : connected ? "ONLINE" : "OFFLINE";
     const motion = coordinate ? (coordinate.motion_allowed ? "READY" : "BLOCKED") : "WAIT";
     const jointCount = currentJointsByArm[arm]?.length || 0;
-    return `
-      <button type="button" class="fleet-chip ${selected ? "selected" : ""}" data-arm="${arm}">
+    let button = fleetStrip.querySelector<HTMLButtonElement>(`button[data-arm="${arm}"]`);
+    if (!button) {
+      button = document.createElement("button");
+      button.type = "button";
+      button.className = "fleet-chip";
+      button.dataset.arm = arm;
+      button.innerHTML = `
         <span class="fleet-chip-arm">${arm.toUpperCase()}</span>
-        <span class="fleet-chip-state">${label}</span>
-        <span class="fleet-chip-motion">${motion}</span>
-        <span class="fleet-chip-meta">${jointCount ? `${jointCount} joints` : robotInfo.model}</span>
-      </button>
-    `;
-  }).join("");
+        <span class="fleet-chip-state"></span>
+        <span class="fleet-chip-motion"></span>
+        <span class="fleet-chip-meta"></span>
+      `;
+      button.addEventListener("click", (event) => {
+        const clickedButton = event.currentTarget as HTMLButtonElement;
+        armSelect.value = clickedButton.dataset.arm as ArmId;
+        armSelect.dispatchEvent(new Event("change"));
+      });
+      fleetStrip.append(button);
+    }
+    button.classList.toggle("selected", selected);
+    button.querySelector<HTMLElement>(".fleet-chip-state")!.textContent = label;
+    button.querySelector<HTMLElement>(".fleet-chip-motion")!.textContent = motion;
+    button.querySelector<HTMLElement>(".fleet-chip-meta")!.textContent = jointCount ? `${jointCount} joints` : robotInfo.model;
+  }
   fleetStrip.querySelectorAll<HTMLButtonElement>("button[data-arm]").forEach((button) => {
-    button.addEventListener("click", () => {
-      const arm = button.dataset.arm as ArmId;
-      armSelect.value = arm;
-      armSelect.dispatchEvent(new Event("change"));
-    });
+    if (!configuredArms.has(button.dataset.arm as ArmId)) button.remove();
   });
 }
 function preferredReference() {
@@ -429,7 +441,7 @@ function handleMessage(message: Message) {
     renderFleetStrip();
     if (message.arm === selectedArm) setSelectedConnection();
   } else if (message.type === "joint_state") {
-  currentJointsByArm[message.arm] = message.positions_rad;
+    currentJointsByArm[message.arm] = message.positions_rad;
     if (!targetEditedByArm[message.arm]) targetJointsByArm[message.arm] = [...message.positions_rad];
     setRobotJoints(robotScenes[message.arm]?.live, message.positions_rad);
     if (message.arm === selectedArm) {

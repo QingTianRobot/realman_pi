@@ -468,16 +468,18 @@ class RealManDriverNode(Node):
         for candidate in frames.values():
             if candidate.controller_name != controller_name:
                 continue
-            return {
+            payload = {
                 "type": int(reference_type),
                 "name": candidate.controller_name,
                 "frame_id": candidate.ros_frame_id,
                 "controller_name": candidate.controller_name,
                 "xyz_m": list(candidate.xyz_m),
                 "quaternion_wxyz": list(candidate.quaternion_wxyz),
-                "payload_kg": candidate.payload_kg,
-                "center_of_mass_m": list(candidate.center_of_mass_m),
             }
+            if reference_type is ReferenceType.TOOL:
+                payload["payload_kg"] = candidate.payload_kg
+                payload["center_of_mass_m"] = list(candidate.center_of_mass_m)
+            return payload
         if frame is None:
             return None
         return {

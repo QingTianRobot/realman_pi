@@ -778,12 +778,6 @@ class RealManDriverNode(Node):
             ):
                 return False
             self._last_event_recovery_attempt = now
-            # The controller can keep the old TCP session briefly after the
-            # SDK handle is destroyed. Give it a bounded quiet interval before
-            # creating a replacement handle.
-            time.sleep(self._event_recovery_delay_sec)
-            if not self.motion_coordinator.event_channel_recovery_required:
-                return True
             self.get_logger().warn(
                 "Resetting RealMan SDK connection after a clean stop left the "
                 "trajectory event channel without a generation marker"
@@ -796,6 +790,12 @@ class RealManDriverNode(Node):
                         f"status {disconnect_status}"
                     )
                     return False
+            # The controller can keep the old TCP session briefly after the
+            # SDK handle is destroyed. Give it a bounded quiet interval before
+            # creating a replacement handle.
+            time.sleep(self._event_recovery_delay_sec)
+            if not self.motion_coordinator.event_channel_recovery_required:
+                return True
             connect_status = self._connect_to_robot()
             if connect_status != 0:
                 self.get_logger().error(

@@ -584,20 +584,21 @@ class MotionCoordinator:
                 (*validation.errors, active_error),
                 None,
             )
-        try:
-            motion_allowed = self.coordinate_manager.motion_allowed(self.arm_id)
-        except Exception as error:
-            return GoalValidationResult(
-                False,
-                (*validation.errors, f"coordinate motion gate failed: {error}"),
-                None,
-            )
-        if not motion_allowed:
-            return GoalValidationResult(
-                False,
-                (*validation.errors, "coordinate verification blocks motion"),
-                None,
-            )
+        if _command_type(request) != CommandType.MOVEJ:
+            try:
+                motion_allowed = self.coordinate_manager.motion_allowed(self.arm_id)
+            except Exception as error:
+                return GoalValidationResult(
+                    False,
+                    (*validation.errors, f"coordinate motion gate failed: {error}"),
+                    None,
+                )
+            if not motion_allowed:
+                return GoalValidationResult(
+                    False,
+                    (*validation.errors, "coordinate verification blocks motion"),
+                    None,
+                )
         return validation
 
     def _activate(self, goal_handle: object, request: object) -> int | None:
@@ -1485,6 +1486,16 @@ def _trajectory_event(event: object) -> tuple[int | None, bool] | None:
         if generation < 0:
             return None
     return generation, state
+
+
+def _command_type(request: object) -> CommandType | None:
+    raw_command = _field(request, "command", None)
+    if isinstance(raw_command, bool) or not isinstance(raw_command, int):
+        return None
+    try:
+        return CommandType(raw_command)
+    except ValueError:
+        return None
 
 
 def _estimated_progress(

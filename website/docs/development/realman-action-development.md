@@ -233,7 +233,9 @@ Action goal accepted
 
 `config/ros/realman_coordinates.yaml` 只描述期望状态，`CoordinateManager` 在连接后
 按 `policy.on_start` 回读控制器。默认 `verify` 不写入控制器；工具、工作坐标任何字段
-不匹配都会关闭 motion gate，因此两个 Action 都会在目标阶段拒绝。
+不匹配都会关闭 motion gate。该 gate 只拦截依赖控制器工具/工作坐标的 `MOVEL`、
+`MOVEJ_P` 和速度 session；关节空间 `MOVEJ` 不读取位姿参考系，仍可在坐标 mismatch
+时提交。
 
 开发者新增一个坐标相关字段时必须同时更新：
 

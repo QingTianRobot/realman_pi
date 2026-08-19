@@ -321,6 +321,18 @@ def test_invalid_execute_aborts_without_any_sdk_call():
     assert ownership.is_busy("l") is False
 
 
+def test_movej_ignores_coordinate_gate_while_cartesian_motion_stays_blocked():
+    blocked = FakeCoordinateManager(allowed=False)
+    movej_coordinator, _, _, movej_ownership = make_coordinator(coordinates=blocked)
+    movel_coordinator, _, _, movel_ownership = make_coordinator(coordinates=blocked)
+
+    assert movej_coordinator.goal_callback(movej_goal()) == FakeGoalResponse.ACCEPT
+    assert movej_ownership.is_busy("l") is True
+    assert movel_coordinator.goal_callback(pose_goal(CommandType.MOVEL)) == FakeGoalResponse.REJECT
+    assert movel_coordinator.goal_callback(pose_goal(CommandType.MOVEJ_P)) == FakeGoalResponse.REJECT
+    assert movel_ownership.is_busy("l") is False
+
+
 def test_adapter_exceptions_log_operation_and_detail():
     coordinator, adapter, _, _ = make_coordinator()
     logger = FakeLogger()
@@ -1537,7 +1549,7 @@ def test_coordinate_mismatch_and_connection_loss_reject_goal():
     coordinator, adapter, _, _ = make_coordinator(
         coordinates=FakeCoordinateManager(allowed=False)
     )
-    assert coordinator.goal_callback(movej_goal()) == FakeGoalResponse.REJECT
+    assert coordinator.goal_callback(pose_goal(CommandType.MOVEL)) == FakeGoalResponse.REJECT
     assert adapter.calls == []
 
 

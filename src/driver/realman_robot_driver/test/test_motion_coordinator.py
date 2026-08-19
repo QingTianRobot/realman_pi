@@ -348,8 +348,8 @@ def test_adapter_exceptions_log_operation_and_detail():
     def fail_trajectory():
         raise RuntimeError("trajectory exploded")
 
-    adapter.movej = fail_submission
-    result = coordinator.execute(FakeGoalHandle(movej_goal()))
+    adapter.movel = fail_submission
+    result = coordinator.execute(FakeGoalHandle(pose_goal(CommandType.MOVEL)))
     adapter.get_state = fail_state
     coordinator._read_state()
     adapter.current_trajectory = fail_trajectory
@@ -500,6 +500,21 @@ def test_valid_movej_uses_exact_adapter_call_and_event_succeeds():
         FakeFeedback.SUBMITTING,
         FakeFeedback.EXECUTING,
     ]
+    assert ownership.is_busy("l") is False
+
+
+def test_movej_already_at_target_succeeds_without_sdk_motion_submission():
+    coordinator, adapter, _, ownership = make_coordinator()
+    handle = FakeGoalHandle(movej_goal(joint_degrees=(0.0,) * 6))
+    assert coordinator.goal_callback(handle.request) == FakeGoalResponse.ACCEPT
+
+    result = coordinator.execute(handle)
+
+    assert result.success is True
+    assert result.terminal_state == FakeResult.SUCCEEDED
+    assert result.message == "motion already at target"
+    assert ("get_state",) in adapter.calls
+    assert [call for call in adapter.calls if call[0] == "movej"] == []
     assert ownership.is_busy("l") is False
 
 

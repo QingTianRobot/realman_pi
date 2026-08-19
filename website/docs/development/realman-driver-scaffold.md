@@ -93,7 +93,7 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 
 四元数顺序固定为 `w, x, y, z`，入口会检查有限值、非零模并归一化。ROS 接口和内部状态不使用 Euler 角；只有 SDK 确实只接受 Euler 的坐标写入边界才会进行一次转换。`velocity_percent` 范围为 `1..100`，`blend_radius_percent` 为 `0..100`，第一版只接受 `connect=false`，`timeout_sec` 必须为正有限数。
 
-一个目标只有同时收到当前 generation 的成功事件、观察到轨迹曾为 active 后回到 inactive、连接仍有效时才成功；MOVEJ 还要求六个关节都落入 `joint_goal_tolerance_deg`。反馈阶段依次为 `VALIDATING`、`SUBMITTING`、`EXECUTING`，停止时进入 `STOPPING`，并持续返回当前关节角、活动坐标、API2 状态和详情。Action cancel 使用 `rm_set_arm_slow_stop()` 并等待 inactive；`/l|m|r/stop` 抢占 ownership 并使用 `rm_set_arm_stop()`。
+一个目标只有同时收到当前 generation 的成功事件、观察到轨迹曾为 active 后回到 inactive、连接仍有效时才成功；MOVEJ 还要求六个关节都落入 `joint_goal_tolerance_deg`。如果 MOVEJ 提交前回读关节已经在目标容差内，驱动直接返回 `motion already at target`，不再等待控制器产生一条空轨迹。反馈阶段依次为 `VALIDATING`、`SUBMITTING`、`EXECUTING`，停止时进入 `STOPPING`，并持续返回当前关节角、活动坐标、API2 状态和详情。Action cancel 使用 `rm_set_arm_slow_stop()` 并等待 inactive；`/l|m|r/stop` 抢占 ownership 并使用 `rm_set_arm_stop()`。
 
 以下命令可在 mock 服务运行时验证完整 Action，不会连接真机：
 

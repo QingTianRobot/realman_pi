@@ -288,6 +288,39 @@ class MotionCoordinator:
         current_joints: tuple[float, ...] = ()
         initial_joints: tuple[float, ...] = ()
         try:
+            if goal.command == CommandType.MOVEJ:
+                state_status, observed_joints, state_connected = self._read_state()
+                if state_status != 0:
+                    self._enter_lockout()
+                    return self._finish(
+                        goal_handle,
+                        generation,
+                        TerminalState.ABORTED,
+                        state_status,
+                        current_joints,
+                        "motion precheck reported an API2 error",
+                    )
+                if state_connected is False:
+                    return self._finish(
+                        goal_handle,
+                        generation,
+                        TerminalState.ABORTED,
+                        _nonzero_status(state_status),
+                        current_joints,
+                        "robot connection lost during motion precheck",
+                    )
+                if observed_joints:
+                    current_joints = observed_joints
+                    initial_joints = observed_joints
+                if self._goal_has_converged(goal, observed_joints):
+                    return self._finish(
+                        goal_handle,
+                        generation,
+                        TerminalState.SUCCEEDED,
+                        0,
+                        observed_joints,
+                        "motion already at target",
+                    )
             self._publish_feedback(
                 goal_handle,
                 FeedbackPhase.SUBMITTING,

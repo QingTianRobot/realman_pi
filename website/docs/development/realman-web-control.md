@@ -151,8 +151,9 @@ Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条�
 ## 取消与软件停止
 
 “取消 Action”只对发起该 Action 的 WebSocket 客户端有效，调用 `cancel_goal_async()`，
-驱动随后执行 slow-stop。网页红色“软件停止”按钮单独调用 `/{arm}/stop`，不先调用 cancel，
-因此不会被 slow-stop 竞态拖慢。它是最快受控停止，不替代控制柜或现场物理急停。
+普通运动驱动随后执行 `rm_set_arm_stop()` 并等待 inactive；速度 Action 则先发送零速度再
+slow-stop。网页红色“软件停止”按钮单独调用 `/{arm}/stop`，可以直接抢占任一 Action。
+这些都是保持动力的受控停止，不替代控制柜或现场物理急停。
 
 客户端断开时，后端按以下顺序清理：速度通道发布零速度、请求速度 Action cancel、请求普通
 Action cancel。浏览器刷新不会留下仍由网页拥有的速度命令。

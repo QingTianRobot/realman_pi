@@ -1,4 +1,5 @@
 import gc
+import inspect
 import math
 import threading
 from types import SimpleNamespace
@@ -91,6 +92,31 @@ class FakeGoalHandle:
 
     def publish_feedback(self, _feedback):
         pass
+
+
+class SeverityCheckingLogger:
+    def __init__(self) -> None:
+        self._severity_by_callsite: dict[tuple[str, int], str] = {}
+
+    def _record(self, severity: str) -> None:
+        caller = inspect.currentframe().f_back.f_back
+        assert caller is not None
+        callsite = (caller.f_code.co_filename, caller.f_lineno)
+        previous = self._severity_by_callsite.setdefault(callsite, severity)
+        if previous != severity:
+            raise ValueError("Logger severity cannot be changed between calls.")
+
+    def debug(self, _message: str) -> None:
+        self._record("debug")
+
+    def info(self, _message: str) -> None:
+        self._record("info")
+
+    def warn(self, _message: str) -> None:
+        self._record("warn")
+
+    def error(self, _message: str) -> None:
+        self._record("error")
 
 
 def _goal_response_is_accepted(response) -> bool:
@@ -187,6 +213,15 @@ def test_start_initializes_zero_command_and_claims_arm():
     assert adapter.velocity_calls[0][0] == [0.0] * 6
     assert ownership.is_busy("l") is True
     session.shutdown()
+
+
+def test_logger_severity_changes_do_not_crash_velocity_session():
+    session = make_session()
+    session._logger = SeverityCheckingLogger()
+
+    session._log("info", "first message")
+    session._log("warn", "second message")
+    session._log("error", "third message")
 
 
 def test_shutdown_is_idempotent_after_initialization_failure_and_preserves_result():

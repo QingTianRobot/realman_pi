@@ -1261,9 +1261,24 @@ class CartesianVelocitySession:
         return message
 
     def _log(self, level: str, message: str) -> None:
-        method = getattr(self._logger, level, None) if self._logger is not None else None
-        if method is not None:
-            method(message)
+        if self._logger is None:
+            return
+        if level == "debug":
+            if getattr(self._logger, "debug", None) is not None:
+                self._logger.debug(message)
+        elif level == "info":
+            if getattr(self._logger, "info", None) is not None:
+                self._logger.info(message)
+        elif level in {"warn", "warning"}:
+            if getattr(self._logger, "warn", None) is not None:
+                self._logger.warn(message)
+            elif getattr(self._logger, "warning", None) is not None:
+                self._logger.warning(message)
+        elif level == "error":
+            if getattr(self._logger, "error", None) is not None:
+                self._logger.error(message)
+        elif getattr(self._logger, "info", None) is not None:
+            self._logger.info(message)
 
     def _read_ros_time_ns(self) -> int | None:
         if self._ros_time_now_ns is None:

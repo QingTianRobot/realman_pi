@@ -109,7 +109,7 @@ IDL 文件是唯一权威来源，字段含义如下。数组长度错误、NaN/
 | `terminal_state` | `success` | 语义 |
 | --- | --- | --- |
 | `SUCCEEDED=0` | `true` | 已提交、观察到 active 后回到 inactive，且完成证据满足命令类型 |
-| `CANCELED=1` | `false` | Action cancel 被接受，SDK slow-stop 成功并确认停止 |
+| `CANCELED=1` | `false` | Action cancel 被接受，SDK immediate stop 成功并确认停止 |
 | `ABORTED=2` | `false` | 参数、连接、SDK、轨迹错误、停止失败或安全 lockout |
 | `TIMEOUT=3` | `false` | deadline 到期，slow-stop 成功但未能在期限内完成正常目标 |
 
@@ -125,7 +125,7 @@ IDL 文件是唯一权威来源，字段含义如下。数组长度错误、NaN/
 | `VALIDATING=0` | Action execute 开始 | 已有 reservation/ownership，尚未提交 SDK |
 | `SUBMITTING=1` | 即将调用 `rm_movej`/`rm_movel`/`rm_movej_p` | 说明正在发送非阻塞 SDK 请求 |
 | `EXECUTING=2` | SDK 接受后轮询期间 | 当前关节、估计进度、活动坐标和 API2 status |
-| `STOPPING=3` | cancel、timeout 或 shutdown | 正在发送 slow-stop 并等待 inactive |
+| `STOPPING=3` | cancel、timeout 或 shutdown | cancel/shutdown 发送 immediate stop，timeout 发送 slow-stop，并等待 inactive |
 
 `progress` 是可用关节目标和当前关节之间的保守估计，不是控制器的真实轨迹百分比；
 位姿命令不能从关节角可靠推导位置，因此不要把它当作笛卡尔误差。反馈中的
@@ -151,9 +151,11 @@ IDL 文件是唯一权威来源，字段含义如下。数组长度错误、NaN/
    - 连接没有丢失，且没有发生 stop/cancel/timeout；
    - `MOVEJ` 的六个最终关节都在 `joint_goal_tolerance_deg` 内；
    - `MOVEL`/`MOVEJ_P` 至少具备事件与 active-to-inactive 证据，不能用关节角冒充位姿到位。
-8. cancel 或 timeout 只调用一次 `rm_set_arm_slow_stop()`，进入 `STOPPING` 并等待 inactive。
-   `/stop` 使用 `rm_set_arm_stop()`，可以抢占普通运动或速度 session。
-9. stop 返回非零、等待线程超时、断线状态不明确或事件通道无法证明已清空时，进入
+8. cancel 和 driver shutdown 只调用一次 `rm_set_arm_stop()`，立即终止轨迹后进入 `STOPPING`
+   并等待 inactive；timeout 仍调用一次 `rm_set_arm_slow_stop()`。显式 `/stop` 同样使用
+   `rm_set_arm_stop()`，可以抢占普通运动或速度 session。
+9. 已提交运动在监控、轨迹事件或内部执行中发生异常时，也先发送 `rm_set_arm_stop()`；
+   stop 返回非零、等待线程超时、断线状态不明确或事件通道无法证明已清空时，进入
    fail-closed lockout。lockout 只能在确认 disconnect 后清理，不能由下一个 goal 覆盖。
 10. 释放 generation 和 ownership；如果提交过但没有消费到当前 generation 的完整事件，
     对旧事件通道设置 quarantine，下一次目标必须等待 reconnect/reconciliation。
@@ -366,7 +368,8 @@ docker compose run --rm --no-deps realman_driver_test bash -lc '
 - `test_submission_callback_before_sdk_returns_is_ignored_as_stale`：提交返回前的 callback 无效；
 - `test_success_event_without_observed_active_trajectory_fails_safe`：没有 active 证据不能成功；
 - `test_movej_completion_requires_final_joints_to_converge_on_target`：六轴都必须满足容差；
-- `test_cancel_stops_once_waits_for_stopped_state_and_returns_canceled`：cancel 只 stop 一次且等 inactive；
+- `test_cancel_stops_once_waits_for_stopped_state_and_returns_canceled`：cancel 只 immediate stop 一次且等 inactive；
+- `test_execution_exception_fast_stops_submitted_motion_before_aborting`：执行异常先 immediate stop 再返回；
 - `test_timeout_slow_stops_once_and_returns_timeout`：deadline 进入 timeout，不伪造 success；
 - `test_fast_stop_without_inactive_trajectory_aborts_and_locks_out_arm`：最快停止不确定时保持 lockout；
 - `test_event_received_before_submission_cannot_succeed_later_goal`：旧事件不能污染新 goal；
@@ -411,7 +414,8 @@ def test_cancel_stops_once_waits_for_stopped_state_and_returns_canceled():
     result = coordinator.execute(handle)
 
     assert result.terminal_state == FakeResult.CANCELED
-    assert adapter.calls.count(("slow_stop",)) == 1
+    assert adapter.calls.count(("stop",)) == 1
+    assert adapter.calls.count(("slow_stop",)) == 0
     assert FakeFeedback.STOPPING in [item.phase for item in handle.feedback]
     assert handle.transitions == ["canceled"]
     assert ownership.is_busy("l") is False
@@ -454,8 +458,9 @@ mock 普通运动必须经历 active、success event、inactive，然后返回 `
 5. 单独验证 cancel、timeout、`/stop`、watchdog 和断线，不要把多个失败原因混在一次测试中；
 6. 记录目标、坐标、版本、API2 status、日志目录和现场观察，再扩大到位姿和角速度。
 
-`/stop` 和 Action cancel 都是 SDK 受控停止，不是断电急停。任何 stop 失败、线程无法退出、
-坐标回读不一致或事件身份不确定，都必须保持 lockout，先断开并人工检查。
+`/stop`、普通运动 Action cancel 和 driver shutdown 都使用最快的 SDK 受控停止，不是断电
+急停。速度 Action cancel 仍先发零速度再 slow-stop。任何 stop 失败、线程无法退出、坐标
+回读不一致或事件身份不确定，都必须保持 lockout，先断开并人工检查。
 
 ## SDK 兼容依据
 

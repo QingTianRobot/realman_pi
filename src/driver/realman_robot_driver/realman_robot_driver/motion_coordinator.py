@@ -200,6 +200,7 @@ class MotionCoordinator:
 
     def cancel_callback(self, goal_handle: object) -> Any:
         request = getattr(goal_handle, "request", None)
+        stop_active_motion = False
         with self._condition:
             active = goal_handle is self._active_goal
             reserved = (
@@ -214,8 +215,12 @@ class MotionCoordinator:
                 self._condition.notify_all()
             elif active:
                 self._cancel_generation = self._active_generation
+                self._condition.notify_all()
+                stop_active_motion = True
             else:
                 return self.cancel_response_type.REJECT
+        if stop_active_motion:
+            self.fast_stop()
         return self.cancel_response_type.ACCEPT
 
     def accepted_callback(self, goal_handle: object) -> None:
@@ -287,6 +292,7 @@ class MotionCoordinator:
         goal = validation.goal
         current_joints: tuple[float, ...] = ()
         initial_joints: tuple[float, ...] = ()
+        submitted = False
         try:
             if goal.command == CommandType.MOVEJ:
                 state_status, observed_joints, state_connected = self._read_state()
@@ -355,6 +361,7 @@ class MotionCoordinator:
                     current_joints,
                     f"motion submission failed with API2 status {submit_status}",
                 )
+            submitted = True
             with self._lock:
                 if self._active_generation == generation:
                     self._accept_events = True
@@ -373,36 +380,45 @@ class MotionCoordinator:
             observed_active_trajectory = False
             while True:
                 if self._fast_stop_requested(generation):
-                    return self._finish_after_fast_stop(
+                    return self._finish_after_requested_fast_stop(
                         goal_handle, generation, current_joints
                     )
                 shutdown_requested = self._shutdown_requested(generation)
-                cancel_requested = bool(getattr(goal_handle, "is_cancel_requested", False))
-                if shutdown_requested or cancel_requested:
-                    reason = "driver shutdown requested" if shutdown_requested and not cancel_requested else "cancel requested"
-                    return self._controlled_stop(
+                cancel_requested = bool(
+                    getattr(goal_handle, "is_cancel_requested", False)
+                )
+                cancel_generation_requested = self._cancel_requested(generation)
+                if shutdown_requested or cancel_requested or cancel_generation_requested:
+                    reason = "driver shutdown requested" if shutdown_requested else "cancel requested"
+                    terminal_state = (
+                        TerminalState.ABORTED
+                        if shutdown_requested or not cancel_requested
+                        else TerminalState.CANCELED
+                    )
+                    return self._fast_controlled_stop(
                         goal_handle,
                         generation,
                         goal,
-                        TerminalState.CANCELED if cancel_requested else TerminalState.ABORTED,
+                        terminal_state,
                         current_joints,
                         reason,
                     )
                 if not bool(getattr(self.adapter, "connected", False)):
                     status = _nonzero_status(getattr(self.adapter, "last_error", -1))
-                    return self._finish(
+                    return self._fast_controlled_stop(
                         goal_handle,
                         generation,
+                        goal,
                         TerminalState.ABORTED,
-                        status,
                         current_joints,
                         "robot connection lost during motion",
+                        result_status=status,
                     )
 
                 state_status, observed_joints, state_connected = self._read_state()
                 trajectory_status, trajectory_active = self._read_trajectory()
                 if self._fast_stop_requested(generation):
-                    return self._finish_after_fast_stop(
+                    return self._finish_after_requested_fast_stop(
                         goal_handle, generation, current_joints
                     )
                 if observed_joints:
@@ -412,28 +428,30 @@ class MotionCoordinator:
                 api2_status = _first_nonzero(state_status, trajectory_status)
                 if api2_status != 0:
                     self._enter_lockout()
-                    return self._finish(
+                    return self._fast_controlled_stop(
                         goal_handle,
                         generation,
+                        goal,
                         TerminalState.ABORTED,
-                        api2_status,
                         current_joints,
                         "motion monitor reported an API2 error",
+                        result_status=api2_status,
                     )
                 if state_connected is False:
-                    return self._finish(
+                    return self._fast_controlled_stop(
                         goal_handle,
                         generation,
+                        goal,
                         TerminalState.ABORTED,
-                        _nonzero_status(state_status),
                         current_joints,
                         "robot connection lost during state monitoring",
+                        result_status=_nonzero_status(state_status),
                     )
                 if trajectory_active is True:
                     observed_active_trajectory = True
                 completion_event = self._take_event(generation)
                 if self._fast_stop_requested(generation):
-                    return self._finish_after_fast_stop(
+                    return self._finish_after_requested_fast_stop(
                         goal_handle, generation, current_joints
                     )
                 progress = _estimated_progress(goal, initial_joints, current_joints)
@@ -448,13 +466,14 @@ class MotionCoordinator:
                 )
 
                 if completion_event is False:
-                    return self._finish(
+                    return self._fast_controlled_stop(
                         goal_handle,
                         generation,
+                        goal,
                         TerminalState.ABORTED,
-                        api2_status,
                         current_joints,
                         "controller reported trajectory failure",
+                        result_status=api2_status,
                     )
                 if (
                     completion_event is True
@@ -490,13 +509,26 @@ class MotionCoordinator:
                 self._sleep(self._poll_period_sec)
         except Exception as error:
             status = _nonzero_status(getattr(self.adapter, "last_error", -1))
-            if self._logger is not None:
+            if submitted:
                 try:
-                    self._logger.error(
-                        f"motion execution failed for {goal.command.name}: {error}"
-                    )
+                    stop_status = self.fast_stop()
                 except Exception:
-                    pass
+                    stop_status = _nonzero_status(getattr(self.adapter, "last_error", -1))
+                if stop_status != 0:
+                    status = stop_status
+            try:
+                self._log(
+                    "error", f"motion execution failed for {goal.command.name}: {error}"
+                )
+            except Exception:
+                pass
+            if submitted:
+                return self._finish_after_fast_stop(
+                    goal_handle,
+                    generation,
+                    current_joints,
+                    reason=f"motion execution failed and was fast-stopped: {error}",
+                )
             return self._finish(
                 goal_handle,
                 generation,
@@ -509,7 +541,7 @@ class MotionCoordinator:
             self._release_generation(generation)
 
     def shutdown(self, timeout_sec: float | None = None) -> int:
-        """Request one controlled stop and wait briefly for active execution to unwind."""
+        """Immediately stop motion and wait briefly for active execution to unwind."""
         idle_stop = None
         with self._condition:
             generation = self._active_generation
@@ -536,12 +568,12 @@ class MotionCoordinator:
                     return -1
                 return status
             try:
-                status = int(self.adapter.slow_stop())
+                status = int(self.adapter.stop())
             except Exception as error:
                 status = _nonzero_status(getattr(self.adapter, "last_error", -1))
                 self._log(
                     "error",
-                    f"pre-submit shutdown slow_stop adapter call failed: {error}",
+                    f"pre-submit shutdown fast_stop adapter call failed: {error}",
                 )
             with self._condition:
                 if self._reservation is reservation:
@@ -565,7 +597,7 @@ class MotionCoordinator:
             return status
         if generation is None:
             return 0
-        status = self._request_stop_once(generation)
+        status = self.fast_stop()
         wait_duration = self._stop_timeout_sec if timeout_sec is None else max(0.0, timeout_sec)
         deadline = time.monotonic() + wait_duration
         with self._condition:
@@ -715,25 +747,32 @@ class MotionCoordinator:
                     )
                 if status != 0:
                     self._enter_lockout()
+                terminal_state = (
+                    TerminalState.CANCELED
+                    if status == 0
+                    and self._cancel_generation == generation
+                    and bool(getattr(goal_handle, "is_cancel_requested", False))
+                    else TerminalState.ABORTED
+                )
                 return (
-                    TerminalState.ABORTED,
+                    terminal_state,
                     status,
                     "fast stop requested before motion submission",
                 )
             if self._shutdown_generation == generation:
-                status = self._wait_for_slow_stop_status(generation)
+                status = self._wait_for_shutdown_fast_stop_status(generation)
                 if status is None:
                     self._enter_lockout()
                     return (
                         TerminalState.ABORTED,
                         -1,
-                        "controlled stop status did not arrive before motion submission",
+                        "shutdown fast stop status did not arrive before motion submission",
                     )
                 if status != 0:
                     return (
                         TerminalState.ABORTED,
                         status,
-                        "controlled stop failed before motion submission "
+                        "shutdown fast stop failed before motion submission "
                         f"with API2 status {status}",
                     )
                 return (
@@ -900,6 +939,50 @@ class MotionCoordinator:
                     "controlled stop could not be confirmed",
                 )
             self._sleep(self._poll_period_sec)
+
+    def _fast_controlled_stop(
+        self,
+        goal_handle: object,
+        generation: int,
+        goal: ValidatedGoal,
+        requested_terminal: TerminalState,
+        current_joints: tuple[float, ...],
+        reason: str,
+        *,
+        result_status: int = 0,
+    ) -> Any:
+        """Immediately stop a canceled or interrupted submitted motion."""
+        if self._fast_stop_requested(generation):
+            return self._finish_after_fast_stop(
+                goal_handle,
+                generation,
+                current_joints,
+                terminal_state=requested_terminal,
+                result_status=result_status,
+            )
+        self._publish_feedback(
+            goal_handle,
+            FeedbackPhase.STOPPING,
+            goal,
+            current_joints,
+            0.0,
+            0,
+            f"{reason}; issuing immediate stop",
+        )
+        stop_status = self.fast_stop()
+        if stop_status != 0:
+            return self._finish_after_fast_stop(
+                goal_handle,
+                generation,
+                current_joints,
+            )
+        return self._finish_after_fast_stop(
+            goal_handle,
+            generation,
+            current_joints,
+            terminal_state=requested_terminal,
+            result_status=result_status,
+        )
 
     def _request_stop_once(self, generation: int) -> int:
         with self._condition:
@@ -1072,13 +1155,40 @@ class MotionCoordinator:
         with self._condition:
             return self._fast_stop_generation == generation
 
-    def _finish_after_fast_stop(
+    def _cancel_requested(self, generation: int) -> bool:
+        with self._condition:
+            return self._cancel_generation == generation
+
+    def _finish_after_requested_fast_stop(
         self,
         goal_handle: object,
         generation: int,
         current_joints: Sequence[float],
     ) -> Any:
-        """Abort only after a fast stop is known to have reached idle."""
+        terminal_state = (
+            TerminalState.CANCELED
+            if self._cancel_requested(generation)
+            and bool(getattr(goal_handle, "is_cancel_requested", False))
+            else TerminalState.ABORTED
+        )
+        return self._finish_after_fast_stop(
+            goal_handle,
+            generation,
+            current_joints,
+            terminal_state=terminal_state,
+        )
+
+    def _finish_after_fast_stop(
+        self,
+        goal_handle: object,
+        generation: int,
+        current_joints: Sequence[float],
+        *,
+        terminal_state: TerminalState = TerminalState.ABORTED,
+        reason: str | None = None,
+        result_status: int = 0,
+    ) -> Any:
+        """Finish only after a fast stop is known to have reached idle."""
         status = self._wait_for_fast_stop_status(generation)
         if status is None:
             self._enter_lockout()
@@ -1103,25 +1213,39 @@ class MotionCoordinator:
 
         deadline = self._monotonic() + self._stop_timeout_sec
         while True:
+            state_status, observed_joints, state_connected = self._read_state()
             trajectory_status, trajectory_active = self._read_trajectory()
-            if trajectory_status != 0:
+            if observed_joints:
+                current_joints = observed_joints
+            api2_status = _first_nonzero(state_status, trajectory_status)
+            if api2_status != 0:
                 self._enter_lockout()
                 return self._finish(
                     goal_handle,
                     generation,
                     TerminalState.ABORTED,
-                    trajectory_status,
+                    api2_status,
                     current_joints,
                     "fast stop confirmation reported an API2 error",
+                )
+            if state_connected is False:
+                self._enter_lockout()
+                return self._finish(
+                    goal_handle,
+                    generation,
+                    TerminalState.ABORTED,
+                    _nonzero_status(state_status),
+                    current_joints,
+                    "robot connection lost while confirming fast stop",
                 )
             if trajectory_active is False:
                 return self._finish(
                     goal_handle,
                     generation,
-                    TerminalState.ABORTED,
-                    0,
+                    terminal_state,
+                    result_status,
                     current_joints,
-                    "fast stop confirmed by inactive trajectory",
+                    reason or "fast stop confirmed by inactive trajectory",
                 )
             if self._monotonic() >= deadline:
                 self._enter_lockout()
@@ -1156,6 +1280,18 @@ class MotionCoordinator:
                 if status is not _STOP_IN_PROGRESS:
                     return int(status or 0)
                 remaining = deadline - self._monotonic()
+                if remaining <= 0.0:
+                    return None
+                self._condition.wait(min(remaining, self._poll_period_sec))
+        return None
+
+    def _wait_for_shutdown_fast_stop_status(self, generation: int) -> int | None:
+        deadline = time.monotonic() + self._stop_timeout_sec
+        with self._condition:
+            while self._shutdown_generation == generation:
+                if self._fast_stop_generation == generation:
+                    return self._wait_for_fast_stop_status(generation)
+                remaining = deadline - time.monotonic()
                 if remaining <= 0.0:
                     return None
                 self._condition.wait(min(remaining, self._poll_period_sec))
@@ -1490,9 +1626,22 @@ class MotionCoordinator:
     def _log(self, level: str, message: str) -> None:
         if self._logger is None:
             return
-        method = getattr(self._logger, level, None)
-        if method is not None:
-            method(message)
+        if level == "debug":
+            if getattr(self._logger, "debug", None) is not None:
+                self._logger.debug(message)
+        elif level == "info":
+            if getattr(self._logger, "info", None) is not None:
+                self._logger.info(message)
+        elif level in {"warn", "warning"}:
+            if getattr(self._logger, "warn", None) is not None:
+                self._logger.warn(message)
+            elif getattr(self._logger, "warning", None) is not None:
+                self._logger.warning(message)
+        elif level == "error":
+            if getattr(self._logger, "error", None) is not None:
+                self._logger.error(message)
+        elif getattr(self._logger, "info", None) is not None:
+            self._logger.info(message)
 
 
 def _trajectory_event(event: object) -> tuple[int | None, bool] | None:

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import inspect
 import threading
 from dataclasses import replace
 from enum import IntEnum
@@ -188,6 +189,42 @@ class FakeLogger:
     def error(self, message: str) -> None:
         self.errors.append(message)
 
+    def debug(self, _message: str) -> None:
+        pass
+
+    def info(self, _message: str) -> None:
+        pass
+
+    def warn(self, _message: str) -> None:
+        pass
+
+
+class SeverityCheckingLogger:
+    """Model rcutils' per-call-site severity consistency check."""
+
+    def __init__(self) -> None:
+        self._severity_by_callsite: dict[tuple[str, int], str] = {}
+
+    def _record(self, severity: str) -> None:
+        caller = inspect.currentframe().f_back.f_back
+        assert caller is not None
+        callsite = (caller.f_code.co_filename, caller.f_lineno)
+        previous = self._severity_by_callsite.setdefault(callsite, severity)
+        if previous != severity:
+            raise ValueError("Logger severity cannot be changed between calls.")
+
+    def debug(self, _message: str) -> None:
+        self._record("debug")
+
+    def info(self, _message: str) -> None:
+        self._record("info")
+
+    def warn(self, _message: str) -> None:
+        self._record("warn")
+
+    def error(self, _message: str) -> None:
+        self._record("error")
+
 
 class FakeGoalHandle:
     def __init__(self, request: Goal) -> None:
@@ -370,6 +407,15 @@ def test_adapter_exceptions_log_operation_and_detail():
     )
 
 
+def test_logger_severity_changes_do_not_crash_motion_coordinator():
+    coordinator, _, _, _ = make_coordinator()
+    coordinator._logger = SeverityCheckingLogger()
+
+    coordinator._log("info", "first message")
+    coordinator._log("warn", "second message")
+    coordinator._log("error", "third message")
+
+
 def test_stop_adapter_exceptions_log_operation_and_detail():
     logger = FakeLogger()
 
@@ -378,8 +424,8 @@ def test_stop_adapter_exceptions_log_operation_and_detail():
     reserved_adapter.last_error = 31
     reserved = FakeGoalHandle(movej_goal())
     assert reserved_coordinator.goal_callback(reserved.request) == FakeGoalResponse.ACCEPT
-    reserved_adapter.slow_stop = lambda: (_ for _ in ()).throw(
-        RuntimeError("reserved slow stop exploded")
+    reserved_adapter.stop = lambda: (_ for _ in ()).throw(
+        RuntimeError("reserved fast stop exploded")
     )
     assert reserved_coordinator.shutdown(timeout_sec=0.0) == 31
 
@@ -402,7 +448,7 @@ def test_stop_adapter_exceptions_log_operation_and_detail():
     assert fast_coordinator.fast_stop() == 33
 
     assert any(
-        "pre-submit shutdown slow_stop adapter call failed: reserved slow stop exploded"
+        "pre-submit shutdown fast_stop adapter call failed: reserved fast stop exploded"
         in entry
         for entry in logger.errors
     )
@@ -658,6 +704,8 @@ def test_failed_trajectory_event_aborts_active_goal():
     result = coordinator.execute(handle)
 
     assert result.terminal_state == FakeResult.ABORTED
+    assert adapter.calls.count(("stop",)) == 1
+    assert adapter.calls.count(("slow_stop",)) == 0
     assert handle.transitions == ["aborted"]
 
 
@@ -669,15 +717,49 @@ def test_cancel_stops_once_waits_for_stopped_state_and_returns_canceled():
     result = coordinator.execute(handle)
 
     assert result.terminal_state == FakeResult.CANCELED
-    assert adapter.calls.count(("slow_stop",)) == 1
+    assert adapter.calls.count(("stop",)) == 1
+    assert adapter.calls.count(("slow_stop",)) == 0
     assert FakeFeedback.STOPPING in [feedback.phase for feedback in handle.feedback]
+    assert handle.transitions == ["canceled"]
+    assert ownership.is_busy("l") is False
+
+
+def test_cancel_callback_issues_fast_stop_before_execution_poll_resumes():
+    coordinator, adapter, clock, ownership = make_coordinator()
+    handle = FakeGoalHandle(movej_goal(timeout_sec=10.0))
+    polling = threading.Event()
+    resume = threading.Event()
+    result_holder = []
+
+    def block_poll() -> None:
+        polling.set()
+        assert resume.wait(timeout=1.0)
+
+    clock.on_sleep = block_poll
+    execute_thread = threading.Thread(
+        target=lambda: result_holder.append(coordinator.execute(handle))
+    )
+    execute_thread.start()
+    try:
+        assert polling.wait(timeout=1.0)
+        handle.is_cancel_requested = True
+        assert coordinator.cancel_callback(handle) == FakeCancelResponse.ACCEPT
+        assert adapter.calls.count(("stop",)) == 1
+    finally:
+        resume.set()
+    execute_thread.join(timeout=1.0)
+
+    assert execute_thread.is_alive() is False
+    assert len(result_holder) == 1
+    assert result_holder[0].terminal_state == FakeResult.CANCELED
+    assert adapter.calls.count(("slow_stop",)) == 0
     assert handle.transitions == ["canceled"]
     assert ownership.is_busy("l") is False
 
 
 def test_cancel_stop_failure_aborts_with_stop_api2_status():
     adapter = FakeAdapter()
-    adapter.stop_status = 52
+    adapter.fast_stop_status = 52
     coordinator, _, clock, _ = make_coordinator(adapter=adapter)
     handle = FakeGoalHandle(movej_goal())
     clock.on_sleep = lambda: setattr(handle, "is_cancel_requested", True)
@@ -686,13 +768,14 @@ def test_cancel_stop_failure_aborts_with_stop_api2_status():
 
     assert result.terminal_state == FakeResult.ABORTED
     assert result.api2_status == 52
-    assert adapter.calls.count(("slow_stop",)) == 1
+    assert adapter.calls.count(("stop",)) == 1
+    assert adapter.calls.count(("slow_stop",)) == 0
     assert handle.transitions == ["aborted"]
 
 
 def test_controlled_stop_does_not_accept_an_event_in_place_of_inactive_trajectory():
     adapter = FakeAdapter()
-    adapter.slow_stop_completes_trajectory = False
+    adapter.fast_stop_completes_trajectory = False
     coordinator, _, clock, ownership = make_coordinator(
         adapter=adapter, stop_timeout_sec=0.02
     )
@@ -718,6 +801,25 @@ def test_controlled_stop_does_not_accept_an_event_in_place_of_inactive_trajector
     assert ownership.is_busy("l") is True
 
 
+def test_execution_exception_fast_stops_submitted_motion_before_aborting():
+    coordinator, adapter, clock, ownership = make_coordinator()
+    handle = FakeGoalHandle(movej_goal(timeout_sec=10.0))
+
+    def fail_after_submission(_duration: float) -> None:
+        raise RuntimeError("polling instruction failed")
+
+    coordinator._sleep = fail_after_submission
+
+    result = coordinator.execute(handle)
+
+    assert result.terminal_state == FakeResult.ABORTED
+    assert "polling instruction failed" in result.message
+    assert adapter.calls.count(("stop",)) == 1
+    assert adapter.calls.count(("slow_stop",)) == 0
+    assert handle.transitions == ["aborted"]
+    assert ownership.is_busy("l") is False
+
+
 @pytest.mark.parametrize(
     ("state_status", "trajectory_status", "expected_status"),
     [(23, 0, 23), (0, 47, 47), (23, 47, 23)],
@@ -738,7 +840,8 @@ def test_cancel_stop_confirmation_status_aborts_before_canceled(
 
     assert result.terminal_state == FakeResult.ABORTED
     assert result.api2_status == expected_status
-    assert adapter.calls.count(("slow_stop",)) == 1
+    assert adapter.calls.count(("stop",)) == 1
+    assert adapter.calls.count(("slow_stop",)) == 0
     assert handle.transitions == ["aborted"]
 
 
@@ -1001,9 +1104,9 @@ def test_reserved_goal_cannot_submit_while_fast_stop_command_is_in_progress():
     assert not any(call[0] == "movej" for call in adapter.calls)
 
 
-def test_pre_submit_shutdown_slow_stop_failure_aborts_with_original_status():
+def test_pre_submit_shutdown_fast_stop_failure_aborts_with_original_status():
     adapter = FakeAdapter()
-    adapter.stop_status = 61
+    adapter.fast_stop_status = 61
     coordinator, adapter, _, ownership = make_coordinator(adapter=adapter)
     reserved = FakeGoalHandle(movej_goal())
 
@@ -1015,13 +1118,14 @@ def test_pre_submit_shutdown_slow_stop_failure_aborts_with_original_status():
 
     assert result.terminal_state == FakeResult.ABORTED
     assert result.api2_status == 61
-    assert adapter.calls.count(("slow_stop",)) == 1
+    assert adapter.calls.count(("stop",)) == 1
+    assert adapter.calls.count(("slow_stop",)) == 0
     assert ownership.is_busy("l") is False
 
 
 def test_activated_pre_submit_shutdown_failure_aborts_with_original_status():
     adapter = FakeAdapter()
-    adapter.stop_status = 67
+    adapter.fast_stop_status = 67
     coordinator, adapter, _, ownership = make_coordinator(adapter=adapter)
     handle = FakeGoalHandle(movej_goal())
     activated = threading.Event()
@@ -1063,7 +1167,7 @@ def test_activated_pre_submit_shutdown_failure_aborts_with_original_status():
     ("interrupt", "stop_call", "terminal_state"),
     [
         ("fast_stop", ("stop",), FakeResult.ABORTED),
-        ("shutdown", ("slow_stop",), FakeResult.ABORTED),
+        ("shutdown", ("stop",), FakeResult.ABORTED),
     ],
 )
 def test_stop_before_submission_never_allows_a_later_movej(
@@ -1179,21 +1283,15 @@ def test_pending_cancel_without_canceling_witness_aborts_legally_before_submissi
     assert ownership.is_busy("l") is False
 
 
-def test_cancel_witness_rechecks_concurrent_fast_stop_failure_before_terminal_state():
+def test_pre_submit_cancel_fast_stop_failure_aborts_and_locks_arm():
     adapter = FakeAdapter()
     adapter.fast_stop_status = 61
-    coordinator, adapter, _, ownership = make_coordinator(
-        adapter=adapter, stop_timeout_sec=0.2
-    )
+    coordinator, adapter, _, ownership = make_coordinator(adapter=adapter)
     handle = FakeGoalHandle(movej_goal())
     activated = threading.Event()
     resume = threading.Event()
     result_holder = []
-    stop_results = []
-    stop_thread = None
     original_activate = coordinator._activate
-    original_wait = coordinator._condition.wait
-    wait_interleaved = False
 
     def pause_after_activation(goal_handle: object, request: object) -> int | None:
         generation = original_activate(goal_handle, request)
@@ -1201,43 +1299,24 @@ def test_cancel_witness_rechecks_concurrent_fast_stop_failure_before_terminal_st
         assert resume.wait(timeout=1.0)
         return generation
 
-    def request_fast_stop_then_acknowledge_cancel() -> None:
-        stop_results.append(coordinator.fast_stop())
-        handle.is_cancel_requested = True
-        with coordinator._condition:
-            coordinator._condition.notify_all()
-
-    def interleave_fast_stop_with_cancel_wait(timeout: float | None = None) -> bool:
-        nonlocal stop_thread, wait_interleaved
-        if not wait_interleaved:
-            wait_interleaved = True
-            stop_thread = threading.Thread(
-                target=request_fast_stop_then_acknowledge_cancel
-            )
-            stop_thread.start()
-        return original_wait(timeout)
-
     coordinator._activate = pause_after_activation
-    coordinator._condition.wait = interleave_fast_stop_with_cancel_wait
     execute_thread = threading.Thread(
         target=lambda: result_holder.append(coordinator.execute(handle))
     )
     execute_thread.start()
     try:
         assert activated.wait(timeout=1.0)
+        handle.is_cancel_requested = True
         assert coordinator.cancel_callback(handle) == FakeCancelResponse.ACCEPT
     finally:
         resume.set()
     execute_thread.join(timeout=1.0)
-    assert stop_thread is not None
-    stop_thread.join(timeout=1.0)
 
     assert execute_thread.is_alive() is False
-    assert stop_thread.is_alive() is False
-    assert stop_results == [61]
     assert len(result_holder) == 1
     assert result_holder[0].terminal_state == FakeResult.ABORTED
     assert result_holder[0].api2_status == 61
+    assert adapter.calls.count(("stop",)) == 1
     assert handle.transitions == ["aborted"]
     assert [call for call in adapter.calls if call[0] == "movej"] == []
     assert ownership.is_busy("l") is True
@@ -1672,7 +1751,7 @@ def test_movej_completion_requires_final_joints_to_converge_on_target():
     assert adapter.calls.count(("slow_stop",)) == 1
 
 
-def test_connection_loss_aborts_and_releases_ownership():
+def test_connection_loss_fast_stops_and_retains_safety_ownership():
     coordinator, adapter, clock, ownership = make_coordinator()
     handle = FakeGoalHandle(movej_goal())
     clock.on_sleep = lambda: setattr(adapter, "connected", False)
@@ -1682,6 +1761,11 @@ def test_connection_loss_aborts_and_releases_ownership():
     assert result.terminal_state == FakeResult.ABORTED
     assert "connection" in result.message
     assert handle.transitions == ["aborted"]
+    assert adapter.calls.count(("stop",)) == 1
+    assert ownership.is_busy("l") is True
+    adapter.connected = True
+    adapter.stopped = True
+    assert coordinator.reconcile_after_connect(connection_reset=True) is True
     assert ownership.is_busy("l") is False
 
 

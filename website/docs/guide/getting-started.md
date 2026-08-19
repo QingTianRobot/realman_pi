@@ -63,7 +63,7 @@ rm65_project_help
 | `rm65_docker_remote_rviz_status` / `logs [-f]` / `stop` | 查看、跟踪或停止后台 RViz |
 | `rm65_ros_build` | 使用本机 Humble 构建到 `realman_bringup` |
 | `rm65_web_build` / `rm65_web_test` | 构建或测试文档网站 |
-| `rm65_deploy_update` | 在生产端对 `main` 执行安全快进更新 |
+| `rm65_deploy_sync` | 本地提交并 push 后，用 `rsync` 同步到生产端 |
 
 这些函数不会自动写入 `~/.zshrc`，也不会隐藏底层参数。需要函数未覆盖的 Compose、
 colcon 或 launch 选项时，继续使用本页的原始命令。`rm65_docker_xbox_test` 不启动

@@ -101,7 +101,8 @@ rm65_project_help
 | `rm65_ros_build [args ...]` | 加载本机 ROS 2 Humble 后执行 `colcon build --symlink-install --packages-up-to realman_bringup realman_robot_driver`。 | 本机 `install/`、`build/`、`log/`。 | 不使用 Docker 时构建 ROS 包，或给 `colcon` 追加调试参数。 | `src/` 下 ROS packages、[系统 Bringup：构建与验证](./system-bringup#构建与验证) |
 | `rm65_web_build` | 在 `website/` 中构建 VitePress 网站。 | 先同步三臂模型资源，再输出 `website/docs/.vitepress/dist`。 | push 前确认开发者手册、模型资源和 GitHub Pages 构建不会失败。 | `website/package.json`、`website/scripts/sync-three-robots.mjs` |
 | `rm65_web_test` | 在 `website/` 中运行 Playwright 网站测试。 | 桌面和移动端文档路由、首页 WebGL 场景和生成 JSON。 | 修改网站页面、导航、生成资源或 docs 结构后。 | `website/tests/`、`config/website/playwright.config.mjs` |
-| `rm65_deploy_update` | 通过 SSH 到生产主机执行 `git fetch origin main` 和 `git merge --ff-only origin/main`。 | 只更新生产目录代码；不自动重建或重启容器。 | main 已合并并推送后，让生产主机快进到最新提交。 | `REALMAN_PRODUCTION_HOST`、`REALMAN_PRODUCTION_DIR`、[系统 Bringup：生产端代码部署](./system-bringup#生产端代码部署) |
+| `rm65_deploy_sync` | 本地 `main` 提交并 `git push origin main` 后，用 `rsync` 同步当前干净工作树到生产主机。 | 更新生产目录文件；排除 `.git/`、构建产物、日志、Node 依赖、测试结果和 Python 缓存；不自动重建或重启容器。 | GitHub 已有最新提交，但生产主机拉取 GitHub 不稳定或希望以本地文件为同步源时。 | `REALMAN_PRODUCTION_HOST`、`REALMAN_PRODUCTION_DIR`、[系统 Bringup：生产端代码部署](./system-bringup#生产端代码部署) |
+| `rm65_deploy_update` | 兼容入口：通过 SSH 到生产主机执行 `git fetch origin main` 和 `git merge --ff-only origin/main`。 | 更新生产端 Git checkout 元数据和文件；不自动重建或重启容器。 | 生产主机可稳定访问 GitHub，且需要让远端 checkout 的 `main` 快进到 `origin/main` 时。 | `REALMAN_PRODUCTION_HOST`、`REALMAN_PRODUCTION_DIR`、[系统 Bringup：生产端代码部署](./system-bringup#生产端代码部署) |
 
 ## 维护规则
 

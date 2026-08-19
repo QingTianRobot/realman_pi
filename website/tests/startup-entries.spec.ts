@@ -19,6 +19,7 @@ test("startup entries page renders the current helper index", async ({ page }) =
   await expect(page.locator("h1")).toHaveText("启动入口索引");
   await expect(page.getByText("rm65_docker_bringup_model")).toBeVisible();
   await expect(page.getByText("rm65_docker_web_control_start")).toBeVisible();
+  await expect(page.getByText("rm65_deploy_sync")).toBeVisible();
 });
 
 test("startup entries page documents every public helper", async ({ page }) => {
@@ -40,6 +41,7 @@ test("rm65_project_help mentions startup entry descriptions", async () => {
   expect(stdout).toContain("启动入口索引");
   expect(stdout).toContain("rm65_docker_bringup_model");
   expect(stdout).toContain("rm65_docker_web_control_start");
+  expect(stdout).toContain("rm65_deploy_sync");
 });
 
 test("Pages workflow rebuilds when startup helper sources change", async () => {

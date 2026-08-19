@@ -265,27 +265,54 @@ ssh realman_local \
   /home/administrator/realman_pi"
 ```
 
-后续生产更新只接受 `main` 的快进更新，避免在生产目录自动合并分叉历史：
+后续生产更新的首选流程是：本地 `main` 完成提交并推送 GitHub，然后从开发机用 `rsync`
+同步当前工作树到生产目录。这样生产端不依赖 GitHub 拉取速度，且本地提交始终是权威版本：
 
-```bash
-ssh realman_local \
-  "cd /home/administrator/realman_pi && \
-  git fetch origin main && \
-  git merge --ff-only origin/main"
+```zsh
+git status --short --branch
+git commit -m "..."
+git push origin main
+source /path/to/realman_pi/functions.zsh
+rm65_deploy_sync
 ```
 
-加载根目录 Zsh 函数后可以使用同一流程的快捷入口：
+`rm65_deploy_sync` 默认从本地仓库根目录同步到 `realman_local:/home/administrator/realman_pi/`，
+并复用 `REALMAN_PRODUCTION_HOST`、`REALMAN_PRODUCTION_DIR` 覆盖目标。函数要求当前分支是
+`main` 且工作区干净；它会排除 `.git/`、`build/`、`install/`、`log/`、`logs/`、
+`website/node_modules/`、VitePress 构建产物、测试结果和 Python 缓存。同步不会删除远端
+runtime 数据，也不会更新远端 `.git` 元数据；远端工作树文件才是生产运行使用的内容。
+
+需要查看或复用底层命令时，等价 rsync 形态是：
+
+```bash
+rsync -avz --progress \
+  --exclude '.git/' \
+  --exclude '.claude/' \
+  --exclude '.worktrees/' \
+  --exclude 'build/' \
+  --exclude 'install/' \
+  --exclude 'log/' \
+  --exclude 'logs/' \
+  --exclude 'website/node_modules/' \
+  --exclude 'website/docs/.vitepress/dist/' \
+  --exclude 'website/test-results/' \
+  --exclude '__pycache__/' \
+  --exclude '*.pyc' \
+  --exclude '.pytest_cache/' \
+  --exclude '.venv*/' \
+  ./ realman_local:/home/administrator/realman_pi/
+```
+
+保留远端 Git 快进入口用于兼容场景：当生产主机可以稳定访问 GitHub，并且需要让远端
+checkout 的 Git 元数据也快进到 `origin/main` 时使用它。该入口仍只执行 `fetch` 和
+`merge --ff-only`，不会覆盖生产端未提交文件：
 
 ```zsh
 source /path/to/realman_pi/functions.zsh
 rm65_deploy_update
 ```
 
-默认主机是 `realman_local`，默认目录是 `/home/administrator/realman_pi`。其他环境可用
-`REALMAN_PRODUCTION_HOST` 和 `REALMAN_PRODUCTION_DIR` 覆盖；函数仍只执行
-`fetch` 和 `merge --ff-only`，不会覆盖生产端未提交文件。
-
-部署后核对工作树和实际版本：
+部署后核对工作树和生产文件版本：
 
 ```bash
 ssh realman_local \
@@ -294,9 +321,13 @@ ssh realman_local \
   git log -1 --format='%H %s'"
 ```
 
-生产主机必须预先安装 Git、Docker Engine 和 Docker Compose v2。代码同步不等于
+使用 `rm65_deploy_sync` 时，`git log -1` 可能仍显示远端 checkout 原来的提交；这是因为
+rsync 保留 `.git/`。以 GitHub 上本地刚推送的 commit 和生产目录文件内容为准。
+
+开发机必须有 `git`、`ssh` 和 `rsync`；生产主机必须预先安装 Git、rsync、Docker Engine
+和 Docker Compose v2。代码同步不等于
 容器已部署；缺少 `docker` 或 `docker compose` 时，应先完成运行时安装，再执行本页
-的 headless Bringup 命令。生产目录中出现未提交修改时停止更新并先确认修改归属，
+的 headless Bringup 命令。生产目录中出现未提交修改或远端专有文件时，先确认修改归属；
 不要使用 `git reset --hard` 覆盖现场文件。
 
 ## 配置解析

@@ -372,6 +372,60 @@ rm65_web_test() {
   (cd -- "$RM65_PROJECT_ROOT/website" && command npm run test:e2e)
 }
 
+rm65_deploy_sync() {
+  emulate -L zsh
+  local host="${REALMAN_PRODUCTION_HOST:-realman_local}"
+  local remote_dir="${REALMAN_PRODUCTION_DIR:-/home/administrator/realman_pi}"
+  local branch
+  local status
+  local quoted_remote_dir
+  local -a excludes
+
+  if [[ "$host" == -* || "$host" == *$'\n'* || "$remote_dir" == *$'\n'* ]]; then
+    print -u2 -r -- "rm65: invalid production host or directory"
+    return 2
+  fi
+
+  _rm65_require_command git || return
+  _rm65_require_command ssh || return
+  _rm65_require_command rsync || return
+
+  branch="$(command git -C "$RM65_PROJECT_ROOT" rev-parse --abbrev-ref HEAD)" || return
+  if [[ "$branch" != "main" ]]; then
+    print -u2 -r -- "rm65: production rsync must run from main, current branch is ${branch}"
+    return 2
+  fi
+
+  status="$(command git -C "$RM65_PROJECT_ROOT" status --short --untracked-files=all)" || return
+  if [[ -n "$status" ]]; then
+    print -u2 -r -- "rm65: commit or stash local changes before production rsync"
+    print -u2 -r -- "$status"
+    return 1
+  fi
+
+  quoted_remote_dir="${(q)remote_dir}"
+  excludes=(
+    --exclude ".git/"
+    --exclude ".claude/"
+    --exclude ".worktrees/"
+    --exclude "build/"
+    --exclude "install/"
+    --exclude "log/"
+    --exclude "logs/"
+    --exclude "website/node_modules/"
+    --exclude "website/docs/.vitepress/dist/"
+    --exclude "website/test-results/"
+    --exclude "__pycache__/"
+    --exclude "*.pyc"
+    --exclude ".pytest_cache/"
+    --exclude ".venv*/"
+  )
+
+  command ssh "$host" "mkdir -p -- ${quoted_remote_dir}" || return
+  command rsync -avz --progress "${excludes[@]}" \
+    "$RM65_PROJECT_ROOT/" "${host}:${remote_dir}/"
+}
+
 rm65_deploy_update() {
   emulate -L zsh
   local host="${REALMAN_PRODUCTION_HOST:-realman_local}"
@@ -441,7 +495,8 @@ rm65_project_help() {
   print -r -- "  rm65_web_build                      构建 VitePress 网站和同步后的三臂 Web 资源"
   print -r -- "  rm65_web_test                       运行网站 Playwright 测试"
   print -r -- "Deployment:"
-  print -r -- "  rm65_deploy_update                  在生产主机对 main 执行 fetch 与 merge --ff-only"
+  print -r -- "  rm65_deploy_sync                    本地提交并 push 后，用 rsync 同步当前 main 到生产端"
+  print -r -- "  rm65_deploy_update                  兼容入口：在生产主机对 main 执行 fetch 与 merge --ff-only"
   print -r -- ""
   print -r -- "Runtime variables: RM65_MODEL, RM65_USE_GUI, RM65_USE_RVIZ,"
   print -r -- "REALMAN_START_ROBOTS, REALMAN_START_DRIVER, REALMAN_START_JOY_DRIVER,"

@@ -123,6 +123,34 @@ test("documentation routes render", async ({ page }) => {
   }
 });
 
+test("documentation tables share the content width without touching navigation", async ({ page }) => {
+  await page.goto("development/startup-entries");
+
+  const layout = await page.evaluate(() => {
+    const content = document.querySelector<HTMLElement>(".VPDoc .content");
+    const tables = [...document.querySelectorAll<HTMLTableElement>(".VPDoc table")];
+    const contentRect = content?.getBoundingClientRect();
+    return {
+      documentWidth: document.documentElement.scrollWidth,
+      viewportWidth: window.innerWidth,
+      contentLeft: contentRect?.left ?? Number.POSITIVE_INFINITY,
+      contentRight: contentRect?.right ?? Number.NEGATIVE_INFINITY,
+      tables: tables.map((table) => {
+        const rect = table.getBoundingClientRect();
+        return { left: rect.left, right: rect.right, width: rect.width };
+      }),
+    };
+  });
+
+  expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
+  expect(layout.tables.length).toBeGreaterThan(0);
+  for (const table of layout.tables) {
+    expect(table.left).toBeGreaterThanOrEqual(layout.contentLeft - 1);
+    expect(table.right).toBeLessThanOrEqual(layout.contentRight + 1);
+    expect(table.width).toBeCloseTo(layout.contentRight - layout.contentLeft, 0);
+  }
+});
+
 test("repository tree preserves its multiline structure", async ({ page }) => {
   await page.goto("architecture/package");
 

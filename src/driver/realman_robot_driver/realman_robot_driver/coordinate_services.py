@@ -13,6 +13,8 @@ from .coordinate_manager import CoordinateManager, CoordinateVerification
 class CoordinateOperationResult:
     success: bool
     matched: bool
+    tool_matched: bool
+    work_matched: bool
     api2_status: int
     active_name: str
     expected_tool: str
@@ -151,6 +153,8 @@ def _operation_result(
     return CoordinateOperationResult(
         success=success,
         matched=verification.matched,
+        tool_matched=verification.tool_matched,
+        work_matched=verification.work_matched,
         api2_status=verification.status,
         active_name=active_name,
         expected_tool=verification.expected_tool,

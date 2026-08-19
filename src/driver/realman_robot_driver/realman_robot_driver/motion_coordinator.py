@@ -90,6 +90,7 @@ class MotionCoordinator:
         action_type: Any | None = None,
         goal_response_type: Any | None = None,
         cancel_response_type: Any | None = None,
+        recover_event_channel: Callable[[], bool] | None = None,
         monotonic: Callable[[], float] = time.monotonic,
         sleep: Callable[[float], None] = time.sleep,
         poll_period_sec: float = 0.02,
@@ -129,6 +130,7 @@ class MotionCoordinator:
         self.action_type = action_type
         self.goal_response_type = goal_response_type
         self.cancel_response_type = cancel_response_type
+        self._recover_event_channel_callback = recover_event_channel
         self._monotonic = monotonic
         self._sleep = sleep
         self._poll_period_sec = poll_period_sec
@@ -149,6 +151,7 @@ class MotionCoordinator:
         self._confirmed_event_generation: int | None = None
         self._event_channel_quarantined = False
         self._event_channel_cleared_through_generation = 0
+        self._event_channel_recovery_generation: int | None = None
         self._terminal_generation: int | None = None
         self._terminal_result: Any | None = None
         self._stop_generation: int | None = None
@@ -168,18 +171,60 @@ class MotionCoordinator:
     def is_busy(self) -> bool:
         return self.ownership.is_busy(self.arm_id)
 
+    @property
+    def event_channel_recovery_required(self) -> bool:
+        """Whether a cleanly stopped generation needs a callback-channel reset."""
+        with self._lock:
+            return (
+                self._event_channel_quarantined
+                and not self._lockout
+                and self._event_channel_recovery_generation == self._generation
+            )
+
     def goal_callback(self, goal_request: object) -> Any:
         with self._lock:
-            if self._lockout or self._event_channel_quarantined:
-                self._log(
-                    "error",
-                    f"Rejecting motion goal: arm {self.arm_id} is safety locked",
-                )
-                return self.goal_response_type.REJECT
+            locked_out = self._lockout
+            quarantined = self._event_channel_quarantined
+            recoverable = (
+                quarantined
+                and not locked_out
+                and self._event_channel_recovery_generation == self._generation
+            )
+        if locked_out:
+            self._log(
+                "error",
+                f"Rejecting motion goal: arm {self.arm_id} is safety locked",
+            )
+            return self.goal_response_type.REJECT
+        if quarantined and not recoverable:
+            self._log(
+                "error",
+                f"Rejecting motion goal: arm {self.arm_id} is safety locked",
+            )
+            return self.goal_response_type.REJECT
         validation = self._validate(goal_request)
         if not validation.valid:
             self._log("warn", f"Rejecting motion goal: {validation.message}")
             return self.goal_response_type.REJECT
+        if recoverable:
+            callback = self._recover_event_channel_callback
+            recovered = False
+            if callback is not None:
+                try:
+                    recovered = bool(callback())
+                except Exception as error:
+                    self._log(
+                        "error",
+                        f"Event channel recovery failed for arm {self.arm_id}: {error}",
+                    )
+            with self._lock:
+                quarantined = self._event_channel_quarantined
+            if not recovered or quarantined:
+                self._log(
+                    "error",
+                    f"Rejecting motion goal: arm {self.arm_id} event channel is quarantined",
+                )
+                return self.goal_response_type.REJECT
         with self._condition:
             if (
                 self._lockout
@@ -708,6 +753,7 @@ class MotionCoordinator:
             self._fast_stop_status = None
             self._shutdown_generation = None
             self._cancel_generation = None
+            self._event_channel_recovery_generation = None
             return generation
 
     def _submit_if_permitted(
@@ -913,6 +959,7 @@ class MotionCoordinator:
             # stop. An event can describe a prior trajectory and has no
             # stop-generation identity.
             if trajectory_active is False:
+                self._mark_event_channel_recovery_ready(generation)
                 if requested_terminal == TerminalState.ABORTED:
                     message = "motion aborted after driver shutdown stop"
                 elif requested_terminal == TerminalState.TIMEOUT:
@@ -1239,6 +1286,7 @@ class MotionCoordinator:
                     "robot connection lost while confirming fast stop",
                 )
             if trajectory_active is False:
+                self._mark_event_channel_recovery_ready(generation)
                 return self._finish(
                     goal_handle,
                     generation,
@@ -1316,6 +1364,12 @@ class MotionCoordinator:
         with self._lock:
             self._lockout = True
 
+    def _mark_event_channel_recovery_ready(self, generation: int) -> None:
+        """Allow automatic channel reset only after the controller is inactive."""
+        with self._lock:
+            if self._active_generation == generation:
+                self._event_channel_recovery_generation = generation
+
     def clear_lockout_after_disconnect(self) -> None:
         """Clear stale callbacks after confirmed disconnect, never physical lockout."""
         release = False
@@ -1325,6 +1379,7 @@ class MotionCoordinator:
             self._event_channel_quarantined = False
             self._event = None
             self._event_channel_cleared_through_generation = self._generation
+            self._event_channel_recovery_generation = None
             release = (
                 not self._lockout
                 and self._active_goal is None
@@ -1362,6 +1417,7 @@ class MotionCoordinator:
                 self._event_channel_quarantined = False
                 self._event = None
                 self._event_channel_cleared_through_generation = self._generation
+                self._event_channel_recovery_generation = None
         if release:
             self.ownership.release(self.arm_id)
         return True
@@ -1614,8 +1670,8 @@ class MotionCoordinator:
                 self._fast_stop_status = None
                 self._shutdown_generation = None
                 # A confirmed physical stop can release arm ownership even if
-                # a generation-less callback channel remains quarantined.
-                # goal_callback still refuses ordinary motion until disconnect.
+                # a generation-less callback channel remains quarantined. The
+                # node must reset that channel before accepting another goal.
                 release = not self._lockout and self._owns_ownership
                 if release:
                     self._owns_ownership = False

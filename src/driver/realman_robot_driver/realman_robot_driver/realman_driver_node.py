@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import math
 import json
+import threading
 import time
 from pathlib import Path
 from typing import Any
@@ -130,6 +131,7 @@ class RealManDriverNode(Node):
             self.motion_config_file,
             self.arm_id,
         )
+        self._event_recovery_lock = threading.Lock()
         profile = self.coordinate_manager.profiles[self.arm_id]
         self._active_references = {
             ReferenceType.BASE: "base",
@@ -165,6 +167,7 @@ class RealManDriverNode(Node):
             ),
             active_reference=lambda reference_type: self._active_references[reference_type],
             action_type=ExecuteMotion,
+            recover_event_channel=lambda: self._recover_event_channel(),
             stop_timeout_sec=self.motion_settings.stop_timeout_sec,
             joint_goal_tolerance_deg=self.motion_settings.joint_goal_tolerance_deg,
             logger=self.get_logger(),
@@ -758,7 +761,39 @@ class RealManDriverNode(Node):
             )
         return code
 
+    def _recover_event_channel(self) -> bool:
+        """Reset a stale callback channel after a confirmed inactive stop."""
+        if not self.motion_coordinator.event_channel_recovery_required:
+            return True
+        if not self._event_recovery_lock.acquire(blocking=False):
+            return False
+        try:
+            self.get_logger().warn(
+                "Resetting RealMan SDK connection after a clean stop left the "
+                "trajectory event channel without a generation marker"
+            )
+            if self.adapter.connected:
+                disconnect_status = self.adapter.disconnect()
+                if disconnect_status != 0:
+                    self.get_logger().error(
+                        "RealMan event channel reset disconnect failed with API2 "
+                        f"status {disconnect_status}"
+                    )
+                    return False
+            connect_status = self._connect_to_robot()
+            if connect_status != 0:
+                self.get_logger().error(
+                    "RealMan event channel reset reconnect failed with API2 "
+                    f"status {connect_status}"
+                )
+                return False
+            return not self.motion_coordinator.event_channel_recovery_required
+        finally:
+            self._event_recovery_lock.release()
+
     def _publish_state(self) -> None:
+        if self.motion_coordinator.event_channel_recovery_required:
+            self._recover_event_channel()
         if (
             not self.adapter.connected
             and self.auto_connect

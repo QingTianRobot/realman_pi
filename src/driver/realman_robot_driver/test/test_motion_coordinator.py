@@ -287,6 +287,7 @@ def make_coordinator(
     coordinates: FakeCoordinateManager | None = None,
     ownership: ArmOwnership | None = None,
     active_reference=None,
+    recover_event_channel=None,
     stop_timeout_sec: float = 2.0,
 ) -> tuple[MotionCoordinator, FakeAdapter, FakeClock, ArmOwnership]:
     adapter = adapter or FakeAdapter()
@@ -314,6 +315,7 @@ def make_coordinator(
         action_type=FakeExecuteMotion,
         goal_response_type=FakeGoalResponse,
         cancel_response_type=FakeCancelResponse,
+        recover_event_channel=recover_event_channel,
         monotonic=clock.monotonic,
         sleep=clock.sleep,
         poll_period_sec=0.01,
@@ -755,6 +757,58 @@ def test_cancel_callback_issues_fast_stop_before_execution_poll_resumes():
     assert adapter.calls.count(("slow_stop",)) == 0
     assert handle.transitions == ["canceled"]
     assert ownership.is_busy("l") is False
+
+
+def test_cancelled_goal_can_start_again_after_event_channel_recovery():
+    recovery_calls = []
+    coordinator, adapter, clock, ownership = make_coordinator(
+        recover_event_channel=lambda: (
+            recovery_calls.append(True)
+            or coordinator.reconcile_after_connect(connection_reset=True)
+        )
+    )
+    first = FakeGoalHandle(movej_goal(timeout_sec=10.0))
+    clock.on_sleep = lambda: setattr(first, "is_cancel_requested", True)
+
+    first_result = coordinator.execute(first)
+
+    assert first_result.terminal_state == FakeResult.CANCELED
+    assert ownership.is_busy("l") is False
+
+    second = FakeGoalHandle(movej_goal())
+    complete_after_first_poll(coordinator, adapter, clock)
+
+    assert coordinator.goal_callback(second.request) == FakeGoalResponse.ACCEPT
+    adapter.stopped = False
+    second_result = coordinator.execute(second)
+
+    assert second_result.terminal_state == FakeResult.SUCCEEDED
+    assert second_result.success is True
+    assert recovery_calls == [True]
+
+
+def test_invalid_goal_does_not_trigger_event_channel_recovery():
+    recovery_calls = []
+    coordinator, _, _, _ = make_coordinator(
+        recover_event_channel=lambda: recovery_calls.append(True)
+    )
+    coordinator._event_channel_quarantined = True
+    coordinator._event_channel_recovery_generation = coordinator._generation
+
+    assert (
+        coordinator.goal_callback(movej_goal(velocity_percent=0))
+        == FakeGoalResponse.REJECT
+    )
+    assert recovery_calls == []
+
+
+def test_failed_event_channel_recovery_keeps_goal_rejected():
+    coordinator, _, _, _ = make_coordinator(recover_event_channel=lambda: False)
+    coordinator._event_channel_quarantined = True
+    coordinator._event_channel_recovery_generation = coordinator._generation
+
+    assert coordinator.goal_callback(movej_goal()) == FakeGoalResponse.REJECT
+    assert coordinator.event_channel_recovery_required is True
 
 
 def test_cancel_stop_failure_aborts_with_stop_api2_status():

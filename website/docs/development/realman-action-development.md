@@ -158,7 +158,9 @@ IDL 文件是唯一权威来源，字段含义如下。数组长度错误、NaN/
    stop 返回非零、等待线程超时、断线状态不明确或事件通道无法证明已清空时，进入
    fail-closed lockout。lockout 只能在确认 disconnect 后清理，不能由下一个 goal 覆盖。
 10. 释放 generation 和 ownership；如果提交过但没有消费到当前 generation 的完整事件，
-    对旧事件通道设置 quarantine，下一次目标必须等待 reconnect/reconciliation。
+    对旧事件通道设置 quarantine。若 cancel/timeout 已经确认控制器轨迹 inactive，驱动会
+    自动断开并重建该臂 SDK 连接、重新注册事件回调，再通过 reconciliation 清理 quarantine；
+    重连或 inactive 证据失败时仍保持安全锁，不能由下一个 goal 强行覆盖。
 
 ### 为什么需要 generation
 
@@ -172,6 +174,20 @@ generation，并在提交前关闭事件窗口。这样可以阻止以下错误�
 
 因此，任何新 Action 若绕过 `MotionCoordinator` 自己注册 callback，都必须先解决同样的
 身份关联问题；“回调里直接 `goal_handle.succeed()`”是不允许的实现。
+
+### 取消后的事件通道恢复
+
+RealMan 的 `rm_event_push_data_t` 不包含 ROS Action request ID 或 generation。取消一个已经
+提交的目标时，`rm_set_arm_stop()` 成功且 `rm_get_arm_current_trajectory()` 返回 inactive，
+只能证明物理轨迹已经停止，不能证明旧回调已经从 SDK 接收队列中消失。因此驱动不会直接把
+旧 generation 的事件通道重新用于下一条运动，而是将该臂短暂置于 event-channel quarantine。
+
+`RealManDriverNode` 通过 `MotionCoordinator.event_channel_recovery_required` 发现这种可恢复
+状态，断开并重新创建 SDK handle，重新注册 `handle_event`，然后调用
+`reconcile_after_connect(connection_reset=True)`。网页端或其他 ROS 客户端发送下一条 goal 时
+也会触发同一恢复流程，因此不需要手动重启 Docker。只有确认重连后的轨迹仍为 inactive 且
+API2 状态为 0，下一条 goal 才会获得 `ArmOwnership`。stop 返回失败、轨迹无法确认 inactive、
+连接异常等情况不会走自动恢复，必须先完成显式 disconnect/reconnect。
 
 ## Kinematics services
 
@@ -326,7 +342,7 @@ goal 都不能隐式写入工具或工作坐标。
 下面的命令用于快速重复 Action 相关回归，不会连接真实控制器：
 
 ```bash
-cd .worktrees/realman-motion-control
+cd <repository-root>
 docker compose build realman_driver_test
 docker compose run --rm --no-deps realman_driver_test bash -lc '
   source /opt/ros/humble/setup.bash

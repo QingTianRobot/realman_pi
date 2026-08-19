@@ -785,6 +785,9 @@ def test_connect_reconciles_physical_lockout_with_read_only_trajectory_state():
 
     assert "was_connected = self.adapter.connected" in source
     assert "connection_reset=not was_connected" in source
+    assert "recover_event_channel=lambda: self._recover_event_channel()" in source
+    assert "self.motion_coordinator.event_channel_recovery_required" in source
+    assert "self.adapter.disconnect()" in source
 
 
 def test_connect_returns_coordinate_api_failure_instead_of_ready_status():

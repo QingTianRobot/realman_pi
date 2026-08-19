@@ -49,6 +49,7 @@ type Manifest = {
   default_joint_position_rad: number;
   robots: Robot[];
 };
+type MotionCommand = 0 | 1 | 2;
 type Message = Record<string, any> & { type: string };
 type RobotScene = { live: any | null; shadow: any | null };
 
@@ -76,7 +77,36 @@ app.innerHTML = `
     </section>
     <aside class="controls">
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><span id="coordinate-state" class="mini-state">WAIT</span></div><div id="coordinate-summary" class="coordinate-summary"></div></section>
-      <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">JOINT TARGET</span><h2>关节角度</h2></div><div class="panel-actions"><span id="selected-arm-label" class="mini-state">L</span><button id="reset-preview" class="text-button" type="button">重置目标</button></div></div><div id="joint-controls" class="joint-controls"></div><button id="movej" class="button primary full" type="button" disabled>发送 MOVEJ</button></section>
+      <section class="panel panel-section motion-panel">
+        <div class="panel-heading compact"><div><span class="eyebrow">MOTION TARGET</span><h2>一次性运动</h2></div><div class="panel-actions"><span id="selected-arm-label" class="mini-state">L</span><button id="reset-preview" class="text-button" type="button">重置目标</button></div></div>
+        <div id="motion-mode" class="segmented-control" aria-label="运动类型">
+          <button type="button" class="selected" data-motion-command="0" aria-pressed="true">MOVEJ</button>
+          <button type="button" data-motion-command="1" aria-pressed="false">MOVEL</button>
+          <button type="button" data-motion-command="2" aria-pressed="false">MOVEP</button>
+        </div>
+        <div id="joint-target"><div id="joint-controls" class="joint-controls"></div></div>
+        <div id="pose-target" class="pose-target" hidden>
+          <div class="target-field-label">位置 (m)</div>
+          <div class="pose-inputs position-inputs">
+            <label>X<input id="pose-x" type="number" step="0.001" inputmode="decimal" /></label>
+            <label>Y<input id="pose-y" type="number" step="0.001" inputmode="decimal" /></label>
+            <label>Z<input id="pose-z" type="number" step="0.001" inputmode="decimal" /></label>
+          </div>
+          <div class="target-field-label">四元数 WXYZ</div>
+          <div class="pose-inputs quaternion-inputs">
+            <label>W<input id="pose-qw" type="number" step="0.001" inputmode="decimal" /></label>
+            <label>X<input id="pose-qx" type="number" step="0.001" inputmode="decimal" /></label>
+            <label>Y<input id="pose-qy" type="number" step="0.001" inputmode="decimal" /></label>
+            <label>Z<input id="pose-qz" type="number" step="0.001" inputmode="decimal" /></label>
+          </div>
+        </div>
+        <div class="motion-parameters">
+          <label>激活参考系<output id="motion-reference">BASE / base</output></label>
+          <label>速度 (%)<input id="motion-velocity" type="number" min="1" max="100" step="1" value="30" /></label>
+          <label>超时 (s)<input id="motion-timeout" type="number" min="0.1" step="0.1" /></label>
+        </div>
+        <button id="execute-motion" class="button primary full" type="button" disabled>发送 MOVEJ</button>
+      </section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">CARTESIAN</span><h2>末端速度</h2></div><span id="velocity-state" class="mini-state">IDLE</span></div><div class="form-grid"><label>参考系<select id="velocity-frame"></select></label><label>周期 (ms)<input id="velocity-period" type="number" min="1" step="1" /></label><label>看门狗 (ms)<input id="velocity-watchdog" type="number" min="1" step="1" /></label><label>线加速度<input id="linear-accel" type="number" min="0.001" step="0.01" /></label><label>角加速度<input id="angular-accel" type="number" min="0.001" step="0.01" /></label></div><div id="velocity-inputs" class="velocity-inputs"></div><div class="inline-actions"><button id="start-velocity" class="button secondary" type="button" disabled>启动速度 Action</button><button id="cancel-velocity" class="button ghost" type="button" disabled>取消</button></div></section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">ACTION MONITOR</span><h2>运行反馈</h2></div><span id="action-state" class="mini-state">IDLE</span></div><div class="progress-track"><div id="progress" class="progress-bar"></div></div><div id="feedback" class="feedback">尚未发送 Action</div><pre id="result" class="result" aria-live="polite">等待结果…</pre></section>
     </aside>
@@ -90,7 +120,7 @@ const connection = $("#connection");
 const mode = $("#mode");
 const stopButton = $("#stop-button") as HTMLButtonElement;
 const cancelMotionButton = $("#cancel-motion") as HTMLButtonElement;
-const movejButton = $("#movej") as HTMLButtonElement;
+const executeMotionButton = $("#execute-motion") as HTMLButtonElement;
 const startVelocityButton = $("#start-velocity") as HTMLButtonElement;
 const cancelVelocityButton = $("#cancel-velocity") as HTMLButtonElement;
 const actionState = $("#action-state");
@@ -105,9 +135,19 @@ const canvas = $("#canvas") as HTMLCanvasElement;
 const viewer = $("#viewer");
 const fleetStrip = $("#fleet-strip");
 const selectedArmLabel = $("#selected-arm-label");
+const motionMode = $("#motion-mode");
+const jointTarget = $("#joint-target") as HTMLElement;
+const poseTarget = $("#pose-target") as HTMLElement;
+const resetPreviewButton = $("#reset-preview") as HTMLButtonElement;
+const motionReference = $("#motion-reference");
+const motionVelocityInput = $("#motion-velocity") as HTMLInputElement;
+const motionTimeoutInput = $("#motion-timeout") as HTMLInputElement;
+const POSE_INPUT_IDS = ["pose-x", "pose-y", "pose-z", "pose-qw", "pose-qx", "pose-qy", "pose-qz"] as const;
+const MOTION_LABELS: Record<MotionCommand, string> = { 0: "MOVEJ", 1: "MOVEL", 2: "MOVEP" };
 
 let manifest: Manifest | undefined;
 let selectedArm: ArmId = "l";
+let selectedMotionCommand: MotionCommand = 0;
 let targetJoints: number[] = [];
 let currentJoints: number[] = [];
 let socket: WebSocket | undefined;
@@ -120,6 +160,8 @@ const connectionStates: Partial<Record<ArmId, boolean>> = {};
 const currentJointsByArm: Partial<Record<ArmId, number[]>> = {};
 const targetJointsByArm: Partial<Record<ArmId, number[]>> = {};
 const targetEditedByArm: Partial<Record<ArmId, boolean>> = {};
+const poseTargetsByArm: Partial<Record<ArmId, string[]>> = {};
+const motionSettingsByArm: Partial<Record<ArmId, { velocity: string; timeout: string }>> = {};
 const robotScenes: Partial<Record<ArmId, RobotScene>> = {};
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
@@ -160,6 +202,7 @@ function updateSelectedArmFromState() {
   currentJoints = [...armJointSnapshot(selectedArm)];
   targetJoints = [...armTargetSnapshot(selectedArm)];
   setJointInputs(targetJoints, true);
+  renderMotionEditor();
   if (selectedRobotScene()?.shadow) setRobotJoints(selectedRobotScene()!.shadow, targetJoints);
   selectedArmLabel.textContent = selectedArm.toUpperCase();
   selectedArmLabel.className = "mini-state active-arm";
@@ -171,6 +214,7 @@ function updateSelectedArmFromState() {
 }
 function renderCoordinateState() {
   const state = currentCoordinateState();
+  motionReference.textContent = referenceLabel(state?.preferred_reference);
   coordinateStateLabel.textContent = state ? (state.motion_allowed ? "READY" : "BLOCKED") : "WAIT";
   coordinateStateLabel.className = state ? `mini-state ${state.motion_allowed ? "accepted" : "stopping"}` : "mini-state";
   if (!state) {
@@ -230,6 +274,53 @@ function preferredReference() {
   const state = currentCoordinateState();
   if (state?.preferred_reference) return state.preferred_reference;
   return { type: 0, name: "base", frame_id: `${selectedArm}/base_link` };
+}
+function poseInputElements() {
+  return POSE_INPUT_IDS.map((id) => $(`#${id}`) as HTMLInputElement);
+}
+function renderPoseInputs() {
+  const values = poseTargetsByArm[selectedArm] ?? ["", "", "", "1", "0", "0", "0"];
+  poseInputElements().forEach((input, index) => { input.value = values[index] ?? ""; });
+}
+function readPoseGoal() {
+  const raw = poseInputElements().map((input) => input.value.trim());
+  if (raw.some((value) => value === "")) return null;
+  const values = raw.map(Number);
+  if (!values.every(Number.isFinite)) return null;
+  const quaternion = values.slice(3);
+  if (Math.hypot(...quaternion) < 1.0e-9) return null;
+  return { position: values.slice(0, 3), quaternion };
+}
+function readMotionSettings() {
+  const velocity = Number(motionVelocityInput.value);
+  const timeout = Number(motionTimeoutInput.value);
+  if (!Number.isInteger(velocity) || velocity < 1 || velocity > 100) return null;
+  if (!Number.isFinite(timeout) || timeout <= 0) return null;
+  return { velocity, timeout };
+}
+function setMotionMode(command: MotionCommand) {
+  selectedMotionCommand = command;
+  motionMode.querySelectorAll<HTMLButtonElement>("button[data-motion-command]").forEach((button) => {
+    const selected = Number(button.dataset.motionCommand) === command;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-pressed", String(selected));
+  });
+  jointTarget.hidden = command !== 0;
+  poseTarget.hidden = command === 0;
+  resetPreviewButton.hidden = command !== 0;
+  executeMotionButton.textContent = `发送 ${MOTION_LABELS[command]}`;
+  setShadowVisibility(selectedArm);
+  updateButtons();
+}
+function renderMotionEditor() {
+  renderPoseInputs();
+  const settings = motionSettingsByArm[selectedArm];
+  if (settings) {
+    motionVelocityInput.value = settings.velocity;
+    motionTimeoutInput.value = settings.timeout;
+  }
+  motionReference.textContent = referenceLabel(currentCoordinateState()?.preferred_reference);
+  setMotionMode(selectedMotionCommand);
 }
 function send(message: Message) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
@@ -297,7 +388,9 @@ function setShadowVisibility(arm: ArmId) {
   });
   const next = robotScenes[arm]?.shadow;
   next?.traverse((object: any) => {
-    if (object instanceof THREE.Mesh && "opacity" in object.material) object.material.opacity = 0.28;
+    if (object instanceof THREE.Mesh && "opacity" in object.material) {
+      object.material.opacity = selectedMotionCommand === 0 ? 0.28 : 0;
+    }
   });
   selectedShadowArm = arm;
 }
@@ -502,7 +595,8 @@ function connect() {
 
 function updateButtons() {
   const writable = canWrite();
-  movejButton.disabled = !writable || Boolean(activeMotionRequest);
+  const motionTargetValid = Boolean(readMotionSettings()) && (selectedMotionCommand === 0 || Boolean(readPoseGoal()));
+  executeMotionButton.disabled = !writable || Boolean(activeMotionRequest) || !motionTargetValid;
   startVelocityButton.disabled = !writable || Boolean(activeVelocityRequest);
   cancelVelocityButton.disabled = !writable || !Boolean(activeVelocityRequest);
   cancelMotionButton.disabled = !writable || !Boolean(activeMotionRequest);
@@ -516,6 +610,11 @@ function loadManifest(next: Manifest) {
     const initial = item.joints.map(() => next.default_joint_position_rad);
     currentJointsByArm[item.id] = currentJointsByArm[item.id] ?? [...initial];
     targetJointsByArm[item.id] = targetJointsByArm[item.id] ?? [...initial];
+    poseTargetsByArm[item.id] = poseTargetsByArm[item.id] ?? ["", "", "", "1", "0", "0", "0"];
+    motionSettingsByArm[item.id] = motionSettingsByArm[item.id] ?? {
+      velocity: "30",
+      timeout: String(item.motion.default_timeout_sec),
+    };
   });
   currentJoints = [...armJointSnapshot(selectedArm)];
   targetJoints = [...armTargetSnapshot(selectedArm)];
@@ -523,6 +622,7 @@ function loadManifest(next: Manifest) {
   selectedArmLabel.textContent = selectedArm.toUpperCase();
   selectedArmLabel.className = "mini-state active-arm";
   renderJointControls();
+  renderMotionEditor();
   configureVelocity();
   renderCoordinateState();
   renderFleetStrip();
@@ -532,7 +632,7 @@ function loadManifest(next: Manifest) {
   updateButtons();
 }
 
-$("#reset-preview").addEventListener("click", () => {
+resetPreviewButton.addEventListener("click", () => {
   targetJoints = [...currentJoints];
   targetJointsByArm[selectedArm] = [...targetJoints];
   targetEditedByArm[selectedArm] = true;
@@ -551,12 +651,51 @@ armSelect.addEventListener("change", () => {
   const config = robotConfig(selectedArm);
   $("#model-label").textContent = `${config.model} / ${selectedArm.toUpperCase()} + 3 arms`;
 });
-movejButton.addEventListener("click", () => {
-  if (!canWrite()) return;
-  activeMotionRequest = requestId("movej");
+motionMode.querySelectorAll<HTMLButtonElement>("button[data-motion-command]").forEach((button) => {
+  button.addEventListener("click", () => {
+    const command = Number(button.dataset.motionCommand);
+    if (command === 0 || command === 1 || command === 2) setMotionMode(command);
+  });
+});
+poseInputElements().forEach((input) => {
+  input.addEventListener("input", () => {
+    poseTargetsByArm[selectedArm] = poseInputElements().map((item) => item.value);
+    updateButtons();
+  });
+});
+[motionVelocityInput, motionTimeoutInput].forEach((input) => {
+  input.addEventListener("input", () => {
+    motionSettingsByArm[selectedArm] = {
+      velocity: motionVelocityInput.value,
+      timeout: motionTimeoutInput.value,
+    };
+    updateButtons();
+  });
+});
+executeMotionButton.addEventListener("click", () => {
+  const settings = readMotionSettings();
+  const pose = selectedMotionCommand === 0 ? null : readPoseGoal();
+  if (!canWrite() || !settings || (selectedMotionCommand !== 0 && !pose)) return;
+  const commandLabel = MOTION_LABELS[selectedMotionCommand];
+  activeMotionRequest = requestId(commandLabel.toLowerCase());
   const reference = preferredReference();
-  send({ type: "execute_motion", request_id: activeMotionRequest, arm: selectedArm, goal: { command: 0, reference_type: reference.type, reference_name: reference.name, joint_degrees: targetJoints.map((value) => value * 180 / Math.PI), pose_position_m: [0, 0, 0], pose_quaternion_wxyz: [1, 0, 0, 0], velocity_percent: 30, blend_radius_percent: 0, timeout_sec: robot().motion.default_timeout_sec } });
-  feedback.textContent = "MOVEJ 已发送，等待 feedback…";
+  send({
+    type: "execute_motion",
+    request_id: activeMotionRequest,
+    arm: selectedArm,
+    goal: {
+      command: selectedMotionCommand,
+      reference_type: reference.type,
+      reference_name: reference.name,
+      joint_degrees: selectedMotionCommand === 0 ? targetJoints.map((value) => value * 180 / Math.PI) : [0, 0, 0, 0, 0, 0],
+      pose_position_m: pose?.position ?? [0, 0, 0],
+      pose_quaternion_wxyz: pose?.quaternion ?? [1, 0, 0, 0],
+      velocity_percent: settings.velocity,
+      blend_radius_percent: 0,
+      timeout_sec: settings.timeout,
+    },
+  });
+  feedback.textContent = `${commandLabel} / ${referenceLabel(reference)} / 等待 feedback…`;
   updateButtons();
 });
 startVelocityButton.addEventListener("click", () => {

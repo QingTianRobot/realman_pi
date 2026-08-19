@@ -56,6 +56,20 @@ canvas { display: block; width: 100%; height: 100%; }
 .joint-row span { display: flex; justify-content: space-between; color: #c8d8d5; font-size: 11px; }
 .joint-row output { color: #78d4c6; font-variant-numeric: tabular-nums; }
 input[type="range"] { display: block; width: 100%; accent-color: #4dbbb0; }
+.segmented-control { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); margin-bottom: 14px; border: 1px solid #385158; }
+.segmented-control button { min-width: 0; border: 0; border-right: 1px solid #385158; border-radius: 0; background: #142226; color: #82999d; padding: 8px 5px; font-size: 10px; font-weight: 800; letter-spacing: 0; }
+.segmented-control button:last-child { border-right: 0; }
+.segmented-control button.selected { background: #255b5b; color: #e7efec; }
+.pose-target[hidden], #joint-target[hidden], #reset-preview[hidden] { display: none; }
+.target-field-label { margin: 11px 0 6px; color: #82999d; font-size: 10px; }
+.pose-inputs { display: grid; gap: 6px; }
+.position-inputs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
+.quaternion-inputs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
+.pose-inputs label, .motion-parameters label { display: grid; gap: 5px; min-width: 0; color: #8fa6a9; font-size: 10px; }
+.pose-inputs input, .motion-parameters input { width: 100%; min-width: 0; padding: 7px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.motion-parameters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
+.motion-parameters label:first-child { grid-column: 1 / -1; }
+.motion-parameters output { min-height: 32px; display: flex; align-items: center; border: 1px solid #385158; border-radius: 3px; background: #101c20; color: #8ee1d2; padding: 7px 9px; font-size: 11px; font-weight: 700; }
 .full { width: 100%; }
 .coordinate-summary { display: grid; gap: 6px; margin-bottom: 16px; }
 .coordinate-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; color: #c8d8d5; font-size: 11px; }

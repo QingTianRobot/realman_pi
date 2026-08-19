@@ -69,9 +69,21 @@ watchdog 和 lockout，不会直接调用 SDK。
 | `action_result` | `status`, `result` | 原 Action result 和 rclpy 状态 |
 | `software_stop_result` | `success`, `message` | `/arm/stop` 的结果 |
 
-### MOVEJ
+### MOVEJ、MOVEL 与 MOVEP
 
-目标关节使用 degree，和 `ExecuteMotion.action` 一致；Web 后端会从 URDF limit 再检查一次。
+一次性运动面板直接映射现有的 `ExecuteMotion.action`：
+
+| 网页模式 | `command` | SDK 方法 | 目标输入 |
+| --- | ---: | --- | --- |
+| `MOVEJ` | `0` | `rm_movej()` | 六轴关节角，degree |
+| `MOVEL` | `1` | `rm_movel()` | XYZ 位置（m）和 WXYZ 四元数 |
+| `MOVEP` | `2`（ROS 常量 `MOVEJ_P`） | `rm_movej_p()` | XYZ 位置（m）和 WXYZ 四元数 |
+
+`MOVEP` 是网页对“按位姿做关节空间运动”的操作名称，不代表 CANFD 的
+`rm_movep_canfd()`。MoveS 需要至少三个连续点，MoveC 还需要途经点和终点；当前单目标
+Action 没有这两类多点契约，因此网页不会把它们伪装成单次按钮。
+
+MOVEJ 目标关节使用 degree；Web 后端会从 URDF limit 再检查一次。
 左侧三块 `L`、`M`、`R` 会同时显示三台机械臂的连接和坐标状态；点击其中一个块即可切换
 当前控制对象，右侧滑条随之控制该 arm。页面会优先使用当前 `coordinate_state` 给出的默认参考系发送目标：
 右侧关节面板标题会显示当前激活的 arm，便于确认选择是否已经切换。
@@ -79,6 +91,11 @@ watchdog 和 lockout，不会直接调用 SDK。
 `joint_state` 时，点击切换仍保持可用。
 在没有人工改动目标之前，右侧滑条会跟随该 arm 的实时 `joint_state`；一旦人工拖动滑条，该 arm
 的目标值就会保持用户输入，直到再次切换或重置。
+
+MOVEL/MOVEP 面板会直接显示所选机械臂的激活参考系，例如 `WORK / cell`；该名称来自
+`coordinate_state.preferred_reference`，用户不能手工拼写一个与控制器状态不一致的名称。
+XYZ 是该参考系下的绝对目标位置，单位为米；姿态使用 `[w,x,y,z]` 四元数。每个 arm
+分别保留自己的位姿输入，位置未填满、四元数为零或速度/超时越界时发送按钮保持禁用。
 
 ```json
 {
@@ -94,7 +111,8 @@ watchdog 和 lockout，不会直接调用 SDK。
 
 `action_feedback.feedback.current_joint_degrees` 到达时，网页只更新当前 arm 的实体模型；三台
 机械臂的 live URDF 会保留在同一画布中，选中 arm 的滑轨编辑目标保持为橙色半透明影子，
-不会被回读覆盖。点击“发送 MOVEJ”才提交影子目标。当前坐标面板会显示 tool/work 名称、
+不会被回读覆盖。点击“发送 MOVEJ”才提交影子目标；切换到 MOVEL/MOVEP 时隐藏关节影子，
+避免将旧关节目标误认为位姿预览。当前坐标面板会显示 tool/work 名称、
 控制器回读值，以及工具坐标的位姿、payload 和重心。
 
 ### 末端六轴速度

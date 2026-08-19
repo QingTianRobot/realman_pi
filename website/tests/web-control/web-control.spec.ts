@@ -105,7 +105,7 @@ test.beforeEach(async ({ page }) => {
   });
 });
 
-test("loads configured URDF scene and sends MOVEJ/cancel protocol", async ({ page }) => {
+test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".fleet-chip")).toHaveCount(3);
   await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
@@ -141,6 +141,8 @@ test("loads configured URDF scene and sends MOVEJ/cancel protocol", async ({ pag
   await expect(page.locator("#connection")).toContainText("ROS ONLINE");
   await expect(page.locator("#coordinate-state")).toContainText("READY");
   await expect(page.locator("#coordinate-summary")).toContainText("WORK / cell");
+  await expect(page.locator("#motion-reference")).toHaveText("WORK / cell");
+  await expect(page.locator("#motion-mode button")).toHaveCount(3);
   await expect(page.locator("input[data-joint-index=\"0\"]")).toBeVisible();
   const before = await canvasChecksum(page);
   await page.locator("input[data-joint-index=\"0\"]").evaluate((element: HTMLInputElement) => {
@@ -149,10 +151,51 @@ test("loads configured URDF scene and sends MOVEJ/cancel protocol", async ({ pag
   });
   await page.waitForTimeout(200);
   expect(await canvasChecksum(page)).not.toBe(before);
-  await page.locator("#movej").click();
+  await page.locator("#execute-motion").click();
+  await page.locator("#cancel-motion").click();
+  await page.evaluate(() => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "action_result", arm: "r", action: "execute_motion", result: { success: false },
+    }) });
+  });
+
+  await page.locator("button[data-motion-command=\"1\"]").click();
+  await expect(page.locator("#joint-target")).toBeHidden();
+  await expect(page.locator("#pose-target")).toBeVisible();
+  await expect(page.locator("#execute-motion")).toHaveText("发送 MOVEL");
+  await expect(page.locator("#execute-motion")).toBeDisabled();
+  await page.locator("#pose-x").fill("0.4");
+  await page.locator("#pose-y").fill("0.1");
+  await page.locator("#pose-z").fill("0.5");
+  await page.locator("#motion-velocity").fill("20");
+  await page.locator("#motion-timeout").fill("12");
+  await expect(page.locator("#execute-motion")).toBeEnabled();
+  await page.locator(".fleet-chip[data-arm=\"l\"]").click();
+  await expect(page.locator("#motion-reference")).toHaveText("WORK / cell");
+  await expect(page.locator("#pose-x")).toHaveValue("");
+  await expect(page.locator("#execute-motion")).toBeDisabled();
+  await page.locator(".fleet-chip[data-arm=\"r\"]").click();
+  await expect(page.locator("#pose-x")).toHaveValue("0.4");
+  await expect(page.locator("#execute-motion")).toBeEnabled();
+  await page.locator("#execute-motion").click();
+  await page.evaluate(() => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "action_result", arm: "r", action: "execute_motion", result: { success: true },
+    }) });
+  });
+
+  await page.locator("button[data-motion-command=\"2\"]").click();
+  await expect(page.locator("#execute-motion")).toHaveText("发送 MOVEP");
+  await page.locator("#execute-motion").click();
   await page.locator("#cancel-motion").click();
   const messages = await page.evaluate(() => (window as any).__webMessages as string[]);
-  expect(messages.some((value) => JSON.parse(value).type === "execute_motion")).toBe(true);
+  const motionMessages = messages.map((value) => JSON.parse(value)).filter((message) => message.type === "execute_motion");
+  expect(motionMessages.map((message) => message.goal.command)).toEqual([0, 1, 2]);
+  expect(motionMessages.slice(1).map((message) => [message.goal.reference_type, message.goal.reference_name])).toEqual([[1, "cell"], [1, "cell"]]);
+  expect(motionMessages[1].goal.pose_position_m).toEqual([0.4, 0.1, 0.5]);
+  expect(motionMessages[1].goal.pose_quaternion_wxyz).toEqual([1, 0, 0, 0]);
+  expect(motionMessages[1].goal.velocity_percent).toBe(20);
+  expect(motionMessages[1].goal.timeout_sec).toBe(12);
   expect(messages.some((value) => JSON.parse(value).type === "cancel_action")).toBe(true);
   await page.screenshot({ path: test.info().outputPath("web-control.png"), fullPage: true });
 });

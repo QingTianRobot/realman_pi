@@ -69,7 +69,8 @@ rm65_project_help
 colcon 或 launch 选项时，继续使用本页的原始命令。`rm65_docker_xbox_test` 不启动
 三臂和 RViz，适合先验证实体手柄是否能产生 Joy 消息和按键日志。
 
-参数化 bringup 的完整开关和组合说明见
+所有 `functions.zsh` 入口的当前用途、组件范围和权威配置见
+[启动入口索引](../development/startup-entries)；参数化 bringup 的完整开关和组合说明见
 [系统 Bringup：参数化组合](../development/system-bringup#参数化组合)。每个函数在子 shell
 中覆盖对应变量，执行结束后不会改变当前终端的环境变量。
 

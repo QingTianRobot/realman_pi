@@ -12,6 +12,7 @@ description: realman_pi 功能契约、实现边界、配置来源和验证方�
 | 功能 | 主要内容 | 权威配置 |
 | --- | --- | --- |
 | [功能文档同步](./documentation-workflow) | 功能完成门槛、Web 手册结构和验证流程 | `.agents/skills/document-feature-updates/SKILL.md` |
+| [启动入口索引](./startup-entries) | `functions.zsh` 每个启动、构建、测试和部署入口的当前用途、组件范围和权威配置 | `functions.zsh`、`config/docker/compose.yaml` |
 | [睿尔曼 Python 驱动查询 Skill](./realman-python-driver) | Python API 文档检索、驱动开发约束、版本与安全核对流程 | `.agents/skills/realman-python-driver/SKILL.md` |
 | [睿尔曼三臂驱动与运动控制](./realman-driver-scaffold) | 三臂关节回读、可取消运动、坐标系、末端速度、RViz 和 mock 验证 | `config/ros/realman_driver.yaml`、`config/ros/realman_coordinates.yaml`、`config/ros/realman_motion.yaml` |
 | [睿尔曼 Action 开发与测试](./realman-action-development) | Action IDL、生命周期、安全状态机、速度 session、扩展步骤和测试矩阵 | `src/driver/realman_msgs/action/`、`config/ros/realman_motion.yaml` |

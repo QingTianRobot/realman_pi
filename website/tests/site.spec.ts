@@ -107,6 +107,7 @@ test("documentation routes render", async ({ page }) => {
     "architecture/package",
     "development/",
     "development/documentation-workflow",
+    "development/startup-entries",
     "development/realman-python-driver",
     "development/realman-driver-scaffold",
     "development/realman-action-development",

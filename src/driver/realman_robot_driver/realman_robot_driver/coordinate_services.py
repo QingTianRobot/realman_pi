@@ -15,7 +15,9 @@ class CoordinateOperationResult:
     matched: bool
     api2_status: int
     active_name: str
+    expected_tool: str
     current_tool: str | None
+    expected_work: str
     current_work: str | None
     message: str
 
@@ -151,7 +153,9 @@ def _operation_result(
         matched=verification.matched,
         api2_status=verification.status,
         active_name=active_name,
+        expected_tool=verification.expected_tool,
         current_tool=verification.current_tool,
+        expected_work=verification.expected_work,
         current_work=verification.current_work,
         message=verification.message,
     )

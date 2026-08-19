@@ -1,0 +1,13 @@
+uint8 BASE=0
+uint8 WORK=1
+uint8 TOOL=2
+uint8 reference_type
+string reference_name
+float64[6] seed_joint_degrees
+float64[3] pose_position_m
+float64[4] pose_quaternion_wxyz
+---
+bool success
+int32 api2_status
+float64[6] joint_degrees
+string message

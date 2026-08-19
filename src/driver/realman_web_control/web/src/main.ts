@@ -99,6 +99,11 @@ app.innerHTML = `
             <label>Y<input id="pose-qy" type="number" step="0.001" inputmode="decimal" /></label>
             <label>Z<input id="pose-qz" type="number" step="0.001" inputmode="decimal" /></label>
           </div>
+          <div id="pose-kinematics-actions" class="pose-kinematics-actions" hidden>
+            <button id="fill-current-pose" class="button secondary" type="button">填入当前位置</button>
+            <button id="solve-ik" class="button ghost" type="button">计算逆解</button>
+          </div>
+          <div id="kinematics-status" class="kinematics-status" aria-live="polite">MOVEL 逆解仅更新影子预览</div>
         </div>
         <div class="motion-parameters">
           <label>激活参考系<output id="motion-reference">BASE / base</output></label>
@@ -138,6 +143,10 @@ const selectedArmLabel = $("#selected-arm-label");
 const motionMode = $("#motion-mode");
 const jointTarget = $("#joint-target") as HTMLElement;
 const poseTarget = $("#pose-target") as HTMLElement;
+const poseKinematicsActions = $("#pose-kinematics-actions") as HTMLElement;
+const fillCurrentPoseButton = $("#fill-current-pose") as HTMLButtonElement;
+const solveIkButton = $("#solve-ik") as HTMLButtonElement;
+const kinematicsStatus = $("#kinematics-status");
 const resetPreviewButton = $("#reset-preview") as HTMLButtonElement;
 const motionReference = $("#motion-reference");
 const motionVelocityInput = $("#motion-velocity") as HTMLInputElement;
@@ -161,6 +170,9 @@ const currentJointsByArm: Partial<Record<ArmId, number[]>> = {};
 const targetJointsByArm: Partial<Record<ArmId, number[]>> = {};
 const targetEditedByArm: Partial<Record<ArmId, boolean>> = {};
 const poseTargetsByArm: Partial<Record<ArmId, string[]>> = {};
+const kinematicsStatusByArm: Partial<Record<ArmId, string>> = {};
+const activeKinematicsRequestByArm: Partial<Record<ArmId, string>> = {};
+const ikPreviewValidByArm: Partial<Record<ArmId, boolean>> = {};
 const motionSettingsByArm: Partial<Record<ArmId, { velocity: string; timeout: string }>> = {};
 const robotScenes: Partial<Record<ArmId, RobotScene>> = {};
 let renderer: THREE.WebGLRenderer;
@@ -207,6 +219,7 @@ function updateSelectedArmFromState() {
   selectedArmLabel.textContent = selectedArm.toUpperCase();
   selectedArmLabel.className = "mini-state active-arm";
   renderCoordinateState();
+  kinematicsStatus.textContent = kinematicsStatusByArm[selectedArm] ?? "MOVEL 逆解仅更新影子预览";
   configureVelocity();
   renderFleetStrip();
   setSelectedConnection();
@@ -308,6 +321,7 @@ function setMotionMode(command: MotionCommand) {
   jointTarget.hidden = command !== 0;
   poseTarget.hidden = command === 0;
   resetPreviewButton.hidden = command !== 0;
+  poseKinematicsActions.hidden = command !== 1;
   executeMotionButton.textContent = `发送 ${MOTION_LABELS[command]}`;
   setShadowVisibility(selectedArm);
   updateButtons();
@@ -320,10 +334,16 @@ function renderMotionEditor() {
     motionTimeoutInput.value = settings.timeout;
   }
   motionReference.textContent = referenceLabel(currentCoordinateState()?.preferred_reference);
+  kinematicsStatus.textContent = kinematicsStatusByArm[selectedArm] ?? "MOVEL 逆解仅更新影子预览";
   setMotionMode(selectedMotionCommand);
 }
 function send(message: Message) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
+}
+
+function setKinematicsStatus(arm: ArmId, message: string) {
+  kinematicsStatusByArm[arm] = message;
+  if (arm === selectedArm) kinematicsStatus.textContent = message;
 }
 
 function setConnection(online: boolean) {
@@ -364,21 +384,32 @@ function setJointInputs(values: number[], target = false) {
 
 function setRobotJoints(target: any, values: number[]) {
   target?.setJointValues(Object.fromEntries(values.map((value, index) => [`joint_${index + 1}`, value])));
+  target?.updateMatrixWorld(true);
 }
 
 function applyMaterials(target: any, shadow: boolean, arm: ArmId) {
   target?.traverse((object: any) => {
     if (!(object instanceof THREE.Mesh)) return;
-    object.material = new THREE.MeshStandardMaterial({
-      color: shadow ? 0xe08a52 : ARM_COLORS[arm],
-      metalness: shadow ? 0.05 : 0.25,
-      roughness: 0.56,
-      transparent: shadow,
-      opacity: shadow ? (arm === selectedArm ? 0.28 : 0) : 1,
-      depthWrite: !shadow,
-    });
+    object.material = shadow
+      ? new THREE.MeshBasicMaterial({
+        color: 0xe08a52,
+        transparent: true,
+        opacity: arm === selectedArm ? 0.28 : 0,
+        depthWrite: false,
+        depthTest: false,
+        side: THREE.DoubleSide,
+      })
+      : new THREE.MeshStandardMaterial({
+        color: ARM_COLORS[arm],
+        metalness: 0.25,
+        roughness: 0.56,
+        depthWrite: true,
+        depthTest: true,
+      });
     object.castShadow = !shadow;
     object.receiveShadow = !shadow;
+    object.renderOrder = shadow ? 10 : 0;
+    object.frustumCulled = !shadow;
   });
 }
 function setShadowVisibility(arm: ArmId) {
@@ -389,10 +420,35 @@ function setShadowVisibility(arm: ArmId) {
   const next = robotScenes[arm]?.shadow;
   next?.traverse((object: any) => {
     if (object instanceof THREE.Mesh && "opacity" in object.material) {
-      object.material.opacity = selectedMotionCommand === 0 ? 0.28 : 0;
+      const opacity = selectedMotionCommand === 0 || (selectedMotionCommand === 1 && ikPreviewValidByArm[arm]) ? 0.28 : 0;
+      object.material.opacity = opacity;
     }
   });
   selectedShadowArm = arm;
+}
+
+function frameScene(includeSelectedShadow = false) {
+  if (!manifest || !camera || !controls || !scene) return;
+  const bounds = new THREE.Box3();
+  manifest.robots.forEach(({ id }) => {
+    const robotScene = robotScenes[id];
+    if (!robotScene) return;
+    bounds.expandByObject(robotScene.live);
+    if (includeSelectedShadow && id === selectedArm) bounds.expandByObject(robotScene.shadow);
+  });
+  if (bounds.isEmpty()) return;
+  const center = bounds.getCenter(new THREE.Vector3());
+  const size = bounds.getSize(new THREE.Vector3());
+  const dimension = Math.max(size.x, size.y, size.z, 0.5);
+  const focusHeight = bounds.min.z + size.z * 0.46;
+  controls.target.set(center.x, center.y, focusHeight);
+  camera.position.set(
+    center.x + dimension * 1.18,
+    center.y - dimension * 1.65,
+    focusHeight + dimension * 0.82,
+  );
+  camera.lookAt(controls.target);
+  controls.update();
 }
 
 function meshCount(target: any) {
@@ -450,21 +506,9 @@ async function loadFleet() {
       setRobotJoints(shadow, armTargetSnapshot(config.id));
       live.updateMatrixWorld(true);
     });
-    const bounds = new THREE.Box3();
-    snapshots.forEach(({ live }) => bounds.expandByObject(live));
-    const center = bounds.getCenter(new THREE.Vector3());
-    const size = bounds.getSize(new THREE.Vector3());
-    const dimension = Math.max(size.x, size.y, size.z, 0.5);
-    const focusHeight = bounds.min.z + size.z * 0.46;
-    controls.target.set(center.x, center.y, focusHeight);
-    camera.position.set(
-      center.x + dimension * 1.18,
-      center.y - dimension * 1.65,
-      focusHeight + dimension * 0.82,
-    );
-    camera.lookAt(controls.target);
     const selectedConfig = robotConfig(selectedArm);
     setShadowVisibility(selectedArm);
+    frameScene(false);
     viewer.dataset.liveMeshes = String(snapshots.reduce((count, { live }) => count + meshCount(live), 0));
     viewer.dataset.shadowMeshes = String(snapshots.reduce((count, { shadow }) => count + meshCount(shadow), 0));
     viewerState.setAttribute("hidden", "");
@@ -542,6 +586,51 @@ function handleMessage(message: Message) {
       $("#joint-stamp").textContent = `joint_states / ${message.stamp_ns || 0}`;
     }
     renderFleetStrip();
+  } else if (message.type === "kinematics_result") {
+    const arm = message.arm as ArmId;
+    if (activeKinematicsRequestByArm[arm] !== message.request_id) return;
+    delete activeKinematicsRequestByArm[arm];
+    if (message.operation === "get_current_pose") {
+      const position = Array.isArray(message.pose_position_m) ? message.pose_position_m : [];
+      const quaternion = Array.isArray(message.pose_quaternion_wxyz) ? message.pose_quaternion_wxyz : [];
+      if (message.success && position.length === 3 && quaternion.length === 4) {
+        poseTargetsByArm[arm] = [...position, ...quaternion].map((value) => String(value));
+        ikPreviewValidByArm[arm] = false;
+        setKinematicsStatus(arm, `当前位置已填入 / ${referenceLabel(coordinateStates[arm]?.preferred_reference)}`);
+        if (arm === selectedArm) renderPoseInputs();
+        if (arm === selectedArm) setShadowVisibility(arm);
+      } else {
+        setKinematicsStatus(arm, `当前位置读取失败 / ${message.message || "unknown error"}`);
+      }
+    } else if (message.operation === "solve_ik") {
+      const degrees = Array.isArray(message.joint_degrees) ? message.joint_degrees : [];
+      const config = manifest?.robots.find((item) => item.id === arm);
+      const valid = Boolean(message.success) && degrees.length === 6 && config?.joints.every(
+        (joint, index) => Number.isFinite(Number(degrees[index])) &&
+          Number(degrees[index]) >= joint.lower_deg && Number(degrees[index]) <= joint.upper_deg,
+      );
+      if (valid) {
+        const radians = degrees.map((value: number) => Number(value) * Math.PI / 180);
+        targetJointsByArm[arm] = [...radians];
+        targetEditedByArm[arm] = true;
+        ikPreviewValidByArm[arm] = true;
+        if (arm === selectedArm) {
+          targetJoints = [...radians];
+          setJointInputs(radians, true);
+        }
+        setRobotJoints(robotScenes[arm]?.shadow, radians);
+        setKinematicsStatus(arm, `逆解成功 / 影子已更新 / ${degrees.map((value: number) => Number(value).toFixed(2)).join(", ")}°`);
+        if (arm === selectedArm) {
+          setShadowVisibility(arm);
+          frameScene(true);
+        }
+      } else {
+        ikPreviewValidByArm[arm] = false;
+        setKinematicsStatus(arm, `逆解失败 / ${message.message || "target is unreachable"}`);
+        if (arm === selectedArm) setShadowVisibility(arm);
+      }
+    }
+    updateButtons();
   } else if (message.type === "action_state") {
     if (message.arm !== selectedArm) {
       renderFleetStrip();
@@ -580,6 +669,12 @@ function handleMessage(message: Message) {
     result.textContent = `${message.code}: ${message.message}`;
     if (message.request_id === activeMotionRequest) activeMotionRequest = "";
     if (message.request_id === activeVelocityRequest) { activeVelocityRequest = ""; window.clearInterval(velocityTimer); velocityTimer = 0; }
+    for (const arm of ["l", "m", "r"] as ArmId[]) {
+      if (message.request_id === activeKinematicsRequestByArm[arm]) {
+        delete activeKinematicsRequestByArm[arm];
+        setKinematicsStatus(arm, `${message.code}: ${message.message}`);
+      }
+    }
     updateButtons();
   }
 }
@@ -601,6 +696,9 @@ function updateButtons() {
   cancelVelocityButton.disabled = !writable || !Boolean(activeVelocityRequest);
   cancelMotionButton.disabled = !writable || !Boolean(activeMotionRequest);
   stopButton.disabled = !writable;
+  const activeKinematicsRequest = Boolean(activeKinematicsRequestByArm[selectedArm]);
+  fillCurrentPoseButton.disabled = !writable || selectedMotionCommand !== 1 || activeKinematicsRequest;
+  solveIkButton.disabled = !writable || selectedMotionCommand !== 1 || activeKinematicsRequest || !Boolean(readPoseGoal());
 }
 
 function loadManifest(next: Manifest) {
@@ -660,6 +758,9 @@ motionMode.querySelectorAll<HTMLButtonElement>("button[data-motion-command]").fo
 poseInputElements().forEach((input) => {
   input.addEventListener("input", () => {
     poseTargetsByArm[selectedArm] = poseInputElements().map((item) => item.value);
+    ikPreviewValidByArm[selectedArm] = false;
+    setKinematicsStatus(selectedArm, "位姿已修改，请重新计算逆解");
+    setShadowVisibility(selectedArm);
     updateButtons();
   });
 });
@@ -696,6 +797,36 @@ executeMotionButton.addEventListener("click", () => {
     },
   });
   feedback.textContent = `${commandLabel} / ${referenceLabel(reference)} / 等待 feedback…`;
+  updateButtons();
+});
+fillCurrentPoseButton.addEventListener("click", () => {
+  if (!canWrite() || selectedMotionCommand !== 1) return;
+  const requestIdValue = requestId("current-pose");
+  activeKinematicsRequestByArm[selectedArm] = requestIdValue;
+  setKinematicsStatus(selectedArm, "读取当前末端位姿…");
+  send({ type: "get_current_pose", request_id: requestIdValue, arm: selectedArm });
+  updateButtons();
+});
+solveIkButton.addEventListener("click", () => {
+  const pose = readPoseGoal();
+  const reference = preferredReference();
+  const joints = armJointSnapshot(selectedArm);
+  if (!canWrite() || selectedMotionCommand !== 1 || !pose || joints.length !== 6) return;
+  const requestIdValue = requestId("solve-ik");
+  activeKinematicsRequestByArm[selectedArm] = requestIdValue;
+  setKinematicsStatus(selectedArm, "计算逆解…");
+  send({
+    type: "solve_ik",
+    request_id: requestIdValue,
+    arm: selectedArm,
+    goal: {
+      reference_type: reference.type,
+      reference_name: reference.name,
+      seed_joint_degrees: joints.map((value) => value * 180 / Math.PI),
+      pose_position_m: pose.position,
+      pose_quaternion_wxyz: pose.quaternion,
+    },
+  });
   updateButtons();
 });
 startVelocityButton.addEventListener("click", () => {

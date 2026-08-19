@@ -48,6 +48,12 @@ class FakeRobot:
     def rm_get_current_arm_state(self):
         return self._call("rm_get_current_arm_state")
 
+    def rm_algo_forward_kinematics(self, joint, flag=1):
+        return self._call("rm_algo_forward_kinematics", joint, flag)
+
+    def rm_algo_inverse_kinematics(self, params):
+        return self._call("rm_algo_inverse_kinematics", params)
+
     def rm_get_arm_event_call_back(self, callback):
         return self._call("rm_get_arm_event_call_back", callback)
 
@@ -728,6 +734,8 @@ def test_mock_adapter_is_safe_and_deterministic():
     assert adapter.movej_p([0.0] * 7, 20, 0, False) == 0
     assert adapter.set_movev_init(1, 0, 5) == 0
     assert adapter.movev([0.0] * 6, True, 0, 0) == 0
+    assert adapter.forward_kinematics([0.0] * 6) == (0, [0.0] * 6)
+    assert adapter.inverse_kinematics([1.0] * 6, [0.1] * 6) == (0, [1.0] * 6)
     tool = ToolFrame(
         controller_name="gripper",
         ros_frame_id="l/tool",

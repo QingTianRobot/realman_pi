@@ -15,6 +15,7 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from realman_msgs.action import CartesianVelocity, ExecuteMotion
+from realman_msgs.srv import GetCurrentPose, SolveIk
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
@@ -71,6 +72,7 @@ class WebControlNode(Node):
         self._commands: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue(maxsize=2048)
         self._actions: dict[tuple[str, str], ActionRecord] = {}
         self._coordinate_state: dict[str, dict[str, Any]] = {}
+        self._joint_degrees: dict[str, list[float]] = {}
         self._callback_group = ReentrantCallbackGroup()
 
         self._motion_clients = {
@@ -101,6 +103,14 @@ class WebControlNode(Node):
                 f"/{arm}/stop",
                 callback_group=self._callback_group,
             )
+            for arm in ARMS
+        }
+        self._current_pose_clients = {
+            arm: self.create_client(GetCurrentPose, f"/{arm}/get_current_pose", callback_group=self._callback_group)
+            for arm in ARMS
+        }
+        self._ik_clients = {
+            arm: self.create_client(SolveIk, f"/{arm}/solve_ik", callback_group=self._callback_group)
             for arm in ARMS
         }
         self._subscriptions = []
@@ -191,6 +201,10 @@ class WebControlNode(Node):
         message_type = message["type"]
         if message_type == "client_disconnected":
             self._client_disconnected(client_id)
+        elif message_type == "get_current_pose":
+            self._get_current_pose(client_id, message)
+        elif message_type == "solve_ik":
+            self._solve_ik(client_id, message)
         elif message_type == "execute_motion":
             self._execute_motion(client_id, message)
         elif message_type == "start_cartesian_velocity":
@@ -203,6 +217,118 @@ class WebControlNode(Node):
             self._software_stop(client_id, message)
         else:
             raise ProtocolError("unsupported_type", f"unsupported message type: {message_type}")
+
+    def _get_current_pose(self, client_id: str, message: dict[str, Any]) -> None:
+        arm = message["arm"]
+        client = self._current_pose_clients[arm]
+        if not client.service_is_ready():
+            raise ProtocolError(
+                "kinematics_unavailable",
+                f"/{arm}/get_current_pose is not available",
+                message["request_id"],
+            )
+        reference_type, reference_name = self._default_reference(arm)
+        request = GetCurrentPose.Request()
+        request.reference_type = reference_type
+        request.reference_name = reference_name
+        future = client.call_async(request)
+        future.add_done_callback(
+            lambda completed: self._current_pose_response(
+                client_id, arm, message["request_id"], completed
+            )
+        )
+
+    def _solve_ik(self, client_id: str, message: dict[str, Any]) -> None:
+        arm = message["arm"]
+        goal = message["goal"]
+        client = self._ik_clients[arm]
+        if not client.service_is_ready():
+            raise ProtocolError(
+                "kinematics_unavailable",
+                f"/{arm}/solve_ik is not available",
+                message["request_id"],
+            )
+        reference_type, reference_name = self._default_reference(arm)
+        goal["reference_type"] = reference_type
+        goal["reference_name"] = reference_name
+        self._validate_reference(arm, goal)
+        request = assign_fields(SolveIk.Request(), goal)
+        future = client.call_async(request)
+        future.add_done_callback(
+            lambda completed: self._ik_response(
+                client_id, arm, message["request_id"], completed
+            )
+        )
+
+    def _current_pose_response(
+        self, client_id: str, arm: str, request_id: str, future: Any
+    ) -> None:
+        try:
+            response = future.result()
+            event = {
+                "type": "kinematics_result",
+                "operation": "get_current_pose",
+                "arm": arm,
+                "request_id": request_id,
+                "success": bool(response.success),
+                "api2_status": int(response.api2_status),
+                "current_joint_degrees": message_to_json(response.current_joint_degrees),
+                "pose_position_m": message_to_json(response.pose_position_m),
+                "pose_quaternion_wxyz": message_to_json(response.pose_quaternion_wxyz),
+                "message": response.message,
+            }
+        except Exception as error:
+            self.get_logger().error(f"Web current pose failed for {arm}: {error}")
+            event = {
+                "type": "kinematics_result",
+                "operation": "get_current_pose",
+                "arm": arm,
+                "request_id": request_id,
+                "success": False,
+                "api2_status": -1,
+                "current_joint_degrees": [],
+                "pose_position_m": [],
+                "pose_quaternion_wxyz": [],
+                "message": str(error),
+            }
+        self._server.send_event(event, client_id)
+
+    def _ik_response(self, client_id: str, arm: str, request_id: str, future: Any) -> None:
+        try:
+            response = future.result()
+            joints = [float(value) for value in response.joint_degrees]
+            if response.success and len(joints) != 6:
+                raise ValueError("IK service returned an invalid joint vector")
+            if response.success:
+                for joint, value in zip(self._robots[arm]["joints"], joints):
+                    if not joint["lower_deg"] <= value <= joint["upper_deg"]:
+                        raise ValueError(
+                            f"{joint['name']} IK result {value:.3f} deg is outside "
+                            f"[{joint['lower_deg']:.3f}, {joint['upper_deg']:.3f}]"
+                        )
+            event = {
+                "type": "kinematics_result",
+                "operation": "solve_ik",
+                "arm": arm,
+                "request_id": request_id,
+                "success": bool(response.success),
+                "api2_status": int(response.api2_status),
+                "joint_degrees": joints,
+                "message": response.message,
+            }
+        except Exception as error:
+            self.get_logger().error(f"Web inverse kinematics failed for {arm}: {error}")
+            event = {
+                "type": "kinematics_result",
+                "operation": "solve_ik",
+                "arm": arm,
+                "request_id": request_id,
+                "success": False,
+                "api2_status": -1,
+                "joint_degrees": [],
+                "message": str(error),
+            }
+        self._server.send_event(event, client_id)
 
     def _coordinate_state_message(self, arm: str, message: String) -> None:
         try:
@@ -541,6 +667,7 @@ class WebControlNode(Node):
         names = [f"joint_{index}" for index in range(1, 7)]
         if not all(name in positions for name in names):
             return
+        self._joint_degrees[arm] = [math.degrees(float(positions[name])) for name in names]
         stamp = message.header.stamp
         self._server.send_event(
             {

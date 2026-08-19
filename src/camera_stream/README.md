@@ -26,6 +26,7 @@ cd src/camera_stream
 - `av`（PyAV）：H.264 编码 + RTSP 推流。**注意：PyPI 的 av wheel 不含 NVENC**，默认用 `libx264`
   软件编码；要用 RTX 4080 的 NVENC 需自建 PyAV（`--enable-nvenc`）或改用 GStreamer
   `nvh264enc`（需 sudo 装 `gstreamer1.0-plugins-bad`）。
+- `PyYAML`：读取 `config/*.yaml`；快捷入口会在启动前检查其模块名 `yaml`。
 - `lz4`：可选，深度压缩。
 
 mediamtx 单二进制由 `install_deps.sh` 下载到 `bin/`（需 curl + 可访问 github）。
@@ -41,7 +42,27 @@ mediamtx 单二进制由 `install_deps.sh` 下载到 `bin/`（需 curl + 可访�
 索引，`serial` 为空的 side 会自动跳过；共用参数在 `stream` 段。默认彩色用 `format: MJPG`（压缩，
 兼容 USB 2.0），换 USB 3.0 后可改 `BGR`（无损）。
 
+快捷启动脚本目前只遍历 `cameras.left` 和 `cameras.right`；新增第三台或第四台 Orbbec 时，
+除 YAML 外还要同步 `scripts/start_streaming.sh` 的 side 列表、RTSP path 和深度端口。
+
 ## 3. 启动 / 停止
+
+从仓库任意目录加载根目录的 Zsh 快捷函数，也可以管理同一组脚本：
+
+```zsh
+source /path/to/realman_pi/functions.zsh
+rm65_camera_start
+rm65_camera_status
+rm65_camera_logs -f
+rm65_camera_stop
+```
+
+这些函数运行在直接连接相机的宿主机上，不创建 Docker 容器；`rm65_camera_start` 会先
+检查 `numpy`、`cv2`、`av`、`yaml`、`pyrealsense2` 和 `pyorbbecsdk`，缺少时提示执行
+`scripts/install_deps.sh`。需要按组件查看日志时可使用：
+`rm65_camera_logs mediamtx`、`rm65_camera_logs orbbec_left`、
+`rm65_camera_logs orbbec_right`、`rm65_camera_logs realsense_stream` 或
+`rm65_camera_logs ros2_bridge`。
 
 ```bash
 cd src/camera_stream

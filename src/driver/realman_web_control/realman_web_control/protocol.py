@@ -114,6 +114,36 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
         return {"type": "ping"}
 
     arm = _arm(message)
+    if message_type == "get_current_pose":
+        return {
+            "type": message_type,
+            "request_id": _request_id(message),
+            "arm": arm,
+        }
+    if message_type == "solve_ik":
+        request_id = _request_id(message)
+        goal = _mapping(message.get("goal"), "goal")
+        reference_type, reference_name = _reference(goal)
+        return {
+            "type": message_type,
+            "request_id": request_id,
+            "arm": arm,
+            "goal": {
+                "reference_type": reference_type,
+                "reference_name": reference_name,
+                "seed_joint_degrees": _vector(
+                    goal.get("seed_joint_degrees"), "goal.seed_joint_degrees", 6
+                ),
+                "pose_position_m": _vector(
+                    goal.get("pose_position_m"), "goal.pose_position_m", 3
+                ),
+                "pose_quaternion_wxyz": _vector(
+                    goal.get("pose_quaternion_wxyz"),
+                    "goal.pose_quaternion_wxyz",
+                    4,
+                ),
+            },
+        }
     if message_type == "execute_motion":
         request_id = _request_id(message)
         goal = _mapping(message.get("goal"), "goal")

@@ -54,6 +54,8 @@ rm65_project_help
 | `rm65_docker_bringup_model` / `hardware` / `headless` | 启动模型、真机 RViz 或无 GUI 预设 |
 | `rm65_docker_bringup_input` / `web` | 只启动输入链路，或启动真机与 Web 控制 |
 | `rm65_docker_bringup_custom_args ...` | 临时透传 `system.launch.py` 参数 |
+| `rm65_camera_start` / `stop` | 在宿主机启动或停止 SDK 直读相机推流 |
+| `rm65_camera_status` / `logs [-f]` | 查看相机进程、端口或跟踪推流日志 |
 | `rm65_docker_web_control[_start]` | 前台或后台启动浏览器 Action 控制台 |
 | `rm65_docker_web_control_status` / `logs` / `stop` | 查看、跟踪或停止 Web 控制台 |
 | `rm65_web_control_url [host]` | 输出浏览器访问地址，默认端口 `8765` |
@@ -73,6 +75,56 @@ colcon 或 launch 选项时，继续使用本页的原始命令。`rm65_docker_x
 [启动入口索引](../development/startup-entries)；参数化 bringup 的完整开关和组合说明见
 [系统 Bringup：参数化组合](../development/system-bringup#参数化组合)。每个函数在子 shell
 中覆盖对应变量，执行结束后不会改变当前终端的环境变量。
+
+### 相机推流
+
+相机功能包直接运行在连接 USB 相机的宿主机上，不通过 `realman_bringup` Docker 服务。它用
+RealSense/Orbbec SDK 读取设备：彩色图像经 PyAV 推送到 `mediamtx` RTSP，深度图像通过独立
+TCP 端口发送；可选 `ros2_bridge` 只发布 `CameraInfo` 和静态 TF，不发布 ROS image topic。
+
+首次使用在相机宿主机安装依赖：
+
+```bash
+cd /path/to/realman_pi/src/camera_stream
+./scripts/install_deps.sh
+```
+
+然后从任意目录加载快捷函数并管理生命周期：
+
+```zsh
+source /path/to/realman_pi/functions.zsh
+rm65_camera_start
+rm65_camera_status
+rm65_camera_logs -f
+rm65_camera_stop
+```
+
+`rm65_camera_start` 启动 `mediamtx`、`realsense_stream`、`config/orbbec.yaml` 中
+`left/right` 两个 side（serial 为空的 side 会自行退出），主机检测到 `ros2` 时再启动
+`ros2_bridge`。
+`rm65_camera_stop` 会停止这些进程，`rm65_camera_status` 会检查进程和 `8554`、`8100-8102`
+监听端口，`rm65_camera_logs` 支持 `all`、`mediamtx`、`orbbec_left`、`orbbec_right`、
+`realsense_stream`、`ros2_bridge` 组件名。
+
+彩色流地址为：
+
+```text
+rtsp://<host>:8554/realsense/color
+rtsp://<host>:8554/orbbec/left/color
+rtsp://<host>:8554/orbbec/right/color
+```
+
+深度服务监听 `<host>:8100`（RealSense）、`<host>:8101`（Orbbec left）和 `<host>:8102`
+（Orbbec right）。启动前必须核对并按现场设备更新
+`src/camera_stream/config/realsense.yaml`、`src/camera_stream/config/orbbec.yaml` 的
+serial；空的 Orbbec serial 会跳过该 side。SDK 会独占 USB 设备，请勿与旧的
+`realsense2_camera_node` 或 Orbbec ROS 图像节点同时运行。
+
+若提示 Python 模块缺失，先执行 `install_deps.sh`；该脚本安装 `numpy`、`av`、`PyYAML`、
+`pyrealsense2`、`pyorbbecsdk` 等依赖，并下载仓库本地的 `bin/mediamtx`。生产主机没有
+这些依赖或串号不匹配时，入口会拒绝启动或在对应日志中报告设备不可用。
+当前启动脚本不会自动发现第三台 Orbbec；增加第四路相机时，需同时扩展
+`orbbec.yaml`、`scripts/start_streaming.sh` 的 side/端口/RTSP 配置。
 
 ### 远程 RViz 函数详解
 
@@ -318,7 +370,7 @@ rm65_docker_web_control_logs -f
 | --- | --- |
 | 关节滑轨 | 生成橙色半透明的目标影子，实体 URDF 继续显示真实回读位置 |
 | `MOVEJ` | 使用当前激活参考系提交六轴关节角 Action，并实时显示阶段、进度、feedback 和 result |
-| `MOVEL` | 显示当前激活参考系，按 XYZ 米制位置和 WXYZ 四元数提交笛卡尔直线运动 |
+| `MOVEL` | 显示当前激活参考系，支持填入当前位置、计算逆解影子预览，再按 XYZ 米制位置和 WXYZ 四元数提交笛卡尔直线运动 |
 | `MOVEP` | 显示当前激活参考系，以 `MOVEJ_P` 命令提交目标位姿的关节空间运动 |
 | 末端速度 | 使用当前激活参考系建立六轴 `vx, vy, vz, wx, wy, wz` 速度 Action，按周期发送最新命令 |
 | 取消 Action | 取消当前浏览器发起的 Action，并由驱动执行受控 slow-stop |

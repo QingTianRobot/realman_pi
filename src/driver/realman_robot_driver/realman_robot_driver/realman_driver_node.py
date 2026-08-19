@@ -18,7 +18,7 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
 from geometry_msgs.msg import TwistStamped
 from realman_msgs.action import CartesianVelocity, ExecuteMotion
-from realman_msgs.srv import SelectFrame, VerifyCoordinates
+from realman_msgs.srv import GetCurrentPose, SelectFrame, SolveIk, VerifyCoordinates
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
@@ -33,10 +33,22 @@ from .coordinate_services import (
 from .cartesian_velocity_session import CartesianVelocitySession
 from .motion_coordinator import ArmOwnership, MotionCoordinator
 from .motion_types import MotionSettings, ReferenceState, ReferenceType
+from .pose_math import (
+    euler_to_quaternion,
+    pose_from_reference,
+    pose_to_reference,
+    quaternion_to_euler,
+)
 from .realman_sdk_adapter import RealManSdkAdapter, RobotState
 
 
 _ARMS = frozenset({"l", "m", "r"})
+
+
+def _unpack_frame_result(result: Any) -> tuple[int, Any | None]:
+    if isinstance(result, (tuple, list)) and len(result) >= 2:
+        return int(result[0]), result[1]
+    return int(result), None
 
 
 def _arm_from_namespace(namespace: str) -> str:
@@ -246,6 +258,8 @@ class RealManDriverNode(Node):
                 "coordinates/select_work",
                 self._select_work_frame,
             ),
+            self.create_service(GetCurrentPose, "get_current_pose", self._get_current_pose),
+            self.create_service(SolveIk, "solve_ik", self._solve_ik),
         ]
         period = 1.0 / self.state_publish_rate
         self.state_timer = self.create_timer(period, self._publish_state)
@@ -366,6 +380,183 @@ class RealManDriverNode(Node):
             CoordinateOperation.SELECT_WORK, request.name
         )
         return self._fill_select_response(response, result)
+
+    def _get_current_pose(
+        self,
+        request: GetCurrentPose.Request,
+        response: GetCurrentPose.Response,
+    ) -> GetCurrentPose.Response:
+        """Read current joints, run FK, and express the pose in the active frame."""
+        try:
+            reference_type, frame = self._kinematics_reference(
+                request.reference_type, request.reference_name
+            )
+            state = self.adapter.get_state()
+            if state.error_code != 0 or not state.joint_degrees:
+                return self._fill_current_pose_response(
+                    response,
+                    False,
+                    state.error_code or -1,
+                    (),
+                    (),
+                    (),
+                    "current joint state is unavailable",
+                )
+            status, base_pose = self.adapter.forward_kinematics(list(state.joint_degrees))
+            if status != 0:
+                return self._fill_current_pose_response(
+                    response, False, status, state.joint_degrees, (), (),
+                    f"forward kinematics failed with API2 status {status}",
+                )
+            position, quaternion = self._pose_in_reference(
+                reference_type, frame, base_pose
+            )
+            return self._fill_current_pose_response(
+                response, True, 0, state.joint_degrees, position, quaternion, "current pose read"
+            )
+        except (TypeError, ValueError) as error:
+            return self._fill_current_pose_response(
+                response, False, -1, (), (), (), str(error)
+            )
+        except Exception as error:
+            self.get_logger().error(f"RealMan current pose service failed: {error}")
+            return self._fill_current_pose_response(
+                response, False, -1, (), (), (), "current pose query failed"
+            )
+
+    def _solve_ik(
+        self,
+        request: SolveIk.Request,
+        response: SolveIk.Response,
+    ) -> SolveIk.Response:
+        """Solve IK for a pose in the active reference without submitting motion."""
+        try:
+            reference_type, frame = self._kinematics_reference(
+                request.reference_type, request.reference_name
+            )
+            seed = [float(value) for value in request.seed_joint_degrees]
+            if len(seed) != 6 or not all(math.isfinite(value) for value in seed):
+                raise ValueError("seed_joint_degrees must contain six finite values")
+            target_quaternion = tuple(float(value) for value in request.pose_quaternion_wxyz)
+            target_position = tuple(float(value) for value in request.pose_position_m)
+            if len(target_position) != 3 or not all(math.isfinite(value) for value in target_position):
+                raise ValueError("pose_position_m must contain three finite values")
+            if len(target_quaternion) != 4 or not all(math.isfinite(value) for value in target_quaternion):
+                raise ValueError("pose_quaternion_wxyz must contain four finite values")
+            base_position, base_quaternion = self._target_in_base(
+                reference_type, frame, target_position, target_quaternion
+            )
+            pose_euler = [
+                *base_position,
+                *quaternion_to_euler(base_quaternion),
+            ]
+            status, joints = self.adapter.inverse_kinematics(seed, pose_euler)
+            if status != 0:
+                response.success = False
+                response.api2_status = status
+                response.message = f"inverse kinematics failed with API2 status {status}"
+                return response
+            if len(joints) != 6 or not all(math.isfinite(value) for value in joints):
+                raise ValueError("SDK returned an invalid six-joint IK solution")
+            response.success = True
+            response.api2_status = 0
+            response.joint_degrees = joints
+            response.message = "inverse kinematics solved; shadow preview only"
+            return response
+        except (TypeError, ValueError) as error:
+            response.success = False
+            response.api2_status = -1
+            response.message = str(error)
+            return response
+        except Exception as error:
+            self.get_logger().error(f"RealMan inverse kinematics service failed: {error}")
+            response.success = False
+            response.api2_status = -1
+            response.message = "inverse kinematics query failed"
+            return response
+
+    def _kinematics_reference(
+        self, reference_type_value: int, reference_name: str
+    ) -> tuple[ReferenceType, Any | None]:
+        try:
+            reference_type = ReferenceType(int(reference_type_value))
+        except (TypeError, ValueError) as error:
+            raise ValueError("reference_type must be BASE, WORK, or TOOL") from error
+        if not isinstance(reference_name, str) or not reference_name:
+            raise ValueError("reference_name must be non-empty")
+        if reference_type is ReferenceType.BASE:
+            if reference_name != "base":
+                raise ValueError("BASE reference_name must be base")
+            return reference_type, None
+        if not self.coordinate_manager.motion_allowed(self.arm_id):
+            raise ValueError("coordinate verification blocks kinematics")
+        if self._active_references[reference_type] != reference_name:
+            raise ValueError("reference does not match the active controller frame")
+        raw_frame = (
+            self.adapter.current_work_frame()
+            if reference_type is ReferenceType.WORK
+            else self.adapter.current_tool_frame()
+        )
+        status, frame = _unpack_frame_result(raw_frame)
+        if status != 0 or frame is None:
+            raise ValueError(f"active {reference_type.name.lower()} frame is unavailable")
+        return reference_type, frame
+
+    @staticmethod
+    def _pose_in_reference(
+        reference_type: ReferenceType, frame: Any | None, base_pose: list[float]
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+        base_position = tuple(base_pose[:3])
+        base_quaternion = euler_to_quaternion(*base_pose[3:])
+        if reference_type is ReferenceType.BASE:
+            return base_position, base_quaternion
+        if frame is None:
+            raise ValueError("reference frame is unavailable")
+        return pose_to_reference(
+            base_position,
+            base_quaternion,
+            frame.xyz_m,
+            frame.quaternion_wxyz,
+        )
+
+    @staticmethod
+    def _target_in_base(
+        reference_type: ReferenceType,
+        frame: Any | None,
+        target_position: tuple[float, float, float],
+        target_quaternion: tuple[float, float, float, float],
+    ) -> tuple[tuple[float, float, float], tuple[float, float, float, float]]:
+        if reference_type is ReferenceType.BASE:
+            return target_position, target_quaternion
+        if frame is None:
+            raise ValueError("reference frame is unavailable")
+        return pose_from_reference(
+            frame.xyz_m,
+            frame.quaternion_wxyz,
+            target_position,
+            target_quaternion,
+        )
+
+    @staticmethod
+    def _fill_current_pose_response(
+        response: GetCurrentPose.Response,
+        success: bool,
+        status: int,
+        joints: Any,
+        position: Any,
+        quaternion: Any,
+        message: str,
+    ) -> GetCurrentPose.Response:
+        response.success = success
+        response.api2_status = int(status)
+        if len(joints) == 6:
+            response.current_joint_degrees = list(joints)
+        if len(position) == 3:
+            response.pose_position_m = list(position)
+        if len(quaternion) == 4:
+            response.pose_quaternion_wxyz = list(quaternion)
+        response.message = message
+        return response
 
     def _run_coordinate_operation(
         self, operation: CoordinateOperation, name: str = ""

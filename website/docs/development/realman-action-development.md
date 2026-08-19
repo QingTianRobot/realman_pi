@@ -166,6 +166,20 @@ generation，并在提交前关闭事件窗口。这样可以阻止以下错误�
 因此，任何新 Action 若绕过 `MotionCoordinator` 自己注册 callback，都必须先解决同样的
 身份关联问题；“回调里直接 `goal_handle.succeed()`”是不允许的实现。
 
+## Kinematics services
+
+每个 namespaced driver 还提供只读的末端位姿和逆解服务：
+
+| Service | Interface | Purpose |
+| --- | --- | --- |
+| `/l/get_current_pose`（以及 `/m`、`/r`） | `realman_msgs/srv/GetCurrentPose` | 从当前关节状态做 FK，并按已验证参考系返回当前 XYZ/WXYZ |
+| `/l/solve_ik`（以及 `/m`、`/r`） | `realman_msgs/srv/SolveIk` | 将参考系目标转换到 base 后调用 SDK IK，返回 degree 关节解 |
+
+它们只执行状态读取和算法计算，不拥有运动 Action，也不会提交 `rm_movej()`、`rm_movel()`
+或 `rm_movej_p()`。调用方必须传入当前激活的参考系名称；逆解的 `seed_joint_degrees`
+用于选择接近当前姿态的解。`GetCurrentPose` 和 `SolveIk` 的位置单位是米，四元数顺序是
+WXYZ，算法使用的中间欧拉角单位是弧度。
+
 ## CartesianVelocity 契约
 
 ### 两阶段接口

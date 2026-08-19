@@ -150,6 +150,49 @@ def test_coordinate_service_contracts_are_exact():
         ],
     )
 
+    _assert_interface_contract(
+        ROOT / "srv/GetCurrentPose.srv",
+        [
+            [
+                "uint8 BASE=0",
+                "uint8 WORK=1",
+                "uint8 TOOL=2",
+                "uint8 reference_type",
+                "string reference_name",
+            ],
+            [
+                "bool success",
+                "int32 api2_status",
+                "float64[6] current_joint_degrees",
+                "float64[3] pose_position_m",
+                "float64[4] pose_quaternion_wxyz",
+                "string message",
+            ],
+        ],
+    )
+
+    _assert_interface_contract(
+        ROOT / "srv/SolveIk.srv",
+        [
+            [
+                "uint8 BASE=0",
+                "uint8 WORK=1",
+                "uint8 TOOL=2",
+                "uint8 reference_type",
+                "string reference_name",
+                "float64[6] seed_joint_degrees",
+                "float64[3] pose_position_m",
+                "float64[4] pose_quaternion_wxyz",
+            ],
+            [
+                "bool success",
+                "int32 api2_status",
+                "float64[6] joint_degrees",
+                "string message",
+            ],
+        ],
+    )
+
 
 def test_interface_contract_tests_are_registered_and_built():
     cmake = (ROOT / "CMakeLists.txt").read_text()

@@ -97,6 +97,19 @@ MOVEL/MOVEP 面板会直接显示所选机械臂的激活参考系，例如 `WOR
 XYZ 是该参考系下的绝对目标位置，单位为米；姿态使用 `[w,x,y,z]` 四元数。每个 arm
 分别保留自己的位姿输入，位置未填满、四元数为零或速度/超时越界时发送按钮保持禁用。
 
+MOVEL 还提供两个只读计算动作。点击“填入当前位置”会调用
+`/{arm}/get_current_pose`，驱动使用当前关节状态做 FK，并把结果按当前激活参考系填入
+XYZ 和 WXYZ。修改目标后点击“计算逆解”会通过 WebSocket 的 `solve_ik` 消息调用
+`/{arm}/solve_ik`；请求种子使用该 arm 的当前实体关节角，驱动将参考系目标转换到算法
+需要的 base 位姿后调用 `rm_algo_inverse_kinematics()`。成功的六个 degree 结果会先经过
+Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条和橙色 URDF 影子。这个过程
+不会发送 `ExecuteMotion`，需要用户另外点击“发送 MOVEL”才会提交真实运动。
+
+两个服务都要求 `reference_type`/`reference_name` 与驱动已验证的激活坐标完全一致；坐标
+验证失败、控制器状态不可读、目标不可达、SDK API2 非零或结果超限都会返回失败消息。
+服务边界的单位固定为：关节 degree、位置 m、四元数 WXYZ；SDK 算法内部的 FK/IK 姿态
+欧拉角为 rad。MOVEL 的真实发送仍沿用原有的 active reference 和坐标 gate。
+
 ```json
 {
   "type":"execute_motion", "request_id":"move-001", "arm":"l",

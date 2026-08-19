@@ -73,6 +73,58 @@ rm65_project_help
 | `rm65_docker_bringup_input` | 只启动 Joy 和 Xbox 输入链。 | `start_robots=false`、`start_driver=false`、`start_joy_driver=true`、`start_controller=true`，等待设备。 | 独立验证实体手柄输入，不触碰机械臂或 RViz。 | `config/ros/xbox_controller.yaml`、[Xbox 手柄输入](./xbox-controller) |
 | `rm65_docker_bringup_web` | 启动真实驱动和 Web 控制，不显示 RViz。 | `start_robots=true`、`start_driver=true`、`start_web_control=true`、RViz/Joy/Xbox 关闭。 | 工控机上提供浏览器 Action 控制和 URDF 状态影子。 | `config/ros/realman_web_control.yaml`、[WebSocket 浏览器控制与 URDF 影子](./realman-web-control) |
 
+## Camera streaming
+
+相机推流入口运行在**直接连接 USB 相机的宿主机**上，不是 Docker Compose 服务，也不属于
+`realman_bringup` 容器。脚本直接调用 RealSense/Orbbec SDK，启动 `mediamtx`、配置中已填写
+序列号的相机进程以及可选的 `ros2_bridge`。因此，同一台设备不能同时被旧的
+`realsense2_camera_node` 或 Orbbec ROS 图像节点打开。
+
+| 函数 | 当前用途 | 启动/影响的组件 | 适用场景 | 权威配置与文档 |
+| --- | --- | --- | --- | --- |
+| `rm65_camera_start` | 检查 Python SDK 依赖后调用 `src/camera_stream/scripts/start_streaming.sh`。 | `mediamtx`、`realsense_stream`、`orbbec.yaml` 中 `left/right` 两个 side；若主机有 `ros2`，还启动 `ros2_bridge`。 | 首次运行依赖安装完成、且需要向局域网提供相机彩色/深度流时。重复启动会被拒绝。 | `src/camera_stream/config/realsense.yaml`、`src/camera_stream/config/orbbec.yaml`、[相机流 README](https://github.com/QingTianRobot/realman_pi/blob/main/src/camera_stream/README.md) |
+| `rm65_camera_stop` | 调用 `stop_streaming.sh` 停止相机流相关进程。 | 停止 Orbbec/RealSense 推流、`ros2_bridge` 和仓库 `bin/mediamtx`。 | 释放 USB 相机、修改配置或切换到其他相机节点前。 | `src/camera_stream/scripts/stop_streaming.sh` |
+| `rm65_camera_status` | 打印配置路径、匹配的进程和监听端口。 | 只读检查相机进程、`mediamtx`、`ros2_bridge`，以及 RTSP `8554`/深度 `8100-8102`。 | 启动后确认服务是否真正监听，或排查端口/残留进程。 | `src/camera_stream/scripts/start_streaming.sh` |
+| `rm65_camera_logs [-f] [component]` | 查看最近 100 行，或用 `-f` 持续跟踪 `src/camera_stream/log/*.log`。 | `all`、`mediamtx`、`orbbec_left`、`orbbec_right`、`realsense_stream`、`ros2_bridge`。 | 排查 SDK 初始化、串号不匹配、USB 带宽和推流错误。 | `src/camera_stream/log/` |
+
+首次使用先在宿主机安装依赖，再加载函数：
+
+```bash
+cd src/camera_stream
+./scripts/install_deps.sh
+```
+
+日常操作：
+
+```zsh
+source /path/to/realman_pi/functions.zsh
+rm65_camera_start
+rm65_camera_status
+rm65_camera_logs -f
+rm65_camera_stop
+```
+
+彩色帧由 `mediamtx` 提供 RTSP：
+
+```text
+rtsp://<host>:8554/realsense/color
+rtsp://<host>:8554/orbbec/left/color
+rtsp://<host>:8554/orbbec/right/color
+```
+
+深度帧通过 TCP `8100`（RealSense）、`8101`（Orbbec left）和 `8102`（Orbbec right）发送；
+它们不是 ROS image topic。`ros2_bridge` 仅发布标定中的 `CameraInfo` 和静态 TF。
+启动前应根据 `udevadm`、`lsusb` 或 `/dev/v4l/by-id` 的实际串号更新两个 YAML；空的
+Orbbec `serial` 会跳过对应 side，错误串号则会在日志中报告找不到设备。
+
+如果 `rm65_camera_start` 提示 `av`、`yaml`、`pyrealsense2` 或 `pyorbbecsdk` 缺失，先运行
+`install_deps.sh`。脚本需要宿主机有 `python3`、`bash`、`curl`，并从官方发布地址下载
+Orbbec wheel 和 `mediamtx`；它不会启动 Docker 容器。
+
+当前脚本只遍历 `left/right` 两个 Orbbec side。即使 USB 枚举出第三台 Orbbec，也不会自动
+抢占；要新增一路，需要在 `orbbec.yaml` 增加 side、RTSP path、深度端口，并同步
+`scripts/start_streaming.sh` 的 side 列表和日志入口。
+
 ## Web 控制入口
 
 | 函数 | 当前用途 | 启动/影响的组件 | 适用场景 | 权威配置与文档 |

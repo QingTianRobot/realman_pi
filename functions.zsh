@@ -253,6 +253,139 @@ rm65_docker_web_control_logs() {
   _rm65_compose logs --tail=100 "$@" realman_web_control
 }
 
+rm65_camera_start() {
+  emulate -L zsh
+  local camera_root="$RM65_PROJECT_ROOT/src/camera_stream"
+  local start_script="$camera_root/scripts/start_streaming.sh"
+  local module
+  local -a missing_modules
+
+  if (( $# > 0 )); then
+    print -u2 -r -- "usage: rm65_camera_start"
+    return 2
+  fi
+
+  if [[ ! -x "$start_script" ]]; then
+    print -u2 -r -- "rm65: camera start script is not executable: ${start_script}"
+    return 1
+  fi
+
+  _rm65_require_command bash || return
+  _rm65_require_command python3 || return
+
+  for module in numpy cv2 av yaml pyrealsense2 pyorbbecsdk; do
+    if ! command python3 -c "import ${module}" >/dev/null 2>&1; then
+      missing_modules+=(${module})
+    fi
+  done
+  if (( ${#missing_modules} > 0 )); then
+    print -u2 -r -- "rm65: camera Python modules are missing: ${(j:, :)missing_modules}"
+    print -u2 -r -- "rm65: run ${camera_root}/scripts/install_deps.sh on the host first"
+    return 1
+  fi
+
+  if command -v pgrep >/dev/null 2>&1 &&
+      command pgrep -f '[c]amera_stream\.(realsense_stream|orbbec_stream)' >/dev/null 2>&1; then
+    print -u2 -r -- "rm65: camera streaming is already running; use rm65_camera_status"
+    return 1
+  fi
+
+  (cd -- "$camera_root" && command bash "$start_script")
+}
+
+rm65_camera_stop() {
+  emulate -L zsh
+  local stop_script="$RM65_PROJECT_ROOT/src/camera_stream/scripts/stop_streaming.sh"
+
+  if (( $# > 0 )); then
+    print -u2 -r -- "usage: rm65_camera_stop"
+    return 2
+  fi
+  if [[ ! -x "$stop_script" ]]; then
+    print -u2 -r -- "rm65: camera stop script is not executable: ${stop_script}"
+    return 1
+  fi
+
+  _rm65_require_command bash || return
+  command bash "$stop_script"
+}
+
+rm65_camera_status() {
+  emulate -L zsh
+  local camera_root="$RM65_PROJECT_ROOT/src/camera_stream"
+  local -a processes ports
+
+  print -r -- "rm65 camera streaming"
+  print -r -- "  root: ${camera_root}"
+  print -r -- "  config: ${camera_root}/config/realsense.yaml"
+  print -r -- "  config: ${camera_root}/config/orbbec.yaml"
+
+  if command -v pgrep >/dev/null 2>&1; then
+    processes=(${(f)"$(command pgrep -af '[c]amera_stream\.(realsense_stream|orbbec_stream)|[m]ediamtx|[r]os2_bridge' || true)"})
+    if (( ${#processes} == 0 )); then
+      print -r -- "  processes: stopped"
+    else
+      print -r -- "  processes:"
+      print -r -- "    ${(F)processes}"
+    fi
+  else
+    print -r -- "  processes: pgrep unavailable"
+  fi
+
+  if command -v ss >/dev/null 2>&1; then
+    ports=(${(f)"$(command ss -ltnH 2>/dev/null | awk '$4 ~ /:(8554|8100|8101|8102)$/ {print $4}' || true)"})
+    if (( ${#ports} == 0 )); then
+      print -r -- "  ports: none (8554 RTSP, 8100-8102 depth)"
+    else
+      print -r -- "  ports: ${(j:, :)ports}"
+    fi
+  fi
+}
+
+rm65_camera_logs() {
+  emulate -L zsh
+  local follow=false
+  local component=all
+  local arg
+  local camera_root="$RM65_PROJECT_ROOT/src/camera_stream"
+  local log_root="$camera_root/log"
+  local -a log_files
+
+  for arg in "$@"; do
+    case "$arg" in
+      -f|--follow) follow=true ;;
+      all|mediamtx|orbbec_left|orbbec_right|realsense_stream|ros2_bridge)
+        if [[ "$component" != all ]]; then
+          print -u2 -r -- "usage: rm65_camera_logs [-f] [all|mediamtx|orbbec_left|orbbec_right|realsense_stream|ros2_bridge]"
+          return 2
+        fi
+        component="$arg"
+        ;;
+      *)
+        print -u2 -r -- "usage: rm65_camera_logs [-f] [all|mediamtx|orbbec_left|orbbec_right|realsense_stream|ros2_bridge]"
+        return 2
+        ;;
+    esac
+  done
+
+  if [[ "$component" == all ]]; then
+    log_files=("$log_root"/*.log(N.om))
+  else
+    log_files=("$log_root/${component}.log")
+    [[ -f "${log_files[1]}" ]] || log_files=()
+  fi
+  if (( ${#log_files} == 0 )); then
+    print -u2 -r -- "rm65: no camera logs found under ${log_root}"
+    return 1
+  fi
+
+  if [[ "$follow" == true ]]; then
+    command tail -n 100 -f -- "${log_files[@]}"
+  else
+    command tail -n 100 -- "${log_files[@]}"
+  fi
+}
+
 rm65_web_control_url() {
   emulate -L zsh
   local host="${1:-${REALMAN_WEB_CONTROL_HOST:-127.0.0.1}}"
@@ -476,6 +609,11 @@ rm65_project_help() {
   print -r -- "  rm65_docker_bringup_headless        三台真实驱动加 Xbox 处理节点，无 GUI"
   print -r -- "  rm65_docker_bringup_input           只启动 Joy/Xbox 输入链，并等待实体设备"
   print -r -- "  rm65_docker_bringup_web             三台真实驱动加 Web 控制，不启动 RViz"
+  print -r -- "Camera streaming (host):"
+  print -r -- "  rm65_camera_start                   启动 mediamtx 和配置中的相机推流进程"
+  print -r -- "  rm65_camera_stop                    停止相机推流、深度服务和可选 ROS bridge"
+  print -r -- "  rm65_camera_status                  查看相机进程和 8554/8100-8102 端口"
+  print -r -- "  rm65_camera_logs [-f] [component]   查看或跟踪相机日志"
   print -r -- "Web control:"
   print -r -- "  rm65_docker_web_control             前台运行独立浏览器控制服务，加入已有 ROS 图"
   print -r -- "  rm65_docker_web_control_start       后台启动浏览器控制服务并打印状态"

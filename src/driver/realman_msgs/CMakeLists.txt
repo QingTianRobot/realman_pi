@@ -10,6 +10,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "action/ExecuteMotion.action"
   "srv/SelectFrame.srv"
   "srv/VerifyCoordinates.srv"
+  "srv/GetCurrentPose.srv"
+  "srv/SolveIk.srv"
   DEPENDENCIES action_msgs
 )
 

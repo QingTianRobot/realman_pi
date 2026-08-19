@@ -67,6 +67,9 @@ input[type="range"] { display: block; width: 100%; accent-color: #4dbbb0; }
 .quaternion-inputs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
 .pose-inputs label, .motion-parameters label { display: grid; gap: 5px; min-width: 0; color: #8fa6a9; font-size: 10px; }
 .pose-inputs input, .motion-parameters input { width: 100%; min-width: 0; padding: 7px; font-size: 11px; font-variant-numeric: tabular-nums; }
+.pose-kinematics-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 8px; margin-top: 14px; }
+.pose-kinematics-actions[hidden] { display: none; }
+.kinematics-status { min-height: 30px; margin-top: 9px; color: #8fa6a9; font-size: 10px; line-height: 1.45; }
 .motion-parameters { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 8px; margin: 14px 0; }
 .motion-parameters label:first-child { grid-column: 1 / -1; }
 .motion-parameters output { min-height: 32px; display: flex; align-items: center; border: 1px solid #385158; border-radius: 3px; background: #101c20; color: #8ee1d2; padding: 7px 9px; font-size: 11px; font-weight: 700; }

@@ -184,6 +184,70 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
     }) });
   });
 
+  const beforeKinematicsMotionCount = await page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map((value) => JSON.parse(value))
+      .filter((message) => message.type === "execute_motion").length,
+  );
+  await expect(page.locator("#fill-current-pose")).toBeVisible();
+  await page.locator("#fill-current-pose").click();
+  let kinematicsMessageCount = await page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map((value) => JSON.parse(value))
+      .filter((message) => message.type === "get_current_pose").length,
+  );
+  expect(kinematicsMessageCount).toBe(1);
+  await page.evaluate(() => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "kinematics_result",
+      operation: "get_current_pose",
+      arm: "r",
+      request_id: JSON.parse((window as any).__webMessages[(window as any).__webMessages.length - 1]).request_id,
+      success: true,
+      pose_position_m: [0.51, 0.52, 0.53],
+      pose_quaternion_wxyz: [1, 0, 0, 0],
+      current_joint_degrees: [11.5, 22.9, 34.4, 45.8, 57.3, 68.8],
+      message: "current pose read",
+    }) });
+  });
+  await expect(page.locator("#pose-x")).toHaveValue("0.51");
+  await expect(page.locator("#kinematics-status")).toContainText("当前位置已填入");
+  await page.locator("#pose-x").fill("0.55");
+  await expect(page.locator("#solve-ik")).toBeEnabled();
+  const beforeIkShadow = await canvasChecksum(page);
+  await page.locator("#solve-ik").click();
+  kinematicsMessageCount = await page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map((value) => JSON.parse(value))
+      .filter((message) => message.type === "solve_ik").length,
+  );
+  expect(kinematicsMessageCount).toBe(1);
+  const solveRequestId = await page.evaluate(() => {
+    const messages = (window as any).__webMessages as string[];
+    return JSON.parse(messages[messages.length - 1]).request_id;
+  });
+  await page.evaluate((requestId) => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "kinematics_result",
+      operation: "solve_ik",
+      arm: "r",
+      request_id: requestId,
+      success: true,
+      api2_status: 0,
+      joint_degrees: [1, 2, 3, 4, 5, 6],
+      message: "inverse kinematics solved; shadow preview only",
+    }) });
+  }, solveRequestId);
+  await expect(page.locator("input[data-joint-index=\"0\"]")).toHaveValue(/^1/);
+  await expect(page.locator("#kinematics-status")).toContainText("逆解成功");
+  await page.waitForTimeout(100);
+  expect(await canvasChecksum(page)).not.toBe(beforeIkShadow);
+  expect(await page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map((value) => JSON.parse(value))
+      .filter((message) => message.type === "execute_motion").length,
+  )).toBe(beforeKinematicsMotionCount);
+
   await page.locator("button[data-motion-command=\"2\"]").click();
   await expect(page.locator("#execute-motion")).toHaveText("发送 MOVEP");
   await page.locator("#execute-motion").click();

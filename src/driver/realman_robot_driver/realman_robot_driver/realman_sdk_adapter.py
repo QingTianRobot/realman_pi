@@ -373,6 +373,84 @@ class RealManSdkAdapter:
     def current_arm_state(self) -> Any:
         return self._query("rm_get_current_arm_state", "SDK arm state query failed")
 
+    def forward_kinematics(self, joint_degrees: list[float]) -> tuple[int, list[float]]:
+        """Return the SDK FK pose as ``[x,y,z,rx,ry,rz]`` in m/rad."""
+        with self._lock:
+            if self.mock_mode:
+                status = self._ready_status_locked()
+                if status is not None:
+                    return status, []
+                return 0, [0.0] * 6
+        result, token, error, _, readiness_status = self._invoke_vendor(
+            "rm_algo_forward_kinematics", (list(joint_degrees), 1)
+        )
+        if readiness_status is not None:
+            return readiness_status, []
+        if error is not None:
+            with self._lock:
+                if token is not None and self._call_matches_locked(token):
+                    self._set_failure_locked(-1, str(error))
+            return -1, []
+        try:
+            pose = [float(value) for value in result]
+        except (TypeError, ValueError):
+            pose = []
+        with self._lock:
+            if token is None or not self._call_matches_locked(token):
+                return -1, []
+            if len(pose) != 6 or not all(math.isfinite(value) for value in pose):
+                self._set_failure_locked(-1, "SDK returned an invalid FK pose")
+                return -1, []
+            self._set_success_locked()
+        return 0, pose
+
+    def inverse_kinematics(
+        self, seed_joint_degrees: list[float], pose_euler_rad: list[float]
+    ) -> tuple[int, list[float]]:
+        """Solve SDK IK from a degree seed and an m/rad Euler pose."""
+        with self._lock:
+            if self.mock_mode:
+                status = self._ready_status_locked()
+                if status is not None:
+                    return status, []
+                return 0, list(seed_joint_degrees)
+        try:
+            from Robotic_Arm.rm_robot_interface import rm_inverse_kinematics_params_t
+
+            params = rm_inverse_kinematics_params_t(
+                list(seed_joint_degrees), list(pose_euler_rad), 1
+            )
+        except Exception as error:
+            with self._lock:
+                self._set_failure_locked(-1, str(error))
+            return -1, []
+        result, token, error, _, readiness_status = self._invoke_vendor(
+            "rm_algo_inverse_kinematics", (params,)
+        )
+        if readiness_status is not None:
+            return readiness_status, []
+        if error is not None:
+            with self._lock:
+                if token is not None and self._call_matches_locked(token):
+                    self._set_failure_locked(-1, str(error))
+            return -1, []
+        try:
+            status, joints = _unpack_result(result)
+            values = [float(value) for value in joints]
+        except (TypeError, ValueError):
+            status, values = -1, []
+        with self._lock:
+            if token is None or not self._call_matches_locked(token):
+                return -1, []
+            if status != 0:
+                self._set_failure_locked(status, "SDK inverse kinematics request failed")
+                return status, []
+            if len(values) != 6 or not all(math.isfinite(value) for value in values):
+                self._set_failure_locked(-1, "SDK returned an invalid IK solution")
+                return -1, []
+            self._set_success_locked()
+        return 0, values
+
     def register_event_callback(self, callback: Callable[[Any], Any]) -> int:
         with self._lock:
             if self.mock_mode:

@@ -300,16 +300,8 @@ docker compose ps realman_web_control
 http://<industrial-host>:8765/
 ```
 
-空 token 时页面仍显示三臂连接状态、实时关节角和 URDF，但控制按钮保持只读。需要启用控制时，
-只在工控机的部署环境中设置长随机 token，不要写入 Git 或网页源码：
-
-```bash
-export REALMAN_WEB_CONTROL_TOKEN="$(openssl rand -hex 32)"
-docker compose up -d --force-recreate realman_web_control
-curl http://127.0.0.1:8765/healthz
-```
-
-也可以使用 Zsh 快捷函数：
+页面会显示三臂连接状态、当前坐标面板、实时关节角和 URDF，并按当前激活参考系直接发
+`MOVEJ` 或速度 Action，不再需要 token 输入。也可以使用 Zsh 快捷函数：
 
 ```zsh
 source /path/to/realman_pi/functions.zsh
@@ -324,8 +316,8 @@ rm65_docker_web_control_logs -f
 | 操作 | 行为 |
 | --- | --- |
 | 关节滑轨 | 生成橙色半透明的目标影子，实体 URDF 继续显示真实回读位置 |
-| `MOVEJ` | 提交六轴关节角 Action，并实时显示阶段、进度、feedback 和 result |
-| 末端速度 | 建立六轴 `vx, vy, vz, wx, wy, wz` 速度 Action，按周期发送最新命令 |
+| `MOVEJ` | 使用当前激活参考系提交六轴关节角 Action，并实时显示阶段、进度、feedback 和 result |
+| 末端速度 | 使用当前激活参考系建立六轴 `vx, vy, vz, wx, wy, wz` 速度 Action，按周期发送最新命令 |
 | 取消 Action | 取消当前浏览器发起的 Action，并由驱动执行受控 slow-stop |
 | 软件停止 | 直接调用当前机械臂的 `/stop` 服务；它不是控制柜物理急停 |
 

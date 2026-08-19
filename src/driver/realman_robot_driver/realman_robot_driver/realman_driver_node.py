@@ -3,6 +3,7 @@
 from __future__ import annotations
 
 import math
+import json
 import time
 from pathlib import Path
 from typing import Any
@@ -19,7 +20,7 @@ from geometry_msgs.msg import TwistStamped
 from realman_msgs.action import CartesianVelocity, ExecuteMotion
 from realman_msgs.srv import SelectFrame, VerifyCoordinates
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
 from .coordinate_manager import CoordinateManager
@@ -177,6 +178,11 @@ class RealManDriverNode(Node):
             logger=self.get_logger(),
             action_type=CartesianVelocity,
             ros_time_now_ns=lambda: self.get_clock().now().nanoseconds,
+        )
+        self._coordinate_state_publisher = self.create_publisher(
+            String,
+            f"/{self.arm_id}/coordinates/state",
+            10,
         )
         self.velocity_command_callback_group = MutuallyExclusiveCallbackGroup()
         self.execute_motion_action_server = ActionServer(
@@ -382,6 +388,7 @@ class RealManDriverNode(Node):
             self.get_logger().info(
                 f"RealMan coordinate {operation} succeeded: {result.message}"
             )
+        self._publish_coordinate_state(result)
         return result
 
     def _update_active_references(self, result: CoordinateOperationResult) -> None:
@@ -396,6 +403,44 @@ class RealManDriverNode(Node):
             if frame is not None:
                 self._active_velocity_frames[ReferenceType.WORK] = frame
 
+    def _publish_coordinate_state(
+        self, result: CoordinateOperationResult | None = None
+    ) -> None:
+        profile = self.coordinate_manager.profiles[self.arm_id]
+        motion_allowed = bool(self.coordinate_manager.motion_allowed(self.arm_id))
+        tool_name = result.current_tool if result and result.current_tool else self._active_references[ReferenceType.TOOL]
+        work_name = result.current_work if result and result.current_work else self._active_references[ReferenceType.WORK]
+        tool_frame = self._frame_for_controller(ReferenceType.TOOL, tool_name)
+        work_frame = self._frame_for_controller(ReferenceType.WORK, work_name)
+        payload = {
+            "type": "coordinate_state",
+            "arm": self.arm_id,
+            "motion_allowed": motion_allowed,
+            "preferred_reference_type": int(
+                ReferenceType.WORK if work_frame is not None else ReferenceType.TOOL if tool_frame is not None else ReferenceType.BASE
+            ),
+            "preferred_reference_name": work_name if work_frame is not None else tool_name if tool_frame is not None else "base",
+            "preferred_reference": self._frame_payload(
+                ReferenceType.WORK if work_frame is not None else ReferenceType.TOOL if tool_frame is not None else ReferenceType.BASE,
+                work_name if work_frame is not None else tool_name if tool_frame is not None else "base",
+                work_frame if work_frame is not None else tool_frame,
+            ),
+            "tool": self._frame_payload(ReferenceType.TOOL, tool_name, tool_frame),
+            "work": self._frame_payload(ReferenceType.WORK, work_name, work_frame),
+            "current_tool": tool_name,
+            "current_work": work_name,
+            "expected_tool": result.expected_tool if result else profile.tool_default,
+            "expected_work": result.expected_work if result else profile.work_default,
+            "matched": result.matched if result else motion_allowed,
+            "tool_matched": result.tool_matched if result else tool_frame is not None,
+            "work_matched": result.work_matched if result else work_frame is not None,
+            "api2_status": result.api2_status if result else 0,
+            "message": result.message if result else "",
+        }
+        message = String()
+        message.data = json.dumps(payload, ensure_ascii=True, separators=(",", ":"))
+        self._coordinate_state_publisher.publish(message)
+
     def _frame_for_controller(
         self, reference_type: ReferenceType, controller_name: str
     ) -> tuple[str, str] | None:
@@ -405,6 +450,41 @@ class RealManDriverNode(Node):
             if frame.controller_name == controller_name:
                 return frame.controller_name, frame.ros_frame_id
         return None
+
+    def _frame_payload(
+        self,
+        reference_type: ReferenceType,
+        controller_name: str,
+        frame: tuple[str, str] | None,
+    ) -> dict[str, Any] | None:
+        if reference_type is ReferenceType.BASE:
+            return {
+                "type": int(reference_type),
+                "name": controller_name,
+                "frame_id": f"{self.arm_id}/base_link",
+            }
+        profile = self.coordinate_manager.profiles[self.arm_id]
+        frames = profile.tools if reference_type is ReferenceType.TOOL else profile.works
+        for candidate in frames.values():
+            if candidate.controller_name != controller_name:
+                continue
+            return {
+                "type": int(reference_type),
+                "name": candidate.controller_name,
+                "frame_id": candidate.ros_frame_id,
+                "controller_name": candidate.controller_name,
+                "xyz_m": list(candidate.xyz_m),
+                "quaternion_wxyz": list(candidate.quaternion_wxyz),
+                "payload_kg": candidate.payload_kg,
+                "center_of_mass_m": list(candidate.center_of_mass_m),
+            }
+        if frame is None:
+            return None
+        return {
+            "type": int(reference_type),
+            "name": controller_name,
+            "frame_id": frame[1],
+        }
 
     def _velocity_command(self, command: TwistStamped) -> None:
         try:
@@ -476,6 +556,7 @@ class RealManDriverNode(Node):
                 self.get_logger().warn(
                     f"RealMan coordinate verification blocked motion: {verification.message}"
                 )
+            self._publish_coordinate_state(verification)
             self.get_logger().info("RealMan connection ready")
         else:
             detail = self.adapter.last_error_message or "no SDK detail"

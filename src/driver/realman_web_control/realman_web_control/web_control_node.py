@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 import queue
 from typing import Any
@@ -15,7 +16,7 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from realman_msgs.action import CartesianVelocity, ExecuteMotion
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool
+from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
 from .action_bridge import ActionRecord, action_event, assign_fields, message_to_json
@@ -69,6 +70,7 @@ class WebControlNode(Node):
         self._robots = {robot["id"]: robot for robot in self._manifest["robots"]}
         self._commands: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue(maxsize=2048)
         self._actions: dict[tuple[str, str], ActionRecord] = {}
+        self._coordinate_state: dict[str, dict[str, Any]] = {}
         self._callback_group = ReentrantCallbackGroup()
 
         self._motion_clients = {
@@ -114,6 +116,15 @@ class WebControlNode(Node):
             )
             self._subscriptions.append(
                 self.create_subscription(
+                    String,
+                    f"/{arm}/coordinates/state",
+                    lambda message, selected=arm: self._coordinate_state_message(selected, message),
+                    10,
+                    callback_group=self._callback_group,
+                )
+            )
+            self._subscriptions.append(
+                self.create_subscription(
                     Bool,
                     f"/{arm}/connected",
                     lambda message, selected=arm: self._connection(selected, message),
@@ -128,6 +139,7 @@ class WebControlNode(Node):
             static_root=static_root,
             description_root=description_root,
             on_command=self._enqueue_command,
+            on_client_connected=self._send_cached_state,
             logger=self.get_logger(),
         )
         self._server.start()
@@ -192,9 +204,39 @@ class WebControlNode(Node):
         else:
             raise ProtocolError("unsupported_type", f"unsupported message type: {message_type}")
 
+    def _coordinate_state_message(self, arm: str, message: String) -> None:
+        try:
+            payload = json.loads(message.data)
+        except json.JSONDecodeError as error:
+            self.get_logger().warn(f"invalid coordinate state for {arm}: {error}")
+            return
+        if not isinstance(payload, dict):
+            return
+        self._coordinate_state[arm] = payload
+        self._server.send_event(payload)
+
+    def _send_cached_state(self, client_id: str) -> None:
+        for arm in ARMS:
+            state = self._coordinate_state.get(arm)
+            if state is not None:
+                self._server.send_event(state, client_id)
+
+    def _default_reference(self, arm: str) -> tuple[int, str]:
+        state = self._coordinate_state.get(arm, {})
+        preferred = state.get("preferred_reference")
+        if isinstance(preferred, dict):
+            ref_type = preferred.get("type")
+            ref_name = preferred.get("name")
+            if isinstance(ref_type, int) and isinstance(ref_name, str) and ref_name:
+                return ref_type, ref_name
+        return 0, "base"
+
     def _execute_motion(self, client_id: str, message: dict[str, Any]) -> None:
         arm = message["arm"]
         goal_values = message["goal"]
+        reference_type, reference_name = self._default_reference(arm)
+        goal_values["reference_type"] = reference_type
+        goal_values["reference_name"] = reference_name
         self._validate_reference(arm, goal_values)
         if goal_values["command"] == ExecuteMotion.Goal.MOVEJ:
             for joint, value in zip(self._robots[arm]["joints"], goal_values["joint_degrees"]):
@@ -229,6 +271,9 @@ class WebControlNode(Node):
     def _start_velocity(self, client_id: str, message: dict[str, Any]) -> None:
         arm = message["arm"]
         goal_values = message["goal"]
+        reference_type, reference_name = self._default_reference(arm)
+        goal_values["reference_type"] = reference_type
+        goal_values["reference_name"] = reference_name
         frame = self._validate_reference(arm, goal_values)
         settings = self._robots[arm]["motion"]
         exact_fields = (

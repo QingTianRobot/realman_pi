@@ -67,6 +67,7 @@ class WebControlServer:
         static_root: str | Path,
         description_root: str | Path,
         on_command: Callable[[str, dict[str, Any]], None],
+        on_client_connected: Callable[[str], None] | None,
         logger: Any,
     ) -> None:
         self.config = config
@@ -74,6 +75,7 @@ class WebControlServer:
         self.static_root = Path(static_root).resolve()
         self.description_root = Path(description_root).resolve()
         self.on_command = on_command
+        self.on_client_connected = on_client_connected
         self.logger = logger
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -207,6 +209,8 @@ class WebControlServer:
                 "layout": self.manifest,
             }
         )
+        if self.on_client_connected is not None:
+            self.on_client_connected(client_id)
         try:
             async for incoming in socket:
                 if incoming.type != WSMsgType.TEXT:

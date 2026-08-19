@@ -31,6 +31,7 @@ def _server(static_root: Path) -> WebControlServer:
         static_root=static_root,
         description_root=static_root,
         on_command=lambda *_args: None,
+        on_client_connected=None,
         logger=FakeLogger(),
     )
 

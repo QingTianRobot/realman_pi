@@ -62,6 +62,7 @@ watchdog 和 lockout，不会直接调用 SDK。
 | --- | --- | --- |
 | `joint_state` | `arm`, `positions_rad`, `stamp_ns` | 实体 URDF 姿态和滑轨 |
 | `connection` | `arm`, `connected` | 控制器在线状态 |
+| `coordinate_state` | `motion_allowed`, `preferred_reference`, `tool`, `work` | 当前激活坐标、可运动状态和默认参考系 |
 | `action_state` | `action`, `request_id`, `state` | submitting/accepted/canceling |
 | `action_feedback` | `feedback` | 原 Action feedback 的 JSON 映射 |
 | `action_result` | `status`, `result` | 原 Action result 和 rclpy 状态 |
@@ -69,13 +70,14 @@ watchdog 和 lockout，不会直接调用 SDK。
 
 ### MOVEJ
 
-目标关节使用 degree，和 `ExecuteMotion.action` 一致；Web 后端会从 URDF limit 再检查一次：
+目标关节使用 degree，和 `ExecuteMotion.action` 一致；Web 后端会从 URDF limit 再检查一次。
+页面会优先使用当前 `coordinate_state` 给出的默认参考系发送目标：
 
 ```json
 {
   "type":"execute_motion", "request_id":"move-001", "arm":"l",
   "goal": {
-    "command":0, "reference_type":0, "reference_name":"base",
+    "command":0, "reference_type":1, "reference_name":"cell",
     "joint_degrees":[0,10,0,-20,0,0],
     "pose_position_m":[0,0,0], "pose_quaternion_wxyz":[1,0,0,0],
     "velocity_percent":30, "blend_radius_percent":0, "timeout_sec":10
@@ -85,14 +87,16 @@ watchdog 和 lockout，不会直接调用 SDK。
 
 `action_feedback.feedback.current_joint_degrees` 到达时，网页只更新实体模型；滑轨编辑的
 目标保持为橙色半透明影子，不会被回读覆盖。点击“发送 MOVEJ”才提交影子目标。
+当前坐标面板会显示 tool/work 名称、控制器回读值，以及工具坐标的位姿、payload 和重心。
 
 ### 末端六轴速度
 
-先建立速度 Action，再以 20 ms 左右的周期发送 `vx, vy, vz, wx, wy, wz`：
+先建立速度 Action，再以 20 ms 左右的周期发送 `vx, vy, vz, wx, wy, wz`。页面会默认选中
+当前 `coordinate_state` 提供的参考系：
 
 ```json
 {"type":"start_cartesian_velocity","request_id":"vel-001","arm":"l","goal":{
-  "reference_type":0,"reference_name":"base","control_period_ms":20,"watchdog_ms":100,
+  "reference_type":1,"reference_name":"cell","control_period_ms":20,"watchdog_ms":100,
   "max_linear_accel_mps2":0.10,"max_angular_accel_radps2":0.50,
   "follow":false,"trajectory_mode":0,"radio":0}}
 ```

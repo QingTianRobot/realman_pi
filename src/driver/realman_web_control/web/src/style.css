@@ -47,6 +47,10 @@ canvas { display: block; width: 100%; height: 100%; }
 .joint-row output { color: #78d4c6; font-variant-numeric: tabular-nums; }
 input[type="range"] { display: block; width: 100%; accent-color: #4dbbb0; }
 .full { width: 100%; }
+.coordinate-summary { display: grid; gap: 6px; margin-bottom: 16px; }
+.coordinate-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; color: #c8d8d5; font-size: 11px; }
+.coordinate-row strong { color: #e7efec; font-size: 11px; font-weight: 700; text-align: right; }
+.coordinate-meta, .coordinate-empty { color: #82999d; font-size: 10px; line-height: 1.45; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .form-grid label, .velocity-inputs label { display: grid; gap: 5px; color: #8fa6a9; font-size: 10px; }
 .form-grid select, .form-grid input { width: 100%; min-width: 0; padding: 7px; font-size: 11px; }

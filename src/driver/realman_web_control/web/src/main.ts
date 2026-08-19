@@ -6,6 +6,34 @@ import "./style.css";
 type ArmId = "l" | "m" | "r";
 type Frame = { type: number; name: string; frame_id: string };
 type Joint = { name: string; lower_rad: number; upper_rad: number; lower_deg: number; upper_deg: number };
+type FrameState = {
+  type: number;
+  name: string;
+  frame_id?: string;
+  controller_name?: string;
+  xyz_m?: number[];
+  quaternion_wxyz?: number[];
+  payload_kg?: number | null;
+  center_of_mass_m?: number[] | null;
+};
+type CoordinateState = {
+  arm: ArmId;
+  motion_allowed: boolean;
+  preferred_reference_type: number;
+  preferred_reference_name: string;
+  preferred_reference: FrameState;
+  tool: FrameState | null;
+  work: FrameState | null;
+  current_tool: string;
+  current_work: string;
+  expected_tool: string;
+  expected_work: string;
+  matched: boolean;
+  tool_matched: boolean;
+  work_matched: boolean;
+  api2_status: number;
+  message: string;
+};
 type Robot = {
   id: ArmId;
   model: string;
@@ -41,6 +69,7 @@ app.innerHTML = `
       <div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span id="root-frame"></span></div>
     </section>
     <aside class="controls">
+      <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><span id="coordinate-state" class="mini-state">WAIT</span></div><div id="coordinate-summary" class="coordinate-summary"></div></section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">JOINT TARGET</span><h2>关节角度</h2></div><button id="reset-preview" class="text-button" type="button">重置目标</button></div><div id="joint-controls" class="joint-controls"></div><button id="movej" class="button primary full" type="button" disabled>发送 MOVEJ</button></section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">CARTESIAN</span><h2>末端速度</h2></div><span id="velocity-state" class="mini-state">IDLE</span></div><div class="form-grid"><label>参考系<select id="velocity-frame"></select></label><label>周期 (ms)<input id="velocity-period" type="number" min="1" step="1" /></label><label>看门狗 (ms)<input id="velocity-watchdog" type="number" min="1" step="1" /></label><label>线加速度<input id="linear-accel" type="number" min="0.001" step="0.01" /></label><label>角加速度<input id="angular-accel" type="number" min="0.001" step="0.01" /></label></div><div id="velocity-inputs" class="velocity-inputs"></div><div class="inline-actions"><button id="start-velocity" class="button secondary" type="button" disabled>启动速度 Action</button><button id="cancel-velocity" class="button ghost" type="button" disabled>取消</button></div></section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">ACTION MONITOR</span><h2>运行反馈</h2></div><span id="action-state" class="mini-state">IDLE</span></div><div class="progress-track"><div id="progress" class="progress-bar"></div></div><div id="feedback" class="feedback">尚未发送 Action</div><pre id="result" class="result" aria-live="polite">等待结果…</pre></section>
@@ -59,6 +88,8 @@ const startVelocityButton = $("#start-velocity") as HTMLButtonElement;
 const cancelVelocityButton = $("#cancel-velocity") as HTMLButtonElement;
 const actionState = $("#action-state");
 const velocityState = $("#velocity-state");
+const coordinateStateLabel = $("#coordinate-state");
+const coordinateSummary = $("#coordinate-summary");
 const feedback = $("#feedback");
 const result = $("#result");
 const progress = $("#progress") as HTMLElement;
@@ -66,7 +97,7 @@ const viewerState = $("#viewer-state");
 const canvas = $("#canvas") as HTMLCanvasElement;
 const viewer = $("#viewer");
 
-let manifest: Manifest;
+let manifest: Manifest | undefined;
 let selectedArm: ArmId = "l";
 let targetJoints: number[] = [];
 let currentJoints: number[] = [];
@@ -75,6 +106,7 @@ let readOnly = false;
 let activeMotionRequest = "";
 let activeVelocityRequest = "";
 let velocityTimer = 0;
+const coordinateStates: Partial<Record<ArmId, CoordinateState>> = {};
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
@@ -82,9 +114,43 @@ let controls: OrbitControls;
 let liveRobot: any;
 let shadowRobot: any;
 
-function robot() { return manifest.robots.find((item) => item.id === selectedArm)!; }
+function robot() {
+  if (!manifest) throw new Error("manifest not loaded");
+  return manifest.robots.find((item) => item.id === selectedArm)!;
+}
 function requestId(prefix: string) { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`; }
 function canWrite() { return !readOnly && socket?.readyState === WebSocket.OPEN; }
+function referenceLabel(frame?: FrameState | null) {
+  if (!frame) return "BASE / base";
+  const prefix = frame.type === 1 ? "WORK" : frame.type === 2 ? "TOOL" : "BASE";
+  return `${prefix} / ${frame.name}`;
+}
+function currentCoordinateState() {
+  return coordinateStates[selectedArm];
+}
+function renderCoordinateState() {
+  const state = currentCoordinateState();
+  coordinateStateLabel.textContent = state ? (state.motion_allowed ? "READY" : "BLOCKED") : "WAIT";
+  coordinateStateLabel.className = state ? `mini-state ${state.motion_allowed ? "accepted" : "stopping"}` : "mini-state";
+  if (!state) {
+    coordinateSummary.innerHTML = `<div class="coordinate-empty">等待坐标状态</div>`;
+    return;
+  }
+  coordinateSummary.innerHTML = `
+    <div class="coordinate-row"><span>MOVE</span><strong>${referenceLabel(state.preferred_reference)}</strong></div>
+    <div class="coordinate-row"><span>TOOL</span><strong>${referenceLabel(state.tool)}</strong></div>
+    <div class="coordinate-meta">${state.tool?.controller_name ?? state.current_tool} ${state.tool?.payload_kg != null ? ` / ${state.tool.payload_kg.toFixed(3)} kg` : ""}</div>
+    <div class="coordinate-meta">${state.tool?.xyz_m ? `xyz ${state.tool.xyz_m.map((value) => value.toFixed(4)).join(", ")}` : ""}</div>
+    <div class="coordinate-row"><span>WORK</span><strong>${referenceLabel(state.work)}</strong></div>
+    <div class="coordinate-meta">${state.work?.controller_name ?? state.current_work}</div>
+    <div class="coordinate-meta">${state.work?.xyz_m ? `xyz ${state.work.xyz_m.map((value) => value.toFixed(4)).join(", ")}` : ""}</div>
+  `;
+}
+function preferredReference() {
+  const state = currentCoordinateState();
+  if (state?.preferred_reference) return state.preferred_reference;
+  return { type: 0, name: "base", frame_id: `${selectedArm}/base_link` };
+}
 function send(message: Message) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
@@ -241,6 +307,11 @@ function configureVelocity() {
   $("#angular-accel").setAttribute("value", String(settings.max_angular_accel_radps2));
   const names = ["vx", "vy", "vz", "wx", "wy", "wz"];
   $("#velocity-inputs").innerHTML = names.map((name, index) => `<label>${name}<input id="velocity-${index}" type="number" step="0.01" value="0" /></label>`).join("");
+  const state = currentCoordinateState();
+  if (state?.preferred_reference) {
+    const frameKey = state.preferred_reference.type === 1 ? "work" : state.preferred_reference.type === 2 ? "tool" : "base";
+    ($("#velocity-frame") as HTMLSelectElement).value = frameKey;
+  }
 }
 
 function handleMessage(message: Message) {
@@ -249,6 +320,10 @@ function handleMessage(message: Message) {
     mode.textContent = readOnly ? "READ ONLY" : "CONTROL READY";
     mode.classList.toggle("ready", !readOnly);
     if (message.layout) loadManifest(message.layout);
+  } else if (message.type === "coordinate_state" && message.arm === selectedArm) {
+    coordinateStates[message.arm] = message as CoordinateState;
+    renderCoordinateState();
+    if (manifest) configureVelocity();
   } else if (message.type === "connection" && message.arm === selectedArm) {
     setConnection(Boolean(message.connected));
   } else if (message.type === "joint_state" && message.arm === selectedArm) {
@@ -317,17 +392,19 @@ function loadManifest(next: Manifest) {
   $("#root-frame").textContent = `TF / ${next.root_frame}`;
   renderJointControls();
   configureVelocity();
+  renderCoordinateState();
   if (!renderer) initScene();
   loadRobot();
   updateButtons();
 }
 
 $("#reset-preview").addEventListener("click", () => { targetJoints = [...currentJoints]; setJointInputs(targetJoints, true); setRobotJoints(shadowRobot, targetJoints); });
-armSelect.addEventListener("change", () => { selectedArm = armSelect.value as ArmId; activeMotionRequest = ""; activeVelocityRequest = ""; loadManifest(manifest); });
+armSelect.addEventListener("change", () => { selectedArm = armSelect.value as ArmId; activeMotionRequest = ""; activeVelocityRequest = ""; loadManifest(manifest); renderCoordinateState(); });
 movejButton.addEventListener("click", () => {
   if (!canWrite()) return;
   activeMotionRequest = requestId("movej");
-  send({ type: "execute_motion", request_id: activeMotionRequest, arm: selectedArm, goal: { command: 0, reference_type: 0, reference_name: "base", joint_degrees: targetJoints.map((value) => value * 180 / Math.PI), pose_position_m: [0, 0, 0], pose_quaternion_wxyz: [1, 0, 0, 0], velocity_percent: 30, blend_radius_percent: 0, timeout_sec: robot().motion.default_timeout_sec } });
+  const reference = preferredReference();
+  send({ type: "execute_motion", request_id: activeMotionRequest, arm: selectedArm, goal: { command: 0, reference_type: reference.type, reference_name: reference.name, joint_degrees: targetJoints.map((value) => value * 180 / Math.PI), pose_position_m: [0, 0, 0], pose_quaternion_wxyz: [1, 0, 0, 0], velocity_percent: 30, blend_radius_percent: 0, timeout_sec: robot().motion.default_timeout_sec } });
   feedback.textContent = "MOVEJ 已发送，等待 feedback…";
   updateButtons();
 });

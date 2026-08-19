@@ -207,9 +207,9 @@ docker compose run --rm realman_bringup
 ROS_DOMAIN_ID=166 docker compose run --rm realman_bringup_remote
 ```
 
-`REALMAN_WEB_CONTROL_TOKEN` 留空时 Web 控制保持只读；启用控制前请在 `.env` 中填写仅限
-可信局域网使用的随机 token。不要把真实 token 写入文档、YAML 或提交记录；`.dockerignore`
-也会阻止 `.env` 进入 Docker 构建上下文。
+Web 控制台不再读取 token；浏览器打开后即可通过 `realman_web_control` 提交动作。该服务
+必须只部署在受信任、隔离的机器人局域网，动作仍然经过 driver 的 ownership、坐标 gate、
+watchdog 和 lockout。
 
 远程目标启动：
 

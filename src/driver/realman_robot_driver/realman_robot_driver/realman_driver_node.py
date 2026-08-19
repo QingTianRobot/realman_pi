@@ -18,8 +18,14 @@ from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
 from geometry_msgs.msg import TwistStamped
-from realman_msgs.action import CartesianVelocity, ExecuteMotion
-from realman_msgs.srv import GetCurrentPose, SelectFrame, SolveIk, VerifyCoordinates
+from realman_msgs.action import CartesianVelocity, ExecuteMotion, ExecuteTrajectory
+from realman_msgs.srv import (
+    GetCurrentPose,
+    RecoverMotion,
+    SelectFrame,
+    SolveIk,
+    VerifyCoordinates,
+)
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
@@ -170,6 +176,7 @@ class RealManDriverNode(Node):
             ),
             active_reference=lambda reference_type: self._active_references[reference_type],
             action_type=ExecuteMotion,
+            trajectory_action_type=ExecuteTrajectory,
             recover_event_channel=lambda: self._recover_event_channel(),
             stop_timeout_sec=self.motion_settings.stop_timeout_sec,
             joint_goal_tolerance_deg=self.motion_settings.joint_goal_tolerance_deg,
@@ -213,6 +220,16 @@ class RealManDriverNode(Node):
             handle_accepted_callback=self.motion_coordinator.accepted_callback,
             callback_group=self.motion_callback_group,
         )
+        self.execute_trajectory_action_server = ActionServer(
+            self,
+            ExecuteTrajectory,
+            "execute_trajectory",
+            execute_callback=self.motion_coordinator.execute_trajectory,
+            goal_callback=self.motion_coordinator.trajectory_goal_callback,
+            cancel_callback=self.motion_coordinator.cancel_callback,
+            handle_accepted_callback=self.motion_coordinator.accepted_callback,
+            callback_group=self.motion_callback_group,
+        )
         self.cartesian_velocity_action_server = ActionServer(
             self,
             CartesianVelocity,
@@ -243,6 +260,11 @@ class RealManDriverNode(Node):
             self.create_service(Trigger, "connect", self._connect),
             self.create_service(Trigger, "disconnect", self._disconnect),
             self.create_service(Trigger, "stop", self._stop),
+            self.create_service(
+                RecoverMotion,
+                "recover_motion",
+                self._recover_motion,
+            ),
             self.create_service(Trigger, "status", self._status),
             self.create_service(
                 VerifyCoordinates,
@@ -339,6 +361,44 @@ class RealManDriverNode(Node):
         response.message = "stop requested" if code == 0 else f"stop failed with status {code}"
         if code != 0:
             self.get_logger().error(f"RealMan stop request failed with status {code}")
+        return response
+
+    def _recover_motion(
+        self,
+        _request: RecoverMotion.Request,
+        response: RecoverMotion.Response,
+    ) -> RecoverMotion.Response:
+        """Explicitly rebuild a quarantined SDK event channel after a cancel."""
+        required = self.motion_coordinator.event_channel_recovery_required
+        response.recovered = False
+        if not required:
+            response.success = True
+            response.api2_status = 0
+            response.message = "motion event channel is already ready"
+            return response
+        if self.motion_coordinator.is_busy():
+            response.success = False
+            response.api2_status = -2
+            response.message = "arm is busy; recover_motion refused"
+            return response
+        recovered = False
+        try:
+            recovered = bool(self._recover_event_channel())
+        except Exception as error:
+            self.get_logger().error(f"Explicit motion recovery failed: {error}")
+            response.api2_status = -1
+            response.message = f"motion recovery failed: {error}"
+        if recovered:
+            response.success = True
+            response.recovered = True
+            response.api2_status = 0
+            response.message = "motion event channel recovered"
+        elif not response.message:
+            response.success = False
+            response.api2_status = int(
+                getattr(self.adapter, "last_error", -1) or -1
+            )
+            response.message = "motion event channel recovery failed"
         return response
 
     def _status(self, _request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
@@ -716,7 +776,7 @@ class RealManDriverNode(Node):
         response.message = result.message
         return response
 
-    def _connect_to_robot(self) -> int:
+    def _connect_to_robot(self, *, event_recovery: bool = False) -> int:
         self._last_connect_attempt = time.monotonic()
         was_connected = self.adapter.connected
         code = self.adapter.connect()
@@ -732,30 +792,32 @@ class RealManDriverNode(Node):
                 self.adapter.disconnect()
                 return callback_status
             if not self.motion_coordinator.reconcile_after_connect(
-                connection_reset=not was_connected
+                connection_reset=not was_connected,
+                recovery_owns_arm=event_recovery,
             ):
                 self.get_logger().warn(
                     "RealMan trajectory reconciliation did not prove an inactive, "
                     "error-free trajectory; motion remains safety gated"
                 )
-            verification = run_startup_coordinate_policy(
-                self.coordinate_manager,
-                self.adapter,
-                self.arm_ownership,
-                self.arm_id,
-                publish_result=self._update_active_references,
-            )
-            if verification.api2_status != 0:
-                self.get_logger().error(
-                    "RealMan coordinate startup failed with API2 status "
-                    f"{verification.api2_status}: {verification.message}"
+            if not event_recovery:
+                verification = run_startup_coordinate_policy(
+                    self.coordinate_manager,
+                    self.adapter,
+                    self.arm_ownership,
+                    self.arm_id,
+                    publish_result=self._update_active_references,
                 )
-                return verification.api2_status
-            if not verification.matched:
-                self.get_logger().warn(
-                    f"RealMan coordinate verification blocked motion: {verification.message}"
-                )
-            self._publish_coordinate_state(verification)
+                if verification.api2_status != 0:
+                    self.get_logger().error(
+                        "RealMan coordinate startup failed with API2 status "
+                        f"{verification.api2_status}: {verification.message}"
+                    )
+                    return verification.api2_status
+                if not verification.matched:
+                    self.get_logger().warn(
+                        f"RealMan coordinate verification blocked motion: {verification.message}"
+                    )
+                self._publish_coordinate_state(verification)
             self.get_logger().info("RealMan connection ready")
         else:
             detail = self.adapter.last_error_message or "no SDK detail"
@@ -770,7 +832,16 @@ class RealManDriverNode(Node):
             return True
         if not self._event_recovery_lock.acquire(blocking=False):
             return False
+        owns_arm = False
         try:
+            owns_arm = self.arm_ownership.acquire(self.arm_id)
+            if not owns_arm:
+                self.get_logger().warn(
+                    f"Motion event channel recovery refused: arm {self.arm_id} is busy"
+                )
+                return False
+            if not self.motion_coordinator.event_channel_recovery_required:
+                return True
             now = time.monotonic()
             if (
                 now - self._last_event_recovery_attempt
@@ -796,7 +867,7 @@ class RealManDriverNode(Node):
             time.sleep(self._event_recovery_delay_sec)
             if not self.motion_coordinator.event_channel_recovery_required:
                 return True
-            connect_status = self._connect_to_robot()
+            connect_status = self._connect_to_robot(event_recovery=True)
             if connect_status != 0:
                 self.get_logger().error(
                     "RealMan event channel reset reconnect failed with API2 "
@@ -805,6 +876,8 @@ class RealManDriverNode(Node):
                 return False
             return not self.motion_coordinator.event_channel_recovery_required
         finally:
+            if owns_arm:
+                self.arm_ownership.release(self.arm_id)
             self._event_recovery_lock.release()
 
     def _publish_state(self) -> None:
@@ -868,6 +941,8 @@ class RealManDriverNode(Node):
             )
         if self.execute_motion_action_server is not None:
             self.execute_motion_action_server.destroy()
+        if self.execute_trajectory_action_server is not None:
+            self.execute_trajectory_action_server.destroy()
         if self.cartesian_velocity_action_server is not None:
             self.cartesian_velocity_action_server.destroy()
         if self.adapter.disconnect() == 0:

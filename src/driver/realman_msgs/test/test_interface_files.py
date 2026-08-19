@@ -30,6 +30,68 @@ def _assert_interface_contract(path: Path, expected_sections: list[list[str]]) -
 
 def test_motion_action_contracts_are_exact():
     _assert_interface_contract(
+        ROOT / "action/ExecuteTrajectory.action",
+        [
+            [
+                "uint8 MOVEJ=0",
+                "uint8 MOVEL=1",
+                "uint8 MOVEJ_P=2",
+                "uint8 BASE=0",
+                "uint8 WORK=1",
+                "uint8 TOOL=2",
+                "uint8 reference_type",
+                "string reference_name",
+                "realman_msgs/MotionWaypoint[] waypoints",
+                "float32 timeout_sec",
+            ],
+            [
+                "uint8 SUCCEEDED=0",
+                "uint8 CANCELED=1",
+                "uint8 ABORTED=2",
+                "uint8 TIMEOUT=3",
+                "bool success",
+                "uint8 terminal_state",
+                "int32 api2_status",
+                "uint32 completed_waypoints",
+                "float64[6] final_joint_degrees",
+                "string message",
+            ],
+            [
+                "uint8 VALIDATING=0",
+                "uint8 SUBMITTING=1",
+                "uint8 EXECUTING=2",
+                "uint8 STOPPING=3",
+                "uint8 phase",
+                "float32 progress",
+                "uint32 submitted_waypoints",
+                "uint32 waypoint_count",
+                "float64[6] current_joint_degrees",
+                "uint8 active_reference_type",
+                "string active_reference_name",
+                "int32 api2_status",
+                "string detail",
+            ],
+        ],
+    )
+
+    _assert_interface_contract(
+        ROOT / "msg/MotionWaypoint.msg",
+        [
+            [
+                "uint8 MOVEJ=0",
+                "uint8 MOVEL=1",
+                "uint8 MOVEJ_P=2",
+                "uint8 command",
+                "float64[6] joint_degrees",
+                "float64[3] pose_position_m",
+                "float64[4] pose_quaternion_wxyz",
+                "uint32 velocity_percent",
+                "uint32 blend_radius_percent",
+            ]
+        ],
+    )
+
+    _assert_interface_contract(
         ROOT / "action/ExecuteMotion.action",
         [
             [
@@ -124,6 +186,19 @@ def test_motion_action_contracts_are_exact():
 
 
 def test_coordinate_service_contracts_are_exact():
+    _assert_interface_contract(
+        ROOT / "srv/RecoverMotion.srv",
+        [
+            [],
+            [
+                "bool success",
+                "bool recovered",
+                "int32 api2_status",
+                "string message",
+            ],
+        ],
+    )
+
     _assert_interface_contract(
         ROOT / "srv/SelectFrame.srv",
         [

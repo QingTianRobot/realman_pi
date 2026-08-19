@@ -65,6 +65,24 @@ class FakeExecuteMotion:
     Feedback = FakeFeedback
 
 
+class FakeTrajectoryResult(FakeResult):
+    def __init__(self) -> None:
+        super().__init__()
+        self.completed_waypoints = 0
+
+
+class FakeTrajectoryFeedback(FakeFeedback):
+    def __init__(self) -> None:
+        super().__init__()
+        self.submitted_waypoints = 0
+        self.waypoint_count = 0
+
+
+class FakeExecuteTrajectory:
+    Result = FakeTrajectoryResult
+    Feedback = FakeTrajectoryFeedback
+
+
 class FakeClock:
     def __init__(self) -> None:
         self.now = 0.0
@@ -227,7 +245,7 @@ class SeverityCheckingLogger:
 
 
 class FakeGoalHandle:
-    def __init__(self, request: Goal) -> None:
+    def __init__(self, request: object) -> None:
         self.request = request
         self.is_cancel_requested = False
         self.feedback: list[FakeFeedback] = []
@@ -280,6 +298,32 @@ def pose_goal(command: CommandType) -> Goal:
     )
 
 
+def trajectory_goal(*, timeout_sec: float = 1.0) -> SimpleNamespace:
+    return SimpleNamespace(
+        reference_type=int(ReferenceType.BASE),
+        reference_name="base",
+        waypoints=[
+            SimpleNamespace(
+                command=int(CommandType.MOVEJ),
+                joint_degrees=(1.0,) * 6,
+                pose_position_m=(0.0,) * 3,
+                pose_quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+                velocity_percent=20,
+                blend_radius_percent=10,
+            ),
+            SimpleNamespace(
+                command=int(CommandType.MOVEJ),
+                joint_degrees=(2.0,) * 6,
+                pose_position_m=(0.0,) * 3,
+                pose_quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+                velocity_percent=20,
+                blend_radius_percent=10,
+            ),
+        ],
+        timeout_sec=timeout_sec,
+    )
+
+
 def make_coordinator(
     *,
     adapter: FakeAdapter | None = None,
@@ -313,6 +357,7 @@ def make_coordinator(
             ReferenceType.TOOL: "tcpgrip",
         }[reference_type]),
         action_type=FakeExecuteMotion,
+        trajectory_action_type=FakeExecuteTrajectory,
         goal_response_type=FakeGoalResponse,
         cancel_response_type=FakeCancelResponse,
         recover_event_channel=recover_event_channel,
@@ -345,6 +390,154 @@ def complete_after_first_poll(
         )
 
     clock.on_sleep = finish
+
+
+def test_connected_trajectory_submits_connected_points_and_completes_once():
+    coordinator, adapter, clock, ownership = make_coordinator()
+    request = trajectory_goal()
+    handle = FakeGoalHandle(request)
+
+    assert (
+        coordinator.trajectory_goal_callback(request)
+        == FakeGoalResponse.ACCEPT
+    )
+
+    def finish() -> None:
+        adapter.stopped = True
+        adapter.joints = (2.0,) * 6
+        coordinator.handle_event(
+            SimpleNamespace(
+                event_type=1,
+                trajectory_state=True,
+                trajectory_connect=0,
+                device=0,
+            )
+        )
+
+    clock.on_sleep = finish
+    result = coordinator.execute_trajectory(handle)
+
+    assert result.terminal_state == FakeTrajectoryResult.SUCCEEDED
+    assert result.completed_waypoints == 2
+    assert handle.transitions == ["succeeded"]
+    assert [call for call in adapter.calls if call[0] == "movej"] == [
+        ("movej", [1.0] * 6, 20, 10, True),
+        ("movej", [2.0] * 6, 20, 10, False),
+    ]
+    assert ownership.is_busy("l") is False
+
+
+def test_connected_trajectory_partial_submission_is_fast_stopped():
+    coordinator, adapter, _, ownership = make_coordinator()
+    request = trajectory_goal()
+    handle = FakeGoalHandle(request)
+    move_count = 0
+    original_movej = adapter.movej
+
+    def fail_second_move(*args, **kwargs):
+        nonlocal move_count
+        move_count += 1
+        if move_count == 2:
+            return 42
+        return original_movej(*args, **kwargs)
+
+    adapter.movej = fail_second_move
+    assert (
+        coordinator.trajectory_goal_callback(request)
+        == FakeGoalResponse.ACCEPT
+    )
+
+    result = coordinator.execute_trajectory(handle)
+
+    assert result.terminal_state == FakeTrajectoryResult.ABORTED
+    assert result.api2_status == 42
+    assert "partial queue was fast-stopped" in result.message
+    assert adapter.calls.count(("stop",)) == 1
+    assert ownership.is_busy("l") is False
+    assert coordinator.event_channel_recovery_required is True
+
+
+def test_connected_trajectory_cancel_fast_stops_and_requires_recovery():
+    coordinator, adapter, clock, ownership = make_coordinator()
+    request = trajectory_goal()
+    handle = FakeGoalHandle(request)
+
+    assert (
+        coordinator.trajectory_goal_callback(request)
+        == FakeGoalResponse.ACCEPT
+    )
+
+    def cancel() -> None:
+        if handle.is_cancel_requested:
+            return
+        handle.is_cancel_requested = True
+        assert coordinator.cancel_callback(handle) == FakeCancelResponse.ACCEPT
+
+    clock.on_sleep = cancel
+    result = coordinator.execute_trajectory(handle)
+
+    assert result.terminal_state == FakeTrajectoryResult.CANCELED
+    assert handle.transitions == ["canceled"]
+    assert adapter.calls.count(("stop",)) == 1
+    assert ownership.is_busy("l") is False
+    assert coordinator.event_channel_recovery_required is True
+
+
+def test_connected_trajectory_observes_cancel_between_waypoint_submissions():
+    coordinator, adapter, _, ownership = make_coordinator()
+    request = trajectory_goal()
+    handle = FakeGoalHandle(request)
+    original_movej = adapter.movej
+
+    def cancel_after_first_submission(*args, **kwargs):
+        status = original_movej(*args, **kwargs)
+        handle.is_cancel_requested = True
+        return status
+
+    adapter.movej = cancel_after_first_submission
+    assert (
+        coordinator.trajectory_goal_callback(request)
+        == FakeGoalResponse.ACCEPT
+    )
+
+    result = coordinator.execute_trajectory(handle)
+
+    assert result.terminal_state == FakeTrajectoryResult.CANCELED
+    assert [call for call in adapter.calls if call[0] == "movej"] == [
+        ("movej", [1.0] * 6, 20, 10, True),
+    ]
+    assert adapter.calls.count(("stop",)) == 1
+    assert ownership.is_busy("l") is False
+
+
+def test_connected_trajectory_rejects_single_waypoint_before_ownership():
+    coordinator, adapter, _, ownership = make_coordinator()
+    request = trajectory_goal()
+    request.waypoints = request.waypoints[:1]
+
+    assert (
+        coordinator.trajectory_goal_callback(request)
+        == FakeGoalResponse.REJECT
+    )
+    assert adapter.calls == []
+    assert ownership.is_busy("l") is False
+
+
+def test_reconcile_allows_node_owned_event_recovery_without_releasing_it():
+    coordinator, adapter, _, ownership = make_coordinator()
+    adapter.stopped = True
+    with coordinator._lock:
+        coordinator._event_channel_quarantined = True
+        coordinator._event_channel_recovery_generation = coordinator._generation
+    assert ownership.acquire("l") is True
+
+    assert coordinator.reconcile_after_connect(
+        connection_reset=True,
+        recovery_owns_arm=True,
+    )
+    assert coordinator.event_channel_recovery_required is False
+    assert ownership.is_busy("l") is True
+    ownership.release("l")
 
 
 def test_invalid_execute_aborts_without_any_sdk_call():

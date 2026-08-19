@@ -17,7 +17,9 @@ from .motion_types import (
     ReferenceType,
     TerminalState,
     ValidatedGoal,
+    ValidatedTrajectoryGoal,
     validate_goal,
+    validate_trajectory_goal,
 )
 
 
@@ -88,6 +90,7 @@ class MotionCoordinator:
         reference_resolver: ReferenceResolver,
         active_reference: Callable[[ReferenceType], str | tuple[ReferenceType, str]],
         action_type: Any | None = None,
+        trajectory_action_type: Any | None = None,
         goal_response_type: Any | None = None,
         cancel_response_type: Any | None = None,
         recover_event_channel: Callable[[], bool] | None = None,
@@ -115,6 +118,13 @@ class MotionCoordinator:
             from realman_msgs.action import ExecuteMotion
 
             action_type = ExecuteMotion
+        if trajectory_action_type is None:
+            try:
+                from realman_msgs.action import ExecuteTrajectory
+
+                trajectory_action_type = ExecuteTrajectory
+            except ImportError:
+                trajectory_action_type = None
         if goal_response_type is None or cancel_response_type is None:
             from rclpy.action import CancelResponse, GoalResponse
 
@@ -128,6 +138,7 @@ class MotionCoordinator:
         self.reference_resolver = reference_resolver
         self.active_reference = active_reference
         self.action_type = action_type
+        self.trajectory_action_type = trajectory_action_type
         self.goal_response_type = goal_response_type
         self.cancel_response_type = cancel_response_type
         self._recover_event_channel_callback = recover_event_channel
@@ -162,6 +173,8 @@ class MotionCoordinator:
         self._cancel_generation: int | None = None
         self._lockout = False
         self._owns_ownership = False
+        self._active_action_type: Any | None = None
+        self._active_waypoint_count = 0
 
     @property
     def active_generation(self) -> int | None:
@@ -182,6 +195,18 @@ class MotionCoordinator:
             )
 
     def goal_callback(self, goal_request: object) -> Any:
+        return self._goal_callback(goal_request, self._validate)
+
+    def trajectory_goal_callback(self, goal_request: object) -> Any:
+        if self.trajectory_action_type is None:
+            return self.goal_response_type.REJECT
+        return self._goal_callback(goal_request, self._validate_trajectory)
+
+    def _goal_callback(
+        self,
+        goal_request: object,
+        validator: Callable[[object], GoalValidationResult],
+    ) -> Any:
         with self._lock:
             locked_out = self._lockout
             quarantined = self._event_channel_quarantined
@@ -202,7 +227,7 @@ class MotionCoordinator:
                 f"Rejecting motion goal: arm {self.arm_id} is safety locked",
             )
             return self.goal_response_type.REJECT
-        validation = self._validate(goal_request)
+        validation = validator(goal_request)
         if not validation.valid:
             self._log("warn", f"Rejecting motion goal: {validation.message}")
             return self.goal_response_type.REJECT
@@ -585,6 +610,341 @@ class MotionCoordinator:
         finally:
             self._release_generation(generation)
 
+    def execute_trajectory(self, goal_handle: object) -> Any:
+        """Submit a connected waypoint sequence as one cancellable action."""
+        action_type = self.trajectory_action_type
+        if action_type is None:
+            return None
+        request = getattr(goal_handle, "request", None)
+        self._publish_feedback(
+            goal_handle,
+            FeedbackPhase.VALIDATING,
+            None,
+            (),
+            0.0,
+            0,
+            "validating connected trajectory",
+            action_type=action_type,
+            waypoint_count=0,
+        )
+        reserved_terminal = self._consume_reservation_terminal(request, goal_handle)
+        if reserved_terminal is not None:
+            terminal_state, api2_status, message = reserved_terminal
+            return self._finish_unowned(
+                goal_handle,
+                terminal_state,
+                api2_status,
+                message,
+                action_type=action_type,
+            )
+        validation = self._validate_trajectory(request)
+        if not validation.valid or not isinstance(
+            validation.goal, ValidatedTrajectoryGoal
+        ):
+            return self._finish_unowned(
+                goal_handle,
+                TerminalState.ABORTED,
+                -1,
+                validation.message or "trajectory goal validation failed",
+                action_type=action_type,
+            )
+
+        goal = validation.goal
+        generation = self._activate(
+            goal_handle,
+            request,
+            action_type=action_type,
+            waypoint_count=len(goal.waypoints),
+        )
+        if generation is None:
+            reserved_terminal = self._consume_reservation_terminal(request, goal_handle)
+            if reserved_terminal is not None:
+                terminal_state, api2_status, message = reserved_terminal
+                return self._finish_unowned(
+                    goal_handle,
+                    terminal_state,
+                    api2_status,
+                    message,
+                    action_type=action_type,
+                )
+            return self._finish_unowned(
+                goal_handle,
+                TerminalState.ABORTED,
+                -1,
+                f"arm {self.arm_id} is busy",
+                action_type=action_type,
+            )
+
+        current_joints: tuple[float, ...] = ()
+        submitted = False
+        try:
+            state_status, observed_joints, state_connected = self._read_state()
+            if state_status != 0:
+                self._enter_lockout()
+                return self._finish(
+                    goal_handle,
+                    generation,
+                    TerminalState.ABORTED,
+                    state_status,
+                    current_joints,
+                    "trajectory precheck reported an API2 error",
+                )
+            if state_connected is False:
+                return self._finish(
+                    goal_handle,
+                    generation,
+                    TerminalState.ABORTED,
+                    _nonzero_status(state_status),
+                    current_joints,
+                    "robot connection lost during trajectory precheck",
+                )
+            if observed_joints:
+                current_joints = observed_joints
+            self._publish_feedback(
+                goal_handle,
+                FeedbackPhase.SUBMITTING,
+                None,
+                current_joints,
+                0.0,
+                0,
+                f"submitting {len(goal.waypoints)} connected waypoints",
+                action_type=action_type,
+                waypoint_count=len(goal.waypoints),
+            )
+            submit_status, interrupted_terminal, submitted_count = (
+                self._submit_trajectory_if_permitted(goal_handle, generation, goal)
+            )
+            if interrupted_terminal is not None:
+                terminal_state, api2_status, reason = interrupted_terminal
+                if submitted_count > 0:
+                    submitted = True
+                    with self._lock:
+                        if self._active_generation == generation:
+                            self._submitted_generation = generation
+                    stop_status = self.fast_stop()
+                    if stop_status != 0:
+                        return self._finish_after_fast_stop(
+                            goal_handle,
+                            generation,
+                            current_joints,
+                        )
+                    return self._finish_after_fast_stop(
+                        goal_handle,
+                        generation,
+                        current_joints,
+                        terminal_state=terminal_state,
+                        result_status=api2_status,
+                        reason=reason,
+                    )
+                return self._finish(
+                    goal_handle,
+                    generation,
+                    terminal_state,
+                    api2_status,
+                    current_joints,
+                    reason,
+                )
+            assert submit_status is not None
+            if submit_status != 0:
+                if submitted_count > 0:
+                    submitted = True
+                    with self._lock:
+                        if self._active_generation == generation:
+                            self._submitted_generation = generation
+                    stop_status = self.fast_stop()
+                    if stop_status != 0:
+                        return self._finish_after_fast_stop(
+                            goal_handle,
+                            generation,
+                            current_joints,
+                        )
+                    return self._finish_after_fast_stop(
+                        goal_handle,
+                        generation,
+                        current_joints,
+                        terminal_state=TerminalState.ABORTED,
+                        result_status=submit_status,
+                        reason=(
+                            f"trajectory submission failed after {submitted_count} "
+                            f"waypoints with API2 status {submit_status}; "
+                            "partial queue was fast-stopped"
+                        ),
+                    )
+                return self._finish(
+                    goal_handle,
+                    generation,
+                    TerminalState.ABORTED,
+                    submit_status,
+                    current_joints,
+                    f"trajectory submission failed after {submitted_count} "
+                    f"waypoints with API2 status {submit_status}",
+                )
+            submitted = True
+            with self._lock:
+                if self._active_generation == generation:
+                    self._accept_events = True
+                    self._submitted_generation = generation
+
+            self._publish_feedback(
+                goal_handle,
+                FeedbackPhase.EXECUTING,
+                None,
+                current_joints,
+                0.0,
+                0,
+                "connected trajectory executing",
+                action_type=action_type,
+                waypoint_count=len(goal.waypoints),
+                submitted_waypoints=len(goal.waypoints),
+            )
+            deadline = self._monotonic() + goal.timeout_sec
+            observed_active_trajectory = False
+            while True:
+                if self._fast_stop_requested(generation):
+                    return self._finish_after_requested_fast_stop(
+                        goal_handle, generation, current_joints
+                    )
+                shutdown_requested = self._shutdown_requested(generation)
+                cancel_requested = bool(
+                    getattr(goal_handle, "is_cancel_requested", False)
+                )
+                cancel_generation_requested = self._cancel_requested(generation)
+                if shutdown_requested or cancel_requested or cancel_generation_requested:
+                    reason = "driver shutdown requested" if shutdown_requested else "cancel requested"
+                    terminal_state = (
+                        TerminalState.ABORTED
+                        if shutdown_requested or not cancel_requested
+                        else TerminalState.CANCELED
+                    )
+                    return self._fast_controlled_stop(
+                        goal_handle,
+                        generation,
+                        goal,
+                        terminal_state,
+                        current_joints,
+                        reason,
+                    )
+                if not bool(getattr(self.adapter, "connected", False)):
+                    status = _nonzero_status(getattr(self.adapter, "last_error", -1))
+                    return self._fast_controlled_stop(
+                        goal_handle,
+                        generation,
+                        goal,
+                        TerminalState.ABORTED,
+                        current_joints,
+                        "robot connection lost during trajectory",
+                        result_status=status,
+                    )
+
+                state_status, observed_joints, state_connected = self._read_state()
+                trajectory_status, trajectory_active = self._read_trajectory()
+                if self._fast_stop_requested(generation):
+                    return self._finish_after_requested_fast_stop(
+                        goal_handle, generation, current_joints
+                    )
+                if observed_joints:
+                    current_joints = observed_joints
+                api2_status = _first_nonzero(state_status, trajectory_status)
+                if api2_status != 0:
+                    self._enter_lockout()
+                    return self._fast_controlled_stop(
+                        goal_handle,
+                        generation,
+                        goal,
+                        TerminalState.ABORTED,
+                        current_joints,
+                        "trajectory monitor reported an API2 error",
+                        result_status=api2_status,
+                    )
+                if state_connected is False:
+                    return self._fast_controlled_stop(
+                        goal_handle,
+                        generation,
+                        goal,
+                        TerminalState.ABORTED,
+                        current_joints,
+                        "robot connection lost during trajectory monitoring",
+                        result_status=_nonzero_status(state_status),
+                    )
+                if trajectory_active is True:
+                    observed_active_trajectory = True
+                completion_event = self._take_event(generation)
+                if self._fast_stop_requested(generation):
+                    return self._finish_after_requested_fast_stop(
+                        goal_handle, generation, current_joints
+                    )
+                final_waypoint = goal.waypoints[-1]
+                final_joint_match = (
+                    final_waypoint.command != CommandType.MOVEJ
+                    or self._waypoint_has_converged(final_waypoint, current_joints)
+                )
+                trajectory_completed = (
+                    completion_event is True
+                    and observed_active_trajectory
+                    and trajectory_active is False
+                    and state_connected is True
+                    and final_joint_match
+                )
+                self._publish_feedback(
+                    goal_handle,
+                    FeedbackPhase.EXECUTING,
+                    None,
+                    current_joints,
+                    1.0 if trajectory_completed else 0.0,
+                    api2_status,
+                    "waiting for connected trajectory completion",
+                    action_type=action_type,
+                    waypoint_count=len(goal.waypoints),
+                    submitted_waypoints=len(goal.waypoints),
+                )
+                if trajectory_completed:
+                    self._confirm_completion_event(generation)
+                    return self._finish(
+                        goal_handle,
+                        generation,
+                        TerminalState.SUCCEEDED,
+                        0,
+                        current_joints,
+                        "connected trajectory completed",
+                    )
+                if self._monotonic() >= deadline:
+                    return self._controlled_stop(
+                        goal_handle,
+                        generation,
+                        goal,
+                        TerminalState.TIMEOUT,
+                        current_joints,
+                        "connected trajectory timeout",
+                    )
+                self._sleep(self._poll_period_sec)
+        except Exception as error:
+            status = _nonzero_status(getattr(self.adapter, "last_error", -1))
+            if submitted:
+                try:
+                    stop_status = self.fast_stop()
+                except Exception:
+                    stop_status = _nonzero_status(getattr(self.adapter, "last_error", -1))
+                if stop_status != 0:
+                    status = stop_status
+            self._log("error", f"connected trajectory execution failed: {error}")
+            if submitted:
+                return self._finish_after_fast_stop(
+                    goal_handle,
+                    generation,
+                    current_joints,
+                    reason=f"connected trajectory failed and was fast-stopped: {error}",
+                )
+            return self._finish(
+                goal_handle,
+                generation,
+                TerminalState.ABORTED,
+                status,
+                current_joints,
+                f"trajectory coordinator failed: {error}",
+            )
+        finally:
+            self._release_generation(generation)
+
     def shutdown(self, timeout_sec: float | None = None) -> int:
         """Immediately stop motion and wait briefly for active execution to unwind."""
         idle_stop = None
@@ -711,7 +1071,63 @@ class MotionCoordinator:
                 )
         return validation
 
-    def _activate(self, goal_handle: object, request: object) -> int | None:
+    def _validate_trajectory(self, request: object) -> GoalValidationResult:
+        active_type: ReferenceType | None = None
+        active_name: str | None = None
+        try:
+            raw_type = _field(request, "reference_type")
+            if isinstance(raw_type, int) and not isinstance(raw_type, bool):
+                active_type = ReferenceType(raw_type)
+                resolved = self.active_reference(active_type)
+                if isinstance(resolved, tuple):
+                    active_type, active_name = resolved
+                else:
+                    active_name = resolved
+        except Exception as error:
+            return GoalValidationResult(
+                False,
+                (f"active frame is unavailable: {error}",),
+                None,
+            )
+        validation = validate_trajectory_goal(
+            request,
+            connected=bool(getattr(self.adapter, "connected", False)),
+            active_reference_type=active_type,
+            active_reference_name=active_name,
+            reference_resolver=self.reference_resolver,
+        )
+        if not validation.valid or not isinstance(
+            validation.goal, ValidatedTrajectoryGoal
+        ):
+            return validation
+        if any(
+            waypoint.command != CommandType.MOVEJ
+            for waypoint in validation.goal.waypoints
+        ):
+            try:
+                motion_allowed = self.coordinate_manager.motion_allowed(self.arm_id)
+            except Exception as error:
+                return GoalValidationResult(
+                    False,
+                    (*validation.errors, f"coordinate motion gate failed: {error}"),
+                    None,
+                )
+            if not motion_allowed:
+                return GoalValidationResult(
+                    False,
+                    (*validation.errors, "coordinate verification blocks motion"),
+                    None,
+                )
+        return validation
+
+    def _activate(
+        self,
+        goal_handle: object,
+        request: object,
+        *,
+        action_type: Any | None = None,
+        waypoint_count: int = 0,
+    ) -> int | None:
         with self._lock:
             if (
                 self._active_goal is not None
@@ -754,6 +1170,8 @@ class MotionCoordinator:
             self._shutdown_generation = None
             self._cancel_generation = None
             self._event_channel_recovery_generation = None
+            self._active_action_type = action_type or self.action_type
+            self._active_waypoint_count = waypoint_count
             return generation
 
     def _submit_if_permitted(
@@ -885,6 +1303,60 @@ class MotionCoordinator:
                 connect=False,
             )
         )
+
+    def _submit_trajectory_if_permitted(
+        self,
+        goal_handle: object,
+        generation: int,
+        goal: ValidatedTrajectoryGoal,
+    ) -> tuple[int | None, tuple[TerminalState, int, str] | None, int]:
+        """Submit connected points, admitting stop checks between SDK calls."""
+        submitted_count = 0
+        for index, waypoint in enumerate(goal.waypoints):
+            with self._condition:
+                interruption = self._submission_interruption_locked(
+                    goal_handle, generation
+                )
+                if interruption is not None:
+                    return None, interruption, submitted_count
+                try:
+                    pose = [
+                        *waypoint.pose_position_m,
+                        *waypoint.pose_quaternion_wxyz,
+                    ]
+                    connect = index < len(goal.waypoints) - 1
+                    if waypoint.command == CommandType.MOVEJ:
+                        status = self.adapter.movej(
+                            list(waypoint.joint_degrees),
+                            waypoint.velocity_percent,
+                            waypoint.blend_radius_percent,
+                            connect=connect,
+                        )
+                    elif waypoint.command == CommandType.MOVEL:
+                        status = self.adapter.movel(
+                            pose,
+                            waypoint.velocity_percent,
+                            waypoint.blend_radius_percent,
+                            connect=connect,
+                        )
+                    else:
+                        status = self.adapter.movej_p(
+                            pose,
+                            waypoint.velocity_percent,
+                            waypoint.blend_radius_percent,
+                            connect=connect,
+                        )
+                    status = int(status)
+                except Exception as error:
+                    status = _nonzero_status(getattr(self.adapter, "last_error", -1))
+                    self._log(
+                        "error",
+                        f"trajectory waypoint {index} submission failed: {error}",
+                    )
+                if status != 0:
+                    return status, None, submitted_count
+                submitted_count += 1
+        return 0, None, submitted_count
 
     def _controlled_stop(
         self,
@@ -1392,7 +1864,12 @@ class MotionCoordinator:
         if release:
             self.ownership.release(self.arm_id)
 
-    def reconcile_after_connect(self, *, connection_reset: bool = False) -> bool:
+    def reconcile_after_connect(
+        self,
+        *,
+        connection_reset: bool = False,
+        recovery_owns_arm: bool = False,
+    ) -> bool:
         """Reconcile safety state after a newly created SDK connection."""
         status, trajectory_active = self._read_trajectory()
         if status != 0 or trajectory_active is not False:
@@ -1405,7 +1882,11 @@ class MotionCoordinator:
                 or self._idle_fast_stop is not None
             ):
                 return False
-            if not self._owns_ownership and self.ownership.is_busy(self.arm_id):
+            if (
+                not recovery_owns_arm
+                and not self._owns_ownership
+                and self.ownership.is_busy(self.arm_id)
+            ):
                 return False
             if self._lockout and not self._owns_ownership:
                 return False
@@ -1444,6 +1925,16 @@ class MotionCoordinator:
             # only the controller success event and inactive trajectory query.
             return True
         target = _finite_vector(goal.joint_degrees, 6)
+        observed = _finite_vector(current_joints, 6)
+        return bool(target) and bool(observed) and all(
+            abs(actual - expected) <= self._joint_goal_tolerance_deg
+            for actual, expected in zip(observed, target)
+        )
+
+    def _waypoint_has_converged(
+        self, waypoint: Any, current_joints: Sequence[float]
+    ) -> bool:
+        target = _finite_vector(getattr(waypoint, "joint_degrees", ()), 6)
         observed = _finite_vector(current_joints, 6)
         return bool(target) and bool(observed) and all(
             abs(actual - expected) <= self._joint_goal_tolerance_deg
@@ -1509,13 +2000,18 @@ class MotionCoordinator:
         self,
         goal_handle: object,
         phase: FeedbackPhase,
-        goal: ValidatedGoal | None,
+        goal: Any | None,
         current_joints: Sequence[float],
         progress: float,
         api2_status: int,
         detail: str,
+        *,
+        action_type: Any | None = None,
+        waypoint_count: int | None = None,
+        submitted_waypoints: int = 0,
     ) -> None:
-        feedback = self.action_type.Feedback()
+        selected_action_type = action_type or self._active_action_type or self.action_type
+        feedback = selected_action_type.Feedback()
         feedback.phase = int(phase)
         feedback.progress = float(progress) if math.isfinite(progress) else 0.0
         feedback.current_joint_degrees = list(current_joints) if len(current_joints) == 6 else [0.0] * 6
@@ -1527,6 +2023,12 @@ class MotionCoordinator:
             feedback.active_reference_name = goal.reference_name
         feedback.api2_status = int(api2_status)
         feedback.detail = detail
+        if hasattr(feedback, "submitted_waypoints"):
+            feedback.submitted_waypoints = int(max(0, submitted_waypoints))
+        if hasattr(feedback, "waypoint_count"):
+            feedback.waypoint_count = int(
+                max(0, self._active_waypoint_count if waypoint_count is None else waypoint_count)
+            )
         goal_handle.publish_feedback(feedback)
 
     def _finish_unowned(
@@ -1535,9 +2037,13 @@ class MotionCoordinator:
         terminal_state: TerminalState,
         api2_status: int,
         message: str,
+        *,
+        action_type: Any | None = None,
     ) -> Any:
         self._release_reservation(getattr(goal_handle, "request", None))
-        result = self._make_result(terminal_state, api2_status, (), message)
+        result = self._make_result(
+            terminal_state, api2_status, (), message, action_type=action_type
+        )
         self._transition(goal_handle, terminal_state)
         return result
 
@@ -1630,11 +2136,20 @@ class MotionCoordinator:
         api2_status: int,
         current_joints: Sequence[float],
         message: str,
+        *,
+        action_type: Any | None = None,
     ) -> Any:
-        result = self.action_type.Result()
+        selected_action_type = action_type or self._active_action_type or self.action_type
+        result = selected_action_type.Result()
         result.success = terminal_state == TerminalState.SUCCEEDED
         result.terminal_state = int(terminal_state)
         result.api2_status = int(api2_status)
+        if hasattr(result, "completed_waypoints"):
+            result.completed_waypoints = (
+                self._active_waypoint_count
+                if terminal_state == TerminalState.SUCCEEDED
+                else 0
+            )
         result.final_joint_degrees = (
             list(current_joints) if len(current_joints) == 6 else [0.0] * 6
         )
@@ -1669,6 +2184,8 @@ class MotionCoordinator:
                 self._fast_stop_generation = None
                 self._fast_stop_status = None
                 self._shutdown_generation = None
+                self._active_action_type = None
+                self._active_waypoint_count = 0
                 # A confirmed physical stop can release arm ownership even if
                 # a generation-less callback channel remains quarantined. The
                 # node must reset that channel before accepting another goal.

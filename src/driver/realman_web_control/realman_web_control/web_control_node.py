@@ -14,8 +14,9 @@ from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from realman_msgs.action import CartesianVelocity, ExecuteMotion
-from realman_msgs.srv import GetCurrentPose, SolveIk
+from realman_msgs.action import CartesianVelocity, ExecuteMotion, ExecuteTrajectory
+from realman_msgs.msg import MotionWaypoint
+from realman_msgs.srv import GetCurrentPose, RecoverMotion, SolveIk
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
@@ -93,6 +94,15 @@ class WebControlNode(Node):
             )
             for arm in ARMS
         }
+        self._trajectory_clients = {
+            arm: ActionClient(
+                self,
+                ExecuteTrajectory,
+                f"/{arm}/execute_trajectory",
+                callback_group=self._callback_group,
+            )
+            for arm in ARMS
+        }
         self._velocity_publishers = {
             arm: self.create_publisher(TwistStamped, f"/{arm}/cartesian_velocity/command", 1)
             for arm in ARMS
@@ -101,6 +111,14 @@ class WebControlNode(Node):
             arm: self.create_client(
                 Trigger,
                 f"/{arm}/stop",
+                callback_group=self._callback_group,
+            )
+            for arm in ARMS
+        }
+        self._recovery_clients = {
+            arm: self.create_client(
+                RecoverMotion,
+                f"/{arm}/recover_motion",
                 callback_group=self._callback_group,
             )
             for arm in ARMS
@@ -207,6 +225,8 @@ class WebControlNode(Node):
             self._solve_ik(client_id, message)
         elif message_type == "execute_motion":
             self._execute_motion(client_id, message)
+        elif message_type == "execute_trajectory":
+            self._execute_trajectory(client_id, message)
         elif message_type == "start_cartesian_velocity":
             self._start_velocity(client_id, message)
         elif message_type == "velocity_command":
@@ -215,6 +235,8 @@ class WebControlNode(Node):
             self._cancel_action(client_id, message["arm"], message["action"])
         elif message_type == "software_stop":
             self._software_stop(client_id, message)
+        elif message_type == "recover_motion":
+            self._recover_motion(client_id, message)
         else:
             raise ProtocolError("unsupported_type", f"unsupported message type: {message_type}")
 
@@ -392,6 +414,61 @@ class WebControlNode(Node):
             message["request_id"],
         )
         goal = assign_fields(ExecuteMotion.Goal(), goal_values)
+        self._send_goal(client, goal, record)
+
+    def _execute_trajectory(
+        self, client_id: str, message: dict[str, Any]
+    ) -> None:
+        arm = message["arm"]
+        goal_values = message["goal"]
+        reference_type, reference_name = self._default_reference(arm)
+        goal_values["reference_type"] = reference_type
+        goal_values["reference_name"] = reference_name
+        self._validate_reference(arm, goal_values)
+        for index, waypoint in enumerate(goal_values["waypoints"]):
+            if waypoint["command"] == MotionWaypoint.MOVEJ:
+                for joint, value in zip(
+                    self._robots[arm]["joints"],
+                    waypoint["joint_degrees"],
+                ):
+                    if not joint["lower_deg"] <= value <= joint["upper_deg"]:
+                        raise ProtocolError(
+                            "joint_limit",
+                            f"waypoint[{index}] {joint['name']} target "
+                            f"{value:.3f} deg is outside "
+                            f"[{joint['lower_deg']:.3f}, "
+                            f"{joint['upper_deg']:.3f}]",
+                            message["request_id"],
+                        )
+            elif math.sqrt(
+                sum(value * value for value in waypoint["pose_quaternion_wxyz"])
+            ) < 1.0e-9:
+                raise ProtocolError(
+                    "invalid_field",
+                    f"waypoint[{index}] pose quaternion magnitude must be non-zero",
+                    message["request_id"],
+                )
+        client = self._trajectory_clients[arm]
+        if not client.server_is_ready():
+            raise ProtocolError(
+                "action_unavailable",
+                f"/{arm}/execute_trajectory is not available",
+                message["request_id"],
+            )
+        record = self._reserve_action(
+            arm,
+            "execute_trajectory",
+            client_id,
+            message["request_id"],
+        )
+        goal = ExecuteTrajectory.Goal()
+        goal.reference_type = goal_values["reference_type"]
+        goal.reference_name = goal_values["reference_name"]
+        goal.timeout_sec = goal_values["timeout_sec"]
+        goal.waypoints = [
+            assign_fields(MotionWaypoint(), waypoint)
+            for waypoint in goal_values["waypoints"]
+        ]
         self._send_goal(client, goal, record)
 
     def _start_velocity(self, client_id: str, message: dict[str, Any]) -> None:
@@ -645,6 +722,64 @@ class WebControlNode(Node):
                 "arm": arm,
                 "request_id": request_id,
                 "success": False,
+                "message": str(error),
+            }
+        self._server.send_event(event, client_id)
+
+    def _recover_motion(self, client_id: str, message: dict[str, Any]) -> None:
+        arm = message["arm"]
+        client = self._recovery_clients[arm]
+        if not client.service_is_ready():
+            raise ProtocolError(
+                "recovery_unavailable",
+                f"/{arm}/recover_motion is not available",
+                message["request_id"],
+            )
+        future = client.call_async(RecoverMotion.Request())
+        future.add_done_callback(
+            lambda completed: self._recover_motion_response(
+                client_id,
+                arm,
+                message["request_id"],
+                completed,
+            )
+        )
+        self._server.send_event(
+            {
+                "type": "motion_recovery_state",
+                "arm": arm,
+                "request_id": message["request_id"],
+                "state": "requested",
+            }
+        )
+
+    def _recover_motion_response(
+        self,
+        client_id: str,
+        arm: str,
+        request_id: str,
+        future: Any,
+    ) -> None:
+        try:
+            response = future.result()
+            event = {
+                "type": "motion_recovery_result",
+                "arm": arm,
+                "request_id": request_id,
+                "success": bool(response.success),
+                "recovered": bool(response.recovered),
+                "api2_status": int(response.api2_status),
+                "message": response.message,
+            }
+        except Exception as error:
+            self.get_logger().error(f"Web motion recovery failed for {arm}: {error}")
+            event = {
+                "type": "motion_recovery_result",
+                "arm": arm,
+                "request_id": request_id,
+                "success": False,
+                "recovered": False,
+                "api2_status": -1,
                 "message": str(error),
             }
         self._server.send_event(event, client_id)

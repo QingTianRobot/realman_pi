@@ -6,16 +6,19 @@ find_package(action_msgs REQUIRED)
 find_package(rosidl_default_generators REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/MotionWaypoint.msg"
   "action/CartesianVelocity.action"
   "action/ExecuteMotion.action"
+  "action/ExecuteTrajectory.action"
   "srv/SelectFrame.srv"
   "srv/VerifyCoordinates.srv"
   "srv/GetCurrentPose.srv"
   "srv/SolveIk.srv"
+  "srv/RecoverMotion.srv"
   DEPENDENCIES action_msgs
 )
 
-install(DIRECTORY action srv
+install(DIRECTORY action msg srv
   DESTINATION share/${PROJECT_NAME}
 )
 

@@ -589,6 +589,17 @@ def test_node_source_registers_execute_motion_action_with_all_lifecycle_callback
     assert "callback_group=self.motion_callback_group" in source
 
 
+def test_node_source_registers_connected_trajectory_and_recovery_interfaces():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert '"execute_trajectory"' in source
+    assert "execute_callback=self.motion_coordinator.execute_trajectory" in source
+    assert "goal_callback=self.motion_coordinator.trajectory_goal_callback" in source
+    assert "cancel_callback=self.motion_coordinator.cancel_callback" in source
+    assert '"recover_motion"' in source
+    assert "self._recover_event_channel()" in source
+
+
 def test_node_source_registers_cartesian_velocity_action_and_command_topic():
     source = NODE_PATH.read_text(encoding="utf-8")
 
@@ -805,12 +816,31 @@ def test_event_channel_recovery_serializes_disconnect_delay_and_reconnect():
             self.connected = False
             return 0
 
-    def connect():
+    def connect(*, event_recovery=False):
+        assert event_recovery is True
         events.append("connect")
         coordinator.event_channel_recovery_required = False
         return 0
 
+    class Ownership:
+        busy = False
+
+        def acquire(self, arm):
+            assert arm == "l"
+            if self.busy:
+                return False
+            self.busy = True
+            events.append("ownership_acquire")
+            return True
+
+        def release(self, arm):
+            assert arm == "l"
+            self.busy = False
+            events.append("ownership_release")
+
     node = SimpleNamespace(
+        arm_id="l",
+        arm_ownership=Ownership(),
         motion_coordinator=coordinator,
         adapter=Adapter(),
         _event_recovery_lock=__import__("threading").Lock(),
@@ -825,7 +855,43 @@ def test_event_channel_recovery_serializes_disconnect_delay_and_reconnect():
     )
 
     assert RealManDriverNode._recover_event_channel(node) is True
-    assert events == ["disconnect", "connect"]
+    assert events == [
+        "ownership_acquire",
+        "disconnect",
+        "connect",
+        "ownership_release",
+    ]
+
+
+@requires_ros_action_runtime
+def test_event_channel_recovery_refuses_busy_arm_before_disconnect():
+    events = []
+    coordinator = SimpleNamespace(event_channel_recovery_required=True)
+    ownership = SimpleNamespace(
+        acquire=lambda arm: False,
+        release=lambda arm: events.append(("release", arm)),
+    )
+    node = SimpleNamespace(
+        arm_id="m",
+        arm_ownership=ownership,
+        motion_coordinator=coordinator,
+        adapter=SimpleNamespace(
+            connected=True,
+            disconnect=lambda: events.append("disconnect"),
+        ),
+        _event_recovery_lock=__import__("threading").Lock(),
+        _last_event_recovery_attempt=0.0,
+        _event_recovery_delay_sec=0.0,
+        _event_recovery_retry_interval_sec=0.0,
+        get_logger=lambda: SimpleNamespace(
+            warn=lambda message: events.append(message),
+            error=lambda message: events.append(message),
+        ),
+    )
+
+    assert RealManDriverNode._recover_event_channel(node) is False
+    assert "disconnect" not in events
+    assert ("release", "m") not in events
 
 
 def test_connect_returns_coordinate_api_failure_instead_of_ready_status():
@@ -899,6 +965,7 @@ def test_mock_node_constructs_and_exposes_services():
             "connect",
             "disconnect",
             "stop",
+            "recover_motion",
             "status",
             "coordinates/verify",
             "coordinates/apply",
@@ -909,6 +976,10 @@ def test_mock_node_constructs_and_exposes_services():
         assert isinstance(node.motion_callback_group, ReentrantCallbackGroup)
         actions = get_action_names_and_types(node)
         assert ("/l/execute_motion", ["realman_msgs/action/ExecuteMotion"]) in actions
+        assert (
+            "/l/execute_trajectory",
+            ["realman_msgs/action/ExecuteTrajectory"],
+        ) in actions
         assert (
             "/l/cartesian_velocity",
             ["realman_msgs/action/CartesianVelocity"],

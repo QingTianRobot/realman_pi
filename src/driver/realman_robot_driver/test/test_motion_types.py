@@ -18,8 +18,10 @@ from realman_robot_driver.motion_types import (
     ReferenceState,
     ReferenceType,
     TerminalState,
+    ValidatedTrajectoryGoal,
     limit_vector_delta,
     validate_goal,
+    validate_trajectory_goal,
 )
 
 
@@ -167,6 +169,82 @@ def test_reference_resolver_accepts_a_configured_reference():
     )
 
     assert result.valid
+
+
+def test_trajectory_goal_requires_two_points_and_normalizes_each_waypoint():
+    waypoint = {
+        "command": CommandType.MOVEJ_P,
+        "joint_degrees": (0.0,) * 6,
+        "pose_position_m": (0.1, 0.2, 0.3),
+        "pose_quaternion_wxyz": (2.0, 0.0, 0.0, 0.0),
+        "velocity_percent": 30,
+        "blend_radius_percent": 5,
+    }
+
+    invalid = validate_trajectory_goal(
+        {
+            "reference_type": ReferenceType.WORK,
+            "reference_name": "cell",
+            "waypoints": [waypoint],
+            "timeout_sec": 5.0,
+        }
+    )
+    valid = validate_trajectory_goal(
+        {
+            "reference_type": ReferenceType.WORK,
+            "reference_name": "cell",
+            "waypoints": [waypoint, waypoint],
+            "timeout_sec": 5.0,
+        },
+        active_reference_type=ReferenceType.WORK,
+        active_reference_name="cell",
+        reference_resolver=ReferenceState(
+            {ReferenceType.WORK: frozenset({"cell"})}
+        ),
+    )
+
+    assert not invalid.valid
+    assert "waypoints must contain at least two points" in invalid.errors
+    assert valid.valid
+    assert valid.goal is not None
+    assert len(valid.goal.waypoints) == 2
+    assert valid.goal.waypoints[0].pose_quaternion_wxyz == (
+        1.0,
+        0.0,
+        0.0,
+        0.0,
+    )
+    assert isinstance(valid.normalized_goal, ValidatedTrajectoryGoal)
+
+
+def test_trajectory_goal_reports_indexed_waypoint_errors():
+    result = validate_trajectory_goal(
+        {
+            "reference_type": ReferenceType.BASE,
+            "reference_name": "base",
+            "waypoints": [
+                {
+                    "command": CommandType.MOVEJ,
+                    "joint_degrees": (0.0,) * 6,
+                    "velocity_percent": 20,
+                    "blend_radius_percent": 5,
+                },
+                {
+                    "command": CommandType.MOVEJ,
+                    "joint_degrees": (0.0,) * 5,
+                    "velocity_percent": 20,
+                    "blend_radius_percent": 5,
+                },
+            ],
+            "timeout_sec": 5.0,
+        }
+    )
+
+    assert not result.valid
+    assert (
+        "waypoint[1]: joint_degrees must contain exactly six values"
+        in result.errors
+    )
 
 
 @pytest.mark.parametrize(

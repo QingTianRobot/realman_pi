@@ -111,12 +111,34 @@ class ValidatedGoal:
 
 
 @dataclass(frozen=True)
+class ValidatedWaypoint:
+    """One controller trajectory point after unit and range validation."""
+
+    command: CommandType
+    joint_degrees: tuple[float, ...]
+    pose_position_m: tuple[float, ...]
+    pose_quaternion_wxyz: tuple[float, ...]
+    velocity_percent: int
+    blend_radius_percent: int
+
+
+@dataclass(frozen=True)
+class ValidatedTrajectoryGoal:
+    """A connected sequence submitted under one arm ownership reservation."""
+
+    reference_type: ReferenceType
+    reference_name: str
+    waypoints: tuple[ValidatedWaypoint, ...]
+    timeout_sec: float
+
+
+@dataclass(frozen=True)
 class GoalValidationResult:
     """Immutable validation result with an optional normalized goal."""
 
     valid: bool
     errors: tuple[str, ...] = ()
-    goal: ValidatedGoal | None = None
+    goal: ValidatedGoal | ValidatedTrajectoryGoal | None = None
 
     @property
     def ok(self) -> bool:
@@ -131,7 +153,7 @@ class GoalValidationResult:
         return "; ".join(self.errors)
 
     @property
-    def normalized_goal(self) -> ValidatedGoal | None:
+    def normalized_goal(self) -> ValidatedGoal | ValidatedTrajectoryGoal | None:
         return self.goal
 
 
@@ -305,6 +327,127 @@ def validate_goal(
             velocity_percent=velocity,
             blend_radius_percent=blend,
             connect=connect,
+            timeout_sec=timeout,
+        ),
+    )
+
+
+def validate_trajectory_goal(
+    goal: object,
+    *,
+    connected: bool | None = True,
+    active_reference_type: ReferenceType | int | None = None,
+    active_reference_name: str | None = None,
+    reference_resolver: ReferenceResolver | None = None,
+) -> GoalValidationResult:
+    """Validate a connected sequence without accepting per-point cancellation.
+
+    The reference frame belongs to the whole sequence. Changing it requires a
+    new sequence after the current one reaches a safe boundary.
+    """
+
+    errors: list[str] = []
+    reference_type, reference_error = _enum(
+        _field(goal, "reference_type"), ReferenceType, "reference_type"
+    )
+    if reference_error:
+        errors.append(reference_error)
+    reference_name = _field(goal, "reference_name", "")
+    if not isinstance(reference_name, str) or not reference_name:
+        errors.append("reference_name must be a non-empty string")
+        reference_name = ""
+    timeout = _finite_number(_field(goal, "timeout_sec"), "timeout_sec")
+    if timeout is None or timeout <= 0.0:
+        errors.append("timeout_sec must be a positive finite number")
+        timeout = 0.0
+    if connected is False:
+        errors.append("arm is not connected")
+    elif connected is not None and not isinstance(connected, bool):
+        errors.append("connected must be a boolean or None")
+
+    active_type: ReferenceType | None = None
+    if active_reference_type is not None:
+        active_type_value, _ = _enum(
+            active_reference_type, ReferenceType, "active_reference_type"
+        )
+        if active_type_value is None:
+            errors.append("active_reference_type is invalid")
+        else:
+            active_type = active_type_value  # type: ignore[assignment]
+            if reference_type is not None and active_type != reference_type:
+                errors.append("reference_type does not match active frame")
+    if active_reference_name is not None and reference_name != active_reference_name:
+        errors.append("reference_name does not match active frame")
+    if reference_type is not None and reference_resolver is not None:
+        if not reference_resolver.is_configured(reference_type, reference_name):
+            errors.append("reference_name is not configured for reference_type")
+
+    raw_waypoints = _field(goal, "waypoints", ())
+    if isinstance(raw_waypoints, (str, bytes, MappingABC, SetABC)) or not isinstance(
+        raw_waypoints, Iterable
+    ):
+        errors.append("waypoints must contain at least two points")
+        raw_waypoints = ()
+    try:
+        waypoint_values = tuple(raw_waypoints)
+    except TypeError:
+        waypoint_values = ()
+        errors.append("waypoints must contain at least two points")
+    if len(waypoint_values) < 2:
+        errors.append("waypoints must contain at least two points")
+    elif len(waypoint_values) > 256:
+        errors.append("waypoints must contain no more than 256 points")
+
+    waypoints: list[ValidatedWaypoint] = []
+    for index, waypoint in enumerate(waypoint_values[:256]):
+        waypoint_goal = {
+            "command": _field(waypoint, "command"),
+            "reference_type": reference_type,
+            "reference_name": reference_name,
+            "joint_degrees": _field(waypoint, "joint_degrees", ()),
+            "pose_position_m": _field(waypoint, "pose_position_m", ()),
+            "pose_quaternion_wxyz": _field(
+                waypoint, "pose_quaternion_wxyz", ()
+            ),
+            "velocity_percent": _field(waypoint, "velocity_percent"),
+            "blend_radius_percent": _field(waypoint, "blend_radius_percent"),
+            "connect": False,
+            "timeout_sec": 1.0,
+        }
+        result = validate_goal(
+            waypoint_goal,
+            connected=connected,
+            active_reference_type=active_reference_type,
+            active_reference_name=active_reference_name,
+            reference_resolver=reference_resolver,
+        )
+        if not result.valid or result.goal is None:
+            errors.extend(f"waypoint[{index}]: {error}" for error in result.errors)
+            continue
+        waypoint_goal_value = result.goal
+        assert isinstance(waypoint_goal_value, ValidatedGoal)
+        waypoints.append(
+            ValidatedWaypoint(
+                command=waypoint_goal_value.command,
+                joint_degrees=tuple(waypoint_goal_value.joint_degrees),
+                pose_position_m=tuple(waypoint_goal_value.pose_position_m),
+                pose_quaternion_wxyz=tuple(waypoint_goal_value.pose_quaternion_wxyz),
+                velocity_percent=waypoint_goal_value.velocity_percent,
+                blend_radius_percent=waypoint_goal_value.blend_radius_percent,
+            )
+        )
+
+    if errors:
+        return GoalValidationResult(False, tuple(dict.fromkeys(errors)), None)
+    assert reference_type is not None
+    assert isinstance(reference_name, str)
+    return GoalValidationResult(
+        True,
+        (),
+        ValidatedTrajectoryGoal(
+            reference_type=reference_type,
+            reference_name=reference_name,
+            waypoints=tuple(waypoints),
             timeout_sec=timeout,
         ),
     )
@@ -520,7 +663,10 @@ __all__ = [
     "TerminalStatus",
     "TerminalState",
     "ValidatedGoal",
+    "ValidatedTrajectoryGoal",
+    "ValidatedWaypoint",
     "ValidationResult",
     "limit_vector_delta",
     "validate_goal",
+    "validate_trajectory_goal",
 ]

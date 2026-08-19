@@ -6,7 +6,8 @@ description: realman_web_control 的 WebSocket 协议、Action 反馈、软件�
 # WebSocket 浏览器控制与 URDF 影子
 
 `realman_web_control` 是一个 ROS 2 功能包：它把浏览器同源 WebSocket 消息转换成现有的
-`ExecuteMotion`、`CartesianVelocity` Action、速度命令和 `/stop` 服务。页面同一端口会同时
+`ExecuteMotion`、`ExecuteTrajectory`、`CartesianVelocity` Action、速度命令、`/stop`
+和 `/recover_motion` 服务。页面同一端口会同时
 渲染三台机械臂的实时 URDF 和坐标状态，但控制指令始终只作用于当前选中的 arm。浏览器永远
 不直接加载 RealMan SDK，也不绕过 `realman_robot_driver` 的 ownership、坐标 gate、
 watchdog 或 lockout。
@@ -68,6 +69,7 @@ watchdog 和 lockout，不会直接调用 SDK。
 | `action_feedback` | `feedback` | 原 Action feedback 的 JSON 映射 |
 | `action_result` | `status`, `result` | 原 Action result 和 rclpy 状态 |
 | `software_stop_result` | `success`, `message` | `/arm/stop` 的结果 |
+| `motion_recovery_result` | `success`, `recovered`, `api2_status` | 取消后的事件通道恢复结果 |
 
 ### MOVEJ、MOVEL 与 MOVEP
 
@@ -128,6 +130,45 @@ Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条�
 避免将旧关节目标误认为位姿预览。当前坐标面板会显示 tool/work 名称、
 控制器回读值，以及工具坐标的位姿、payload 和重心。
 
+### 连续路点轨迹
+
+主界面目前仍以单点编辑为主，但同一个 `/ws` 已提供 `execute_trajectory` 协议。它把
+2--256 个路点映射到 `ExecuteTrajectory` Action；Web 后端逐点检查有限值、速度、交融
+半径、四元数和 MOVEJ 的 URDF 关节限位，再由驱动把非末点设为 `connect=1`、末点设为
+`connect=0`。整条轨迹只占用当前 arm 一次，其他 Web goal 会收到 `action_busy`。
+
+```json
+{
+  "type": "execute_trajectory",
+  "request_id": "trajectory-001",
+  "arm": "m",
+  "goal": {
+    "reference_type": 0,
+    "reference_name": "base",
+    "timeout_sec": 20,
+    "waypoints": [
+      {
+        "command": 0,
+        "joint_degrees": [0, 5, 0, 0, 0, 0],
+        "velocity_percent": 10,
+        "blend_radius_percent": 10
+      },
+      {
+        "command": 0,
+        "joint_degrees": [0, 0, 0, 0, 0, 0],
+        "velocity_percent": 10,
+        "blend_radius_percent": 0
+      }
+    ]
+  }
+}
+```
+
+未使用的关节或位姿字段可以省略，协议会填入固定长度默认值。后端仍以驱动当前发布的
+`preferred_reference` 覆盖浏览器传入的参考系，防止页面缓存与控制器激活坐标脱节。
+取消消息使用 `action: "execute_trajectory"`；取消意味着 immediate stop，不是无缝替换
+后续目标。
+
 ### 末端六轴速度
 
 先建立速度 Action，再以 20 ms 左右的周期发送 `vx, vy, vz, wx, wy, wz`。页面会默认选中
@@ -151,9 +192,21 @@ Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条�
 ## 取消与软件停止
 
 “取消 Action”只对发起该 Action 的 WebSocket 客户端有效，调用 `cancel_goal_async()`，
-普通运动驱动随后执行 `rm_set_arm_stop()` 并等待 inactive；速度 Action 则先发送零速度再
-slow-stop。网页红色“软件停止”按钮单独调用 `/{arm}/stop`，可以直接抢占任一 Action。
+普通运动和连续轨迹驱动随后执行 `rm_set_arm_stop()` 并等待 inactive；速度 Action 则先
+发送零速度再 slow-stop。网页红色“软件停止”按钮单独调用 `/{arm}/stop`，可以直接抢占
+任一 Action。
 这些都是保持动力的受控停止，不替代控制柜或现场物理急停。
+
+取消结果返回后，客户端可以主动请求事件通道恢复：
+
+```json
+{"type":"recover_motion","request_id":"recover-001","arm":"m"}
+```
+
+响应为 `motion_recovery_result`。`success=true, recovered=false` 表示通道本来已经可用；
+`recovered=true` 表示驱动完成了 SDK handle 重建。恢复期间该 arm 被
+`ArmOwnership` 独占；正在运动或执行坐标写入时请求会失败。即使客户端不显式调用，
+下一条普通或连续运动 goal 仍会触发同一恢复流程。
 
 客户端断开时，后端按以下顺序清理：速度通道发布零速度、请求速度 Action cancel、请求普通
 Action cancel。浏览器刷新不会留下仍由网页拥有的速度命令。

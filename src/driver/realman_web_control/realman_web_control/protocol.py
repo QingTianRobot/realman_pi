@@ -8,7 +8,9 @@ from typing import Any
 
 
 ARMS = frozenset({"l", "m", "r"})
-ACTION_NAMES = frozenset({"execute_motion", "cartesian_velocity"})
+ACTION_NAMES = frozenset(
+    {"execute_motion", "execute_trajectory", "cartesian_velocity"}
+)
 MAX_REQUEST_ID_LENGTH = 96
 
 
@@ -169,6 +171,73 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
         }
         return {"type": message_type, "request_id": request_id, "arm": arm, "goal": normalized_goal}
 
+    if message_type == "execute_trajectory":
+        request_id = _request_id(message)
+        goal = _mapping(message.get("goal"), "goal")
+        reference_type, reference_name = _reference(goal)
+        raw_waypoints = goal.get("waypoints")
+        if not isinstance(raw_waypoints, list) or not 2 <= len(raw_waypoints) <= 256:
+            raise ProtocolError(
+                "invalid_field",
+                "goal.waypoints must contain from 2 through 256 points",
+            )
+        waypoints = []
+        for index, raw_waypoint in enumerate(raw_waypoints):
+            waypoint = _mapping(raw_waypoint, f"goal.waypoints[{index}]")
+            prefix = f"goal.waypoints[{index}]"
+            waypoints.append(
+                {
+                    "command": _integer(
+                        waypoint.get("command"), f"{prefix}.command", 0, 2
+                    ),
+                    "joint_degrees": _vector(
+                        waypoint.get("joint_degrees", [0.0] * 6),
+                        f"{prefix}.joint_degrees",
+                        6,
+                    ),
+                    "pose_position_m": _vector(
+                        waypoint.get("pose_position_m", [0.0] * 3),
+                        f"{prefix}.pose_position_m",
+                        3,
+                    ),
+                    "pose_quaternion_wxyz": _vector(
+                        waypoint.get(
+                            "pose_quaternion_wxyz",
+                            [1.0, 0.0, 0.0, 0.0],
+                        ),
+                        f"{prefix}.pose_quaternion_wxyz",
+                        4,
+                    ),
+                    "velocity_percent": _integer(
+                        waypoint.get("velocity_percent"),
+                        f"{prefix}.velocity_percent",
+                        1,
+                        100,
+                    ),
+                    "blend_radius_percent": _integer(
+                        waypoint.get("blend_radius_percent", 0),
+                        f"{prefix}.blend_radius_percent",
+                        0,
+                        100,
+                    ),
+                }
+            )
+        return {
+            "type": message_type,
+            "request_id": request_id,
+            "arm": arm,
+            "goal": {
+                "reference_type": reference_type,
+                "reference_name": reference_name,
+                "waypoints": waypoints,
+                "timeout_sec": _number(
+                    goal.get("timeout_sec"),
+                    "goal.timeout_sec",
+                    positive=True,
+                ),
+            },
+        }
+
     if message_type == "start_cartesian_velocity":
         request_id = _request_id(message)
         goal = _mapping(message.get("goal"), "goal")
@@ -203,7 +272,10 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
     if message_type == "cancel_action":
         action = message.get("action")
         if action not in ACTION_NAMES:
-            raise ProtocolError("invalid_action", "action must be execute_motion or cartesian_velocity")
+            raise ProtocolError(
+                "invalid_action",
+                "action must be execute_motion, execute_trajectory, or cartesian_velocity",
+            )
         return {
             "type": message_type,
             "request_id": _request_id(message, required=False),
@@ -212,4 +284,10 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
         }
     if message_type == "software_stop":
         return {"type": message_type, "request_id": _request_id(message, required=False), "arm": arm}
+    if message_type == "recover_motion":
+        return {
+            "type": message_type,
+            "request_id": _request_id(message),
+            "arm": arm,
+        }
     raise ProtocolError("unsupported_type", f"unsupported message type: {message_type}")

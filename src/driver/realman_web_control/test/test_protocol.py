@@ -94,3 +94,57 @@ def test_kinematics_messages_require_complete_vectors():
                 }
             )
         )
+
+
+def test_connected_trajectory_and_recovery_messages_are_normalized():
+    motion = valid_motion()["goal"]
+    parsed = parse_message(
+        json.dumps(
+            {
+                "type": "execute_trajectory",
+                "request_id": "trajectory-1",
+                "arm": "r",
+                "goal": {
+                    "reference_type": 0,
+                    "reference_name": "base",
+                    "waypoints": [motion, motion],
+                    "timeout_sec": 12,
+                },
+            }
+        )
+    )
+    recovery = parse_message(
+        '{"type":"recover_motion","request_id":"recover-1","arm":"r"}'
+    )
+
+    assert parsed["goal"]["timeout_sec"] == 12.0
+    assert len(parsed["goal"]["waypoints"]) == 2
+    assert parsed["goal"]["waypoints"][0]["joint_degrees"][1] == 1.0
+    assert recovery == {
+        "type": "recover_motion",
+        "request_id": "recover-1",
+        "arm": "r",
+    }
+
+
+def test_connected_trajectory_rejects_short_or_invalid_waypoint_lists():
+    message = {
+        "type": "execute_trajectory",
+        "request_id": "trajectory-1",
+        "arm": "l",
+        "goal": {
+            "reference_type": 0,
+            "reference_name": "base",
+            "waypoints": [valid_motion()["goal"]],
+            "timeout_sec": 5,
+        },
+    }
+    with pytest.raises(ProtocolError, match="2 through 256"):
+        parse_message(json.dumps(message))
+
+    message["goal"]["waypoints"] = [
+        valid_motion()["goal"],
+        {**valid_motion()["goal"], "velocity_percent": 0},
+    ]
+    with pytest.raises(ProtocolError, match="velocity_percent"):
+        parse_message(json.dumps(message))

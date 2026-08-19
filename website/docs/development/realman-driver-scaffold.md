@@ -60,11 +60,13 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 ├── /l/joint_states       sensor_msgs/msg/JointState
 ├── /l/connected          std_msgs/msg/Bool
 ├── /l/execute_motion     realman_msgs/action/ExecuteMotion
+├── /l/execute_trajectory realman_msgs/action/ExecuteTrajectory
 ├── /l/cartesian_velocity realman_msgs/action/CartesianVelocity
 ├── /l/cartesian_velocity/command geometry_msgs/msg/TwistStamped
 ├── /l/connect            std_srvs/srv/Trigger
 ├── /l/disconnect         std_srvs/srv/Trigger
 ├── /l/stop               std_srvs/srv/Trigger
+├── /l/recover_motion     realman_msgs/srv/RecoverMotion
 ├── /l/status             std_srvs/srv/Trigger
 ├── /l/coordinates/verify       realman_msgs/srv/VerifyCoordinates
 ├── /l/coordinates/apply        realman_msgs/srv/VerifyCoordinates
@@ -92,6 +94,12 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 | `MOVEJ_P=2` | `rm_movej_p()` | `pose_position_m[3]`（m）和 `pose_quaternion_wxyz[4]` |
 
 四元数顺序固定为 `w, x, y, z`，入口会检查有限值、非零模并归一化。ROS 接口和内部状态不使用 Euler 角；只有 SDK 确实只接受 Euler 的坐标写入边界才会进行一次转换。`velocity_percent` 范围为 `1..100`，`blend_radius_percent` 为 `0..100`，第一版只接受 `connect=false`，`timeout_sec` 必须为正有限数。
+
+多点连续运动使用独立的 `execute_trajectory` Action，而不是放开
+`ExecuteMotion.connect=true`。它一次接收 2--256 个 `MotionWaypoint`，整条队列持续
+占有单臂 ownership；非末点由驱动设为 `connect=1`，末点设为 `connect=0`。取消会立即
+停止整条队列，不能把取消后的新 goal 当作连续轨迹。详细字段和 CLI 示例见
+[睿尔曼 Action 开发与测试](./realman-action-development#executetrajectory-契约)。
 
 一个目标只有同时收到当前 generation 的成功事件、观察到轨迹曾为 active 后回到 inactive、连接仍有效时才成功；MOVEJ 还要求六个关节都落入 `joint_goal_tolerance_deg`。如果 MOVEJ 提交前回读关节已经在目标容差内，驱动直接返回 `motion already at target`，不再等待控制器产生一条空轨迹。反馈阶段依次为 `VALIDATING`、`SUBMITTING`、`EXECUTING`，停止时进入 `STOPPING`，并持续返回当前关节角、活动坐标、API2 状态和详情。Action cancel 使用 `rm_set_arm_stop()` 并等待 inactive；如果已提交目标没有可关联的完成事件，驱动会在确认 inactive 后自动重建该臂 SDK 事件通道，再允许下一条目标；`/l|m|r/stop` 抢占 ownership 并使用 `rm_set_arm_stop()`。
 
@@ -326,11 +334,13 @@ ros2 run tf2_ros tf2_echo world r/link_6
 `robot_state_publisher` 订阅；`world -> l/m/r/link_6` 均可持续查询。节点列表中不应出现
 `joint_state_publisher`，否则说明假关节状态源没有被驱动模式禁用。
 
-运动接口的 mock graph 还应包含 6 个 Action、12 个坐标 Service 和 3 个速度命令 topic：
+运动接口的 mock graph 还应包含 9 个 Action、12 个坐标 Service、3 个
+`recover_motion` Service 和 3 个速度命令 topic：
 
 ```bash
 ros2 action list
 ros2 service list | grep '/coordinates/'
+ros2 service list | grep '/recover_motion'
 ros2 topic list | grep '/cartesian_velocity/command'
 ```
 
@@ -365,10 +375,12 @@ mock 普通运动会依次报告 active、inactive 和成功完成事件，因�
 4. 使用 `realman_driver_rviz` 只观察 `/l|m|r/joint_states`、连接状态、TF 和 RViz 姿态；核对厂商度数到 ROS 弧度的转换及左/中/右模型对应关系。
 5. 对每臂调用 `coordinates/verify`，只读比对当前工具/工作坐标。发生 mismatch 时先核对标定和配置；未经复核不得用 `coordinates/apply` 覆盖控制器。
 6. 清空工作区、限制负载、确认碰撞设置，安排一名人员保持可触达现场急停。一次只允许一个 arm namespace 取得 ownership，先以低 `velocity_percent` 执行经人工确认可达的小幅 MOVEJ。
-7. 检查 Action 的 VALIDATING/SUBMITTING/EXECUTING 反馈、当前关节角、API2 状态以及最终 active-to-inactive 证据；随后单独验证 cancel 的缓停和 `/stop` 的最快受控停止。二者都不是断电急停。
+7. 检查 Action 的 VALIDATING/SUBMITTING/EXECUTING 反馈、当前关节角、API2 状态以及最终 active-to-inactive 证据；随后单独验证 cancel 和 `/stop` 的最快受控停止，并在 cancel 结果后调用一次 `recover_motion`。这些接口都不是断电急停。
 8. MOVEL/MOVEJ_P 从已知安全位姿开始，先核对 `reference_type`、控制器 `reference_name`、位置单位 m 和四元数 `wxyz`，再使用低速度执行；不要在奇异位形、软件限位或共享工作区边界附近测试。
-9. 末端速度 session 先持续发布六轴零速度，再只开放一个低幅线速度轴；验证加速度限制后停止发布，让 watchdog 自动停止。随后分别验证角速度、Action cancel 和显式 `/stop`，整个过程中保持固定 `control_period_ms`。
-10. 最后验证通信中断、自动重连、旧时间戳命令拒绝、lockout、`disconnect` 清理和重新 `verify`。每次验收记录命令、目标、返回码、日志目录和现场观察，不以重复下发掩盖错误。
+9. 在两个已人工确认安全的小幅 MOVEJ 点之间测试 `execute_trajectory`，中间点使用低
+   交融半径；确认轨迹不在路点处完全停下，随后单独验证整条队列 cancel。
+10. 末端速度 session 先持续发布六轴零速度，再只开放一个低幅线速度轴；验证加速度限制后停止发布，让 watchdog 自动停止。随后分别验证角速度、Action cancel 和显式 `/stop`，整个过程中保持固定 `control_period_ms`。
+11. 最后验证通信中断、自动重连、旧时间戳命令拒绝、lockout、`disconnect` 清理和重新 `verify`。每次验收记录命令、目标、返回码、日志目录和现场观察，不以重复下发掩盖错误。
 
 接口和版本依据见[睿尔曼 Python 驱动查询 Skill](./realman-python-driver)。后续每增加一个运动、力控或 IO 接口，都要同时补适配器测试、ROS 接口测试、失败路径和本页契约。
 
@@ -377,5 +389,6 @@ mock 普通运动会依次报告 active、inactive 和成功完成事件，因�
 - SDK 版本由 `config/python/realman-sdk-requirements.txt` 锁定；真实控制器、网络连通性和固件兼容性仍需现场确认。
 - 连接和状态读取当前在 ROS executor 线程中同步执行；生产实现需要避免网络阻塞占用关键回调线程。
 - 已实现基础连接重试和速度命令专项 QoS；尚未实现关节状态陈旧检测和诊断消息。
-- 已实现普通运动 Action 和笛卡尔速度 session；尚未实现力控、IO、Modbus、UDP 和末端设备接口。
+- 已实现普通运动、连接轨迹 Action 和笛卡尔速度 session；尚未实现力控、IO、Modbus、
+  UDP 和末端设备接口。
 - 未验证真实 RM65 控制器；所有真机参数和固件兼容性仍需现场确认。

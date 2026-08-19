@@ -10,9 +10,11 @@ Action 作为运动控制的唯一异步入口：调用方可以在运动期间�
 最终结果判断动作停在什么阶段。驱动不把一个已经提交给控制器的 SDK 调用伪装成同步函数，
 也不把“收到一次成功事件”单独当作运动完成。
 
-当前实现包含两个 Action：
+当前实现包含三个 Action：
 
 - `realman_msgs/action/ExecuteMotion.action`：`MOVEJ`、`MOVEL`、`MOVEJ_P` 三种一次性运动。
+- `realman_msgs/action/ExecuteTrajectory.action`：一次提交 2--256 个连接路点，由控制器
+  对相邻轨迹做连续规划和交融。
 - `realman_msgs/action/CartesianVelocity.action`：六轴末端速度 session；目标建立 session，
   速度本身通过 `TwistStamped` 话题持续刷新。
 
@@ -27,6 +29,7 @@ ROS 2 client
     ▼
 realman_driver_node.py
     ├── rclpy ActionServer: execute_motion
+    ├── rclpy ActionServer: execute_trajectory
     ├── rclpy ActionServer: cartesian_velocity
     └── TwistStamped command subscription
     ▼
@@ -48,8 +51,9 @@ motion_coordinator.py                 cartesian_velocity_session.py
 | `realman_driver_node.py` | ActionServer、callback group、topic/service wiring、ROS message 转换 | 把业务状态机塞进 callback，直接调用 vendor SDK |
 | `test/` | 可重复的 mock、失败路径、竞态和接口契约 | 依赖真实 IP 的默认单元测试 |
 
-`ArmOwnership` 是每个 arm 的单一写入锁。普通运动、速度 session、坐标 `apply/select`
-和显式 `/stop` 共享它；一个 arm 被占用时，另一个入口必须在调用 SDK 之前拒绝。
+`ArmOwnership` 是每个 arm 的单一写入锁。普通运动、连接轨迹、速度 session、坐标
+`apply/select`、显式 `/stop` 和事件通道恢复共享它；一个 arm 被占用时，另一个入口
+必须在调用 SDK 之前拒绝。
 三臂之间不共享这把锁，因此 `l`、`m`、`r` 可以各自有一个活动操作。
 
 ## ROS 端点
@@ -59,17 +63,19 @@ motion_coordinator.py                 cartesian_velocity_session.py
 | 端点 | 类型 | 作用 |
 | --- | --- | --- |
 | `/l/execute_motion` | `realman_msgs/action/ExecuteMotion` | 一次性关节或笛卡尔运动 |
+| `/l/execute_trajectory` | `realman_msgs/action/ExecuteTrajectory` | 一次提交并监督整条连接轨迹 |
 | `/l/cartesian_velocity` | `realman_msgs/action/CartesianVelocity` | 建立并监督六轴速度 session |
 | `/l/cartesian_velocity/command` | `geometry_msgs/msg/TwistStamped` | 更新活动速度 session 的最新命令 |
 | `/l/stop` | `std_srvs/srv/Trigger` | 抢占当前 arm 并执行最快受控停止 |
+| `/l/recover_motion` | `realman_msgs/srv/RecoverMotion` | 取消后显式重建被隔离的 SDK 事件通道 |
 | `/l/coordinates/verify` | `realman_msgs/srv/VerifyCoordinates` | 只读回查工具/工作坐标 |
 | `/l/coordinates/apply` | `realman_msgs/srv/VerifyCoordinates` | 显式写入并回读默认坐标 |
 | `/l/coordinates/select_tool` | `realman_msgs/srv/SelectFrame` | 选择配置内工具并回读 |
 | `/l/coordinates/select_work` | `realman_msgs/srv/SelectFrame` | 选择配置内工作坐标并回读 |
 
 Action 名称没有 `l/realman_driver` 前缀，因为节点已经运行在 `/l` namespace 下。发布
-`ros2 action list` 时应看到六个 Action：每个 arm 各一个 `execute_motion` 和
-`cartesian_velocity`。
+`ros2 action list` 时应看到九个 Action：每个 arm 各一个 `execute_motion`、
+`execute_trajectory` 和 `cartesian_velocity`。
 
 ## ExecuteMotion 契约
 
@@ -162,6 +168,41 @@ IDL 文件是唯一权威来源，字段含义如下。数组长度错误、NaN/
     自动断开并重建该臂 SDK 连接、重新注册事件回调，再通过 reconciliation 清理 quarantine；
     重连或 inactive 证据失败时仍保持安全锁，不能由下一个 goal 强行覆盖。
 
+## ExecuteTrajectory 契约
+
+`ExecuteTrajectory` 用于已经知道后续路点的连续运动。一个 goal 包含统一的
+`reference_type/reference_name`、总超时和 2--256 个 `MotionWaypoint`。每个路点包含
+`command`、命令对应的关节或位姿目标、`velocity_percent` 和
+`blend_radius_percent`。驱动先校验整组数据，再取得一次 `ArmOwnership`：
+
+- 第一个到倒数第二个路点调用 SDK 时使用 `connect=1`；
+- 最后一个路点固定使用 `connect=0`，闭合控制器队列；
+- 中间点的非零交融半径才有连续通过目标点的意义，最后一点的交融半径不会生效；
+- 所有位姿路点共享同一个已验证参考系，队列执行中不能切换 tool/work frame；
+- 每个 SDK 提交之间重新检查 cancel 和 `/stop`，但不会在一次 SDK 调用中间释放锁；
+- 任一路点提交失败时，只要已有路点进入控制器，就先 immediate stop 并确认 inactive；
+- 整条轨迹只有在最终成功事件、active-to-inactive 和连接证据成立后返回成功；末点为
+  `MOVEJ` 时还必须满足关节容差。
+
+整个 goal 是一个取消边界。Action cancel 会停止并清空当前连续轨迹，不会把新 goal
+无缝接到旧轨迹上；需要连续路径时应在取消前把后续路点放入同一个
+`ExecuteTrajectory` goal。反馈中的 `submitted_waypoints` 只表示已被 SDK 接受的路点数，
+`completed_waypoints` 只在整条轨迹成功后等于总数，因为厂商事件没有可靠的逐路点
+generation/index。
+
+低风险 mock 示例：
+
+```bash
+ros2 action send_goal /l/execute_trajectory \
+  realman_msgs/action/ExecuteTrajectory \
+  "{reference_type: 0, reference_name: base, timeout_sec: 20.0, waypoints: [
+    {command: 0, joint_degrees: [0, 5, 0, 0, 0, 0],
+     velocity_percent: 10, blend_radius_percent: 10},
+    {command: 0, joint_degrees: [0, 0, 0, 0, 0, 0],
+     velocity_percent: 10, blend_radius_percent: 0}
+  ]}" --feedback
+```
+
 ### 为什么需要 generation
 
 RealMan 事件 payload 没有 ROS Action request ID。驱动为每次提交分配单调递增的
@@ -188,6 +229,17 @@ RealMan 的 `rm_event_push_data_t` 不包含 ROS Action request ID 或 generatio
 也会触发同一恢复流程，因此不需要手动重启 Docker。只有确认重连后的轨迹仍为 inactive 且
 API2 状态为 0，下一条 goal 才会获得 `ArmOwnership`。stop 返回失败、轨迹无法确认 inactive、
 连接异常等情况不会走自动恢复，必须先完成显式 disconnect/reconnect。
+
+调用方也可以在 Action 已返回 `CANCELED` 后主动恢复；服务幂等，通道已经健康时返回
+`success=true, recovered=false`，实际执行了重建时返回 `recovered=true`：
+
+```bash
+ros2 service call /l/recover_motion realman_msgs/srv/RecoverMotion "{}"
+```
+
+恢复会原子取得该 arm 的 `ArmOwnership`，再执行 disconnect、1 秒冷却、connect、事件
+callback 注册和 inactive reconciliation。若同一 arm 正在执行普通运动、连接轨迹、速度
+session 或坐标写入，服务拒绝，不会在活动 SDK 调用旁边重连。
 
 ## Kinematics services
 
@@ -328,12 +380,12 @@ goal 都不能隐式写入工具或工作坐标。
 | --- | --- | --- |
 | ROS IDL | `src/driver/realman_msgs/test/test_interface_files.py` | 字段顺序、常量、数组长度、依赖和 CMake 注册 |
 | 纯类型/配置 | `test_motion_types.py` | enum、四元数归一化、单位/范围、frame resolver、未知配置键 |
-| 普通 Action 状态机 | `test_motion_coordinator.py` | reservation、busy、提交、event、active/inactive、完成、取消、超时、lockout |
+| 普通/连接轨迹状态机 | `test_motion_coordinator.py` | reservation、busy、连接路点、部分提交、event、完成、取消、超时、lockout |
 | 速度 session | `test_cartesian_velocity_session.py` | stamp、frame、限速、限加速度、QoS 边界、周期 overrun、watchdog、线程竞态 |
 | 坐标安全 | `test_coordinate_manager.py` | 读取匹配、mismatch gate、apply/select、写后回读、ownership 和四元数容差 |
 | SDK 适配器 | `test_realman_sdk_adapter.py` | vendor 参数、原始 status、回调指针、句柄/断线、stop 和 mock 事件 |
 | ROS node/launch | `test_realman_driver_node.py` | ActionServer 注册、topic/QoS、配置透传、停止顺序、服务响应和 shutdown |
-| mock graph | `test_system_launch.py` 及驱动测试 | 三臂 namespaces、6 Action、坐标 services、3 command topics、TF 数据链路 |
+| mock graph | `test_system_launch.py` 及驱动测试 | 三臂 namespaces、9 Action、坐标/恢复 services、3 command topics、TF 数据链路 |
 | 真机验收 | 现场清单 | SDK 版本、网络、verify、低速目标、cancel、watchdog、断线和急停 |
 
 ### 推荐的最小回归集
@@ -407,10 +459,17 @@ docker compose run --rm --no-deps realman_driver_test bash -lc '
 接口和节点：
 
 - `test_motion_action_contracts_are_exact`：IDL 变更必须显式更新契约测试；
+- `test_connected_trajectory_submits_connected_points_and_completes_once`：中间点
+  `connect=true`、末点 `false`，整条轨迹只返回一次终态；
+- `test_connected_trajectory_partial_submission_is_fast_stopped`：部分入队失败必须先快停；
+- `test_connected_trajectory_observes_cancel_between_waypoint_submissions`：路点之间响应取消，
+  不再提交剩余队列；
 - `test_node_source_registers_execute_motion_action_with_all_lifecycle_callbacks`：必须接入
   goal/cancel/accepted/execute 四个 callback；
 - `test_node_source_registers_cartesian_velocity_action_and_command_topic`：速度 Action 和命令 topic
   必须同时存在；
+- `test_node_source_registers_connected_trajectory_and_recovery_interfaces`：连续轨迹和恢复
+  service 必须同时注册；
 - `test_velocity_command_uses_dedicated_serial_qos_and_freshness_boundary`：QoS 与 freshness
   不能被普通 topic 默认值替代；
 - `test_node_shutdown_stops_velocity_before_disconnect`：shutdown 顺序必须保持；

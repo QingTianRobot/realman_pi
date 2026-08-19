@@ -119,6 +119,7 @@ const coordinateStates: Partial<Record<ArmId, CoordinateState>> = {};
 const connectionStates: Partial<Record<ArmId, boolean>> = {};
 const currentJointsByArm: Partial<Record<ArmId, number[]>> = {};
 const targetJointsByArm: Partial<Record<ArmId, number[]>> = {};
+const targetEditedByArm: Partial<Record<ArmId, boolean>> = {};
 const robotScenes: Partial<Record<ArmId, RobotScene>> = {};
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
@@ -241,6 +242,7 @@ function renderJointControls() {
     const index = Number(input.dataset.jointIndex);
     targetJoints[index] = Number(input.value) * Math.PI / 180;
     targetJointsByArm[selectedArm] = [...targetJoints];
+    targetEditedByArm[selectedArm] = true;
     $(`#joint-value-${index}`).textContent = `${Number(input.value).toFixed(1)}°`;
     selectedRobotScene()?.shadow?.setJointValues(Object.fromEntries(targetJoints.map((value, i) => [`joint_${i + 1}`, value])));
   }));
@@ -427,7 +429,8 @@ function handleMessage(message: Message) {
     renderFleetStrip();
     if (message.arm === selectedArm) setSelectedConnection();
   } else if (message.type === "joint_state") {
-    currentJointsByArm[message.arm] = message.positions_rad;
+  currentJointsByArm[message.arm] = message.positions_rad;
+    if (!targetEditedByArm[message.arm]) targetJointsByArm[message.arm] = [...message.positions_rad];
     setRobotJoints(robotScenes[message.arm]?.live, message.positions_rad);
     if (message.arm === selectedArm) {
       currentJoints = message.positions_rad;
@@ -520,6 +523,7 @@ function loadManifest(next: Manifest) {
 $("#reset-preview").addEventListener("click", () => {
   targetJoints = [...currentJoints];
   targetJointsByArm[selectedArm] = [...targetJoints];
+  targetEditedByArm[selectedArm] = true;
   setJointInputs(targetJoints, true);
   setRobotJoints(selectedRobotScene()?.shadow, targetJoints);
 });

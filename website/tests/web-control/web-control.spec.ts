@@ -69,7 +69,7 @@ test.beforeEach(async ({ page }) => {
             message: "ok",
           }) });
           this.emit("message", { data: JSON.stringify({ type: "connection", arm: "m", connected: true }) });
-          this.emit("message", { data: JSON.stringify({ type: "joint_state", arm: "m", positions_rad: [0, 0, 0, 0, 0, 0], stamp_ns: 43 }) });
+          this.emit("message", { data: JSON.stringify({ type: "joint_state", arm: "m", positions_rad: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6], stamp_ns: 43 }) });
           this.emit("message", { data: JSON.stringify({
             type: "coordinate_state",
             arm: "r",
@@ -90,7 +90,7 @@ test.beforeEach(async ({ page }) => {
             message: "ok",
           }) });
           this.emit("message", { data: JSON.stringify({ type: "connection", arm: "r", connected: true }) });
-          this.emit("message", { data: JSON.stringify({ type: "joint_state", arm: "r", positions_rad: [0, 0, 0, 0, 0, 0], stamp_ns: 44 }) });
+          this.emit("message", { data: JSON.stringify({ type: "joint_state", arm: "r", positions_rad: [0.2, 0.4, 0.6, 0.8, 1.0, 1.2], stamp_ns: 44 }) });
         }, 20);
       }
       addEventListener(type: string, callback: (event: any) => void) { (this.listeners[type] ||= []).push(callback); }
@@ -113,9 +113,11 @@ test("loads configured URDF scene and sends MOVEJ/cancel protocol", async ({ pag
   await page.locator(".fleet-chip[data-arm=\"m\"]").click();
   await expect(page.locator("#arm-select")).toHaveValue("m");
   await expect(page.locator("#selected-arm-label")).toContainText("M");
+  await expect(page.locator("input[data-joint-index=\"0\"]")).toHaveValue(/^5\.7/);
   await page.locator(".fleet-chip[data-arm=\"r\"]").click();
   await expect(page.locator("#arm-select")).toHaveValue("r");
   await expect(page.locator("#selected-arm-label")).toContainText("R");
+  await expect(page.locator("input[data-joint-index=\"0\"]")).toHaveValue(/^11\.4/);
   await expect(page.locator("#viewer")).toHaveAttribute("data-live-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/, { timeout: 30_000 });
   await expect(page.locator("#viewer")).toHaveAttribute("data-shadow-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/);
   await expect(page.locator("#connection")).toContainText("ROS ONLINE");

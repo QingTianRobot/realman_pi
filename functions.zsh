@@ -377,7 +377,7 @@ rm65_deploy_sync() {
   local host="${REALMAN_PRODUCTION_HOST:-realman_local}"
   local remote_dir="${REALMAN_PRODUCTION_DIR:-/home/administrator/realman_pi}"
   local branch
-  local status
+  local tree_status
   local quoted_remote_dir
   local -a excludes
 
@@ -396,10 +396,10 @@ rm65_deploy_sync() {
     return 2
   fi
 
-  status="$(command git -C "$RM65_PROJECT_ROOT" status --short --untracked-files=all)" || return
-  if [[ -n "$status" ]]; then
+  tree_status="$(command git -C "$RM65_PROJECT_ROOT" status --short --untracked-files=all)" || return
+  if [[ -n "$tree_status" ]]; then
     print -u2 -r -- "rm65: commit or stash local changes before production rsync"
-    print -u2 -r -- "$status"
+    print -u2 -r -- "$tree_status"
     return 1
   fi
 

@@ -133,7 +133,22 @@ def test_movej_is_nonblocking_and_preserves_degrees(adapter, fake_robot):
 )
 def test_pose_motion_forwards_vendor_arguments(adapter, fake_robot, method_name, pose, vendor_name):
     assert getattr(adapter, method_name)(pose, 20, 5, True) == 0
-    assert fake_robot.calls[-1] == (vendor_name, pose, 20, 5, 1, 0)
+    assert fake_robot.calls[-1] == (vendor_name, pose[:3] + [0.0, 0.0, 0.0], 20, 5, 1, 0)
+
+
+def test_pose_motion_converts_wxyz_to_sdk_xyz_euler(adapter, fake_robot):
+    pose = [0.1, 0.2, 0.3, math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)]
+
+    assert adapter.movel(pose, 20, 0, False) == 0
+
+    assert fake_robot.calls[-1] == (
+        "rm_movel",
+        pytest.approx([0.1, 0.2, 0.3, 0.0, 0.0, math.pi / 2.0]),
+        20,
+        0,
+        0,
+        0,
+    )
 
 
 def test_velocity_vector_is_not_converted_to_euler(adapter, fake_robot):
@@ -165,8 +180,8 @@ def test_motion_commands_return_nonzero_vendor_status_unchanged(
 
     arguments = {
         "movej": ([0.0] * 6, 20, 0, False),
-        "movel": ([0.0] * 7, 20, 0, False),
-        "movej_p": ([0.0] * 7, 20, 0, False),
+        "movel": ([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], 20, 0, False),
+        "movej_p": ([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], 20, 0, False),
         "movev": ([0.0] * 6, True, 0, 0),
     }[method_name]
 
@@ -798,8 +813,8 @@ def test_mock_adapter_is_safe_and_deterministic():
     assert adapter.stop() == 0
     assert adapter.slow_stop() == 0
     assert adapter.movej([0.0] * 6, 20, 0, False) == 0
-    assert adapter.movel([0.0] * 7, 20, 0, False) == 0
-    assert adapter.movej_p([0.0] * 7, 20, 0, False) == 0
+    assert adapter.movel([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], 20, 0, False) == 0
+    assert adapter.movej_p([0.0, 0.0, 0.0, 1.0, 0.0, 0.0, 0.0], 20, 0, False) == 0
     assert adapter.set_movev_init(1, 0, 5) == 0
     assert adapter.movev([0.0] * 6, True, 0, 0) == 0
     assert adapter.forward_kinematics([0.0] * 6) == (0, [0.0] * 6)

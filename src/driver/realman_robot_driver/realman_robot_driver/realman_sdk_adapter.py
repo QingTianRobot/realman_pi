@@ -290,10 +290,11 @@ class RealManSdkAdapter:
         blend_radius_percent: int,
         connect: bool,
     ) -> int:
+        vendor_pose = _vendor_motion_pose(pose)
         return self._command(
             "rm_movel",
             "SDK movel request failed",
-            pose if not isinstance(pose, tuple) else list(pose),
+            vendor_pose,
             velocity_percent,
             blend_radius_percent,
             int(connect),
@@ -307,10 +308,11 @@ class RealManSdkAdapter:
         blend_radius_percent: int,
         connect: bool,
     ) -> int:
+        vendor_pose = _vendor_motion_pose(pose)
         return self._command(
             "rm_movej_p",
             "SDK movej_p request failed",
-            pose if not isinstance(pose, tuple) else list(pose),
+            vendor_pose,
             velocity_percent,
             blend_radius_percent,
             int(connect),
@@ -943,6 +945,12 @@ def _vendor_tool_frame(frame: Any) -> Any:
     vendor_frame.payload = frame.payload_kg
     vendor_frame.x, vendor_frame.y, vendor_frame.z = frame.center_of_mass_m
     return vendor_frame
+
+
+def _vendor_motion_pose(pose: Any) -> list[float]:
+    """Convert the project WXYZ pose to the SDK's XYZ plus Euler pose."""
+    values = _finite_vector(pose, 7, "motion pose")
+    return [*values[:3], *_euler_from_quaternion(values[3:])]
 
 
 def _controller_frame_from_profile(frame: Any, *, is_tool: bool) -> ControllerFrame:

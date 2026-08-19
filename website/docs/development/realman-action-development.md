@@ -95,6 +95,11 @@ IDL 文件是唯一权威来源，字段含义如下。数组长度错误、NaN/
 不会启用轨迹交融。未来支持连接轨迹前，必须先定义 cancel、timeout 和多段轨迹 ownership
 如何作用于整条链，不能只把 `connect=true` 校验删除。
 
+对于 `MOVEL` 和 `MOVEJ_P`，项目 Action 始终接收七值位姿 `[x, y, z, w, x, y, z]`；
+`RealManSdkAdapter` 在调用 `rm_movel()`/`rm_movej_p()` 前将其转换为 SDK 要求的六值
+`[x, y, z, rx, ry, rz]`，其中位置单位为米、Euler 姿态单位为弧度。调用 SDK 时不能把
+四元数四项直接追加到位置后作为七值列表传入。
+
 `MOVEJ` 不要求位姿字段有效，`MOVEL` 和 `MOVEJ_P` 不要求关节字段有效。这一行为由
 `motion_types.validate_goal()` 的命令分支测试固定下来，新增字段时不要让无关字段产生
 隐藏耦合。

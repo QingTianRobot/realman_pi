@@ -810,6 +810,7 @@ class RealManDriverNode(Node):
     def _publish_state(self) -> None:
         if (
             not self.adapter.connected
+            and not self.motion_coordinator.event_channel_recovery_required
             and self.auto_connect
             and self.reconnect_interval > 0.0
             and time.monotonic() - self._last_connect_attempt >= self.reconnect_interval

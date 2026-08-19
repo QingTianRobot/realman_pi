@@ -788,6 +788,44 @@ def test_connect_reconciles_physical_lockout_with_read_only_trajectory_state():
     assert "recover_event_channel=lambda: self._recover_event_channel()" in source
     assert "self.motion_coordinator.event_channel_recovery_required" in source
     assert "self.adapter.disconnect()" in source
+    publish_state = source[source.index("    def _publish_state"):]
+    assert "not self.motion_coordinator.event_channel_recovery_required" in publish_state
+
+
+@requires_ros_action_runtime
+def test_event_channel_recovery_serializes_disconnect_delay_and_reconnect():
+    events = []
+    coordinator = SimpleNamespace(event_channel_recovery_required=True)
+
+    class Adapter:
+        connected = True
+
+        def disconnect(self):
+            events.append("disconnect")
+            self.connected = False
+            return 0
+
+    def connect():
+        events.append("connect")
+        coordinator.event_channel_recovery_required = False
+        return 0
+
+    node = SimpleNamespace(
+        motion_coordinator=coordinator,
+        adapter=Adapter(),
+        _event_recovery_lock=__import__("threading").Lock(),
+        _last_event_recovery_attempt=0.0,
+        _event_recovery_delay_sec=0.0,
+        _event_recovery_retry_interval_sec=0.0,
+        _connect_to_robot=connect,
+        get_logger=lambda: SimpleNamespace(
+            warn=lambda _message: None,
+            error=lambda _message: None,
+        ),
+    )
+
+    assert RealManDriverNode._recover_event_channel(node) is True
+    assert events == ["disconnect", "connect"]
 
 
 def test_connect_returns_coordinate_api_failure_instead_of_ready_status():

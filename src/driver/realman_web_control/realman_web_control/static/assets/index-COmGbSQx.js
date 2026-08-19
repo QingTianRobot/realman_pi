@@ -4129,9 +4129,13 @@ No loader available`)}}const lx=document.querySelector("#app");lx.innerHTML=`
   <main class="workspace">
     <section class="viewer-panel panel">
       <div class="panel-heading"><div><span class="eyebrow">LIVE / TARGET</span><h1>三维姿态</h1></div><div id="model-label" class="muted">loading model</div></div>
-      <div id="fleet-strip" class="fleet-strip"></div>
-      <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
-      <div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span id="root-frame"></span></div>
+      <div class="viewer-layout">
+        <div id="fleet-strip" class="fleet-strip"></div>
+        <div class="viewer-column">
+          <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
+          <div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span id="root-frame"></span></div>
+        </div>
+      </div>
     </section>
     <aside class="controls">
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><span id="coordinate-state" class="mini-state">WAIT</span></div><div id="coordinate-summary" class="coordinate-summary"></div></section>

@@ -49,6 +49,48 @@ test.beforeEach(async ({ page }) => {
           }) });
           this.emit("message", { data: JSON.stringify({ type: "connection", arm: "l", connected: true }) });
           this.emit("message", { data: JSON.stringify({ type: "joint_state", arm: "l", positions_rad: [0, 0, 0, 0, 0, 0], stamp_ns: 42 }) });
+          this.emit("message", { data: JSON.stringify({
+            type: "coordinate_state",
+            arm: "m",
+            motion_allowed: true,
+            preferred_reference_type: 1,
+            preferred_reference_name: "cell",
+            preferred_reference: { type: 1, name: "cell", frame_id: "m/cell" },
+            tool: { type: 2, name: "tcpgrip", frame_id: "m/tool", controller_name: "tcpgrip", xyz_m: [0, 0, 0.12], quaternion_wxyz: [1, 0, 0, 0], payload_kg: 0.8, center_of_mass_m: [0, 0, 0.06] },
+            work: { type: 1, name: "cell", frame_id: "m/work", controller_name: "cell", xyz_m: [0.4, 0.5, 0.6], quaternion_wxyz: [1, 0, 0, 0] },
+            current_tool: "tcpgrip",
+            current_work: "cell",
+            expected_tool: "tcpgrip",
+            expected_work: "cell",
+            matched: true,
+            tool_matched: true,
+            work_matched: true,
+            api2_status: 0,
+            message: "ok",
+          }) });
+          this.emit("message", { data: JSON.stringify({ type: "connection", arm: "m", connected: true }) });
+          this.emit("message", { data: JSON.stringify({ type: "joint_state", arm: "m", positions_rad: [0, 0, 0, 0, 0, 0], stamp_ns: 43 }) });
+          this.emit("message", { data: JSON.stringify({
+            type: "coordinate_state",
+            arm: "r",
+            motion_allowed: true,
+            preferred_reference_type: 1,
+            preferred_reference_name: "cell",
+            preferred_reference: { type: 1, name: "cell", frame_id: "r/cell" },
+            tool: { type: 2, name: "tcpgrip", frame_id: "r/tool", controller_name: "tcpgrip", xyz_m: [0, 0, 0.12], quaternion_wxyz: [1, 0, 0, 0], payload_kg: 0.8, center_of_mass_m: [0, 0, 0.06] },
+            work: { type: 1, name: "cell", frame_id: "r/work", controller_name: "cell", xyz_m: [0.4, 0.5, 0.6], quaternion_wxyz: [1, 0, 0, 0] },
+            current_tool: "tcpgrip",
+            current_work: "cell",
+            expected_tool: "tcpgrip",
+            expected_work: "cell",
+            matched: true,
+            tool_matched: true,
+            work_matched: true,
+            api2_status: 0,
+            message: "ok",
+          }) });
+          this.emit("message", { data: JSON.stringify({ type: "connection", arm: "r", connected: true }) });
+          this.emit("message", { data: JSON.stringify({ type: "joint_state", arm: "r", positions_rad: [0, 0, 0, 0, 0, 0], stamp_ns: 44 }) });
         }, 20);
       }
       addEventListener(type: string, callback: (event: any) => void) { (this.listeners[type] ||= []).push(callback); }
@@ -68,6 +110,10 @@ test("loads configured URDF scene and sends MOVEJ/cancel protocol", async ({ pag
   await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
   await expect(page.locator(".fleet-chip[data-arm=\"m\"]")).toContainText("6 joints");
   await expect(page.locator(".fleet-chip[data-arm=\"r\"]")).toContainText("6 joints");
+  await page.locator(".fleet-chip[data-arm=\"m\"]").click();
+  await expect(page.locator("#arm-select")).toHaveValue("m");
+  await page.locator(".fleet-chip[data-arm=\"r\"]").click();
+  await expect(page.locator("#arm-select")).toHaveValue("r");
   await expect(page.locator("#viewer")).toHaveAttribute("data-live-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/, { timeout: 30_000 });
   await expect(page.locator("#viewer")).toHaveAttribute("data-shadow-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/);
   await expect(page.locator("#connection")).toContainText("ROS ONLINE");

@@ -31,8 +31,10 @@ h1, h2 { margin: 4px 0 0; letter-spacing: -.01em; }
 h1 { font-size: 22px; }
 h2 { font-size: 15px; }
 .muted, .viewer-footer, .text-button { color: #82999d; font-size: 11px; }
+.viewer-layout { display: grid; grid-template-columns: 118px minmax(0, 1fr); min-height: 0; flex: 1; }
+.viewer-column { display: flex; flex-direction: column; min-width: 0; }
 .viewer { position: relative; flex: 1; min-height: 480px; overflow: hidden; }
-.fleet-strip { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 8px; padding: 10px 16px; border-bottom: 1px solid #263b40; background: #0f1a1e; }
+.fleet-strip { display: grid; gap: 8px; padding: 10px; border-right: 1px solid #263b40; background: #0f1a1e; align-content: start; }
 .fleet-chip { min-width: 0; display: grid; grid-template-columns: auto 1fr auto; align-items: center; gap: 7px; border: 1px solid #2c474c; border-radius: 4px; background: #142226; color: #c8d8d5; padding: 8px 9px; text-align: left; }
 .fleet-chip.selected { border-color: #58c5b9; background: #173035; }
 .fleet-chip-arm { display: grid; place-items: center; width: 24px; height: 24px; border: 1px solid #4b777b; color: #8ee1d2; font-size: 11px; font-weight: 800; }
@@ -92,8 +94,9 @@ dialog input { width: 100%; margin: 8px 0 18px; }
   .button { padding: 8px 9px; }
   .workspace { padding: 10px 10px 20px; gap: 10px; }
   .viewer-panel { min-height: 530px; }
+  .viewer-layout { grid-template-columns: 1fr; }
   .viewer { min-height: 380px; }
-  .fleet-strip { grid-template-columns: 1fr; padding: 8px 10px; }
+  .fleet-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid #263b40; }
   .velocity-inputs { grid-template-columns: repeat(3, 1fr); row-gap: 8px; }
   .viewer-footer { font-size: 9px; }
 }

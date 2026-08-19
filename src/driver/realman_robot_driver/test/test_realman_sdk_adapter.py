@@ -592,9 +592,9 @@ def test_coordinate_adapter_protocol_uses_one_adapter_arm_and_vendor_frames(
                 "quaternion": {"w": 1.0, "x": 0.0, "y": 0.0, "z": 0.0},
             },
             "payload": 1.5,
-            "x": 0.01,
-            "y": 0.02,
-            "z": 0.03,
+            "x": 10.0,
+            "y": 20.0,
+            "z": 30.0,
         },
     )
     fake_robot.results["rm_get_current_work_frame"] = (
@@ -631,6 +631,29 @@ def test_coordinate_adapter_protocol_uses_one_adapter_arm_and_vendor_frames(
         "cell",
         [0.4, 0.5, 0.6, 0.0, 0.0, 0.0],
     )
+
+
+def test_current_tool_frame_converts_controller_com_millimetres_to_metres(
+    adapter, fake_robot
+):
+    fake_robot.results["rm_get_current_tool_frame"] = (
+        0,
+        {
+            "name": "tcpgrip",
+            "pose": [0.0, 0.0, 0.12, 0.0, 0.0, 0.0],
+            "payload": 0.8,
+            "x": 0.0,
+            "y": 0.0,
+            # rm_get_current_tool_frame returns the COM fields in mm on the
+            # production RM65 controller, while the project API uses metres.
+            "z": 60.0,
+        },
+    )
+
+    status, current_tool = adapter.current_tool_frame()
+
+    assert status == 0
+    assert current_tool.center_of_mass_m == (0.0, 0.0, 0.060)
     assert adapter.change_tool_frame("gripper") == 0
     assert adapter.change_work_frame("cell") == 0
 

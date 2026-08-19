@@ -10,6 +10,9 @@ from typing import Any, Callable
 from .coordinate_manager import ControllerFrame
 
 
+_VENDOR_CURRENT_TOOL_COM_MM_TO_M = 1.0e-3
+
+
 @dataclass(frozen=True)
 class RobotState:
     """ROS-neutral state returned by the adapter."""
@@ -1007,10 +1010,15 @@ def _controller_frame_from_vendor(frame: Any, *, is_tool: bool) -> ControllerFra
 
     if is_tool:
         payload_kg = _finite_scalar(_field(frame, "payload"), "payload", minimum=0.0)
-        center_of_mass_m = _finite_vector(
+        center_of_mass_mm = _finite_vector(
             tuple(_field(frame, axis) for axis in ("x", "y", "z")),
             3,
-            "center_of_mass_m",
+            "center_of_mass_mm",
+        )
+        # RM65 controller readback exposes rm_frame_t.x/y/z in millimetres;
+        # the project coordinate contract stores all linear values in metres.
+        center_of_mass_m = tuple(
+            value * _VENDOR_CURRENT_TOOL_COM_MM_TO_M for value in center_of_mass_mm
         )
     else:
         payload_kg = None

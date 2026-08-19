@@ -113,6 +113,8 @@ ros2 action send_goal /l/execute_motion realman_msgs/action/ExecuteMotion \
 
 `config/ros/realman_coordinates.yaml` 是工具和工作坐标的权威期望状态。每个工具包含控制器名、namespaced ROS frame、位置（m）、`quaternion_wxyz`、负载（kg）和质心（m）；工作坐标包含控制器名、ROS frame、位置和四元数。默认三臂工具为 `tcpgrip`，工作坐标为 `cell`。
 
+RealMan RM65 控制器的 `rm_get_current_tool_frame()` 回读中，`rm_frame_t.x/y/z` 质心字段使用毫米；驱动适配器在 SDK 边界将其转换为米后再交给坐标管理器。工具配置、`rm_set_manual_tool_frame()`/`rm_update_tool_frame()` 写入以及项目内部接口统一使用米。不要为了适配该回读值把 `config/ros/realman_coordinates.yaml` 中的质心改成毫米。
+
 默认 `policy.on_start=verify`：每次连接只读取控制器当前工具/工作坐标并逐字段比较，不写入控制器。API2 读取失败或任一字段不匹配都会关闭该臂 motion gate；该 gate 拦截依赖控制器工具/工作坐标的 `MOVEL`、`MOVEJ_P` 和速度 session。关节空间 `MOVEJ` 只使用六轴关节角，不依赖当前工具/工作坐标，因此仍可用于低速回零、离开安全位置或后续重新校准。四个 Service 与普通运动共享单臂 ownership：
 
 | Service | 行为 |

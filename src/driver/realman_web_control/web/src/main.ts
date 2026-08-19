@@ -50,6 +50,7 @@ type Manifest = {
   robots: Robot[];
 };
 type Message = Record<string, any> & { type: string };
+type RobotScene = { live: any | null; shadow: any | null };
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -65,6 +66,7 @@ app.innerHTML = `
   <main class="workspace">
     <section class="viewer-panel panel">
       <div class="panel-heading"><div><span class="eyebrow">LIVE / TARGET</span><h1>三维姿态</h1></div><div id="model-label" class="muted">loading model</div></div>
+      <div id="fleet-strip" class="fleet-strip"></div>
       <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
       <div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span id="root-frame"></span></div>
     </section>
@@ -78,6 +80,7 @@ app.innerHTML = `
 `;
 
 const $ = <T extends Element>(selector: string) => document.querySelector<T>(selector)!;
+const ARM_COLORS: Record<ArmId, number> = { l: 0x2d9b9d, m: 0xd47746, r: 0x84949a };
 const armSelect = $("#arm-select") as HTMLSelectElement;
 const connection = $("#connection");
 const mode = $("#mode");
@@ -96,6 +99,7 @@ const progress = $("#progress") as HTMLElement;
 const viewerState = $("#viewer-state");
 const canvas = $("#canvas") as HTMLCanvasElement;
 const viewer = $("#viewer");
+const fleetStrip = $("#fleet-strip");
 
 let manifest: Manifest | undefined;
 let selectedArm: ArmId = "l";
@@ -107,16 +111,24 @@ let activeMotionRequest = "";
 let activeVelocityRequest = "";
 let velocityTimer = 0;
 const coordinateStates: Partial<Record<ArmId, CoordinateState>> = {};
+const connectionStates: Partial<Record<ArmId, boolean>> = {};
+const currentJointsByArm: Partial<Record<ArmId, number[]>> = {};
+const targetJointsByArm: Partial<Record<ArmId, number[]>> = {};
+const robotScenes: Partial<Record<ArmId, RobotScene>> = {};
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
 let controls: OrbitControls;
-let liveRobot: any;
-let shadowRobot: any;
+let selectedShadowArm: ArmId | null = null;
+let loadGeneration = 0;
 
 function robot() {
   if (!manifest) throw new Error("manifest not loaded");
   return manifest.robots.find((item) => item.id === selectedArm)!;
+}
+function robotConfig(arm: ArmId) {
+  if (!manifest) throw new Error("manifest not loaded");
+  return manifest.robots.find((item) => item.id === arm)!;
 }
 function requestId(prefix: string) { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`; }
 function canWrite() { return !readOnly && socket?.readyState === WebSocket.OPEN; }
@@ -127,6 +139,27 @@ function referenceLabel(frame?: FrameState | null) {
 }
 function currentCoordinateState() {
   return coordinateStates[selectedArm];
+}
+function selectedRobotScene() {
+  return robotScenes[selectedArm];
+}
+function armJointSnapshot(arm: ArmId) {
+  const config = robotConfig(arm);
+  return currentJointsByArm[arm] ?? config.joints.map(() => manifest!.default_joint_position_rad);
+}
+function armTargetSnapshot(arm: ArmId) {
+  return targetJointsByArm[arm] ?? armJointSnapshot(arm);
+}
+function updateSelectedArmFromState() {
+  currentJoints = [...armJointSnapshot(selectedArm)];
+  targetJoints = [...armTargetSnapshot(selectedArm)];
+  setJointInputs(targetJoints, true);
+  if (selectedRobotScene()?.shadow) setRobotJoints(selectedRobotScene()!.shadow, targetJoints);
+  renderCoordinateState();
+  configureVelocity();
+  renderFleetStrip();
+  setSelectedConnection();
+  updateButtons();
 }
 function renderCoordinateState() {
   const state = currentCoordinateState();
@@ -146,6 +179,35 @@ function renderCoordinateState() {
     <div class="coordinate-meta">${state.work?.xyz_m ? `xyz ${state.work.xyz_m.map((value) => value.toFixed(4)).join(", ")}` : ""}</div>
   `;
 }
+function renderFleetStrip() {
+  if (!manifest) return;
+  fleetStrip.innerHTML = manifest.robots.map((robotInfo) => {
+    const arm = robotInfo.id;
+    const selected = arm === selectedArm;
+    const coordinate = coordinateStates[arm];
+    const connected = connectionStates[arm];
+    const label = connected === undefined ? "WAIT" : connected ? "ONLINE" : "OFFLINE";
+    const motion = coordinate ? (coordinate.motion_allowed ? "READY" : "BLOCKED") : "WAIT";
+    const jointCount = currentJointsByArm[arm]?.length || 0;
+    return `
+      <button type="button" class="fleet-chip ${selected ? "selected" : ""}" data-arm="${arm}">
+        <span class="fleet-chip-arm">${arm.toUpperCase()}</span>
+        <span class="fleet-chip-state">${label}</span>
+        <span class="fleet-chip-motion">${motion}</span>
+        <span class="fleet-chip-meta">${jointCount ? `${jointCount} joints` : robotInfo.model}</span>
+      </button>
+    `;
+  }).join("");
+  fleetStrip.querySelectorAll<HTMLButtonElement>("button[data-arm]").forEach((button) => {
+    button.addEventListener("click", () => {
+      const arm = button.dataset.arm as ArmId;
+      if (armSelect.value !== arm) {
+        armSelect.value = arm;
+        armSelect.dispatchEvent(new Event("change"));
+      }
+    });
+  });
+}
 function preferredReference() {
   const state = currentCoordinateState();
   if (state?.preferred_reference) return state.preferred_reference;
@@ -159,6 +221,10 @@ function setConnection(online: boolean) {
   connection.textContent = online ? "ROS ONLINE" : "OFFLINE";
   connection.classList.toggle("offline", !online);
 }
+function setSelectedConnection() {
+  const online = Boolean(connectionStates[selectedArm]);
+  setConnection(online);
+}
 
 function renderJointControls() {
   const controlsHost = $("#joint-controls");
@@ -169,8 +235,9 @@ function renderJointControls() {
   controlsHost.querySelectorAll<HTMLInputElement>("input[data-joint-index]").forEach((input) => input.addEventListener("input", () => {
     const index = Number(input.dataset.jointIndex);
     targetJoints[index] = Number(input.value) * Math.PI / 180;
+    targetJointsByArm[selectedArm] = [...targetJoints];
     $(`#joint-value-${index}`).textContent = `${Number(input.value).toFixed(1)}°`;
-    shadowRobot?.setJointValues(Object.fromEntries(targetJoints.map((value, i) => [`joint_${i + 1}`, value])));
+    selectedRobotScene()?.shadow?.setJointValues(Object.fromEntries(targetJoints.map((value, i) => [`joint_${i + 1}`, value])));
   }));
 }
 
@@ -189,20 +256,31 @@ function setRobotJoints(target: any, values: number[]) {
   target?.setJointValues(Object.fromEntries(values.map((value, index) => [`joint_${index + 1}`, value])));
 }
 
-function applyMaterials(target: any, shadow: boolean) {
+function applyMaterials(target: any, shadow: boolean, arm: ArmId) {
   target?.traverse((object: any) => {
     if (!(object instanceof THREE.Mesh)) return;
     object.material = new THREE.MeshStandardMaterial({
-      color: shadow ? 0xe08a52 : selectedArm === "l" ? 0x2d9b9d : selectedArm === "m" ? 0xd47746 : 0x84949a,
+      color: shadow ? 0xe08a52 : ARM_COLORS[arm],
       metalness: shadow ? 0.05 : 0.25,
       roughness: 0.56,
       transparent: shadow,
-      opacity: shadow ? 0.26 : 1,
+      opacity: shadow ? (arm === selectedArm ? 0.28 : 0) : 1,
       depthWrite: !shadow,
     });
     object.castShadow = !shadow;
     object.receiveShadow = !shadow;
   });
+}
+function setShadowVisibility(arm: ArmId) {
+  const previous = selectedShadowArm ? robotScenes[selectedShadowArm]?.shadow : null;
+  previous?.traverse((object: any) => {
+    if (object instanceof THREE.Mesh && "opacity" in object.material) object.material.opacity = 0;
+  });
+  const next = robotScenes[arm]?.shadow;
+  next?.traverse((object: any) => {
+    if (object instanceof THREE.Mesh && "opacity" in object.material) object.material.opacity = 0.28;
+  });
+  selectedShadowArm = arm;
 }
 
 function meshCount(target: any) {
@@ -219,31 +297,49 @@ async function waitForMeshes(targets: any[], minimumPerRobot = 7) {
   throw new Error("URDF mesh loading timed out");
 }
 
-async function loadRobot() {
+async function loadFleet() {
+  const generation = ++loadGeneration;
   viewerState.textContent = "加载 URDF…";
   viewerState.removeAttribute("hidden");
-  liveRobot?.parent?.remove(liveRobot);
-  shadowRobot?.parent?.remove(shadowRobot);
   const loader = new URDFLoader();
   loader.packages = { rm65_description: `${location.origin}/models` };
-  const config = robot();
   try {
-    [liveRobot, shadowRobot] = await Promise.all([
-      loader.loadAsync(`${location.origin}${config.urdf_url}`),
-      loader.loadAsync(`${location.origin}${config.urdf_url}`),
-    ]);
-    [liveRobot, shadowRobot].forEach((model, index) => {
-      model.position.set(config.transform.x, config.transform.y, config.transform.z);
-      model.rotation.set(config.transform.roll, config.transform.pitch, config.transform.yaw, "ZYX");
-      scene.add(model);
+    const snapshots = await Promise.all(manifest!.robots.map(async (config) => {
+      const live = await loader.loadAsync(`${location.origin}${config.urdf_url}`);
+      const shadow = await loader.loadAsync(`${location.origin}${config.urdf_url}`);
+      return { config, live, shadow };
+    }));
+    if (generation !== loadGeneration) return;
+    scene.clear();
+    scene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
+    const key = new THREE.DirectionalLight(0xffffff, 4);
+    key.position.set(2, -3, 4);
+    key.castShadow = true;
+    scene.add(key);
+    const grid = new THREE.GridHelper(3.5, 22, 0x567078, 0x263b40);
+    grid.rotation.x = Math.PI / 2;
+    scene.add(grid);
+    const allMeshes: any[] = [];
+    snapshots.forEach(({ config, live, shadow }) => {
+      live.position.set(config.transform.x, config.transform.y, config.transform.z);
+      live.rotation.set(config.transform.roll, config.transform.pitch, config.transform.yaw, "ZYX");
+      shadow.position.set(config.transform.x, config.transform.y, config.transform.z);
+      shadow.rotation.set(config.transform.roll, config.transform.pitch, config.transform.yaw, "ZYX");
+      scene.add(live);
+      scene.add(shadow);
+      robotScenes[config.id] = { live, shadow };
+      allMeshes.push(live, shadow);
     });
-    await waitForMeshes([liveRobot, shadowRobot]);
-    applyMaterials(liveRobot, false);
-    applyMaterials(shadowRobot, true);
-    setRobotJoints(liveRobot, currentJoints);
-    setRobotJoints(shadowRobot, targetJoints);
-    liveRobot.updateMatrixWorld(true);
-    const bounds = new THREE.Box3().setFromObject(liveRobot);
+    await waitForMeshes(allMeshes);
+    snapshots.forEach(({ config, live, shadow }) => {
+      applyMaterials(live, false, config.id);
+      applyMaterials(shadow, true, config.id);
+      setRobotJoints(live, armJointSnapshot(config.id));
+      setRobotJoints(shadow, armTargetSnapshot(config.id));
+      live.updateMatrixWorld(true);
+    });
+    const bounds = new THREE.Box3();
+    snapshots.forEach(({ live }) => bounds.expandByObject(live));
     const center = bounds.getCenter(new THREE.Vector3());
     const size = bounds.getSize(new THREE.Vector3());
     const dimension = Math.max(size.x, size.y, size.z, 0.5);
@@ -255,10 +351,12 @@ async function loadRobot() {
       focusHeight + dimension * 0.82,
     );
     camera.lookAt(controls.target);
-    viewer.dataset.liveMeshes = String(meshCount(liveRobot));
-    viewer.dataset.shadowMeshes = String(meshCount(shadowRobot));
+    const selectedConfig = robotConfig(selectedArm);
+    setShadowVisibility(selectedArm);
+    viewer.dataset.liveMeshes = String(snapshots.reduce((count, { live }) => count + meshCount(live), 0));
+    viewer.dataset.shadowMeshes = String(snapshots.reduce((count, { shadow }) => count + meshCount(shadow), 0));
     viewerState.setAttribute("hidden", "");
-    $("#model-label").textContent = `${config.model} / ${selectedArm.toUpperCase()}`;
+    $("#model-label").textContent = `${selectedConfig.model} / ${selectedArm.toUpperCase()} + 3 arms`;
   } catch (error) {
     viewerState.textContent = `URDF 加载失败: ${String(error)}`;
   }
@@ -277,14 +375,6 @@ function initScene() {
   controls = new OrbitControls(camera, canvas);
   controls.enableDamping = true;
   controls.target.set(0, 0, 0.55);
-  scene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
-  const key = new THREE.DirectionalLight(0xffffff, 4);
-  key.position.set(2, -3, 4);
-  key.castShadow = true;
-  scene.add(key);
-  const grid = new THREE.GridHelper(3.5, 22, 0x567078, 0x263b40);
-  grid.rotation.x = Math.PI / 2;
-  scene.add(grid);
   const resize = () => {
     const box = viewer.getBoundingClientRect();
     if (!box.width || !box.height) return;
@@ -320,17 +410,30 @@ function handleMessage(message: Message) {
     mode.textContent = readOnly ? "READ ONLY" : "CONTROL READY";
     mode.classList.toggle("ready", !readOnly);
     if (message.layout) loadManifest(message.layout);
-  } else if (message.type === "coordinate_state" && message.arm === selectedArm) {
+  } else if (message.type === "coordinate_state") {
     coordinateStates[message.arm] = message as CoordinateState;
-    renderCoordinateState();
-    if (manifest) configureVelocity();
-  } else if (message.type === "connection" && message.arm === selectedArm) {
-    setConnection(Boolean(message.connected));
-  } else if (message.type === "joint_state" && message.arm === selectedArm) {
-    currentJoints = message.positions_rad;
-    setRobotJoints(liveRobot, currentJoints);
-    $("#joint-stamp").textContent = `joint_states / ${message.stamp_ns || 0}`;
-  } else if (message.type === "action_state" && message.arm === selectedArm) {
+    renderFleetStrip();
+    if (message.arm === selectedArm) {
+      renderCoordinateState();
+      if (manifest) configureVelocity();
+    }
+  } else if (message.type === "connection") {
+    connectionStates[message.arm] = Boolean(message.connected);
+    renderFleetStrip();
+    if (message.arm === selectedArm) setSelectedConnection();
+  } else if (message.type === "joint_state") {
+    currentJointsByArm[message.arm] = message.positions_rad;
+    setRobotJoints(robotScenes[message.arm]?.live, message.positions_rad);
+    if (message.arm === selectedArm) {
+      currentJoints = message.positions_rad;
+      $("#joint-stamp").textContent = `joint_states / ${message.stamp_ns || 0}`;
+    }
+    renderFleetStrip();
+  } else if (message.type === "action_state") {
+    if (message.arm !== selectedArm) {
+      renderFleetStrip();
+      return;
+    }
     actionState.textContent = String(message.state).toUpperCase();
     actionState.className = `mini-state ${message.state}`;
     if (message.action === "cartesian_velocity") velocityState.textContent = String(message.state).toUpperCase();
@@ -339,17 +442,20 @@ function handleMessage(message: Message) {
       if (message.action === "cartesian_velocity") { activeVelocityRequest = ""; window.clearInterval(velocityTimer); velocityTimer = 0; }
       updateButtons();
     }
-  } else if (message.type === "action_feedback" && message.arm === selectedArm) {
+  } else if (message.type === "action_feedback") {
+    if (message.arm !== selectedArm) return;
     const item = message.feedback || {};
     feedback.textContent = `${message.action} / ${item.detail || "executing"} / progress ${item.progress ?? "-"}`;
     if (Array.isArray(item.current_joint_degrees)) {
       const radians = item.current_joint_degrees.map((value: number) => value * Math.PI / 180);
+      currentJointsByArm[message.arm] = radians;
       currentJoints = radians;
-      setRobotJoints(liveRobot, radians);
+      setRobotJoints(robotScenes[message.arm]?.live, radians);
     }
     if (Array.isArray(item.commanded_linear_velocity_mps)) feedback.textContent = `velocity / ${item.commanded_linear_velocity_mps.map((value: number) => value.toFixed(3)).join(", ")}`;
     progress.style.width = `${Math.max(0, Math.min(100, Number(item.progress || 0) * 100))}%`;
-  } else if (message.type === "action_result" && message.arm === selectedArm) {
+  } else if (message.type === "action_result") {
+    if (message.arm !== selectedArm) return;
     result.textContent = JSON.stringify(message.result, null, 2);
     actionState.textContent = "RESULT";
     activeMotionRequest = message.action === "execute_motion" ? "" : activeMotionRequest;
@@ -386,20 +492,42 @@ function updateButtons() {
 function loadManifest(next: Manifest) {
   manifest = next;
   selectedArm = armSelect.value as ArmId;
-  const initial = next.robots.find((item) => item.id === selectedArm)!.joints.map(() => next.default_joint_position_rad);
-  currentJoints = [...initial];
-  targetJoints = [...initial];
+  next.robots.forEach((item) => {
+    const initial = item.joints.map(() => next.default_joint_position_rad);
+    currentJointsByArm[item.id] = currentJointsByArm[item.id] ?? [...initial];
+    targetJointsByArm[item.id] = targetJointsByArm[item.id] ?? [...initial];
+  });
+  currentJoints = [...armJointSnapshot(selectedArm)];
+  targetJoints = [...armTargetSnapshot(selectedArm)];
   $("#root-frame").textContent = `TF / ${next.root_frame}`;
   renderJointControls();
   configureVelocity();
   renderCoordinateState();
+  renderFleetStrip();
+  setSelectedConnection();
   if (!renderer) initScene();
-  loadRobot();
+  loadFleet();
   updateButtons();
 }
 
-$("#reset-preview").addEventListener("click", () => { targetJoints = [...currentJoints]; setJointInputs(targetJoints, true); setRobotJoints(shadowRobot, targetJoints); });
-armSelect.addEventListener("change", () => { selectedArm = armSelect.value as ArmId; activeMotionRequest = ""; activeVelocityRequest = ""; loadManifest(manifest); renderCoordinateState(); });
+$("#reset-preview").addEventListener("click", () => {
+  targetJoints = [...currentJoints];
+  targetJointsByArm[selectedArm] = [...targetJoints];
+  setJointInputs(targetJoints, true);
+  setRobotJoints(selectedRobotScene()?.shadow, targetJoints);
+});
+armSelect.addEventListener("change", () => {
+  selectedArm = armSelect.value as ArmId;
+  activeMotionRequest = "";
+  activeVelocityRequest = "";
+  window.clearInterval(velocityTimer);
+  velocityTimer = 0;
+  renderJointControls();
+  setShadowVisibility(selectedArm);
+  updateSelectedArmFromState();
+  const config = robotConfig(selectedArm);
+  $("#model-label").textContent = `${config.model} / ${selectedArm.toUpperCase()} + 3 arms`;
+});
 movejButton.addEventListener("click", () => {
   if (!canWrite()) return;
   activeMotionRequest = requestId("movej");

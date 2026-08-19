@@ -64,8 +64,12 @@ test.beforeEach(async ({ page }) => {
 
 test("loads configured URDF scene and sends MOVEJ/cancel protocol", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("#viewer")).toHaveAttribute("data-live-meshes", /^[7-9]|[1-9][0-9]+$/, { timeout: 30_000 });
-  await expect(page.locator("#viewer")).toHaveAttribute("data-shadow-meshes", /^[7-9]|[1-9][0-9]+$/);
+  await expect(page.locator(".fleet-chip")).toHaveCount(3);
+  await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
+  await expect(page.locator(".fleet-chip[data-arm=\"m\"]")).toContainText("6 joints");
+  await expect(page.locator(".fleet-chip[data-arm=\"r\"]")).toContainText("6 joints");
+  await expect(page.locator("#viewer")).toHaveAttribute("data-live-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/, { timeout: 30_000 });
+  await expect(page.locator("#viewer")).toHaveAttribute("data-shadow-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/);
   await expect(page.locator("#connection")).toContainText("ROS ONLINE");
   await expect(page.locator("#coordinate-state")).toContainText("READY");
   await expect(page.locator("#coordinate-summary")).toContainText("WORK / cell");

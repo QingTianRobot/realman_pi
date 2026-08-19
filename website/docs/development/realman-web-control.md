@@ -6,9 +6,10 @@ description: realman_web_control 的 WebSocket 协议、Action 反馈、软件�
 # WebSocket 浏览器控制与 URDF 影子
 
 `realman_web_control` 是一个 ROS 2 功能包：它把浏览器同源 WebSocket 消息转换成现有的
-`ExecuteMotion`、`CartesianVelocity` Action、速度命令和 `/stop` 服务。浏览器永远不直接
-加载 RealMan SDK，也不绕过 `realman_robot_driver` 的 ownership、坐标 gate、watchdog 或
-lockout。
+`ExecuteMotion`、`CartesianVelocity` Action、速度命令和 `/stop` 服务。页面同一端口会同时
+渲染三台机械臂的实时 URDF 和坐标状态，但控制指令始终只作用于当前选中的 arm。浏览器永远
+不直接加载 RealMan SDK，也不绕过 `realman_robot_driver` 的 ownership、坐标 gate、
+watchdog 或 lockout。
 
 ```text
 笔记本浏览器
@@ -60,9 +61,9 @@ watchdog 和 lockout，不会直接调用 SDK。
 
 | 事件 | 关键字段 | 用途 |
 | --- | --- | --- |
-| `joint_state` | `arm`, `positions_rad`, `stamp_ns` | 实体 URDF 姿态和滑轨 |
+| `joint_state` | `arm`, `positions_rad`, `stamp_ns` | 各 arm 的实体 URDF 姿态和滑轨 |
 | `connection` | `arm`, `connected` | 控制器在线状态 |
-| `coordinate_state` | `motion_allowed`, `preferred_reference`, `tool`, `work` | 当前激活坐标、可运动状态和默认参考系 |
+| `coordinate_state` | `arm`, `motion_allowed`, `preferred_reference`, `tool`, `work` | 各 arm 的激活坐标、可运动状态和默认参考系 |
 | `action_state` | `action`, `request_id`, `state` | submitting/accepted/canceling |
 | `action_feedback` | `feedback` | 原 Action feedback 的 JSON 映射 |
 | `action_result` | `status`, `result` | 原 Action result 和 rclpy 状态 |
@@ -71,7 +72,8 @@ watchdog 和 lockout，不会直接调用 SDK。
 ### MOVEJ
 
 目标关节使用 degree，和 `ExecuteMotion.action` 一致；Web 后端会从 URDF limit 再检查一次。
-页面会优先使用当前 `coordinate_state` 给出的默认参考系发送目标：
+顶部状态条会同时显示 `l`、`m`、`r` 三台机械臂的连接和坐标状态；点击其中一个条目即可
+切换当前控制对象。页面会优先使用当前 `coordinate_state` 给出的默认参考系发送目标：
 
 ```json
 {
@@ -85,9 +87,10 @@ watchdog 和 lockout，不会直接调用 SDK。
 }
 ```
 
-`action_feedback.feedback.current_joint_degrees` 到达时，网页只更新实体模型；滑轨编辑的
-目标保持为橙色半透明影子，不会被回读覆盖。点击“发送 MOVEJ”才提交影子目标。
-当前坐标面板会显示 tool/work 名称、控制器回读值，以及工具坐标的位姿、payload 和重心。
+`action_feedback.feedback.current_joint_degrees` 到达时，网页只更新当前 arm 的实体模型；三台
+机械臂的 live URDF 会保留在同一画布中，选中 arm 的滑轨编辑目标保持为橙色半透明影子，
+不会被回读覆盖。点击“发送 MOVEJ”才提交影子目标。当前坐标面板会显示 tool/work 名称、
+控制器回读值，以及工具坐标的位姿、payload 和重心。
 
 ### 末端六轴速度
 
@@ -128,9 +131,10 @@ Action cancel。浏览器刷新不会留下仍由网页拥有的速度命令。
 - `rm65_description/urdf/<model>.urdf`：六个关节的 lower/upper limit 和 mesh。
 
 服务端只允许 `/models/urdf/<model>.urdf` 和 `/models/meshes/...` 解析到
-`rm65_description` package 内，`..` 路径会被拒绝。前端为当前 arm 加载两个独立的 URDF
-实例：实体模型使用 `joint_states.position`，影子模型使用滑轨目标；不 clone 实例，避免
-URDFLoader 的关节映射共享。切换 l/m/r 会重新读取对应的 world transform。
+`rm65_description` package 内，`..` 路径会被拒绝。前端为三台机械臂分别加载两份 URDF
+实例：每台 arm 都有一个实体模型和一个影子模型。实体模型使用各自的
+`joint_states.position`，影子模型只跟随当前选中 arm 的滑轨目标；不 clone 实例，避免
+URDFLoader 的关节映射共享。切换 l/m/r 只会切换控制焦点，不会重建整个三臂视图。
 
 ## 测试和开发
 

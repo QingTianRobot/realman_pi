@@ -112,8 +112,10 @@ test("loads configured URDF scene and sends MOVEJ/cancel protocol", async ({ pag
   await expect(page.locator(".fleet-chip[data-arm=\"r\"]")).toContainText("6 joints");
   await page.locator(".fleet-chip[data-arm=\"m\"]").click();
   await expect(page.locator("#arm-select")).toHaveValue("m");
+  await expect(page.locator("#selected-arm-label")).toContainText("M");
   await page.locator(".fleet-chip[data-arm=\"r\"]").click();
   await expect(page.locator("#arm-select")).toHaveValue("r");
+  await expect(page.locator("#selected-arm-label")).toContainText("R");
   await expect(page.locator("#viewer")).toHaveAttribute("data-live-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/, { timeout: 30_000 });
   await expect(page.locator("#viewer")).toHaveAttribute("data-shadow-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/);
   await expect(page.locator("#connection")).toContainText("ROS ONLINE");

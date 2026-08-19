@@ -74,6 +74,7 @@ watchdog 和 lockout，不会直接调用 SDK。
 目标关节使用 degree，和 `ExecuteMotion.action` 一致；Web 后端会从 URDF limit 再检查一次。
 左侧三块 `L`、`M`、`R` 会同时显示三台机械臂的连接和坐标状态；点击其中一个块即可切换
 当前控制对象，右侧滑条随之控制该 arm。页面会优先使用当前 `coordinate_state` 给出的默认参考系发送目标：
+右侧关节面板标题会显示当前激活的 arm，便于确认选择是否已经切换。
 
 ```json
 {

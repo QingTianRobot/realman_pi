@@ -26,6 +26,7 @@ select, input[type="number"], input[type="password"] { border: 1px solid #385158
 .viewer-panel { min-height: calc(100vh - 100px); display: flex; flex-direction: column; }
 .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid #263b40; }
 .panel-heading.compact { padding: 0 0 13px; border-bottom: 0; align-items: center; }
+.panel-actions { display: flex; align-items: center; gap: 8px; }
 .eyebrow { color: #58c5b9; font-size: 10px; font-weight: 800; letter-spacing: .14em; }
 h1, h2 { margin: 4px 0 0; letter-spacing: -.01em; }
 h1 { font-size: 22px; }
@@ -70,6 +71,7 @@ input[type="range"] { display: block; width: 100%; accent-color: #4dbbb0; }
 .mini-state { color: #8ba0a2; }
 .mini-state.executing, .mini-state.accepted { color: #84dfd0; border-color: #477d79; }
 .mini-state.canceling, .mini-state.stopping { color: #e4b16f; border-color: #896b45; }
+.mini-state.active-arm { color: #8ee1d2; border-color: #4b777b; }
 .progress-track { height: 4px; background: #26383c; margin: 4px 0 12px; }
 .progress-bar { width: 0; height: 100%; background: #4cc2b5; transition: width .15s ease; }
 .feedback { min-height: 32px; color: #c3d4d1; font-size: 11px; line-height: 1.5; }

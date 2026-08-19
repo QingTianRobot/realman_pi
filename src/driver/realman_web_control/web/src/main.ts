@@ -76,7 +76,7 @@ app.innerHTML = `
     </section>
     <aside class="controls">
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><span id="coordinate-state" class="mini-state">WAIT</span></div><div id="coordinate-summary" class="coordinate-summary"></div></section>
-      <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">JOINT TARGET</span><h2>关节角度</h2></div><button id="reset-preview" class="text-button" type="button">重置目标</button></div><div id="joint-controls" class="joint-controls"></div><button id="movej" class="button primary full" type="button" disabled>发送 MOVEJ</button></section>
+      <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">JOINT TARGET</span><h2>关节角度</h2></div><div class="panel-actions"><span id="selected-arm-label" class="mini-state">L</span><button id="reset-preview" class="text-button" type="button">重置目标</button></div></div><div id="joint-controls" class="joint-controls"></div><button id="movej" class="button primary full" type="button" disabled>发送 MOVEJ</button></section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">CARTESIAN</span><h2>末端速度</h2></div><span id="velocity-state" class="mini-state">IDLE</span></div><div class="form-grid"><label>参考系<select id="velocity-frame"></select></label><label>周期 (ms)<input id="velocity-period" type="number" min="1" step="1" /></label><label>看门狗 (ms)<input id="velocity-watchdog" type="number" min="1" step="1" /></label><label>线加速度<input id="linear-accel" type="number" min="0.001" step="0.01" /></label><label>角加速度<input id="angular-accel" type="number" min="0.001" step="0.01" /></label></div><div id="velocity-inputs" class="velocity-inputs"></div><div class="inline-actions"><button id="start-velocity" class="button secondary" type="button" disabled>启动速度 Action</button><button id="cancel-velocity" class="button ghost" type="button" disabled>取消</button></div></section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">ACTION MONITOR</span><h2>运行反馈</h2></div><span id="action-state" class="mini-state">IDLE</span></div><div class="progress-track"><div id="progress" class="progress-bar"></div></div><div id="feedback" class="feedback">尚未发送 Action</div><pre id="result" class="result" aria-live="polite">等待结果…</pre></section>
     </aside>
@@ -104,6 +104,7 @@ const viewerState = $("#viewer-state");
 const canvas = $("#canvas") as HTMLCanvasElement;
 const viewer = $("#viewer");
 const fleetStrip = $("#fleet-strip");
+const selectedArmLabel = $("#selected-arm-label");
 
 let manifest: Manifest | undefined;
 let selectedArm: ArmId = "l";
@@ -159,6 +160,8 @@ function updateSelectedArmFromState() {
   targetJoints = [...armTargetSnapshot(selectedArm)];
   setJointInputs(targetJoints, true);
   if (selectedRobotScene()?.shadow) setRobotJoints(selectedRobotScene()!.shadow, targetJoints);
+  selectedArmLabel.textContent = selectedArm.toUpperCase();
+  selectedArmLabel.className = "mini-state active-arm";
   renderCoordinateState();
   configureVelocity();
   renderFleetStrip();
@@ -205,10 +208,8 @@ function renderFleetStrip() {
   fleetStrip.querySelectorAll<HTMLButtonElement>("button[data-arm]").forEach((button) => {
     button.addEventListener("click", () => {
       const arm = button.dataset.arm as ArmId;
-      if (armSelect.value !== arm) {
-        armSelect.value = arm;
-        armSelect.dispatchEvent(new Event("change"));
-      }
+      armSelect.value = arm;
+      armSelect.dispatchEvent(new Event("change"));
     });
   });
 }
@@ -504,6 +505,8 @@ function loadManifest(next: Manifest) {
   currentJoints = [...armJointSnapshot(selectedArm)];
   targetJoints = [...armTargetSnapshot(selectedArm)];
   $("#root-frame").textContent = `TF / ${next.root_frame}`;
+  selectedArmLabel.textContent = selectedArm.toUpperCase();
+  selectedArmLabel.className = "mini-state active-arm";
   renderJointControls();
   configureVelocity();
   renderCoordinateState();

@@ -76,8 +76,14 @@ class FakeRobot:
     def rm_set_manual_tool_frame(self, frame):
         return self._call("rm_set_manual_tool_frame", frame)
 
+    def rm_update_tool_frame(self, frame):
+        return self._call("rm_update_tool_frame", frame)
+
     def rm_set_manual_work_frame(self, name, pose):
         return self._call("rm_set_manual_work_frame", name, pose)
+
+    def rm_update_work_frame(self, name, pose):
+        return self._call("rm_update_work_frame", name, pose)
 
     def rm_change_tool_frame(self, name):
         return self._call("rm_change_tool_frame", name)
@@ -645,6 +651,45 @@ def test_set_work_frame_normalizes_quaternion_and_serializes_known_axis_euler(
     method, name, pose = fake_robot.calls[-1]
     assert (method, name) == ("rm_set_manual_work_frame", "cell")
     assert pose == pytest.approx([0.4, 0.5, 0.6, 0.0, 0.0, math.pi / 2.0])
+
+
+def test_existing_coordinate_frames_are_updated_after_create_status_one(
+    adapter, fake_robot, monkeypatch
+):
+    _install_frame_types(monkeypatch)
+    tool = ToolFrame(
+        controller_name="tcpgrip",
+        ros_frame_id="l/tool/tcpgrip",
+        xyz_m=(0.0, 0.0, 0.12),
+        quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+        payload_kg=0.8,
+        center_of_mass_m=(0.0, 0.0, 0.06),
+    )
+    work = WorkFrame(
+        controller_name="cell",
+        ros_frame_id="l/work/cell",
+        xyz_m=(0.0, 0.0, 0.0),
+        quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+    )
+    fake_robot.results.update(
+        {
+            "rm_set_manual_tool_frame": 1,
+            "rm_update_tool_frame": 0,
+            "rm_set_manual_work_frame": 1,
+            "rm_update_work_frame": 0,
+        }
+    )
+
+    assert adapter.set_tool_frame(tool) == 0
+    assert [call[0] for call in fake_robot.calls[-2:]] == [
+        "rm_set_manual_tool_frame",
+        "rm_update_tool_frame",
+    ]
+    assert adapter.set_work_frame(work) == 0
+    assert [call[0] for call in fake_robot.calls[-2:]] == [
+        "rm_set_manual_work_frame",
+        "rm_update_work_frame",
+    ]
 
 
 @pytest.mark.parametrize(

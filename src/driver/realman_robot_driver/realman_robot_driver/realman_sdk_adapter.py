@@ -588,7 +588,16 @@ class RealManSdkAdapter:
         with self._lock:
             if token is None or not self._call_matches_locked(token):
                 return _status_code(result)
-            return self._finish_command_locked(result, "SDK tool frame update failed")
+            result_status = self._finish_command_locked(
+                result, "SDK tool frame create failed"
+            )
+        if result_status == 1:
+            return self._command(
+                "rm_update_tool_frame",
+                "SDK tool frame update failed",
+                vendor_frame,
+            )
+        return result_status
 
     def set_work_frame(self, frame: Any) -> int:
         with self._lock:
@@ -628,7 +637,17 @@ class RealManSdkAdapter:
         with self._lock:
             if token is None or not self._call_matches_locked(token):
                 return _status_code(result)
-            return self._finish_command_locked(result, "SDK work frame update failed")
+            result_status = self._finish_command_locked(
+                result, "SDK work frame create failed"
+            )
+        if result_status == 1:
+            return self._command(
+                "rm_update_work_frame",
+                "SDK work frame update failed",
+                controller_frame.controller_name,
+                pose,
+            )
+        return result_status
 
     def change_tool_frame(self, controller_name: str) -> int:
         with self._lock:

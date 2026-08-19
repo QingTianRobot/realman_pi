@@ -131,6 +131,9 @@ ros2 service call /l/coordinates/select_work realman_msgs/srv/SelectFrame \
 ```
 
 `coordinates/apply` 会修改真实控制器；只能在机械臂空闲、标定值已复核且现场安全条件满足时显式调用。所有 mutation 在写入后回读，返回 `api2_status`，失败时保持 motion gate 关闭。
+当同名工具或工作坐标已经存在时，适配器会在新建接口返回 API2 状态 `1` 后改用
+`rm_update_tool_frame()` 或 `rm_update_work_frame()` 覆盖该配置，再选择并回读；因此重复
+执行 `coordinates/apply` 不需要人工先删除控制器中的同名坐标。
 
 ## 笛卡尔速度 session
 

@@ -132,6 +132,9 @@ class RealManDriverNode(Node):
             self.arm_id,
         )
         self._event_recovery_lock = threading.Lock()
+        self._last_event_recovery_attempt = 0.0
+        self._event_recovery_delay_sec = 1.0
+        self._event_recovery_retry_interval_sec = 1.0
         profile = self.coordinate_manager.profiles[self.arm_id]
         self._active_references = {
             ReferenceType.BASE: "base",
@@ -768,6 +771,19 @@ class RealManDriverNode(Node):
         if not self._event_recovery_lock.acquire(blocking=False):
             return False
         try:
+            now = time.monotonic()
+            if (
+                now - self._last_event_recovery_attempt
+                < self._event_recovery_retry_interval_sec
+            ):
+                return False
+            self._last_event_recovery_attempt = now
+            # The controller can keep the old TCP session briefly after the
+            # SDK handle is destroyed. Give it a bounded quiet interval before
+            # creating a replacement handle.
+            time.sleep(self._event_recovery_delay_sec)
+            if not self.motion_coordinator.event_channel_recovery_required:
+                return True
             self.get_logger().warn(
                 "Resetting RealMan SDK connection after a clean stop left the "
                 "trajectory event channel without a generation marker"
@@ -792,8 +808,6 @@ class RealManDriverNode(Node):
             self._event_recovery_lock.release()
 
     def _publish_state(self) -> None:
-        if self.motion_coordinator.event_channel_recovery_required:
-            self._recover_event_channel()
         if (
             not self.adapter.connected
             and self.auto_connect

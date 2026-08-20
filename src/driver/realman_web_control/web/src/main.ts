@@ -69,6 +69,7 @@ app.innerHTML = `
     <span id="mode" class="status-pill ready">CONTROL READY</span>
     <span id="auth-button" class="status-pill ready">CONTROL OPEN</span>
     <button id="cancel-motion" class="button ghost" type="button" disabled>取消 Action</button>
+    <button id="recover-motion" class="button secondary" type="button" disabled>恢复机械臂</button>
     <button id="stop-button" class="button danger" type="button" disabled>■ 软件停止</button>
   </header>
   <main class="workspace">
@@ -144,6 +145,7 @@ const connection = $("#connection");
 const mode = $("#mode");
 const stopButton = $("#stop-button") as HTMLButtonElement;
 const cancelMotionButton = $("#cancel-motion") as HTMLButtonElement;
+const recoverMotionButton = $("#recover-motion") as HTMLButtonElement;
 const executeMotionButton = $("#execute-motion") as HTMLButtonElement;
 const startVelocityButton = $("#start-velocity") as HTMLButtonElement;
 const cancelVelocityButton = $("#cancel-velocity") as HTMLButtonElement;
@@ -208,6 +210,7 @@ const motionSettingsByArm: Partial<Record<ArmId, { velocity: string; timeout: st
 const jointRecordsByArm: Partial<Record<ArmId, JointRecord[]>> = {};
 const recordStatusByArm: Partial<Record<ArmId, string>> = {};
 const activeRecordRequestByArm: Partial<Record<ArmId, string>> = {};
+const activeRecoveryRequestByArm: Partial<Record<ArmId, string>> = {};
 const robotScenes: Partial<Record<ArmId, RobotScene>> = {};
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
@@ -779,6 +782,21 @@ function handleMessage(message: Message) {
     updateButtons();
   } else if (message.type === "software_stop_result") {
     result.textContent = `软件停止: ${message.success ? "成功" : "失败"} / ${message.message}`;
+  } else if (message.type === "motion_recovery_state") {
+    const arm = message.arm as ArmId;
+    if (activeRecoveryRequestByArm[arm] !== message.request_id) return;
+    result.textContent = `${arm.toUpperCase()} 恢复请求中 / ${message.state}`;
+    updateButtons();
+  } else if (message.type === "motion_recovery_result") {
+    const arm = message.arm as ArmId;
+    if (activeRecoveryRequestByArm[arm] !== message.request_id) return;
+    delete activeRecoveryRequestByArm[arm];
+    const status = message.success
+      ? (message.recovered ? "已恢复" : "无需恢复")
+      : "恢复失败";
+    result.textContent = `${arm.toUpperCase()} ${status} / ${message.message || "unknown error"}`;
+    if (arm === selectedArm) actionState.textContent = status.toUpperCase();
+    updateButtons();
   } else if (message.type === "error") {
     result.textContent = `${message.code}: ${message.message}`;
     if (message.request_id === activeMotionRequest) activeMotionRequest = "";
@@ -791,6 +809,10 @@ function handleMessage(message: Message) {
       if (message.request_id === activeRecordRequestByArm[arm]) {
         delete activeRecordRequestByArm[arm];
         setRecordStatus(arm, `${message.code}: ${message.message}`);
+      }
+      if (message.request_id === activeRecoveryRequestByArm[arm]) {
+        delete activeRecoveryRequestByArm[arm];
+        result.textContent = `${arm.toUpperCase()} 恢复失败 / ${message.code}: ${message.message}`;
       }
     }
     updateButtons();
@@ -813,6 +835,7 @@ function updateButtons() {
   startVelocityButton.disabled = !writable || Boolean(activeVelocityRequest);
   cancelVelocityButton.disabled = !writable || !Boolean(activeVelocityRequest);
   cancelMotionButton.disabled = !writable || !Boolean(activeMotionRequest);
+  recoverMotionButton.disabled = !writable || Boolean(activeRecoveryRequestByArm[selectedArm]);
   stopButton.disabled = !writable;
   const activeKinematicsRequest = Boolean(activeKinematicsRequestByArm[selectedArm]);
   fillCurrentPoseButton.disabled = !writable || selectedMotionCommand !== 1 || activeKinematicsRequest;
@@ -992,5 +1015,13 @@ startVelocityButton.addEventListener("click", () => {
 cancelVelocityButton.addEventListener("click", () => { send({ type: "cancel_action", arm: selectedArm, action: "cartesian_velocity" }); window.clearInterval(velocityTimer); velocityTimer = 0; });
 cancelMotionButton.addEventListener("click", () => { send({ type: "cancel_action", arm: selectedArm, action: "execute_motion" }); });
 stopButton.addEventListener("click", () => { send({ type: "software_stop", request_id: requestId("stop"), arm: selectedArm }); });
+recoverMotionButton.addEventListener("click", () => {
+  if (!canWrite() || activeRecoveryRequestByArm[selectedArm]) return;
+  const requestIdValue = requestId("recover");
+  activeRecoveryRequestByArm[selectedArm] = requestIdValue;
+  result.textContent = `${selectedArm.toUpperCase()} 恢复请求中…`;
+  send({ type: "recover_motion", request_id: requestIdValue, arm: selectedArm });
+  updateButtons();
+});
 fetch("/api/layout").then((response) => response.json()).then(loadManifest).catch((error) => { viewerState.textContent = `布局加载失败: ${String(error)}`; });
 connect();

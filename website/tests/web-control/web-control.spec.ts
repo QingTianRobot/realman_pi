@@ -187,6 +187,32 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator("#coordinate-summary")).toContainText("WORK / cell");
   await expect(page.locator("#motion-reference")).toHaveText("WORK / cell");
   await expect(page.locator("#motion-mode button")).toHaveCount(3);
+  await page.locator(".fleet-chip[data-arm=\"l\"]").click();
+  await page.evaluate(() => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "connection", arm: "l", connected: false,
+    }) });
+  });
+  await expect(page.locator("#connection")).toContainText("OFFLINE");
+  await expect(page.locator("#recover-motion")).toBeEnabled();
+  await page.locator("#recover-motion").click();
+  const recoveryRequestId = await page.evaluate(() => {
+    const messages = (window as any).__webMessages as string[];
+    return messages.map((value) => JSON.parse(value)).findLast((item) => item.type === "recover_motion").request_id;
+  });
+  await expect(page.locator("#recover-motion")).toBeDisabled();
+  await page.evaluate((requestId) => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "motion_recovery_state", arm: "l", request_id: requestId, state: "requested",
+    }) });
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "motion_recovery_result", arm: "l", request_id: requestId,
+      success: true, recovered: true, api2_status: 0, message: "motion event channel recovered",
+    }) });
+  }, recoveryRequestId);
+  await expect(page.locator("#result")).toContainText("L 已恢复");
+  await expect(page.locator("#recover-motion")).toBeEnabled();
+  await page.locator(".fleet-chip[data-arm=\"r\"]").click();
   await expect(page.locator("input[data-joint-index=\"0\"]")).toBeVisible();
   await page.locator("input[data-joint-index=\"0\"]").evaluate((element: HTMLInputElement) => {
     element.value = "30";

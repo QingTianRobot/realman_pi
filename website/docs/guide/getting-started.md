@@ -471,6 +471,7 @@ rm65_docker_web_control_logs -f
 | 关节记录 | 把当前真实关节角保存到 `config/web-control/joint-records/<arm>/`；选择记录可填入 MOVEJ，或经 FK 填入 MOVEL/MOVEP 位姿 |
 | 末端速度 | 使用当前激活参考系建立六轴 `vx, vy, vz, wx, wy, wz` 速度 Action，按周期发送最新命令 |
 | 取消 Action | 取消当前浏览器发起的 Action；普通运动立即停止，速度 session 零速后 slow-stop |
+| 恢复机械臂 | 对当前选中的机械臂重建取消后失效的运动事件通道；不发送运动指令 |
 | 软件停止 | 直接调用当前机械臂的 `/stop` 服务；它不是控制柜物理急停 |
 
 Action、坐标系、四元数和安全边界的开发契约见[Action 开发与测试](../development/realman-action-development)，

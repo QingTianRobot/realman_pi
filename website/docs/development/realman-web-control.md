@@ -70,6 +70,7 @@ watchdog 和 lockout，不会直接调用 SDK。
 | `action_feedback` | `feedback` | 原 Action feedback 的 JSON 映射 |
 | `action_result` | `status`, `result` | 原 Action result 和 rclpy 状态 |
 | `software_stop_result` | `success`, `message` | `/arm/stop` 的结果 |
+| `motion_recovery_state` | `arm`, `request_id`, `state` | 网页恢复按钮发起的恢复请求状态 |
 | `motion_recovery_result` | `success`, `recovered`, `api2_status` | 取消后的事件通道恢复结果 |
 | `joint_records` | `arm`, `records` | 该 arm 可填入运动面板的已保存关节记录 |
 | `joint_record_saved` | `record` | “记录当前”写入 YAML 后的结果 |
@@ -232,6 +233,10 @@ Web 控制相关 Compose 服务把 `./config` 以可写方式挂到容器内，�
 `recovered=true` 表示驱动完成了 SDK handle 重建。恢复期间该 arm 被
 `ArmOwnership` 独占；正在运动或执行坐标写入时请求会失败。即使客户端不显式调用，
 下一条普通或连续运动 goal 仍会触发同一恢复流程。
+
+网页顶部的“恢复机械臂”按钮会对当前选中的 arm 发送同一请求。按钮在 arm 显示离线时仍可用，
+因为事件通道失效正是需要恢复的场景；恢复成功后必须等待该 arm 重新发布
+`connection=true`，再发送运动。按钮不会执行运动，也不能替代控制柜或现场物理急停。
 
 客户端断开时，后端按以下顺序清理：速度通道发布零速度、请求速度 Action cancel、请求普通
 Action cancel。浏览器刷新不会留下仍由网页拥有的速度命令。

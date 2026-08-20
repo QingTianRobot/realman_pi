@@ -94,7 +94,15 @@ def main() -> int:
     log.info("开始推流，Ctrl-C 退出")
     try:
         while _running:
-            frames = pipeline.wait_for_frames(timeout_ms=5000)
+            try:
+                frames = pipeline.wait_for_frames(timeout_ms=5000)
+            except RuntimeError as exc:
+                log.error(
+                    "RealSense 读取帧失败: %s。请检查 USB3 线/端口、设备占用和相机固件；"
+                    "当前 USB2 总线可能无法同时承载多台相机。",
+                    exc,
+                )
+                return 1
             if not frames:
                 continue
             ts_us = time.time_ns() // 1000

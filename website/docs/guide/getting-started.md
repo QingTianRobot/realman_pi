@@ -56,6 +56,8 @@ rm65_project_help
 | `rm65_docker_bringup_custom_args ...` | 临时透传 `system.launch.py` 参数 |
 | `rm65_camera_start` / `stop` | 在宿主机启动或停止 SDK 直读相机推流 |
 | `rm65_camera_status` / `logs [-f]` | 查看相机进程、端口或跟踪推流日志 |
+| `rm65_camera_ros2 [color|depth] [rviz]` | 按串号启动三台 Orbbec 单一 ROS2 图像流；默认彩色，传入 `depth` 切换深度，传入 `rviz` 时同时启动 RViz2 |
+| `rm65_camera_ros2_stop` / `status` / `logs` | 停止、检查或查看 ROS2 相机节点日志 |
 | `rm65_docker_web_control[_start]` | 前台或后台启动浏览器 Action 控制台 |
 | `rm65_docker_web_control_status` / `logs` / `stop` | 查看、跟踪或停止 Web 控制台 |
 | `rm65_web_control_url [host]` | 输出浏览器访问地址，默认端口 `8765` |
@@ -100,10 +102,10 @@ rm65_camera_stop
 ```
 
 `rm65_camera_start` 启动 `mediamtx`、`realsense_stream`、`config/orbbec.yaml` 中
-`left/right` 两个 side（serial 为空的 side 会自行退出），主机检测到 `ros2` 时再启动
+配置的所有 side（serial 为空的 side 会自行退出），主机检测到 `ros2` 时再启动
 `ros2_bridge`。
-`rm65_camera_stop` 会停止这些进程，`rm65_camera_status` 会检查进程和 `8554`、`8100-8102`
-监听端口，`rm65_camera_logs` 支持 `all`、`mediamtx`、`orbbec_left`、`orbbec_right`、
+`rm65_camera_stop` 会停止这些进程，`rm65_camera_status` 会检查进程和 `8554`、`8100-8103`
+监听端口，`rm65_camera_logs` 支持 `all`、`mediamtx`、`orbbec_left`、`orbbec_middle`、`orbbec_right`、
 `realsense_stream`、`ros2_bridge` 组件名。
 
 彩色流地址为：
@@ -111,11 +113,12 @@ rm65_camera_stop
 ```text
 rtsp://<host>:8554/realsense/color
 rtsp://<host>:8554/orbbec/left/color
+rtsp://<host>:8554/orbbec/middle/color
 rtsp://<host>:8554/orbbec/right/color
 ```
 
-深度服务监听 `<host>:8100`（RealSense）、`<host>:8101`（Orbbec left）和 `<host>:8102`
-（Orbbec right）。启动前必须核对并按现场设备更新
+深度服务监听 `<host>:8100`（RealSense）、`<host>:8101`（Orbbec left）、`<host>:8102`
+（Orbbec middle）和 `<host>:8103`（Orbbec right）。启动前必须核对并按现场设备更新
 `src/camera_stream/config/realsense.yaml`、`src/camera_stream/config/orbbec.yaml` 的
 serial；空的 Orbbec serial 会跳过该 side。SDK 会独占 USB 设备，请勿与旧的
 `realsense2_camera_node` 或 Orbbec ROS 图像节点同时运行。
@@ -123,8 +126,59 @@ serial；空的 Orbbec serial 会跳过该 side。SDK 会独占 USB 设备，请
 若提示 Python 模块缺失，先执行 `install_deps.sh`；该脚本安装 `numpy`、`av`、`PyYAML`、
 `pyrealsense2`、`pyorbbecsdk` 等依赖，并下载仓库本地的 `bin/mediamtx`。生产主机没有
 这些依赖或串号不匹配时，入口会拒绝启动或在对应日志中报告设备不可用。
-当前启动脚本不会自动发现第三台 Orbbec；增加第四路相机时，需同时扩展
-`orbbec.yaml`、`scripts/start_streaming.sh` 的 side/端口/RTSP 配置。
+启动脚本会从 `orbbec.yaml` 动态读取所有 side。生产机当前三台 Orbbec 和一台 D435 都在
+USB2 总线上；三路 Orbbec 使用 `320x240@15` 深度低带宽档可正常推流和返回深度帧，但 D435
+当前 SDK/V4L2 均无帧，需更换 USB3 线或端口后再恢复 RealSense 深度和高分辨率。
+
+### ROS2 相机与 RViz2
+
+需要 ROS image topic 时使用官方 Orbbec ROS2 驱动。`rm65_camera_ros2` 会先停止 SDK 推流，
+source ROS2 Humble、Orbbec 和本仓库工作区，然后从 `config/ros/cameras_ros2.yaml` 按串号
+启动三台 Gemini 305。默认使用 USB2 兼容的 `640x480@15 MJPG` 彩色；深度向驱动传入
+`640x480@15 Y16` 和硬件抽取系数 `2`，实际发布 `320x240@15`。点云关闭；每次运行的
+官方节点日志写入 `logs/<timestamp>/`。三台相机是独立设备，配置默认关闭帧同步、触发输出和
+软件触发；启用 wrapper 默认同步参数会导致后启动的 USB2 设备只有 publisher 而没有图像帧。
+三台 Orbbec 与 D435 共用 USB2 root hub 时，还需将生产机 `usbfs_memory_mb` 调到至少 `256`；
+启动函数会检查该值并在过小时打印临时和持久化修复命令。
+wrapper 2.7.6 不能直接用 `320x240` 作为 Gemini 305 的原始深度 profile，否则即使设备枚举
+列表显示该档也会报告 profile 不匹配。
+
+生产端（通常无桌面）执行：
+
+```zsh
+source /home/administrator/realman_pi/functions.zsh
+rm65_camera_ros2
+ros2 topic list | grep camera
+rm65_camera_ros2_status
+```
+
+默认会看到 `/camera_left`、`/camera_middle`、`/camera_right` 下的 `color/image_raw` 和
+对应 `camera_info`。需要深度时使用互斥的深度模式：
+
+```zsh
+rm65_camera_ros2 depth
+```
+
+它使用 `640x480@15 Y16` 加硬件抽取 `2`，发布 `320x240@15` 的 `depth/image_raw`。
+官方 wrapper 2.7.6 在当前 USB2/libuvc 拓扑下不支持同一设备同时打开彩色和深度连续出帧，
+所以不要把 `enable_color` 和 `enable_depth` 同时设为 true。有图形桌面时可直接：
+
+```zsh
+rm65_camera_ros2 color rviz
+```
+
+`rviz` 参数要求当前会话有 `DISPLAY`；生产端无 GUI 时，让生产端保持
+`rm65_camera_ros2 color`，在笔记本以相同 `ROS_DOMAIN_ID` 使用远程查看器。当前生产机默认域为
+`0`，因此笔记本执行 `rm65_docker_remote_rviz 0`；如果两端设置了其他域，将 `0` 换成该值。
+停止或切回旧 SDK 推流时：
+
+```zsh
+rm65_camera_ros2_stop
+rm65_camera_start
+```
+
+两套相机节点不能同时打开 USB 设备。RealSense D435 在现有 USB2 拓扑下仍无法稳定出帧，
+因此没有加入这个 ROS2 三相机默认 launch。
 
 ### 远程 RViz 函数详解
 
@@ -373,11 +427,19 @@ rm65_docker_web_control_logs -f
 | `MOVEL` | 显示当前激活参考系，支持填入当前位置、计算逆解影子预览，再按 XYZ 米制位置和 WXYZ 四元数提交笛卡尔直线运动 |
 | `MOVEP` | 显示当前激活参考系，以 `MOVEJ_P` 命令提交目标位姿的关节空间运动 |
 | 末端速度 | 使用当前激活参考系建立六轴 `vx, vy, vz, wx, wy, wz` 速度 Action，按周期发送最新命令 |
-| 取消 Action | 取消当前浏览器发起的 Action，并由驱动执行受控 slow-stop |
+| 取消 Action | 取消当前浏览器发起的 Action；普通运动立即停止，速度 session 零速后 slow-stop |
 | 软件停止 | 直接调用当前机械臂的 `/stop` 服务；它不是控制柜物理急停 |
 
 Action、坐标系、四元数和安全边界的开发契约见[Action 开发与测试](../development/realman-action-development)，
 WebSocket 消息与 URDF 影子实现见[WebSocket 浏览器控制与 URDF 影子](../development/realman-web-control)。
+
+连续通过多个路点时不要在单点 Action 中途点击取消再发送下一点。应使用
+`/{arm}/execute_trajectory`，或通过 WebSocket 发送 `execute_trajectory` 消息；取消后的
+事件通道可显式恢复：
+
+```bash
+ros2 service call /l/recover_motion realman_msgs/srv/RecoverMotion "{}"
+```
 
 ### 在本机显示远程机械臂
 

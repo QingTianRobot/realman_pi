@@ -9,6 +9,7 @@
   <license>BSD-3-Clause</license>
 
   <buildtool_depend>ament_cmake</buildtool_depend>
+  <exec_depend>python3-yaml</exec_depend>
 
   <!-- 注意: realsense2_camera 和 orbbec_camera 位于独立工作区
        (src/sensor/realsense_ws 和 src/sensor/OrbbecSDK_ROS2)，

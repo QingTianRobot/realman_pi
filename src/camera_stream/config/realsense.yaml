@@ -1,23 +1,26 @@
 # 全局相机 RealSense D435 推流配置
 camera:
   name: realsense          # RTSP 路径段 / 日志前缀
-  serial: "262322074840"   # 留空则取第一台设备
+  serial: "346222072431"   # 生产端 D435；留空则取第一台设备
   rtsp_path: /realsense/color
   # 推给本机 mediamtx；消费端用 http://<本机IP>:8554 或 rtsp://<本机IP>:8554/realsense/color
   rtsp_url: rtsp://127.0.0.1:8554/realsense/color
 
 color:
-  width: 1280
-  height: 720
-  fps: 30
+  # 生产机当前把相机接在 USB2 总线；USB3 线/端口恢复后可升到 1280x720@30。
+  width: 424
+  height: 240
+  fps: 15
   encoder: libx264         # PyAV wheel 不带 NVENC；如需 NVENC 需自建 PyAV 或用 GStreamer
-  bitrate_kbps: 8000
+  bitrate_kbps: 1500
 
 depth:
-  enable: true
-  width: 848
-  height: 480
-  fps: 30
+  # D435 在当前 USB2 拓扑下无法和三台 Orbbec 同时稳定传深度，先关闭；
+  # 接入 USB3 后改为 true 并按设备支持的 profile 恢复分辨率。
+  enable: false
+  width: 480
+  height: 270
+  fps: 15
   port: 8100               # 深度 TCP 通道监听端口
   bind: 0.0.0.0
   lz4_compress: false      # 千兆网带宽够用可关；带宽紧张时置 true

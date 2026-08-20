@@ -82,10 +82,14 @@ rm65_project_help
 
 | 函数 | 当前用途 | 启动/影响的组件 | 适用场景 | 权威配置与文档 |
 | --- | --- | --- | --- | --- |
-| `rm65_camera_start` | 检查 Python SDK 依赖后调用 `src/camera_stream/scripts/start_streaming.sh`。 | `mediamtx`、`realsense_stream`、`orbbec.yaml` 中 `left/right` 两个 side；若主机有 `ros2`，还启动 `ros2_bridge`。 | 首次运行依赖安装完成、且需要向局域网提供相机彩色/深度流时。重复启动会被拒绝。 | `src/camera_stream/config/realsense.yaml`、`src/camera_stream/config/orbbec.yaml`、[相机流 README](https://github.com/QingTianRobot/realman_pi/blob/main/src/camera_stream/README.md) |
+| `rm65_camera_start` | 检查 Python SDK 依赖后调用 `src/camera_stream/scripts/start_streaming.sh`。 | `mediamtx`、`realsense_stream`、`orbbec.yaml` 中所有 side；若主机有 `ros2`，还启动 `ros2_bridge`。 | 首次运行依赖安装完成、且需要向局域网提供相机彩色/深度流时。重复启动会被拒绝。 | `src/camera_stream/config/realsense.yaml`、`src/camera_stream/config/orbbec.yaml`、[相机流 README](https://github.com/QingTianRobot/realman_pi/blob/main/src/camera_stream/README.md) |
 | `rm65_camera_stop` | 调用 `stop_streaming.sh` 停止相机流相关进程。 | 停止 Orbbec/RealSense 推流、`ros2_bridge` 和仓库 `bin/mediamtx`。 | 释放 USB 相机、修改配置或切换到其他相机节点前。 | `src/camera_stream/scripts/stop_streaming.sh` |
-| `rm65_camera_status` | 打印配置路径、匹配的进程和监听端口。 | 只读检查相机进程、`mediamtx`、`ros2_bridge`，以及 RTSP `8554`/深度 `8100-8102`。 | 启动后确认服务是否真正监听，或排查端口/残留进程。 | `src/camera_stream/scripts/start_streaming.sh` |
-| `rm65_camera_logs [-f] [component]` | 查看最近 100 行，或用 `-f` 持续跟踪 `src/camera_stream/log/*.log`。 | `all`、`mediamtx`、`orbbec_left`、`orbbec_right`、`realsense_stream`、`ros2_bridge`。 | 排查 SDK 初始化、串号不匹配、USB 带宽和推流错误。 | `src/camera_stream/log/` |
+| `rm65_camera_status` | 打印配置路径、匹配的进程和监听端口。 | 只读检查相机进程、`mediamtx`、`ros2_bridge`，以及 RTSP `8554`/深度 `8100-8103`。 | 启动后确认服务是否真正监听，或排查端口/残留进程。 | `src/camera_stream/scripts/start_streaming.sh` |
+| `rm65_camera_logs [-f] [component]` | 查看最近 100 行，或用 `-f` 持续跟踪 `src/camera_stream/log/*.log`。 | `all`、`mediamtx`、`orbbec_left`、`orbbec_middle`、`orbbec_right`、`realsense_stream`、`ros2_bridge`。 | 排查 SDK 初始化、串号不匹配、USB 带宽和推流错误。 | `src/camera_stream/log/` |
+| `rm65_camera_ros2 [color|depth] [rviz]` | 停止 SDK 推流后，按串号启动三台 Orbbec 的单一 ROS2 图像流；默认 `color`，传入 `depth` 切换深度流，传入 `rviz` 时额外启动 RViz2。 | `sensor_bringup/cameras_ros2.launch.py`、`orbbec_camera/gemini305.launch.py`；发布所选 Image、CameraInfo 和 TF。 | 需要原生 ROS image topic、`image_view` 或 RViz2 调试时；生产端无 GUI 时省略 `rviz`。 | `config/ros/cameras_ros2.yaml`、`config/rviz/cameras.rviz` |
+| `rm65_camera_ros2_stop` | 停止 ROS2 相机 launch、Orbbec 节点和组件容器。 | 释放三台 Orbbec USB 设备；不会启动或停止 RealMan 驱动。 | 在切回 `rm65_camera_start` SDK 推流或重新构建前。 | `src/sensor_bringup/launch/cameras_ros2.launch.py` |
+| `rm65_camera_ros2_status` | 查看 ROS2 相机 launch、Orbbec 节点和日志根目录。 | 只读检查，不改变运行状态。 | 排查节点是否仍占用 USB 或确认 headless 启动是否成功。 | `logs/<timestamp>/` |
+| `rm65_camera_ros2_logs` | 查看最近一次 ROS2 相机运行目录中的官方 ROS 日志。 | 读取 `ROS_LOG_DIR` 下节点日志，不做 shell 重定向。 | 排查串号匹配、depth profile 和 DDS 发现问题。 | `logs/<timestamp>/` |
 
 首次使用先在宿主机安装依赖，再加载函数：
 
@@ -109,10 +113,12 @@ rm65_camera_stop
 ```text
 rtsp://<host>:8554/realsense/color
 rtsp://<host>:8554/orbbec/left/color
+rtsp://<host>:8554/orbbec/middle/color
 rtsp://<host>:8554/orbbec/right/color
 ```
 
-深度帧通过 TCP `8100`（RealSense）、`8101`（Orbbec left）和 `8102`（Orbbec right）发送；
+深度帧通过 TCP `8100`（RealSense）、`8101`（Orbbec left）、`8102`（Orbbec middle）和
+`8103`（Orbbec right）发送；
 它们不是 ROS image topic。`ros2_bridge` 仅发布标定中的 `CameraInfo` 和静态 TF。
 启动前应根据 `udevadm`、`lsusb` 或 `/dev/v4l/by-id` 的实际串号更新两个 YAML；空的
 Orbbec `serial` 会跳过对应 side，错误串号则会在日志中报告找不到设备。
@@ -121,9 +127,74 @@ Orbbec `serial` 会跳过对应 side，错误串号则会在日志中报告找�
 `install_deps.sh`。脚本需要宿主机有 `python3`、`bash`、`curl`，并从官方发布地址下载
 Orbbec wheel 和 `mediamtx`；它不会启动 Docker 容器。
 
-当前脚本只遍历 `left/right` 两个 Orbbec side。即使 USB 枚举出第三台 Orbbec，也不会自动
-抢占；要新增一路，需要在 `orbbec.yaml` 增加 side、RTSP path、深度端口，并同步
-`scripts/start_streaming.sh` 的 side 列表和日志入口。
+启动脚本现在从 `orbbec.yaml` 动态遍历所有 side。当前生产配置按 USB 物理端口记录为
+`left=CV2L360000HS`（port 2）、`middle=CV2T661000DC`（port 4）、
+`right=CV2L36000037`（port 5）；如果现场重新插拔 USB，必须重新核对物理位置和串号。
+生产机四个相机共用 USB2 总线；三路 Orbbec 使用 `320x240@15` 深度低带宽档并可正常返回深度帧，
+D435 当前无法稳定出帧，因此配置暂时只启用 RealSense 彩色低分辨率流。接入 USB3 后再恢复
+RealSense 深度、更高分辨率和 Orbbec 的 `640x400@30` 深度档。
+
+### ROS2 图像节点与 RViz2
+
+`rm65_camera_ros2` 使用官方 `orbbec_camera` ROS2 驱动，不使用旧 USB port 路径，而是从
+`config/ros/cameras_ros2.yaml` 读取三台 Gemini 305 的串号。默认彩色档为 `640x480@15 MJPG`，
+深度档使用 `640x480@15 Y16` 原始 profile 和硬件抽取系数 `2`，实际发布
+`320x240@15`，并关闭点云以适应生产机 USB2 总线。三台相机按独立设备运行，配置默认关闭
+`enable_frame_sync`、`trigger_out_enabled` 和 `software_trigger_enabled`；官方默认同步参数会导致
+后启动的设备只有 publisher 而没有图像帧。默认只打开彩色流，每次启动都会创建
+`logs/YYYYMMDD_HHMMSS/` 并设置 `ROS_LOG_DIR`，节点日志由 rcutils 官方机制生成。
+三台 Orbbec 与 D435 共用一条 USB2 root hub 时，生产机的
+`/sys/module/usbcore/parameters/usbfs_memory_mb` 应至少为 `256`；函数会在低于该值时告警。
+临时修复和持久化设置分别为：
+
+```bash
+sudo sh -c 'echo 256 > /sys/module/usbcore/parameters/usbfs_memory_mb'
+echo 'options usbcore usbfs_memory_mb=256' | sudo tee /etc/modprobe.d/usbcore.conf
+```
+
+先停止 SDK 推流，再在连接 USB 相机的生产机上 source 函数并启动 headless ROS2 图：
+
+```zsh
+source /home/administrator/realman_pi/functions.zsh
+rm65_camera_ros2 color
+rm65_camera_ros2_status
+```
+
+默认 `color` 模式预期 topic 包括：
+
+```text
+/camera_left/color/image_raw
+/camera_middle/color/image_raw
+/camera_right/color/image_raw
+```
+
+默认模式实际发布三个 `color/image_raw`、三个 `color/camera_info` 和 TF；深度路径只有显式
+使用 `rm65_camera_ros2 depth` 时才会发布。wrapper 2.7.6 在当前 USB2/libuvc 拓扑下同时
+打开同一设备的彩色和深度会创建 publisher 但不连续出帧，因此两种流是互斥模式。三台彩色
+在 `640x480@15 MJPG` 下已实测约 15 Hz。
+
+有图形桌面的机器可以直接启动 RViz2：
+
+```zsh
+rm65_camera_ros2 color rviz
+# 需要深度时改为：rm65_camera_ros2 depth rviz
+```
+
+生产端通常没有 `DISPLAY`，这时在生产端只运行 `rm65_camera_ros2 color`，在笔记本使用与生产端
+相同的 `ROS_DOMAIN_ID` 启动远程 RViz。当前生产机未设置该变量时，相机函数使用默认域 `0`，
+笔记本可执行 `rm65_docker_remote_rviz 0`；如果两端统一设置为其他域，命令中的 `0` 替换为该值。
+不要在笔记本运行会直接连接机械臂 SDK 的
+`realman_driver_rviz`。切换回 SDK/RTSP 推流前执行：
+
+```zsh
+rm65_camera_ros2_stop
+rm65_camera_start
+```
+
+`rm65_camera_ros2_logs` 可检查串号不匹配、`OB_FORMAT_UNKNOWN` 或 USB 带宽错误。当前生产
+机已验证 Orbbec 使用 `Y16` 和硬件二倍抽取；直接传 `320x240` 会被 wrapper 2.7.6 拒绝。
+RealSense D435 仍不作为 ROS2 相机默认路径，
+因为它在现有 USB2 连接下无法稳定输出首帧。
 
 ## Web 控制入口
 

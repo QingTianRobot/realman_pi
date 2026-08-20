@@ -1,0 +1,43 @@
+# ROS 2 Orbbec bringup defaults for the three cameras on the production rig.
+# Select by serial number because USB bus paths can change after re-plugging.
+cameras:
+  left:
+    serial: "CV2L360000HS"
+  middle:
+    serial: "CV2T661000DC"
+  right:
+    serial: "CV2L36000037"
+
+# Gemini 305 devices share the USB2 bus on the production host. These profiles
+# keep all three devices within the available bandwidth.
+streams:
+  color:
+    width: 640
+    height: 480
+    # 15Hz is the stable three-camera profile on the production USB2 bus.
+    fps: 15
+    format: MJPG
+  depth:
+    # Gemini 305 interprets these as the sensor profile before hardware
+    # decimation. 640x480 with factor 2 publishes 320x240 depth images.
+    width: 640
+    height: 480
+    fps: 15
+    format: Y16
+    decimation_factor: 2
+
+# ROS2 bringup defaults to color-only. The wrapper can publish color or depth
+# reliably on this USB2 topology, but not both streams from one camera at once.
+mode: color
+
+# Host prerequisite: all production cameras share a USB2 root hub. Set
+# /sys/module/usbcore/parameters/usbfs_memory_mb to at least 256 MB before
+# starting all three streams. The launch does not change kernel settings.
+
+# Each camera is independent on this USB2 topology.  The wrapper's default
+# frame-sync/software-trigger settings can leave later devices with a live
+# publisher but no frames, so keep hardware/software triggering disabled.
+sync:
+  enable_frame_sync: false
+  trigger_out_enabled: false
+  software_trigger_enabled: false

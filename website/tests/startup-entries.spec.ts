@@ -42,6 +42,8 @@ test("rm65_project_help mentions startup entry descriptions", async () => {
   expect(stdout).toContain("rm65_docker_bringup_model");
   expect(stdout).toContain("rm65_docker_web_control_start");
   expect(stdout).toContain("rm65_deploy_sync");
+  expect(stdout).toContain("rm65_camera_status");
+  expect(stdout).toContain("8100-8103");
 });
 
 test("Pages workflow rebuilds when startup helper sources change", async () => {

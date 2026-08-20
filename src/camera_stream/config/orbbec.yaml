@@ -1,5 +1,6 @@
 # 手眼相机 Orbbec Gemini 305 推流配置（支持多台，按 side 名选择）
 # 用法: python -m camera_stream.orbbec_stream config/orbbec.yaml --side left
+#       python -m camera_stream.orbbec_stream config/orbbec.yaml --side middle
 #       python -m camera_stream.orbbec_stream config/orbbec.yaml --side right
 
 rtsp_host: 127.0.0.1     # 推给本机 mediamtx
@@ -17,27 +18,26 @@ stream:
     bitrate_kbps: 4000
   depth:
     enable: true
-    # USB 2.0 下 30fps 只有 640x480；换 USB 3.0 后可改 640x400@30（Gemini 305 原生档）
-    width: 640
-    height: 480
-    fps: 30
+    # 三台相机并行挂在 USB 2.0 时使用低带宽档；换 USB 3.0 后可改 640x400@30。
+    width: 320
+    height: 240
+    fps: 15
     lz4_compress: false
 
 # 各相机按 side 名索引；serial 为空表示未接入（启动时自动跳过）
 cameras:
   left:
-    serial: "CV2T66100096"   # 已接入
+    serial: "CV2L360000HS"   # USB port 2；现场左侧相机，请按物理安装核对
     rtsp_path: /orbbec/left/color
     depth_port: 8101
     bind: 0.0.0.0
-  right:
-    serial: ""               # 待接入，填入串号后生效
-    rtsp_path: /orbbec/right/color
+  middle:
+    serial: "CV2T661000DC"   # USB port 4；现场中间相机，请按物理安装核对
+    rtsp_path: /orbbec/middle/color
     depth_port: 8102
     bind: 0.0.0.0
-  # 后续接入更多台，照此追加，例如:
-  # third:
-  #   serial: ""
-  #   rtsp_path: /orbbec/third/color
-  #   depth_port: 8103
-  #   bind: 0.0.0.0
+  right:
+    serial: "CV2L36000037"   # USB port 5；现场右侧相机，请按物理安装核对
+    rtsp_path: /orbbec/right/color
+    depth_port: 8103
+    bind: 0.0.0.0

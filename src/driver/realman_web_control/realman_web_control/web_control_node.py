@@ -16,12 +16,13 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from realman_msgs.action import CartesianVelocity, ExecuteMotion, ExecuteTrajectory
 from realman_msgs.msg import MotionWaypoint
-from realman_msgs.srv import GetCurrentPose, RecoverMotion, SolveIk
+from realman_msgs.srv import ForwardKinematics, GetCurrentPose, RecoverMotion, SolveIk
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
 from .action_bridge import ActionRecord, action_event, assign_fields, message_to_json
+from .joint_records import JointRecordStore
 from .model_manifest import build_manifest
 from .protocol import ProtocolError
 from .web_server import WebControlServer, load_server_config
@@ -53,6 +54,10 @@ class WebControlNode(Node):
             "coordinates_config_file",
             f"{config_root}/config/ros/realman_coordinates.yaml",
         )
+        self.declare_parameter(
+            "joint_record_dir",
+            f"{config_root}/config/web-control/joint-records",
+        )
         self.declare_parameter("description_root", description_root)
         self.declare_parameter("static_root", f"{config_root}/static")
 
@@ -60,6 +65,7 @@ class WebControlNode(Node):
         layout_file = self._parameter("layout_config_file")
         motion_file = self._parameter("motion_config_file")
         coordinates_file = self._parameter("coordinates_config_file")
+        joint_record_dir = self._parameter("joint_record_dir")
         description_root = self._parameter("description_root")
         static_root = self._parameter("static_root")
         web_config = load_server_config(web_config_file)
@@ -74,6 +80,7 @@ class WebControlNode(Node):
         self._actions: dict[tuple[str, str], ActionRecord] = {}
         self._coordinate_state: dict[str, dict[str, Any]] = {}
         self._joint_degrees: dict[str, list[float]] = {}
+        self._joint_records = JointRecordStore(joint_record_dir)
         self._callback_group = ReentrantCallbackGroup()
 
         self._motion_clients = {
@@ -125,6 +132,14 @@ class WebControlNode(Node):
         }
         self._current_pose_clients = {
             arm: self.create_client(GetCurrentPose, f"/{arm}/get_current_pose", callback_group=self._callback_group)
+            for arm in ARMS
+        }
+        self._fk_clients = {
+            arm: self.create_client(
+                ForwardKinematics,
+                f"/{arm}/forward_kinematics",
+                callback_group=self._callback_group,
+            )
             for arm in ARMS
         }
         self._ik_clients = {
@@ -219,6 +234,12 @@ class WebControlNode(Node):
         message_type = message["type"]
         if message_type == "client_disconnected":
             self._client_disconnected(client_id)
+        elif message_type == "list_joint_records":
+            self._list_joint_records(client_id, message)
+        elif message_type == "save_joint_record":
+            self._save_joint_record(client_id, message)
+        elif message_type == "apply_joint_record":
+            self._apply_joint_record(client_id, message)
         elif message_type == "get_current_pose":
             self._get_current_pose(client_id, message)
         elif message_type == "solve_ik":
@@ -352,6 +373,131 @@ class WebControlNode(Node):
             }
         self._server.send_event(event, client_id)
 
+    def _list_joint_records(self, client_id: str, message: dict[str, Any]) -> None:
+        self._send_joint_records(client_id, message["arm"])
+
+    def _save_joint_record(self, client_id: str, message: dict[str, Any]) -> None:
+        arm = message["arm"]
+        joints = self._joint_degrees.get(arm)
+        if not joints:
+            raise ProtocolError(
+                "joint_state_unavailable",
+                f"{arm} has no current joint_states sample to record",
+                message["request_id"],
+            )
+        record = self._joint_records.save(arm, message["label"], joints)
+        event = {
+            "type": "joint_record_saved",
+            "arm": arm,
+            "request_id": message["request_id"],
+            "record": record.event(),
+        }
+        self._server.send_event(event, client_id)
+        self._send_joint_records(None, arm)
+
+    def _apply_joint_record(self, client_id: str, message: dict[str, Any]) -> None:
+        arm = message["arm"]
+        try:
+            record = self._joint_records.get(arm, message["record_id"])
+        except ValueError as error:
+            raise ProtocolError(
+                "joint_record_unavailable",
+                str(error),
+                message["request_id"],
+            ) from error
+        if message["command"] == 0:
+            self._server.send_event(
+                {
+                    "type": "joint_record_applied",
+                    "arm": arm,
+                    "request_id": message["request_id"],
+                    "command": message["command"],
+                    "record": record.event(),
+                    "joint_degrees": list(record.joint_degrees),
+                },
+                client_id,
+            )
+            return
+        client = self._fk_clients[arm]
+        if not client.service_is_ready():
+            raise ProtocolError(
+                "kinematics_unavailable",
+                f"/{arm}/forward_kinematics is not available",
+                message["request_id"],
+            )
+        reference_type, reference_name = self._default_reference(arm)
+        goal = {
+            "reference_type": reference_type,
+            "reference_name": reference_name,
+        }
+        self._validate_reference(arm, goal)
+        request = ForwardKinematics.Request()
+        request.reference_type = reference_type
+        request.reference_name = reference_name
+        request.joint_degrees = list(record.joint_degrees)
+        future = client.call_async(request)
+        future.add_done_callback(
+            lambda completed: self._joint_record_fk_response(
+                client_id,
+                arm,
+                message["request_id"],
+                message["command"],
+                record.event(),
+                completed,
+            )
+        )
+
+    def _joint_record_fk_response(
+        self,
+        client_id: str,
+        arm: str,
+        request_id: str,
+        command: int,
+        record: dict[str, Any],
+        future: Any,
+    ) -> None:
+        try:
+            response = future.result()
+            event = {
+                "type": "joint_record_applied",
+                "arm": arm,
+                "request_id": request_id,
+                "command": command,
+                "record": record,
+                "success": bool(response.success),
+                "api2_status": int(response.api2_status),
+                "joint_degrees": record["joint_degrees"],
+                "pose_position_m": message_to_json(response.pose_position_m),
+                "pose_quaternion_wxyz": message_to_json(response.pose_quaternion_wxyz),
+                "message": response.message,
+            }
+        except Exception as error:
+            self.get_logger().error(f"Web joint record FK failed for {arm}: {error}")
+            event = {
+                "type": "joint_record_applied",
+                "arm": arm,
+                "request_id": request_id,
+                "command": command,
+                "record": record,
+                "success": False,
+                "api2_status": -1,
+                "joint_degrees": record["joint_degrees"],
+                "pose_position_m": [],
+                "pose_quaternion_wxyz": [],
+                "message": str(error),
+            }
+        self._server.send_event(event, client_id)
+
+    def _send_joint_records(self, client_id: str | None, arm: str) -> None:
+        self._server.send_event(
+            {
+                "type": "joint_records",
+                "arm": arm,
+                "records": [record.event() for record in self._joint_records.list(arm)],
+            },
+            client_id,
+        )
+
     def _coordinate_state_message(self, arm: str, message: String) -> None:
         try:
             payload = json.loads(message.data)
@@ -368,6 +514,7 @@ class WebControlNode(Node):
             state = self._coordinate_state.get(arm)
             if state is not None:
                 self._server.send_event(state, client_id)
+            self._send_joint_records(client_id, arm)
 
     def _default_reference(self, arm: str) -> tuple[int, str]:
         state = self._coordinate_state.get(arm, {})

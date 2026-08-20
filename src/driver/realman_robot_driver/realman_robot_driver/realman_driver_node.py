@@ -20,6 +20,7 @@ from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
 from geometry_msgs.msg import TwistStamped
 from realman_msgs.action import CartesianVelocity, ExecuteMotion, ExecuteTrajectory
 from realman_msgs.srv import (
+    ForwardKinematics,
     GetCurrentPose,
     RecoverMotion,
     SelectFrame,
@@ -287,6 +288,7 @@ class RealManDriverNode(Node):
                 self._select_work_frame,
             ),
             self.create_service(GetCurrentPose, "get_current_pose", self._get_current_pose),
+            self.create_service(ForwardKinematics, "forward_kinematics", self._forward_kinematics),
             self.create_service(SolveIk, "solve_ik", self._solve_ik),
         ]
         period = 1.0 / self.state_publish_rate
@@ -541,6 +543,50 @@ class RealManDriverNode(Node):
             response.message = "inverse kinematics query failed"
             return response
 
+    def _forward_kinematics(
+        self,
+        request: ForwardKinematics.Request,
+        response: ForwardKinematics.Response,
+    ) -> ForwardKinematics.Response:
+        """Run FK for an arbitrary six-joint target and express it in the active frame."""
+        try:
+            reference_type, frame = self._kinematics_reference(
+                request.reference_type, request.reference_name
+            )
+            joints = [float(value) for value in request.joint_degrees]
+            if len(joints) != 6 or not all(math.isfinite(value) for value in joints):
+                raise ValueError("joint_degrees must contain six finite values")
+            status, base_pose = self.adapter.forward_kinematics(joints)
+            if status != 0:
+                return self._fill_forward_kinematics_response(
+                    response,
+                    False,
+                    status,
+                    (),
+                    (),
+                    f"forward kinematics failed with API2 status {status}",
+                )
+            position, quaternion = self._pose_in_reference(
+                reference_type, frame, base_pose
+            )
+            return self._fill_forward_kinematics_response(
+                response,
+                True,
+                0,
+                position,
+                quaternion,
+                "forward kinematics solved",
+            )
+        except (TypeError, ValueError) as error:
+            return self._fill_forward_kinematics_response(
+                response, False, -1, (), (), str(error)
+            )
+        except Exception as error:
+            self.get_logger().error(f"RealMan forward kinematics service failed: {error}")
+            return self._fill_forward_kinematics_response(
+                response, False, -1, (), (), "forward kinematics query failed"
+            )
+
     def _kinematics_reference(
         self, reference_type_value: int, reference_name: str
     ) -> tuple[ReferenceType, Any | None]:
@@ -617,6 +663,24 @@ class RealManDriverNode(Node):
         response.api2_status = int(status)
         if len(joints) == 6:
             response.current_joint_degrees = list(joints)
+        if len(position) == 3:
+            response.pose_position_m = list(position)
+        if len(quaternion) == 4:
+            response.pose_quaternion_wxyz = list(quaternion)
+        response.message = message
+        return response
+
+    @staticmethod
+    def _fill_forward_kinematics_response(
+        response: ForwardKinematics.Response,
+        success: bool,
+        status: int,
+        position: Any,
+        quaternion: Any,
+        message: str,
+    ) -> ForwardKinematics.Response:
+        response.success = success
+        response.api2_status = int(status)
         if len(position) == 3:
             response.pose_position_m = list(position)
         if len(quaternion) == 4:

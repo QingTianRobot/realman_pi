@@ -6,11 +6,12 @@ description: realman_web_control 的 WebSocket 协议、Action 反馈、软件�
 # WebSocket 浏览器控制与 URDF 影子
 
 `realman_web_control` 是一个 ROS 2 功能包：它把浏览器同源 WebSocket 消息转换成现有的
-`ExecuteMotion`、`ExecuteTrajectory`、`CartesianVelocity` Action、速度命令、`/stop`
-和 `/recover_motion` 服务。页面同一端口会同时
+`ExecuteMotion`、`ExecuteTrajectory`、`CartesianVelocity` Action、速度命令、FK/IK 查询、
+`/stop` 和 `/recover_motion` 服务。页面同一端口会同时
 渲染三台机械臂的实时 URDF 和坐标状态，但控制指令始终只作用于当前选中的 arm。浏览器永远
 不直接加载 RealMan SDK，也不绕过 `realman_robot_driver` 的 ownership、坐标 gate、
-watchdog 或 lockout。
+watchdog 或 lockout。网页保存的关节记录写入 `config/web-control/joint-records/<arm>/`，
+按 `l`、`m`、`r` 分目录存放。
 
 ```text
 笔记本浏览器
@@ -70,6 +71,9 @@ watchdog 和 lockout，不会直接调用 SDK。
 | `action_result` | `status`, `result` | 原 Action result 和 rclpy 状态 |
 | `software_stop_result` | `success`, `message` | `/arm/stop` 的结果 |
 | `motion_recovery_result` | `success`, `recovered`, `api2_status` | 取消后的事件通道恢复结果 |
+| `joint_records` | `arm`, `records` | 该 arm 可填入运动面板的已保存关节记录 |
+| `joint_record_saved` | `record` | “记录当前”写入 YAML 后的结果 |
+| `joint_record_applied` | `command`, `joint_degrees`, `pose_position_m`, `pose_quaternion_wxyz` | 选择记录填入当前 MOVEJ/MOVEL/MOVEP 表单 |
 
 ### MOVEJ、MOVEL 与 MOVEP
 
@@ -111,6 +115,27 @@ Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条�
 验证失败、控制器状态不可读、目标不可达、SDK API2 非零或结果超限都会返回失败消息。
 服务边界的单位固定为：关节 degree、位置 m、四元数 WXYZ；SDK 算法内部的 FK/IK 姿态
 欧拉角为 rad。MOVEL 的真实发送仍沿用原有的 active reference 和坐标 gate。
+
+### 关节记录
+
+一次性运动面板的“关节记录”区用于把当前真实回读的六轴关节角保存成 YAML。浏览器只发送
+记录名称；后端从最近一次 `/{arm}/joint_states` 缓存取值，写入
+`config/web-control/joint-records/<arm>/<record-id>.yaml`。每个文件使用
+`realman_joint_record.v1` schema，关节单位为 degree；空目录由
+`config/web-control/joint-records/README.md` 和 `l/`、`m/`、`r/` 子目录约定。
+
+选择记录并点击“填入”不会提交真实运动，只会更新当前表单和橙色影子：
+
+| 当前模式 | 填入行为 |
+| --- | --- |
+| `MOVEJ` | 直接把记录的六轴 degree 转成滑条目标，并更新影子 |
+| `MOVEL` | 调用 `/{arm}/forward_kinematics`，把记录关节正解为当前激活参考系下的 XYZ/WXYZ，再填入位姿输入 |
+| `MOVEP` | 同样调用 `/{arm}/forward_kinematics`，填入 `MOVEJ_P` 所需的目标位姿 |
+
+`forward_kinematics` 与 `get_current_pose` 使用同一套参考系规则：`reference_type` 和
+`reference_name` 必须匹配驱动已验证的激活坐标；坐标 gate 关闭时，MOVEL/MOVEP 记录填入会失败。
+Web 控制相关 Compose 服务把 `./config` 以可写方式挂到容器内，默认记录目录为
+`/opt/rm65_ws/config/web-control/joint-records`，可用 `REALMAN_JOINT_RECORD_DIR` 覆盖。
 
 ```json
 {

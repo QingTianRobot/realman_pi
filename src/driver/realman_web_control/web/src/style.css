@@ -62,6 +62,12 @@ input[type="range"] { display: block; width: 100%; accent-color: #4dbbb0; }
 .segmented-control button.selected { background: #255b5b; color: #e7efec; }
 .pose-target[hidden], #joint-target[hidden], #reset-preview[hidden] { display: none; }
 .target-field-label { margin: 11px 0 6px; color: #82999d; font-size: 10px; }
+.joint-records { margin: 4px 0 14px; padding: 10px; border: 1px solid #263b40; background: #101c20; }
+.record-save-row, .record-apply-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.record-apply-row { margin-top: 8px; }
+.record-save-row input, .record-apply-row select { width: 100%; min-width: 0; padding: 7px; font-size: 11px; }
+.record-save-row .button, .record-apply-row .button { min-width: 82px; padding: 8px 10px; }
+.record-status { min-height: 24px; margin-top: 7px; color: #8fa6a9; font-size: 10px; line-height: 1.45; }
 .pose-inputs { display: grid; gap: 6px; }
 .position-inputs { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 .quaternion-inputs { grid-template-columns: repeat(4, minmax(0, 1fr)); }
@@ -118,4 +124,5 @@ dialog input { width: 100%; margin: 8px 0 18px; }
   .fleet-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid #263b40; }
   .velocity-inputs { grid-template-columns: repeat(3, 1fr); row-gap: 8px; }
   .viewer-footer { font-size: 9px; }
+  .record-save-row, .record-apply-row { grid-template-columns: 1fr; }
 }

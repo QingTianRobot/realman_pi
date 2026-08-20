@@ -52,6 +52,13 @@ type Manifest = {
 type MotionCommand = 0 | 1 | 2;
 type Message = Record<string, any> & { type: string };
 type RobotScene = { live: any | null; shadow: any | null };
+type JointRecord = {
+  id: string;
+  label: string;
+  created_at: string;
+  updated_at: string;
+  joint_degrees: number[];
+};
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -105,6 +112,18 @@ app.innerHTML = `
           </div>
           <div id="kinematics-status" class="kinematics-status" aria-live="polite">MOVEL 逆解仅更新影子预览</div>
         </div>
+        <div class="joint-records">
+          <div class="target-field-label">关节记录</div>
+          <div class="record-save-row">
+            <input id="record-name" type="text" maxlength="64" placeholder="record name" />
+            <button id="save-record" class="button secondary" type="button" disabled>记录当前</button>
+          </div>
+          <div class="record-apply-row">
+            <select id="record-select"></select>
+            <button id="apply-record" class="button ghost" type="button" disabled>填入</button>
+          </div>
+          <div id="record-status" class="record-status" aria-live="polite">等待记录列表</div>
+        </div>
         <div class="motion-parameters">
           <label>激活参考系<output id="motion-reference">BASE / base</output></label>
           <label>速度 (%)<input id="motion-velocity" type="number" min="1" max="100" step="1" value="30" /></label>
@@ -151,8 +170,20 @@ const resetPreviewButton = $("#reset-preview") as HTMLButtonElement;
 const motionReference = $("#motion-reference");
 const motionVelocityInput = $("#motion-velocity") as HTMLInputElement;
 const motionTimeoutInput = $("#motion-timeout") as HTMLInputElement;
+const recordNameInput = $("#record-name") as HTMLInputElement;
+const saveRecordButton = $("#save-record") as HTMLButtonElement;
+const recordSelect = $("#record-select") as HTMLSelectElement;
+const applyRecordButton = $("#apply-record") as HTMLButtonElement;
+const recordStatus = $("#record-status");
 const POSE_INPUT_IDS = ["pose-x", "pose-y", "pose-z", "pose-qw", "pose-qx", "pose-qy", "pose-qz"] as const;
 const MOTION_LABELS: Record<MotionCommand, string> = { 0: "MOVEJ", 1: "MOVEL", 2: "MOVEP" };
+const HTML_ENTITIES: Record<string, string> = {
+  "&": "&amp;",
+  "<": "&lt;",
+  ">": "&gt;",
+  "\"": "&quot;",
+  "'": "&#39;",
+};
 
 let manifest: Manifest | undefined;
 let selectedArm: ArmId = "l";
@@ -174,6 +205,9 @@ const kinematicsStatusByArm: Partial<Record<ArmId, string>> = {};
 const activeKinematicsRequestByArm: Partial<Record<ArmId, string>> = {};
 const ikPreviewValidByArm: Partial<Record<ArmId, boolean>> = {};
 const motionSettingsByArm: Partial<Record<ArmId, { velocity: string; timeout: string }>> = {};
+const jointRecordsByArm: Partial<Record<ArmId, JointRecord[]>> = {};
+const recordStatusByArm: Partial<Record<ArmId, string>> = {};
+const activeRecordRequestByArm: Partial<Record<ArmId, string>> = {};
 const robotScenes: Partial<Record<ArmId, RobotScene>> = {};
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
@@ -196,6 +230,9 @@ function referenceLabel(frame?: FrameState | null) {
   if (!frame) return "BASE / base";
   const prefix = frame.type === 1 ? "WORK" : frame.type === 2 ? "TOOL" : "BASE";
   return `${prefix} / ${frame.name}`;
+}
+function escapeHtml(value: string) {
+  return value.replace(/[&<>"']/g, (character) => HTML_ENTITIES[character] ?? character);
 }
 function currentCoordinateState() {
   return coordinateStates[selectedArm];
@@ -328,6 +365,7 @@ function setMotionMode(command: MotionCommand) {
 }
 function renderMotionEditor() {
   renderPoseInputs();
+  renderRecordControls();
   const settings = motionSettingsByArm[selectedArm];
   if (settings) {
     motionVelocityInput.value = settings.velocity;
@@ -341,9 +379,24 @@ function send(message: Message) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
 
+function renderRecordControls() {
+  const records = jointRecordsByArm[selectedArm] ?? [];
+  const selectedValue = recordSelect.value;
+  recordSelect.innerHTML = records.length
+    ? records.map((record) => `<option value="${escapeHtml(record.id)}">${escapeHtml(record.label)}</option>`).join("")
+    : `<option value="">无记录</option>`;
+  if (records.some((record) => record.id === selectedValue)) recordSelect.value = selectedValue;
+  recordStatus.textContent = recordStatusByArm[selectedArm] ?? (records.length ? `${records.length} 条记录` : "无记录");
+}
+
 function setKinematicsStatus(arm: ArmId, message: string) {
   kinematicsStatusByArm[arm] = message;
   if (arm === selectedArm) kinematicsStatus.textContent = message;
+}
+
+function setRecordStatus(arm: ArmId, message: string) {
+  recordStatusByArm[arm] = message;
+  if (arm === selectedArm) recordStatus.textContent = message;
 }
 
 function setConnection(online: boolean) {
@@ -385,6 +438,33 @@ function setJointInputs(values: number[], target = false) {
 function setRobotJoints(target: any, values: number[]) {
   target?.setJointValues(Object.fromEntries(values.map((value, index) => [`joint_${index + 1}`, value])));
   target?.updateMatrixWorld(true);
+}
+
+function applyJointRecordToJoints(arm: ArmId, jointDegrees: number[], message: string) {
+  const config = manifest?.robots.find((item) => item.id === arm);
+  const valid = jointDegrees.length === 6 && config?.joints.every(
+    (joint, index) => Number.isFinite(Number(jointDegrees[index])) &&
+      Number(jointDegrees[index]) >= joint.lower_deg && Number(jointDegrees[index]) <= joint.upper_deg,
+  );
+  if (!valid) {
+    setRecordStatus(arm, "记录关节角超出限制");
+    return false;
+  }
+  const radians = jointDegrees.map((value) => Number(value) * Math.PI / 180);
+  targetJointsByArm[arm] = [...radians];
+  targetEditedByArm[arm] = true;
+  ikPreviewValidByArm[arm] = true;
+  if (arm === selectedArm) {
+    targetJoints = [...radians];
+    setJointInputs(radians, true);
+  }
+  setRobotJoints(robotScenes[arm]?.shadow, radians);
+  setRecordStatus(arm, message);
+  if (arm === selectedArm) {
+    setShadowVisibility(arm);
+    frameScene(true);
+  }
+  return true;
 }
 
 function applyMaterials(target: any, shadow: boolean, arm: ArmId) {
@@ -586,6 +666,40 @@ function handleMessage(message: Message) {
       $("#joint-stamp").textContent = `joint_states / ${message.stamp_ns || 0}`;
     }
     renderFleetStrip();
+  } else if (message.type === "joint_records") {
+    jointRecordsByArm[message.arm as ArmId] = Array.isArray(message.records) ? message.records : [];
+    if (!recordStatusByArm[message.arm as ArmId]) {
+      setRecordStatus(message.arm as ArmId, `${jointRecordsByArm[message.arm as ArmId]?.length ?? 0} 条记录`);
+    }
+    if (message.arm === selectedArm) renderRecordControls();
+    updateButtons();
+  } else if (message.type === "joint_record_saved") {
+    const arm = message.arm as ArmId;
+    delete activeRecordRequestByArm[arm];
+    setRecordStatus(arm, `已记录 ${message.record?.label ?? ""}`);
+    recordNameInput.value = "";
+    if (arm === selectedArm) renderRecordControls();
+    updateButtons();
+  } else if (message.type === "joint_record_applied") {
+    const arm = message.arm as ArmId;
+    if (activeRecordRequestByArm[arm] !== message.request_id) return;
+    delete activeRecordRequestByArm[arm];
+    const jointDegrees = Array.isArray(message.joint_degrees) ? message.joint_degrees : [];
+    const command = Number(message.command) as MotionCommand;
+    if (command === 0) {
+      applyJointRecordToJoints(arm, jointDegrees, `已填入 ${message.record?.label ?? "记录"} / MOVEJ`);
+    } else {
+      const position = Array.isArray(message.pose_position_m) ? message.pose_position_m : [];
+      const quaternion = Array.isArray(message.pose_quaternion_wxyz) ? message.pose_quaternion_wxyz : [];
+      if (message.success && position.length === 3 && quaternion.length === 4 && applyJointRecordToJoints(arm, jointDegrees, `已填入 ${message.record?.label ?? "记录"} / ${MOTION_LABELS[command]}`)) {
+        poseTargetsByArm[arm] = [...position, ...quaternion].map((value) => String(value));
+        setKinematicsStatus(arm, `记录正解已填入 / ${referenceLabel(coordinateStates[arm]?.preferred_reference)}`);
+        if (arm === selectedArm) renderPoseInputs();
+      } else {
+        setRecordStatus(arm, `记录正解失败 / ${message.message || "forward kinematics failed"}`);
+      }
+    }
+    updateButtons();
   } else if (message.type === "kinematics_result") {
     const arm = message.arm as ArmId;
     if (activeKinematicsRequestByArm[arm] !== message.request_id) return;
@@ -674,6 +788,10 @@ function handleMessage(message: Message) {
         delete activeKinematicsRequestByArm[arm];
         setKinematicsStatus(arm, `${message.code}: ${message.message}`);
       }
+      if (message.request_id === activeRecordRequestByArm[arm]) {
+        delete activeRecordRequestByArm[arm];
+        setRecordStatus(arm, `${message.code}: ${message.message}`);
+      }
     }
     updateButtons();
   }
@@ -699,6 +817,9 @@ function updateButtons() {
   const activeKinematicsRequest = Boolean(activeKinematicsRequestByArm[selectedArm]);
   fillCurrentPoseButton.disabled = !writable || selectedMotionCommand !== 1 || activeKinematicsRequest;
   solveIkButton.disabled = !writable || selectedMotionCommand !== 1 || activeKinematicsRequest || !Boolean(readPoseGoal());
+  const activeRecordRequest = Boolean(activeRecordRequestByArm[selectedArm]);
+  saveRecordButton.disabled = !writable || activeRecordRequest || recordNameInput.value.trim() === "" || (currentJointsByArm[selectedArm]?.length ?? 0) !== 6;
+  applyRecordButton.disabled = !writable || activeRecordRequest || !recordSelect.value;
 }
 
 function loadManifest(next: Manifest) {
@@ -709,6 +830,7 @@ function loadManifest(next: Manifest) {
     currentJointsByArm[item.id] = currentJointsByArm[item.id] ?? [...initial];
     targetJointsByArm[item.id] = targetJointsByArm[item.id] ?? [...initial];
     poseTargetsByArm[item.id] = poseTargetsByArm[item.id] ?? ["", "", "", "1", "0", "0", "0"];
+    jointRecordsByArm[item.id] = jointRecordsByArm[item.id] ?? [];
     motionSettingsByArm[item.id] = motionSettingsByArm[item.id] ?? {
       velocity: "30",
       timeout: String(item.motion.default_timeout_sec),
@@ -720,6 +842,7 @@ function loadManifest(next: Manifest) {
   selectedArmLabel.textContent = selectedArm.toUpperCase();
   selectedArmLabel.className = "mini-state active-arm";
   renderJointControls();
+  renderRecordControls();
   renderMotionEditor();
   configureVelocity();
   renderCoordinateState();
@@ -772,6 +895,32 @@ poseInputElements().forEach((input) => {
     };
     updateButtons();
   });
+});
+recordNameInput.addEventListener("input", updateButtons);
+recordSelect.addEventListener("change", updateButtons);
+saveRecordButton.addEventListener("click", () => {
+  if (!canWrite()) return;
+  const label = recordNameInput.value.trim();
+  if (!label) return;
+  const requestIdValue = requestId("save-record");
+  activeRecordRequestByArm[selectedArm] = requestIdValue;
+  setRecordStatus(selectedArm, "保存当前关节角…");
+  send({ type: "save_joint_record", request_id: requestIdValue, arm: selectedArm, label });
+  updateButtons();
+});
+applyRecordButton.addEventListener("click", () => {
+  if (!canWrite() || !recordSelect.value) return;
+  const requestIdValue = requestId("apply-record");
+  activeRecordRequestByArm[selectedArm] = requestIdValue;
+  setRecordStatus(selectedArm, "读取记录…");
+  send({
+    type: "apply_joint_record",
+    request_id: requestIdValue,
+    arm: selectedArm,
+    record_id: recordSelect.value,
+    command: selectedMotionCommand,
+  });
+  updateButtons();
 });
 executeMotionButton.addEventListener("click", () => {
   const settings = readMotionSettings();

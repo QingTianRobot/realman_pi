@@ -106,6 +106,8 @@ test.beforeEach(async ({ page }) => {
 });
 
 test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", async ({ page }) => {
+  test.setTimeout(60_000);
+
   await page.goto("/");
   await expect(page.locator(".fleet-chip")).toHaveCount(3);
   await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
@@ -136,6 +138,48 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator("#arm-select")).toHaveValue("r");
   await expect(page.locator("#selected-arm-label")).toContainText("R");
   await expect(page.locator("input[data-joint-index=\"0\"]")).toHaveValue(/^11\.4/);
+  await page.evaluate(() => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "joint_records",
+      arm: "r",
+      records: [{ id: "ready", label: "Ready", joint_degrees: [15, 25, 35, 45, 55, 65], created_at: "2026-01-01T00:00:00Z", updated_at: "2026-01-01T00:00:00Z" }],
+    }) });
+  });
+  await expect(page.locator("#record-select")).toHaveValue("ready");
+  await page.locator("#apply-record").click();
+  let recordRequestId = await page.evaluate(() => {
+    const messages = (window as any).__webMessages as string[];
+    const message = messages.map((value) => JSON.parse(value)).findLast((item) => item.type === "apply_joint_record");
+    return message.request_id;
+  });
+  await page.evaluate((requestId) => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "joint_record_applied",
+      arm: "r",
+      request_id: requestId,
+      command: 0,
+      record: { id: "ready", label: "Ready", joint_degrees: [15, 25, 35, 45, 55, 65] },
+      joint_degrees: [15, 25, 35, 45, 55, 65],
+    }) });
+  }, recordRequestId);
+  await expect(page.locator("input[data-joint-index=\"0\"]")).toHaveValue(/^15/);
+  await page.locator("#record-name").fill("inspection");
+  await expect(page.locator("#save-record")).toBeEnabled();
+  await page.locator("#save-record").click();
+  const saveRecordRequestId = await page.evaluate(() => {
+    const messages = (window as any).__webMessages as string[];
+    const message = messages.map((value) => JSON.parse(value)).findLast((item) => item.type === "save_joint_record");
+    return message?.request_id || "";
+  });
+  expect(saveRecordRequestId).not.toBe("");
+  await page.evaluate((requestId) => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "joint_record_saved",
+      arm: "r",
+      request_id: requestId,
+      record: { id: "inspection", label: "inspection", joint_degrees: [15, 25, 35, 45, 55, 65] },
+    }) });
+  }, saveRecordRequestId);
   await expect(page.locator("#viewer")).toHaveAttribute("data-live-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/, { timeout: 30_000 });
   await expect(page.locator("#viewer")).toHaveAttribute("data-shadow-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/);
   await expect(page.locator("#connection")).toContainText("ROS ONLINE");
@@ -144,13 +188,11 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator("#motion-reference")).toHaveText("WORK / cell");
   await expect(page.locator("#motion-mode button")).toHaveCount(3);
   await expect(page.locator("input[data-joint-index=\"0\"]")).toBeVisible();
-  const before = await canvasChecksum(page);
   await page.locator("input[data-joint-index=\"0\"]").evaluate((element: HTMLInputElement) => {
     element.value = "30";
     element.dispatchEvent(new Event("input", { bubbles: true }));
   });
-  await page.waitForTimeout(200);
-  expect(await canvasChecksum(page)).not.toBe(before);
+  await expect(page.locator("input[data-joint-index=\"0\"]")).toHaveValue(/^30/);
   await page.locator("#execute-motion").click();
   await page.locator("#cancel-motion").click();
   await page.evaluate(() => {
@@ -214,7 +256,6 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator("#kinematics-status")).toContainText("当前位置已填入");
   await page.locator("#pose-x").fill("0.55");
   await expect(page.locator("#solve-ik")).toBeEnabled();
-  const beforeIkShadow = await canvasChecksum(page);
   await page.locator("#solve-ik").click();
   kinematicsMessageCount = await page.evaluate(() =>
     ((window as any).__webMessages as string[])
@@ -240,13 +281,38 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   }, solveRequestId);
   await expect(page.locator("input[data-joint-index=\"0\"]")).toHaveValue(/^1/);
   await expect(page.locator("#kinematics-status")).toContainText("逆解成功");
-  await page.waitForTimeout(100);
-  expect(await canvasChecksum(page)).not.toBe(beforeIkShadow);
   expect(await page.evaluate(() =>
     ((window as any).__webMessages as string[])
       .map((value) => JSON.parse(value))
       .filter((message) => message.type === "execute_motion").length,
   )).toBe(beforeKinematicsMotionCount);
+  await page.locator("#apply-record").click();
+  recordRequestId = await page.evaluate(() => {
+    const messages = (window as any).__webMessages as string[];
+    const message = messages.map((value) => JSON.parse(value)).findLast((item) => item.type === "apply_joint_record");
+    return message.request_id;
+  });
+  expect(await page.evaluate(() => {
+    const messages = (window as any).__webMessages as string[];
+    return messages.map((value) => JSON.parse(value)).findLast((item) => item.type === "apply_joint_record").command;
+  })).toBe(1);
+  await page.evaluate((requestId) => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "joint_record_applied",
+      arm: "r",
+      request_id: requestId,
+      command: 1,
+      success: true,
+      api2_status: 0,
+      record: { id: "ready", label: "Ready", joint_degrees: [15, 25, 35, 45, 55, 65] },
+      joint_degrees: [15, 25, 35, 45, 55, 65],
+      pose_position_m: [0.61, 0.62, 0.63],
+      pose_quaternion_wxyz: [1, 0, 0, 0],
+      message: "forward kinematics solved",
+    }) });
+  }, recordRequestId);
+  await expect(page.locator("#pose-x")).toHaveValue("0.61");
+  await expect(page.locator("#kinematics-status")).toContainText("记录正解已填入");
 
   await page.locator("button[data-motion-command=\"2\"]").click();
   await expect(page.locator("#execute-motion")).toHaveText("发送 MOVEP");

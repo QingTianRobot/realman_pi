@@ -129,6 +129,7 @@ docker compose run --rm realman_driver_rviz
 | `REALMAN_USE_GUI` | `use_gui` | `true` / `false` |
 | `REALMAN_USE_RVIZ` | `use_rviz` | `true` / `false` |
 | `REALMAN_START_WEB_CONTROL` | `start_web_control` | `true` / `false` |
+| `REALMAN_JOINT_RECORD_DIR` | `joint_record_dir` | 默认 `/opt/rm65_ws/config/web-control/joint-records` |
 | `REALMAN_WAIT_FOR_JOY_DEVICE` | `wait_for_joy_device` | `true` / `false` |
 | `REALMAN_JOY_POLL_INTERVAL` | `joy_poll_interval` | `0.1` 以上的秒数 |
 

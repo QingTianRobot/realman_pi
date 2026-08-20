@@ -13,6 +13,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/SelectFrame.srv"
   "srv/VerifyCoordinates.srv"
   "srv/GetCurrentPose.srv"
+  "srv/ForwardKinematics.srv"
   "srv/SolveIk.srv"
   "srv/RecoverMotion.srv"
   DEPENDENCIES action_msgs

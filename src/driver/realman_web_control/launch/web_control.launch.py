@@ -35,6 +35,11 @@ def generate_launch_description():
                 default_value=str(config_root / "ros" / "realman_coordinates.yaml"),
                 description="Verified coordinate frame names exposed to the browser UI.",
             ),
+            DeclareLaunchArgument(
+                "joint_record_dir",
+                default_value=str(config_root / "web-control" / "joint-records"),
+                description="Writable Web control joint target records under root config/.",
+            ),
             Node(
                 package="realman_web_control",
                 executable="web_control_node",
@@ -46,6 +51,7 @@ def generate_launch_description():
                         "layout_config_file": LaunchConfiguration("layout_config_file"),
                         "motion_config_file": LaunchConfiguration("motion_config_file"),
                         "coordinates_config_file": LaunchConfiguration("coordinates_config_file"),
+                        "joint_record_dir": LaunchConfiguration("joint_record_dir"),
                         "description_root": str(description_share),
                         "static_root": str(package_share / "static"),
                     }
@@ -53,4 +59,3 @@ def generate_launch_description():
             ),
         ]
     )
-

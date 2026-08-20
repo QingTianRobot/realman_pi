@@ -76,6 +76,46 @@ def test_kinematics_messages_are_normalized():
     assert solved["goal"]["seed_joint_degrees"] == [0.0, 1.0, 2.0, 3.0, 4.0, 5.0]
 
 
+def test_joint_record_messages_are_normalized():
+    listed = parse_message(
+        '{"type":"list_joint_records","request_id":"list-1","arm":"l"}'
+    )
+    saved = parse_message(
+        '{"type":"save_joint_record","request_id":"save-1","arm":"m","label":"ready pose"}'
+    )
+    applied = parse_message(
+        '{"type":"apply_joint_record","request_id":"apply-1","arm":"r","record_id":"ready-pose","command":2}'
+    )
+
+    assert listed == {
+        "type": "list_joint_records",
+        "request_id": "list-1",
+        "arm": "l",
+    }
+    assert saved == {
+        "type": "save_joint_record",
+        "request_id": "save-1",
+        "arm": "m",
+        "label": "ready pose",
+    }
+    assert applied == {
+        "type": "apply_joint_record",
+        "request_id": "apply-1",
+        "arm": "r",
+        "record_id": "ready-pose",
+        "command": 2,
+    }
+
+
+def test_joint_record_messages_reject_missing_fields():
+    with pytest.raises(ProtocolError, match="label"):
+        parse_message('{"type":"save_joint_record","request_id":"save-1","arm":"l"}')
+    with pytest.raises(ProtocolError, match="command"):
+        parse_message(
+            '{"type":"apply_joint_record","request_id":"apply-1","arm":"l","record_id":"ready","command":4}'
+        )
+
+
 def test_kinematics_messages_require_complete_vectors():
     with pytest.raises(ProtocolError, match="seed_joint_degrees"):
         parse_message(

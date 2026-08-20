@@ -69,6 +69,7 @@ def generate_launch_description():
     motion_config_file = LaunchConfiguration("motion_config_file")
     start_web_control = LaunchConfiguration("start_web_control")
     web_control_config_file = LaunchConfiguration("web_control_config_file")
+    joint_record_dir = LaunchConfiguration("joint_record_dir")
     wait_for_joy_device = LaunchConfiguration("wait_for_joy_device")
     joy_device_path = LaunchConfiguration("joy_device_path")
     joy_poll_interval = LaunchConfiguration("joy_poll_interval")
@@ -174,6 +175,11 @@ def generate_launch_description():
                 description="Browser bridge settings under the project-root config/ directory.",
             ),
             DeclareLaunchArgument(
+                "joint_record_dir",
+                default_value=str(config_root / "web-control" / "joint-records"),
+                description="Writable Web control joint target records under root config/.",
+            ),
+            DeclareLaunchArgument(
                 "wait_for_joy_device",
                 default_value="false",
                 description="Keep polling until the configured joystick device appears.",
@@ -217,6 +223,7 @@ def generate_launch_description():
                     "layout_config_file": str(three_robots_config),
                     "motion_config_file": motion_config_file,
                     "coordinates_config_file": coordinates_config_file,
+                    "joint_record_dir": joint_record_dir,
                 }.items(),
             ),
             Node(

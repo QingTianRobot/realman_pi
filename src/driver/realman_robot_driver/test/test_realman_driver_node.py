@@ -971,6 +971,9 @@ def test_mock_node_constructs_and_exposes_services():
             "coordinates/apply",
             "coordinates/select_tool",
             "coordinates/select_work",
+            "forward_kinematics",
+            "get_current_pose",
+            "solve_ik",
         } <= service_names
         assert node.adapter.arm_id == "l"
         assert isinstance(node.motion_callback_group, ReentrantCallbackGroup)

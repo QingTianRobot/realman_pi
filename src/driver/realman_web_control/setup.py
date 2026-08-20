@@ -28,6 +28,10 @@ setup(
                 "../../../config/ros/realman_coordinates.yaml",
             ],
         ),
+        (
+            f"share/{package_name}/config/web-control/joint-records",
+            ["../../../config/web-control/joint-records/README.md"],
+        ),
         (f"share/{package_name}/static", static_files),
         (f"share/{package_name}/static/assets", static_asset_files),
     ],

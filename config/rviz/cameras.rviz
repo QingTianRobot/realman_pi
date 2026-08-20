@@ -41,7 +41,7 @@ Visualization Manager:
         Value: /camera_left/color/image_raw
       Value: true
     - Class: rviz_default_plugins/Image
-      Enabled: true
+      Enabled: false
       Name: Left depth
       Topic:
         Depth: 5
@@ -61,7 +61,7 @@ Visualization Manager:
         Value: /camera_middle/color/image_raw
       Value: true
     - Class: rviz_default_plugins/Image
-      Enabled: true
+      Enabled: false
       Name: Middle depth
       Topic:
         Depth: 5
@@ -81,7 +81,7 @@ Visualization Manager:
         Value: /camera_right/color/image_raw
       Value: true
     - Class: rviz_default_plugins/Image
-      Enabled: true
+      Enabled: false
       Name: Right depth
       Topic:
         Depth: 5

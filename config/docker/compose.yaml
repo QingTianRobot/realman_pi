@@ -194,6 +194,15 @@ services:
       - realman_bringup
       - remote_rviz.launch.py
 
+  # RViz-only camera viewer. It subscribes to the production Orbbec image
+  # topics and never starts a RealMan driver or local camera device.
+  realman_camera_rviz:
+    <<: *rm65-rviz-common
+    command:
+      - rviz2
+      - -d
+      - /opt/rm65_ws/config/rviz/cameras.rviz
+
   # Standalone Xbox validation. This starts only the SDL Joy publisher and the
   # C++ button logger, so a controller can be tested without RViz or robot TF.
   xbox_controller_test:

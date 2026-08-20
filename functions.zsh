@@ -643,6 +643,51 @@ rm65_docker_remote_rviz_logs() {
   _rm65_compose logs --tail=100 "$@" realman_remote_rviz
 }
 
+rm65_docker_camera_rviz() {
+  emulate -L zsh
+  if (( $# > 1 )); then
+    print -u2 -r -- "usage: rm65_docker_camera_rviz [domain_id]"
+    return 2
+  fi
+
+  (
+    local domain_id="${1:-${ROS_DOMAIN_ID:-0}}"
+    _rm65_prepare_remote_rviz_env "$domain_id" || return
+    print -r -- "rm65: camera RViz is running in the foreground; close it or press Ctrl-C to stop"
+    _rm65_compose run --rm realman_camera_rviz
+  )
+}
+
+rm65_docker_camera_rviz_start() {
+  emulate -L zsh
+  if (( $# > 1 )); then
+    print -u2 -r -- "usage: rm65_docker_camera_rviz_start [domain_id]"
+    return 2
+  fi
+
+  (
+    local domain_id="${1:-${ROS_DOMAIN_ID:-0}}"
+    _rm65_prepare_remote_rviz_env "$domain_id" || return
+    _rm65_compose up -d realman_camera_rviz || return
+    _rm65_compose ps realman_camera_rviz
+  )
+}
+
+rm65_docker_camera_rviz_stop() {
+  emulate -L zsh
+  _rm65_compose stop realman_camera_rviz
+}
+
+rm65_docker_camera_rviz_status() {
+  emulate -L zsh
+  _rm65_compose ps realman_camera_rviz
+}
+
+rm65_docker_camera_rviz_logs() {
+  emulate -L zsh
+  _rm65_compose logs --tail=100 "$@" realman_camera_rviz
+}
+
 rm65_ros_build() {
   emulate -L zsh
   local humble_setup
@@ -804,6 +849,12 @@ rm65_project_help() {
   print -r -- "  rm65_docker_remote_rviz_stop        停止后台远程 RViz，不影响工控机驱动"
   print -r -- "  rm65_docker_remote_rviz_status      查看后台远程 RViz 状态"
   print -r -- "  rm65_docker_remote_rviz_logs [-f]   查看或跟踪远程 RViz 日志"
+  print -r -- "Camera RViz (notebook):"
+  print -r -- "  rm65_docker_camera_rviz [domain]   前台显示三路相机图像，默认 ROS domain 0"
+  print -r -- "  rm65_docker_camera_rviz_start [domain] 后台启动三路相机 RViz"
+  print -r -- "  rm65_docker_camera_rviz_stop        停止后台相机 RViz"
+  print -r -- "  rm65_docker_camera_rviz_status      查看后台相机 RViz 状态"
+  print -r -- "  rm65_docker_camera_rviz_logs [-f]   查看或跟踪相机 RViz 日志"
   print -r -- "ROS:"
   print -r -- "  rm65_ros_build [args ...]            使用本机 ROS 2 Humble 构建 bringup 和驱动包"
   print -r -- "Website:"

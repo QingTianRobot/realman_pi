@@ -216,6 +216,11 @@ RealSense D435 仍不作为 ROS2 相机默认路径，
 | `rm65_docker_remote_rviz_stop` | 停止后台远程 RViz。 | `docker compose stop realman_remote_rviz`。 | 关闭桌面机 RViz-only 服务，不影响工控机驱动和机械臂。 | Docker Compose |
 | `rm65_docker_remote_rviz_status` | 查看后台远程 RViz 状态。 | `docker compose ps realman_remote_rviz`。 | 确认 RViz 容器是否仍在运行。 | Docker Compose |
 | `rm65_docker_remote_rviz_logs [-f]` | 查看或跟踪远程 RViz 日志。 | `docker compose logs --tail=100 ... realman_remote_rviz`。 | 排查 DDS 发现、TF、joint state 或显示授权问题。 | Docker Compose、[故障排查](../troubleshooting) |
+| `rm65_docker_camera_rviz [domain]` | 前台显示生产机三路 Orbbec 彩色图像。 | `realman_camera_rviz` 和 `config/rviz/cameras.rviz`；不启动驱动或本地相机。 | 笔记本查看生产机的 `/camera_left`、`/camera_middle`、`/camera_right` 实拍画面。 | [快速开始：查看三路实拍画面](../guide/getting-started#查看三路实拍画面) |
+| `rm65_docker_camera_rviz_start [domain]` | 后台启动三路相机 RViz。 | `docker compose up -d realman_camera_rviz`。 | 日常持续查看相机画面。 | `realman_camera_rviz` Compose 服务 |
+| `rm65_docker_camera_rviz_stop` | 停止后台相机 RViz。 | `docker compose stop realman_camera_rviz`。 | 关闭笔记本上的相机查看器，不影响生产机相机。 | Docker Compose |
+| `rm65_docker_camera_rviz_status` | 查看后台相机 RViz 状态。 | `docker compose ps realman_camera_rviz`。 | 确认相机 RViz 容器是否运行。 | Docker Compose |
+| `rm65_docker_camera_rviz_logs [-f]` | 查看或跟踪相机 RViz 日志。 | `docker compose logs --tail=100 ... realman_camera_rviz`。 | 排查 X11、DDS domain 或图像订阅问题。 | Docker Compose |
 
 ## 本机构建、网站和部署入口
 

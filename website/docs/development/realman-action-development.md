@@ -226,9 +226,10 @@ RealMan 的 `rm_event_push_data_t` 不包含 ROS Action request ID 或 generatio
 `RealManDriverNode` 通过 `MotionCoordinator.event_channel_recovery_required` 发现这种可恢复
 状态，断开并重新创建 SDK handle，重新注册 `handle_event`，然后调用
 `reconcile_after_connect(connection_reset=True)`。网页端或其他 ROS 客户端发送下一条 goal 时
-也会触发同一恢复流程，因此不需要手动重启 Docker。只有确认重连后的轨迹仍为 inactive 且
-API2 状态为 0，下一条 goal 才会获得 `ArmOwnership`。stop 返回失败、轨迹无法确认 inactive、
-连接异常等情况不会走自动恢复，必须先完成显式 disconnect/reconnect。
+也会触发同一恢复流程；状态定时器还会按 `reconnect_interval` 在后台重试，因此单次 SDK
+重建失败不会让节点永久失去恢复能力。只有确认重连后的轨迹仍为 inactive 且 API2 状态为 0，
+下一条 goal 才会获得 `ArmOwnership`。恢复失败期间该 arm 保持 `connected=false` 并拒绝运动，
+其他 arm 不受影响。
 
 调用方也可以在 Action 已返回 `CANCELED` 后主动恢复；服务幂等，通道已经健康时返回
 `success=true, recovered=false`，实际执行了重建时返回 `recovered=true`：

@@ -800,7 +800,37 @@ def test_connect_reconciles_physical_lockout_with_read_only_trajectory_state():
     assert "self.motion_coordinator.event_channel_recovery_required" in source
     assert "self.adapter.disconnect()" in source
     publish_state = source[source.index("    def _publish_state"):]
-    assert "not self.motion_coordinator.event_channel_recovery_required" in publish_state
+    assert "self._maybe_reconnect()" in publish_state
+
+
+@requires_ros_action_runtime
+def test_publish_state_retries_quarantined_event_channel_without_direct_connect():
+    recovery_calls = []
+    connect_calls = []
+    published = []
+    state = RobotState((), False, "RM65-B", -1)
+    node = SimpleNamespace(
+        adapter=SimpleNamespace(
+            connected=True,
+            get_state=lambda: state,
+        ),
+        motion_coordinator=SimpleNamespace(event_channel_recovery_required=True),
+        auto_connect=True,
+        reconnect_interval=5.0,
+        _last_connect_attempt=0.0,
+        _last_event_recovery_attempt=0.0,
+        _recover_event_channel=lambda: recovery_calls.append(True) or False,
+        _connect_to_robot=lambda: connect_calls.append(True),
+        connected_publisher=SimpleNamespace(publish=published.append),
+        _report_state_error=lambda _state: None,
+    )
+    node._maybe_reconnect = lambda: RealManDriverNode._maybe_reconnect(node)
+
+    RealManDriverNode._publish_state(node)
+
+    assert recovery_calls == [True]
+    assert connect_calls == []
+    assert published and published[0].data is False
 
 
 @requires_ros_action_runtime

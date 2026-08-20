@@ -409,11 +409,26 @@ def test_get_state_malformed_status_returns_error_without_leaking_exception(
     state = adapter.get_state()
 
     assert state.joint_degrees == ()
-    assert state.connected is True
+    assert state.connected is False
     assert state.error_code == -1
     assert adapter.last_error == -1
     assert adapter.last_error_message == "SDK joint state request failed"
     assert adapter._active_calls == 0
+
+
+def test_get_state_vendor_exception_marks_connection_for_retry(adapter, fake_robot):
+    def raise_read_error():
+        raise RuntimeError("controller read failed")
+
+    fake_robot.rm_get_joint_degree = raise_read_error
+
+    state = adapter.get_state()
+
+    assert state.joint_degrees == ()
+    assert state.connected is False
+    assert state.error_code == -1
+    assert adapter.connected is False
+    assert adapter.last_error_message == "controller read failed"
 
 
 def test_mock_current_trajectory_uses_documented_raw_dict_shape():

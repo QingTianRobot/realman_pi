@@ -306,7 +306,14 @@ class RealManDriverNode(Node):
                 "mock_mode is enabled; no physical controller connection or motion will occur"
             )
         if self.auto_connect:
-            self._connect_to_robot()
+            # A controller or SDK can be unavailable during process startup.
+            # Keep the ROS node alive so the state timer can retry later.
+            try:
+                self._connect_to_robot()
+            except Exception as error:
+                self.get_logger().error(
+                    f"Initial RealMan connection attempt failed: {error}"
+                )
 
     def _connect(self, _request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
         code = self._connect_to_robot()
@@ -842,53 +849,63 @@ class RealManDriverNode(Node):
 
     def _connect_to_robot(self, *, event_recovery: bool = False) -> int:
         self._last_connect_attempt = time.monotonic()
-        was_connected = self.adapter.connected
-        code = self.adapter.connect()
-        if code == 0:
-            callback_status = self.adapter.register_event_callback(
-                self.motion_coordinator.handle_event
-            )
-            if callback_status != 0:
-                self.get_logger().error(
-                    "RealMan event callback registration failed with API2 status "
-                    f"{callback_status}"
+        try:
+            was_connected = self.adapter.connected
+            code = self.adapter.connect()
+            if code == 0:
+                callback_status = self.adapter.register_event_callback(
+                    self.motion_coordinator.handle_event
                 )
-                self.adapter.disconnect()
-                return callback_status
-            if not self.motion_coordinator.reconcile_after_connect(
-                connection_reset=not was_connected,
-                recovery_owns_arm=event_recovery,
-            ):
-                self.get_logger().warn(
-                    "RealMan trajectory reconciliation did not prove an inactive, "
-                    "error-free trajectory; motion remains safety gated"
-                )
-            if not event_recovery:
-                verification = run_startup_coordinate_policy(
-                    self.coordinate_manager,
-                    self.adapter,
-                    self.arm_ownership,
-                    self.arm_id,
-                    publish_result=self._update_active_references,
-                )
-                if verification.api2_status != 0:
+                if callback_status != 0:
                     self.get_logger().error(
-                        "RealMan coordinate startup failed with API2 status "
-                        f"{verification.api2_status}: {verification.message}"
+                        "RealMan event callback registration failed with API2 status "
+                        f"{callback_status}"
                     )
-                    return verification.api2_status
-                if not verification.matched:
+                    self.adapter.disconnect()
+                    return callback_status
+                if not self.motion_coordinator.reconcile_after_connect(
+                    connection_reset=not was_connected,
+                    recovery_owns_arm=event_recovery,
+                ):
                     self.get_logger().warn(
-                        f"RealMan coordinate verification blocked motion: {verification.message}"
+                        "RealMan trajectory reconciliation did not prove an inactive, "
+                        "error-free trajectory; motion remains safety gated"
                     )
-                self._publish_coordinate_state(verification)
-            self.get_logger().info("RealMan connection ready")
-        else:
-            detail = self.adapter.last_error_message or "no SDK detail"
-            self.get_logger().error(
-                f"RealMan connection failed with API2 status {code}: {detail}"
-            )
-        return code
+                if not event_recovery:
+                    verification = run_startup_coordinate_policy(
+                        self.coordinate_manager,
+                        self.adapter,
+                        self.arm_ownership,
+                        self.arm_id,
+                        publish_result=self._update_active_references,
+                    )
+                    if verification.api2_status != 0:
+                        self.get_logger().error(
+                            "RealMan coordinate startup failed with API2 status "
+                            f"{verification.api2_status}: {verification.message}"
+                        )
+                        return verification.api2_status
+                    if not verification.matched:
+                        self.get_logger().warn(
+                            f"RealMan coordinate verification blocked motion: {verification.message}"
+                        )
+                    self._publish_coordinate_state(verification)
+                self.get_logger().info("RealMan connection ready")
+            else:
+                detail = self.adapter.last_error_message or "no SDK detail"
+                self.get_logger().error(
+                    f"RealMan connection failed with API2 status {code}: {detail}"
+                )
+            return code
+        except Exception as error:
+            self.get_logger().error(f"RealMan connection setup failed: {error}")
+            try:
+                self.adapter.disconnect()
+            except Exception as disconnect_error:
+                self.get_logger().error(
+                    f"RealMan connection cleanup failed: {disconnect_error}"
+                )
+            return -1
 
     def _recover_event_channel(self) -> bool:
         """Reset a stale callback channel after a confirmed inactive stop."""
@@ -898,6 +915,13 @@ class RealManDriverNode(Node):
             return False
         owns_arm = False
         try:
+            now = time.monotonic()
+            if (
+                now - self._last_event_recovery_attempt
+                < self._event_recovery_retry_interval_sec
+            ):
+                return False
+            self._last_event_recovery_attempt = now
             owns_arm = self.arm_ownership.acquire(self.arm_id)
             if not owns_arm:
                 self.get_logger().warn(
@@ -906,13 +930,6 @@ class RealManDriverNode(Node):
                 return False
             if not self.motion_coordinator.event_channel_recovery_required:
                 return True
-            now = time.monotonic()
-            if (
-                now - self._last_event_recovery_attempt
-                < self._event_recovery_retry_interval_sec
-            ):
-                return False
-            self._last_event_recovery_attempt = now
             self.get_logger().warn(
                 "Resetting RealMan SDK connection after a clean stop left the "
                 "trajectory event channel without a generation marker"
@@ -944,17 +961,43 @@ class RealManDriverNode(Node):
                 self.arm_ownership.release(self.arm_id)
             self._event_recovery_lock.release()
 
-    def _publish_state(self) -> None:
-        if (
-            not self.adapter.connected
-            and not self.motion_coordinator.event_channel_recovery_required
-            and self.auto_connect
-            and self.reconnect_interval > 0.0
-            and time.monotonic() - self._last_connect_attempt >= self.reconnect_interval
-        ):
-            self._connect_to_robot()
+    def _maybe_reconnect(self) -> None:
+        """Keep one arm retryable without ever bypassing motion safety gates."""
+        if not self.auto_connect or self.reconnect_interval <= 0.0:
+            return
+        now = time.monotonic()
+        try:
+            if self.motion_coordinator.event_channel_recovery_required:
+                if (
+                    now - self._last_event_recovery_attempt
+                    >= self.reconnect_interval
+                ):
+                    self._recover_event_channel()
+                return
+            if (
+                not self.adapter.connected
+                and now - self._last_connect_attempt >= self.reconnect_interval
+            ):
+                self._connect_to_robot()
+        except Exception as error:
+            self.get_logger().error(f"Automatic RealMan reconnect failed: {error}")
 
-        state = self.adapter.get_state()
+    def _publish_state(self) -> None:
+        self._maybe_reconnect()
+
+        try:
+            state = self.adapter.get_state()
+        except Exception as error:
+            # A vendor exception must not escape a ROS timer callback. Tear down
+            # the possibly stale handle so the next timer tick can reconnect.
+            self.get_logger().error(f"RealMan state read failed: {error}")
+            try:
+                self.adapter.disconnect()
+            except Exception as disconnect_error:
+                self.get_logger().error(
+                    f"RealMan state recovery cleanup failed: {disconnect_error}"
+                )
+            state = RobotState((), False, self.robot_model, -1)
         connected = Bool()
         connected.data = state.connected
         self.connected_publisher.publish(connected)

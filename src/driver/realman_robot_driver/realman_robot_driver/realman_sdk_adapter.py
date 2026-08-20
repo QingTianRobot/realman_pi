@@ -891,6 +891,7 @@ class RealManSdkAdapter:
                 current = token is not None and self._call_matches_locked(token)
                 if current:
                     self._set_failure_locked(-1, str(error))
+                    self._connected = False
                     return RobotState((), self._connected, self.robot_model, -1)
             return RobotState((), False, self.robot_model, -1)
 
@@ -900,6 +901,7 @@ class RealManSdkAdapter:
             with self._lock:
                 if token is not None and self._call_matches_locked(token):
                     self._set_failure_locked(-1, "SDK joint state request failed")
+                    self._connected = False
                     return RobotState((), self._connected, self.robot_model, -1)
             return RobotState((), False, self.robot_model, -1)
         with self._lock:

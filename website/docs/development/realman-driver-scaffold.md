@@ -79,7 +79,11 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 
 `joint_states.position` 遵守 ROS 约定使用弧度。适配器从 `rm_get_joint_degree()` 读取厂商的度数，节点只在发布边界转换一次。RM65-B 的六个名称固定为 `joint_1` 到 `joint_6`，由配置中的 `joint_names` 显式声明。
 
-未连接或 SDK 状态查询失败时不发布不可用的关节状态；mock 连接后发布六轴零位。通信错误 `-1/-2` 会将当前连接标记为失效，节点按 `reconnect_interval` 自动重连。`connected` 表示连接生命周期，调用方还应检查 `/status` 返回的 `last_error`。
+未连接或 SDK 状态查询失败时不发布不可用的关节状态；mock 连接后发布六轴零位。通信错误
+`-1/-2` 或 SDK 异常会将当前连接标记为失效，节点记录错误、发布该臂离线状态并按
+`reconnect_interval` 自动重连；异常不会从启动连接流程或状态定时器向 ROS executor 冒泡，
+因此单臂控制器失败不会退出整个驱动节点。`connected` 表示连接生命周期，调用方还应检查
+`/status` 返回的 `last_error`。
 
 `stop` 当前映射到官方 `rm_set_arm_stop()`，表示最快关节速度受控停止且轨迹不可恢复。它不是断电急停，也不替代现场安全回路。
 
@@ -199,7 +203,7 @@ BASE 的 ROS frame 由驱动固定为 `l/base_link`（中、右臂对应 `m/base
 | `thread_mode` | `RM_TRIPLE_MODE_E` | 当前必须为三线程；普通运动完成事件依赖 SDK callback |
 | `mock_mode` | `false` | `true` 时不导入 SDK，不访问任何控制器 |
 | `auto_connect` | `true` | 启动时连接并开始回读；设为 `false` 可手动调用 `connect` |
-| `reconnect_interval` | `5.0` 秒 | 连接失败或断线后的重连周期；`0.0` 禁用 |
+| `reconnect_interval` | `5.0` 秒 | 连接失败、断线或事件通道隔离后的重连/恢复周期；`0.0` 禁用 |
 | `state_publish_rate` | `10.0` Hz | 必须大于零；后续应按网络和控制器能力测定 |
 | `joint_names` | `joint_1` 到 `joint_6` | 数量必须与 SDK 返回的自由度一致 |
 | `coordinates_config_file` | `config/ros/realman_coordinates.yaml` | 工具/工作坐标和启动验证策略的权威配置 |
@@ -228,7 +232,9 @@ SDK 依赖由根目录 `config/python/realman-sdk-requirements.txt` 锁定为 `R
 `RealManSdkAdapter` 在硬件模式下负责创建并保留这个桥接指针，把
 `rm_event_push_data_t` 转成 Action 协调器使用的字典；mock 模式仍使用普通 Python
 回调。回调注册失败会保留 API2 状态并关闭连接，驱动随后按 `reconnect_interval` 重试，
-不会把未确认的轨迹报告为成功。
+不会把未确认的轨迹报告为成功。取消后事件通道进入隔离时，状态定时器也会在后台重复执行
+disconnect、冷却、connect、回调注册和 inactive reconciliation；失败只让当前 arm 保持
+`connected=false` 和运动安全门禁，不会退出驱动节点，也不会影响其他 arm。
 
 ## 独立启动
 

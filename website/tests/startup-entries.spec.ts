@@ -47,6 +47,31 @@ test("rm65_project_help mentions startup entry descriptions", async () => {
   expect(stdout).toContain("rm65_docker_camera_rviz");
 });
 
+test("functions load ROS runtime defaults from project env", async () => {
+  const escapedPath = functionsZshPath.replace(/"/g, '\\"');
+  const { stdout } = await execFileAsync(
+    "zsh",
+    [
+      "-lc",
+      [
+        "unset ROS_DOMAIN_ID ROS_LOCALHOST_ONLY DISPLAY XAUTHORITY",
+        `source "${escapedPath}"`,
+        'printf "domain=%s\\nlocalhost=%s\\ndisplay=%s\\nxauthority=%s\\n" "$ROS_DOMAIN_ID" "$ROS_LOCALHOST_ONLY" "${DISPLAY-unset}" "${XAUTHORITY-unset}"',
+        "export ROS_DOMAIN_ID=42",
+        `source "${escapedPath}"`,
+        'printf "manual_domain=%s\\n" "$ROS_DOMAIN_ID"',
+      ].join("; "),
+    ],
+    { maxBuffer: 1_000_000 },
+  );
+
+  expect(stdout).toContain("domain=0");
+  expect(stdout).toContain("localhost=0");
+  expect(stdout).toContain("display=unset");
+  expect(stdout).toContain("xauthority=unset");
+  expect(stdout).toContain("manual_domain=42");
+});
+
 test("Pages workflow rebuilds when startup helper sources change", async () => {
   const workflow = await readFile(deployWorkflowPath, "utf8");
 

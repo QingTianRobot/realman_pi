@@ -148,7 +148,7 @@ docker compose run --rm realman_bringup_remote \
 从另一 Humble 终端依次发布按下和释放：
 
 ```bash
-export ROS_DOMAIN_ID=65
+source /path/to/realman_pi/functions.zsh
 export ROS_LOCALHOST_ONLY=0
 ros2 topic pub --once /input/joy sensor_msgs/msg/Joy \
   "{axes: [], buttons: [1, 0, 0, 0, 0, 0, 0, 0, 0, 0, 0]}"

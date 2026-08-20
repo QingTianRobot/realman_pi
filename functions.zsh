@@ -2,6 +2,32 @@
 #   source /path/to/realman_pi/functions.zsh
 
 typeset -g RM65_PROJECT_ROOT="${${(%):-%N}:A:h}"
+typeset -gA _RM65_PROJECT_ENV_VALUES
+
+_rm65_load_project_env() {
+  emulate -L zsh
+  local env_file="$RM65_PROJECT_ROOT/.env"
+  local line key value current_value previous_env_value
+
+  [[ -r "$env_file" ]] || return 0
+
+  while IFS= read -r line || [[ -n "$line" ]]; do
+    [[ -z "$line" || "$line" == \#* ]] && continue
+    [[ "$line" =~ '^[[:space:]]*([A-Za-z_][A-Za-z0-9_]*)=(.*)$' ]] || continue
+    key="${match[1]}"
+    value="${match[2]%$'\r'}"
+    [[ -z "$value" ]] && continue
+    current_value="${(P)key:-}"
+    previous_env_value="${_RM65_PROJECT_ENV_VALUES[$key]-}"
+    if [[ -n "$current_value" && "$current_value" != "$previous_env_value" ]]; then
+      continue
+    fi
+    export "$key=$value"
+    _RM65_PROJECT_ENV_VALUES[$key]="$value"
+  done < "$env_file"
+}
+
+_rm65_load_project_env
 
 _rm65_require_command() {
   emulate -L zsh
@@ -473,6 +499,7 @@ rm65_camera_ros2() {
   _rm65_source_camera_ros2 || return
   _rm65_check_camera_usbfs_memory
   export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
+  export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
   _rm65_require_command ros2 || return
   if ! command ros2 pkg prefix orbbec_camera >/dev/null 2>&1; then
     print -u2 -r -- "rm65: orbbec_camera is not in the sourced ROS 2 environment"
@@ -532,6 +559,7 @@ rm65_camera_ros2_status() {
   print -r -- "rm65 ROS2 camera bringup"
   print -r -- "  launch: $RM65_PROJECT_ROOT/src/sensor_bringup/launch/cameras_ros2.launch.py"
   print -r -- "  config: $RM65_PROJECT_ROOT/config/ros/cameras_ros2.yaml"
+  print -r -- "  ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}"
   print -r -- "  logs: ${ROS_LOG_DIR:-${REALMAN_LOG_ROOT:-$RM65_PROJECT_ROOT/logs}}"
   if command -v pgrep >/dev/null 2>&1; then
     process_output="$(command pgrep -af "$process_pattern" || true)"
@@ -571,7 +599,7 @@ rm65_web_control_url() {
 
 _rm65_prepare_remote_rviz_env() {
   emulate -L zsh
-  local domain_id="${1:-${ROS_DOMAIN_ID:-166}}"
+  local domain_id="${1:-${ROS_DOMAIN_ID:-0}}"
   local runtime_dir="${XDG_RUNTIME_DIR:-/run/user/$EUID}"
   local -a xauthority_candidates
 
@@ -845,12 +873,12 @@ rm65_project_help() {
   print -r -- "  rm65_web_control_url [host]         打印 http://host:port/ 浏览器控制台地址"
   print -r -- "Remote RViz:"
   print -r -- "  rm65_docker_remote_rviz [domain]    前台启动 RViz-only 远程查看器，保留终端日志"
-  print -r -- "  rm65_docker_remote_rviz_start [domain] 后台启动 RViz-only 远程查看器"
+  print -r -- "  rm65_docker_remote_rviz_start [domain] 后台启动 RViz-only 远程查看器，默认读取 .env 的 ROS_DOMAIN_ID"
   print -r -- "  rm65_docker_remote_rviz_stop        停止后台远程 RViz，不影响工控机驱动"
   print -r -- "  rm65_docker_remote_rviz_status      查看后台远程 RViz 状态"
   print -r -- "  rm65_docker_remote_rviz_logs [-f]   查看或跟踪远程 RViz 日志"
   print -r -- "Camera RViz (notebook):"
-  print -r -- "  rm65_docker_camera_rviz [domain]   前台显示三路相机图像，默认 ROS domain 0"
+  print -r -- "  rm65_docker_camera_rviz [domain]   前台显示三路相机图像，默认读取 .env 的 ROS_DOMAIN_ID"
   print -r -- "  rm65_docker_camera_rviz_start [domain] 后台启动三路相机 RViz"
   print -r -- "  rm65_docker_camera_rviz_stop        停止后台相机 RViz"
   print -r -- "  rm65_docker_camera_rviz_status      查看后台相机 RViz 状态"

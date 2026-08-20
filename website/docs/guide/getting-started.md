@@ -71,9 +71,10 @@ rm65_project_help
 | `rm65_web_build` / `rm65_web_test` | 构建或测试文档网站 |
 | `rm65_deploy_sync` | 本地提交并 push 后，用 `rsync` 同步到生产端 |
 
-这些函数不会自动写入 `~/.zshrc`，也不会隐藏底层参数。需要函数未覆盖的 Compose、
-colcon 或 launch 选项时，继续使用本页的原始命令。`rm65_docker_xbox_test` 不启动
-三臂和 RViz，适合先验证实体手柄是否能产生 Joy 消息和按键日志。
+这些函数不会自动写入 `~/.zshrc`，也不会隐藏底层参数。加载时会读取仓库根目录 `.env`
+中的简单 `KEY=value` 配置；当前终端已经设置的非空变量优先，因此可以临时覆盖。需要函数未
+覆盖的 Compose、colcon 或 launch 选项时，继续使用本页的原始命令。`rm65_docker_xbox_test`
+不启动三臂和 RViz，适合先验证实体手柄是否能产生 Joy 消息和按键日志。
 
 所有 `functions.zsh` 入口的当前用途、组件范围和权威配置见
 [启动入口索引](../development/startup-entries)；参数化 bringup 的完整开关和组合说明见
@@ -170,8 +171,8 @@ rm65_camera_ros2 color rviz
 ```
 
 `rviz` 参数要求当前会话有 `DISPLAY`；生产端无 GUI 时，让生产端保持
-`rm65_camera_ros2 color`，在笔记本以相同 `ROS_DOMAIN_ID` 使用远程查看器。当前生产机默认域为
-`0`，因此笔记本执行 `rm65_docker_remote_rviz 0`；如果两端设置了其他域，将 `0` 换成该值。
+`rm65_camera_ros2 color`，在笔记本使用同一份 `.env` 中的 `ROS_DOMAIN_ID` 启动远程查看器。
+需要更换 DDS 域时，优先修改 `.env` 的 `ROS_DOMAIN_ID`，然后重新 source 函数并重启相关节点。
 停止或切回旧 SDK 推流时：
 
 ```zsh
@@ -187,7 +188,7 @@ rm65_camera_start
 ```zsh
 source /path/to/realman_pi/functions.zsh
 rm65_docker_build realman_camera_rviz  # 首次使用或镜像更新后执行
-rm65_docker_camera_rviz 0               # 前台打开 RViz，关闭窗口或 Ctrl-C 停止
+rm65_docker_camera_rviz                 # 前台打开 RViz，关闭窗口或 Ctrl-C 停止
 ```
 
 RViz 中会显示：
@@ -201,17 +202,17 @@ RViz 中会显示：
 也可以让 RViz 在后台运行：
 
 ```zsh
-rm65_docker_camera_rviz_start 0
+rm65_docker_camera_rviz_start
 rm65_docker_camera_rviz_status
 rm65_docker_camera_rviz_logs -f
 rm65_docker_camera_rviz_stop
 ```
 
-如果生产机和笔记本使用的不是 domain `0`，两端必须改成完全相同的值，例如
-`ROS_DOMAIN_ID=166 rm65_camera_ros2 color` 和 `rm65_docker_camera_rviz 166`。若 RViz 窗口打开但
+生产机和笔记本必须使用完全相同的 `ROS_DOMAIN_ID`；日常只改 `.env`，不需要在每条命令后
+追加 domain 参数。`rm65_docker_camera_rviz [domain]` 仍保留临时覆盖能力。若 RViz 窗口打开但
 图像为空，先在笔记本执行 `ros2 topic list | grep '/camera_.*color/image_raw'`，再检查两端
-`ROS_LOCALHOST_ONLY=0`、DDS UDP/组播和防火墙设置。不要在笔记本执行 `rm65_camera_ros2`，否则
-它会尝试直接占用笔记本的 USB 相机设备。
+`ROS_LOCALHOST_ONLY=0`、DDS UDP/组播和防火墙设置。专用相机 RViz 只显示三路彩色图像，不加载
+深度 topic。不要在笔记本执行 `rm65_camera_ros2`，否则它会尝试直接占用笔记本的 USB 相机设备。
 
 两套相机节点不能同时打开 USB 设备。RealSense D435 在现有 USB2 拓扑下仍无法稳定出帧，
 因此没有加入这个 ROS2 三相机默认 launch。
@@ -221,13 +222,13 @@ rm65_docker_camera_rviz_stop
 下面的函数只在有图形桌面的笔记本上运行。真实机械臂驱动仍应在连接工业交换机的工控机上
 运行 `realman_bringup_remote`；笔记本不能使用 `realman_driver_rviz` 去直接连接
 `192.168.30.x` 控制器。所有函数的可选 `domain` 参数必须与工控机一致，取值范围是 `0` 到
-`232`；省略时沿用当前 `ROS_DOMAIN_ID`，如果环境中没有设置则默认使用 `166`。
+`232`；省略时使用当前环境或 `.env` 中的 `ROS_DOMAIN_ID`。
 
 | 函数 | 使用方式 | 生命周期和适用场景 |
 | --- | --- | --- |
 | `rm65_docker_build` | `rm65_docker_build realman_remote_rviz` | 首次使用或代码更新后构建 RViz 镜像；不会启动节点。 |
-| `rm65_docker_remote_rviz_start` | `rm65_docker_remote_rviz_start 166` | 后台启动 `realman_remote_rviz`；命令返回后 RViz 窗口和容器继续运行，适合日常使用。 |
-| `rm65_docker_remote_rviz` | `rm65_docker_remote_rviz 166` | 前台启动；当前终端持续显示 launch 日志，关闭窗口或按 `Ctrl-C` 停止。适合首次排错。 |
+| `rm65_docker_remote_rviz_start` | `rm65_docker_remote_rviz_start` | 后台启动 `realman_remote_rviz`；命令返回后 RViz 窗口和容器继续运行，适合日常使用。 |
+| `rm65_docker_remote_rviz` | `rm65_docker_remote_rviz` | 前台启动；当前终端持续显示 launch 日志，关闭窗口或按 `Ctrl-C` 停止。适合首次排错。 |
 | `rm65_docker_remote_rviz_status` | `rm65_docker_remote_rviz_status` | 只查看 Compose 服务状态，不改变运行状态。看到 `Up` 才表示容器仍在运行。 |
 | `rm65_docker_remote_rviz_logs` | `rm65_docker_remote_rviz_logs` 或 `rm65_docker_remote_rviz_logs -f` | 查看最近 100 行日志；`-f` 持续跟踪日志，按 `Ctrl-C` 只退出跟踪，不停止 RViz。 |
 | `rm65_docker_remote_rviz_stop` | `rm65_docker_remote_rviz_stop` | 停止笔记本上的 RViz-only 服务，不停止工控机驱动和机械臂。 |
@@ -237,12 +238,12 @@ rm65_docker_camera_rviz_stop
 ```zsh
 source /path/to/realman_pi/functions.zsh
 rm65_docker_build realman_remote_rviz  # 第一次或代码更新后执行
-rm65_docker_remote_rviz_start 166
+rm65_docker_remote_rviz_start
 rm65_docker_remote_rviz_status
 ```
 
 后台服务不会因为关闭当前终端而停止，但目前没有配置开机自动重启；电脑或 Docker 服务重启
-后需要再次执行 `rm65_docker_remote_rviz_start 166`。函数会自动读取 `DISPLAY` 和
+后需要再次执行 `rm65_docker_remote_rviz_start`。函数会自动读取 `DISPLAY` 和
 `XAUTHORITY`，并兼容 GNOME Wayland 的 `.mutter-Xwaylandauth.*` 文件。
 
 常见问题的判断方式：
@@ -256,12 +257,14 @@ rm65_docker_remote_rviz_status
 
 ## `.env` 与 Bringup 预设
 
-从仓库根目录执行 `docker compose` 时会自动读取根目录 `.env`。文件中的每个变量都带有候选值
-注释，模板默认不会启用真实运动控制，也不会包含密钥。命令行显式设置的变量优先级更高：
+从仓库根目录执行 `docker compose` 时会自动读取根目录 `.env`；`functions.zsh` 加载时也会读取
+同一文件。`ROS_DOMAIN_ID` 和 `ROS_LOCALHOST_ONLY` 应在这里统一配置，保证机械臂节点、相机
+ROS2 节点、Web 控制和远程 RViz 在同一个 ROS 图中。文件中的每个变量都带有候选值注释，
+模板默认不会启用真实运动控制，也不会包含密钥。命令行显式设置的变量优先级更高：
 
 ```bash
 ${EDITOR:-vi} .env
-ROS_DOMAIN_ID=166 docker compose config --quiet
+docker compose config --quiet
 ```
 
 `realman_bringup_custom` 会把 `.env` 中的开关透传给 `system.launch.py`。常用变量如下：
@@ -380,12 +383,13 @@ RM65_USE_GUI=true docker compose run --rm rm65_three_rviz
 
 ## ROS 域设置
 
-独立查看器默认使用 `ROS_DOMAIN_ID=65`，避免读取同一网络中其他机器人发布的 `/robot_description` 和 TF。
+所有 Docker 服务和 Zsh helper 默认读取仓库根目录 `.env` 中的 `ROS_DOMAIN_ID`。生产机、
+笔记本和调试终端需要互相发现时，保持同一个值；需要隔离调试时，再临时覆盖。
 
-需要接入现有 ROS 2 图时，显式指定相同的域：
+接入现有 ROS 2 图时，先在 `.env` 中设置相同的域，再启动查看器：
 
 ```bash
-ROS_DOMAIN_ID=0 RM65_MODEL=RM65-B docker compose run --rm rm65_rviz
+RM65_MODEL=RM65-B docker compose run --rm rm65_rviz
 ```
 
 ## Xbox 手柄与统一启动
@@ -420,10 +424,12 @@ button[0] a RELEASED
 无桌面的远程端可以启动 headless 调试目标：
 
 ```bash
-ROS_DOMAIN_ID=65 docker compose run --rm realman_bringup_remote
+docker compose run --rm realman_bringup_remote
 ```
 
-远程 Humble 主机设置相同的 `ROS_DOMAIN_ID=65` 和 `ROS_LOCALHOST_ONLY=0`，向 `/input/joy` 发布 `sensor_msgs/msg/Joy` 即可驱动输入节点。两台主机之间还需要允许 DDS UDP 网络通信。
+远程 Humble 主机加载同一份 `.env` 或手动设置相同的 `ROS_DOMAIN_ID`，并保持
+`ROS_LOCALHOST_ONLY=0`，向 `/input/joy` 发布 `sensor_msgs/msg/Joy` 即可驱动输入节点。
+两台主机之间还需要允许 DDS UDP 网络通信。
 
 ### 浏览器 Web 控制台
 
@@ -481,12 +487,12 @@ ros2 service call /l/recover_motion realman_msgs/srv/RecoverMotion "{}"
 
 如果真实驱动运行在另一台工控机，而 RViz 要显示在当前桌面机上，请让工控机只运行
 `realman_bringup_remote`，当前桌面机运行 RViz-only 服务。两端需要使用同一个未占用的
-ROS domain；下面使用 `166` 作为示例。
+ROS domain；推荐在两端仓库根目录 `.env` 中写同一个 `ROS_DOMAIN_ID`。
 
 工控机：
 
 ```bash
-ROS_DOMAIN_ID=166 docker compose up -d realman_bringup_remote
+docker compose up -d realman_bringup_remote
 ```
 
 `realman_bringup_remote` 是无 GUI 的生产端 ROS 图，Compose 配置会让它在主机重启、
@@ -498,7 +504,7 @@ Docker daemon 重启或异常退出后自动恢复。只有显式执行
 ```bash
 source /path/to/realman_pi/functions.zsh
 rm65_docker_build realman_remote_rviz
-rm65_docker_remote_rviz_start 166
+rm65_docker_remote_rviz_start
 rm65_docker_remote_rviz_status
 ```
 
@@ -512,8 +518,8 @@ rm65_docker_remote_rviz_stop
 ```
 
 需要让日志留在当前终端并在 `Ctrl-C` 时同时停止 RViz，可改用前台命令
-`rm65_docker_remote_rviz 166`。参数缺省时函数沿用当前 `ROS_DOMAIN_ID`，环境中也未设置时
-默认使用 `166`。
+`rm65_docker_remote_rviz`。参数缺省时函数使用当前环境或 `.env` 中的 `ROS_DOMAIN_ID`；
+仍可用 `rm65_docker_remote_rviz 42` 做一次性临时覆盖。
 
 该服务只启动 RViz 2，不连接机械臂、不启动 `robot_state_publisher`，也不发布假关节状态。
 桌面机和工控机需要在可互通并允许 DDS UDP/组播的网络中；如果连接经过 NAT 或 VPN 不支持

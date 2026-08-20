@@ -35,12 +35,12 @@ before starting the container:
 export XAUTHORITY="$HOME/.Xauthority"
 ```
 
-The Compose service uses `ROS_DOMAIN_ID=65` by default so a standalone model
-does not consume another robot's `/robot_description` or TF data. To connect
-to an existing ROS 2 graph, set the same domain ID when starting the service:
+The Compose service reads `ROS_DOMAIN_ID` from the repository root `.env`.
+The template uses domain `0`. To connect to an existing ROS 2 graph, set the
+same domain ID in `.env` before starting the service:
 
 ```bash
-ROS_DOMAIN_ID=0 RM65_MODEL=RM65-B docker compose run --rm rm65_rviz
+RM65_MODEL=RM65-B docker compose run --rm rm65_rviz
 ```
 
 The default model is `RM65-B`. Every converted URDF has one complete TF tree

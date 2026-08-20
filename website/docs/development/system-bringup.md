@@ -192,8 +192,10 @@ docker compose build realman_bringup
 
 ### 项目 `.env` 自动加载
 
-从仓库根目录执行 `docker compose` 时，Compose 会自动读取根目录 `.env`。项目已提供一份
-无密钥模板，变量旁边的注释列出常用候选值；修改后直接执行构建或启动命令即可：
+从仓库根目录执行 `docker compose` 时，Compose 会自动读取根目录 `.env`。`functions.zsh`
+加载时也读取同一文件，因此 `ROS_DOMAIN_ID`、`ROS_LOCALHOST_ONLY` 等运行变量可以在一个
+地方统一维护。项目已提供一份无密钥模板，变量旁边的注释列出常用候选值；修改后重新 source
+函数并执行构建或启动命令即可：
 
 ```bash
 ${EDITOR:-vi} .env
@@ -201,10 +203,12 @@ docker compose build realman_bringup
 docker compose run --rm realman_bringup
 ```
 
-命令行显式写入的变量优先级高于 `.env`，适合临时切换 ROS 域或镜像：
+命令行显式写入的变量优先级高于 `.env`，只建议用于一次性调试。日常切换 ROS 域时仍应修改
+`.env`，保证宿主机相机节点、Docker 服务和远程 RViz 一致：
 
 ```bash
-ROS_DOMAIN_ID=166 docker compose run --rm realman_bringup_remote
+${EDITOR:-vi} .env
+source /path/to/realman_pi/functions.zsh
 ```
 
 Web 控制台不再读取 token；浏览器打开后即可通过 `realman_web_control` 提交动作。该服务
@@ -214,20 +218,20 @@ watchdog 和 lockout。
 远程目标启动：
 
 ```bash
-ROS_DOMAIN_ID=65 docker compose run --rm realman_bringup_remote
+docker compose run --rm realman_bringup_remote
 ```
 
 在另一台同网段的桌面机显示远程真实状态时，工控机只启动 headless bringup，桌面机只启动
-RViz。两端使用同一个未被其他 ROS 图占用的 `ROS_DOMAIN_ID`：
+RViz。两端使用同一个未被其他 ROS 图占用的 `ROS_DOMAIN_ID`，推荐在两端 `.env` 中写相同值：
 
 ```bash
 # 工控机
-ROS_DOMAIN_ID=166 docker compose up -d realman_bringup_remote
+docker compose up -d realman_bringup_remote
 
 # 桌面机
 source /path/to/realman_pi/functions.zsh
 rm65_docker_build realman_remote_rviz
-rm65_docker_remote_rviz_start 166
+rm65_docker_remote_rviz_start
 rm65_docker_remote_rviz_status
 ```
 
@@ -238,18 +242,19 @@ ROS 图；如果运维人员显式执行 `docker compose stop realman_bringup_re
 
 后台方式会立即归还终端，但 RViz 节点和窗口会持续运行。`rm65_docker_remote_rviz_logs -f`
 跟踪容器日志，`rm65_docker_remote_rviz_stop` 停止节点。需要让 RViz 生命周期跟随当前终端时，
-使用 `rm65_docker_remote_rviz 166`；关闭窗口或按 `Ctrl-C` 即停止前台容器。
+使用 `rm65_docker_remote_rviz`；关闭窗口或按 `Ctrl-C` 即停止前台容器。
 
 启动函数会验证 domain 范围，并从当前桌面环境获取 `DISPLAY` 与 `XAUTHORITY`；若 GNOME
 Wayland 没有导出 `XAUTHORITY`，函数会自动查找运行时目录下的
-`.mutter-Xwaylandauth.*`。domain 参数缺省时沿用已有 `ROS_DOMAIN_ID`，否则使用 `166`。
+`.mutter-Xwaylandauth.*`。domain 参数缺省时使用当前环境或 `.env` 中的 `ROS_DOMAIN_ID`；
+仍可传入 `rm65_docker_remote_rviz 42` 做临时覆盖。
 
 `realman_remote_rviz` 只启动 `rviz2`，直接订阅远程的 `/l|m|r/robot_description`、TF 和
 `/l|m|r/joint_states`；它不会在桌面机创建 RealMan SDK 连接，也不会启动假关节状态源。
 两台主机必须能互相发现 DDS 的 UDP 流量；跨 NAT 或只允许单播的网络需要额外的 DDS
 discovery 配置。具体的 Zsh 函数参数、生命周期和故障判断见[快速开始：远程 RViz 函数详解](../guide/getting-started#远程-rviz-函数详解)。
 
-所有服务使用 host network、`ROS_LOCALHOST_ONLY=0` 和默认 `ROS_DOMAIN_ID=65`。远程主机必须使用相同域；DDS 自动发现还要求网络允许组播和 UDP。跨网段部署需要额外的 DDS discovery 配置。
+所有服务使用 host network、`.env` 中的 `ROS_DOMAIN_ID` 和 `ROS_LOCALHOST_ONLY=0`。远程主机必须使用相同域；DDS 自动发现还要求网络允许组播和 UDP。跨网段部署需要额外的 DDS discovery 配置。
 
 ## 生产端代码部署
 
@@ -366,10 +371,10 @@ PID 和时间戳避免三臂同名可执行文件覆盖。ROS 节点必须使用
 
 ## 远程验证
 
-在远程 Humble 主机设置：
+在远程 Humble 主机设置与生产端相同的 ROS 域：
 
 ```bash
-export ROS_DOMAIN_ID=65
+source /path/to/realman_pi/functions.zsh
 export ROS_LOCALHOST_ONLY=0
 ros2 node list
 ros2 topic list

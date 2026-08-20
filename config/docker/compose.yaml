@@ -19,8 +19,8 @@ x-realman-common: &realman-common
   environment:
     # Host networking plus ROS_LOCALHOST_ONLY=0 exposes DDS discovery to remote
     # Humble hosts using the same domain. Firewalls must permit DDS UDP traffic.
-    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-65}
-    ROS_LOCALHOST_ONLY: "0"
+    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+    ROS_LOCALHOST_ONLY: ${ROS_LOCALHOST_ONLY:-0}
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
     # The launch file scans this path/glob and waits when it is not present.
@@ -36,8 +36,8 @@ x-realman-common: &realman-common
 x-rm65-rviz-common: &rm65-rviz-common
   <<: *realman-common
   environment:
-    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-65}
-    ROS_LOCALHOST_ONLY: "0"
+    ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
+    ROS_LOCALHOST_ONLY: ${ROS_LOCALHOST_ONLY:-0}
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
     REALMAN_JOY_DEVICE: ${REALMAN_JOY_DEVICE:-auto}

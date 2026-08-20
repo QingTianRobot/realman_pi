@@ -18,7 +18,7 @@ source /path/to/realman_pi/functions.zsh
 rm65_project_help
 ```
 
-所有 helper 都从 `functions.zsh` 所在位置定位仓库根目录，因此可以在任意目录调用。函数不会自动写入 `~/.zshrc`，也不会隐藏底层 Docker、colcon、npm、SSH 命令；遇到未覆盖的参数时，继续直接调用底层命令。
+所有 helper 都从 `functions.zsh` 所在位置定位仓库根目录，因此可以在任意目录调用。函数加载时会读取仓库根目录 `.env` 中的简单 `KEY=value` 配置，并保留当前终端已经显式设置的非空变量。函数不会自动写入 `~/.zshrc`，也不会隐藏底层 Docker、colcon、npm、SSH 命令；遇到未覆盖的参数时，继续直接调用底层命令。
 
 ## 项目入口
 
@@ -86,7 +86,7 @@ rm65_project_help
 | `rm65_camera_stop` | 调用 `stop_streaming.sh` 停止相机流相关进程。 | 停止 Orbbec/RealSense 推流、`ros2_bridge` 和仓库 `bin/mediamtx`。 | 释放 USB 相机、修改配置或切换到其他相机节点前。 | `src/camera_stream/scripts/stop_streaming.sh` |
 | `rm65_camera_status` | 打印配置路径、匹配的进程和监听端口。 | 只读检查相机进程、`mediamtx`、`ros2_bridge`，以及 RTSP `8554`/深度 `8100-8103`。 | 启动后确认服务是否真正监听，或排查端口/残留进程。 | `src/camera_stream/scripts/start_streaming.sh` |
 | `rm65_camera_logs [-f] [component]` | 查看最近 100 行，或用 `-f` 持续跟踪 `src/camera_stream/log/*.log`。 | `all`、`mediamtx`、`orbbec_left`、`orbbec_middle`、`orbbec_right`、`realsense_stream`、`ros2_bridge`。 | 排查 SDK 初始化、串号不匹配、USB 带宽和推流错误。 | `src/camera_stream/log/` |
-| `rm65_camera_ros2 [color|depth] [rviz]` | 停止 SDK 推流后，按串号启动三台 Orbbec 的单一 ROS2 图像流；默认 `color`，传入 `depth` 切换深度流，传入 `rviz` 时额外启动 RViz2。 | `sensor_bringup/cameras_ros2.launch.py`、`orbbec_camera/gemini305.launch.py`；发布所选 Image、CameraInfo 和 TF。 | 需要原生 ROS image topic、`image_view` 或 RViz2 调试时；生产端无 GUI 时省略 `rviz`。 | `config/ros/cameras_ros2.yaml`、`config/rviz/cameras.rviz` |
+| `rm65_camera_ros2 [color|depth] [rviz]` | 停止 SDK 推流后，按串号启动三台 Orbbec 的单一 ROS2 图像流；默认 `color`，传入 `depth` 切换深度流，传入 `rviz` 时额外启动 RViz2。 | `sensor_bringup/cameras_ros2.launch.py`、`orbbec_camera/gemini305.launch.py`；发布所选 Image、CameraInfo 和 TF；`ROS_DOMAIN_ID` 和 `ROS_LOCALHOST_ONLY` 来自 `.env` 或当前环境。 | 需要原生 ROS image topic、`image_view` 或 RViz2 调试时；生产端无 GUI 时省略 `rviz`。 | `.env`、`config/ros/cameras_ros2.yaml`、`config/rviz/cameras.rviz` |
 | `rm65_camera_ros2_stop` | 停止 ROS2 相机 launch、Orbbec 节点和组件容器。 | 释放三台 Orbbec USB 设备；不会启动或停止 RealMan 驱动。 | 在切回 `rm65_camera_start` SDK 推流或重新构建前。 | `src/sensor_bringup/launch/cameras_ros2.launch.py` |
 | `rm65_camera_ros2_status` | 查看 ROS2 相机 launch、Orbbec 节点和日志根目录。 | 只读检查，不改变运行状态。 | 排查节点是否仍占用 USB 或确认 headless 启动是否成功。 | `logs/<timestamp>/` |
 | `rm65_camera_ros2_logs` | 查看最近一次 ROS2 相机运行目录中的官方 ROS 日志。 | 读取 `ROS_LOG_DIR` 下节点日志，不做 shell 重定向。 | 排查串号匹配、depth profile 和 DDS 发现问题。 | `logs/<timestamp>/` |
@@ -181,8 +181,8 @@ rm65_camera_ros2 color rviz
 ```
 
 生产端通常没有 `DISPLAY`，这时在生产端只运行 `rm65_camera_ros2 color`，在笔记本使用与生产端
-相同的 `ROS_DOMAIN_ID` 启动远程 RViz。当前生产机未设置该变量时，相机函数使用默认域 `0`，
-笔记本可执行 `rm65_docker_remote_rviz 0`；如果两端统一设置为其他域，命令中的 `0` 替换为该值。
+相同的 `.env` 启动远程 RViz。需要更换 DDS 域时，优先修改两端 `.env` 的 `ROS_DOMAIN_ID`，
+然后重新 source 函数并重启相关节点。
 不要在笔记本运行会直接连接机械臂 SDK 的
 `realman_driver_rviz`。切换回 SDK/RTSP 推流前执行：
 
@@ -211,13 +211,13 @@ RealSense D435 仍不作为 ROS2 相机默认路径，
 
 | 函数 | 当前用途 | 启动/影响的组件 | 适用场景 | 权威配置与文档 |
 | --- | --- | --- | --- | --- |
-| `rm65_docker_remote_rviz [domain]` | 前台启动 RViz-only 远程查看器。 | `remote_rviz.launch.py` 和 `rviz2`；不启动本地 driver、robot_state_publisher 或假关节状态源。 | 首次排查远程 DDS、X11 授权或 RViz 配置时，保留终端日志。 | [快速开始：远程 RViz 函数详解](../guide/getting-started#远程-rviz-函数详解) |
-| `rm65_docker_remote_rviz_start [domain]` | 后台启动 RViz-only 远程查看器并打印状态。 | `docker compose up -d realman_remote_rviz`。 | 日常在桌面机持续观察工控机 `realman_bringup_remote` 发布的三臂状态。 | `realman_remote_rviz` Compose 服务 |
+| `rm65_docker_remote_rviz [domain]` | 前台启动 RViz-only 远程查看器；省略 `domain` 时读取 `.env` 的 `ROS_DOMAIN_ID`。 | `remote_rviz.launch.py` 和 `rviz2`；不启动本地 driver、robot_state_publisher 或假关节状态源。 | 首次排查远程 DDS、X11 授权或 RViz 配置时，保留终端日志。 | `.env`、[快速开始：远程 RViz 函数详解](../guide/getting-started#远程-rviz-函数详解) |
+| `rm65_docker_remote_rviz_start [domain]` | 后台启动 RViz-only 远程查看器并打印状态；省略 `domain` 时读取 `.env`。 | `docker compose up -d realman_remote_rviz`。 | 日常在桌面机持续观察工控机 `realman_bringup_remote` 发布的三臂状态。 | `.env`、`realman_remote_rviz` Compose 服务 |
 | `rm65_docker_remote_rviz_stop` | 停止后台远程 RViz。 | `docker compose stop realman_remote_rviz`。 | 关闭桌面机 RViz-only 服务，不影响工控机驱动和机械臂。 | Docker Compose |
 | `rm65_docker_remote_rviz_status` | 查看后台远程 RViz 状态。 | `docker compose ps realman_remote_rviz`。 | 确认 RViz 容器是否仍在运行。 | Docker Compose |
 | `rm65_docker_remote_rviz_logs [-f]` | 查看或跟踪远程 RViz 日志。 | `docker compose logs --tail=100 ... realman_remote_rviz`。 | 排查 DDS 发现、TF、joint state 或显示授权问题。 | Docker Compose、[故障排查](../troubleshooting) |
-| `rm65_docker_camera_rviz [domain]` | 前台显示生产机三路 Orbbec 彩色图像。 | `realman_camera_rviz` 和 `config/rviz/cameras.rviz`；不启动驱动或本地相机。 | 笔记本查看生产机的 `/camera_left`、`/camera_middle`、`/camera_right` 实拍画面。 | [快速开始：查看三路实拍画面](../guide/getting-started#查看三路实拍画面) |
-| `rm65_docker_camera_rviz_start [domain]` | 后台启动三路相机 RViz。 | `docker compose up -d realman_camera_rviz`。 | 日常持续查看相机画面。 | `realman_camera_rviz` Compose 服务 |
+| `rm65_docker_camera_rviz [domain]` | 前台显示生产机三路 Orbbec 彩色图像；省略 `domain` 时读取 `.env` 的 `ROS_DOMAIN_ID`。 | `realman_camera_rviz` 和只含彩色 Image display 的 `config/rviz/cameras.rviz`；不启动驱动、本地相机或深度显示。 | 笔记本查看生产机的 `/camera_left`、`/camera_middle`、`/camera_right` 实拍画面。 | `.env`、[快速开始：查看三路实拍画面](../guide/getting-started#查看三路实拍画面) |
+| `rm65_docker_camera_rviz_start [domain]` | 后台启动三路相机 RViz；省略 `domain` 时读取 `.env`。 | `docker compose up -d realman_camera_rviz`。 | 日常持续查看相机画面。 | `.env`、`realman_camera_rviz` Compose 服务 |
 | `rm65_docker_camera_rviz_stop` | 停止后台相机 RViz。 | `docker compose stop realman_camera_rviz`。 | 关闭笔记本上的相机查看器，不影响生产机相机。 | Docker Compose |
 | `rm65_docker_camera_rviz_status` | 查看后台相机 RViz 状态。 | `docker compose ps realman_camera_rviz`。 | 确认相机 RViz 容器是否运行。 | Docker Compose |
 | `rm65_docker_camera_rviz_logs [-f]` | 查看或跟踪相机 RViz 日志。 | `docker compose logs --tail=100 ... realman_camera_rviz`。 | 排查 X11、DDS domain 或图像订阅问题。 | Docker Compose |
@@ -235,7 +235,7 @@ RealSense D435 仍不作为 ROS2 相机默认路径，
 ## 维护规则
 
 - 修改 `functions.zsh` 新增、重命名或删除入口时，同步更新本页、`rm65_project_help`、`website/docs/development/index.md` 和 `website/tests/site.spec.ts` 路由列表。
-- 修改 Compose 服务、launch 参数或 `.env` 变量时，优先更新对应专题页，再让本页链接到新的权威说明。
+- 修改 Compose 服务、launch 参数或 `.env` 变量时，优先更新对应专题页，再让本页链接到新的权威说明。涉及 ROS 通信时，确认相机、机械臂、Web 控制和远程 RViz 的 `ROS_DOMAIN_ID` 仍来自同一配置源。
 - 不把真实 token、临时 IP、现场 SSH 密钥或未验证的真机行为写入文档。真实硬件行为应标明验证状态。
 - 运行文档验证：
 

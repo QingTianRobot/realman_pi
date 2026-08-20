@@ -112,7 +112,7 @@ Compose 使用 host network 和 host IPC，并挂载两个只读/受限的显示
 | `/tmp/.X11-unix` | `/tmp/.X11-unix` | 读写 socket |
 | `$XAUTHORITY` | `/tmp/.Xauthority` | 只读 |
 
-容器默认设置 `ROS_DOMAIN_ID=65` 和 `ROS_LOCALHOST_ONLY=0`。使用 host network 后，同一网络中的 Humble 主机可以加入该 ROS 图进行远程调试；主机防火墙必须允许 DDS UDP 流量。带 RViz 的服务额外设置 `QT_X11_NO_MITSHM=1` 和 `LIBGL_ALWAYS_SOFTWARE=1`，降低主机与容器的 OpenGL 驱动冲突概率。
+容器从根目录 `.env` 读取 `ROS_DOMAIN_ID`，模板值为 `0`，并默认设置 `ROS_LOCALHOST_ONLY=0`。使用 host network 后，同一网络中的 Humble 主机可以加入该 ROS 图进行远程调试；主机防火墙必须允许 DDS UDP 流量。带 RViz 的服务额外设置 `QT_X11_NO_MITSHM=1` 和 `LIBGL_ALWAYS_SOFTWARE=1`，降低主机与容器的 OpenGL 驱动冲突概率。
 
 `realman_bringup` 把主机 `/dev/input` 只读映射到容器，并等待
 `*-event-joystick` 设备出现后启动 Joy 驱动。`realman_bringup_remote` 不启动设备驱动和 GUI，

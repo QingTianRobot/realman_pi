@@ -87,7 +87,8 @@ Unsupported RM65 model '...'. Choose one of: ...
 echo "$ROS_DOMAIN_ID"
 ```
 
-独立容器默认是域 `65`。连接外部节点时应显式传入对应值：
+容器默认读取仓库根目录 `.env` 中的 `ROS_DOMAIN_ID`。连接外部节点时，先确认两端 `.env`
+或当前环境变量一致；需要一次性覆盖时再显式传入对应值：
 
 ```bash
 ROS_DOMAIN_ID=0 docker compose run --rm rm65_rviz

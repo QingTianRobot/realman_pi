@@ -152,6 +152,11 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
     const message = messages.map((value) => JSON.parse(value)).findLast((item) => item.type === "apply_joint_record");
     return message.request_id;
   });
+  const recordRequestReference = await page.evaluate(() => {
+    const messages = (window as any).__webMessages as string[];
+    return messages.map((value) => JSON.parse(value)).findLast((item) => item.type === "apply_joint_record").reference;
+  });
+  expect(recordRequestReference).toEqual({ reference_type: 1, reference_name: "cell" });
   await page.evaluate((requestId) => {
     (window as any).__webSocket.emit("message", { data: JSON.stringify({
       type: "joint_record_applied",

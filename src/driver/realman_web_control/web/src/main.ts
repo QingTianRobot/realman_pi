@@ -1128,6 +1128,7 @@ saveRecordButton.addEventListener("click", () => {
 applyRecordButton.addEventListener("click", () => {
   if (!canWrite() || !recordSelect.value) return;
   const requestIdValue = requestId("apply-record");
+  const reference = selectedMotionCommand === 0 ? preferredReference() : poseReference();
   beginRecordRequest(selectedArm, requestIdValue, "读取记录…");
   send({
     type: "apply_joint_record",
@@ -1135,9 +1136,9 @@ applyRecordButton.addEventListener("click", () => {
     arm: selectedArm,
     record_id: recordSelect.value,
     command: selectedMotionCommand,
-    reference: selectedMotionCommand === 0 ? preferredReference() : {
-      reference_type: poseReference().type,
-      reference_name: poseReference().name,
+    reference: {
+      reference_type: reference.type,
+      reference_name: reference.name,
     },
   });
   updateButtons();

@@ -122,6 +122,10 @@ XYZ 和 WXYZ。MOVEL 还提供“计算逆解”：修改目标后点击它会�
 Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条和橙色 URDF 影子。这个过程
 不会发送 `ExecuteMotion`，需要用户另外点击“发送 MOVEL”才会提交真实运动。
 
+位姿滑轨本身只能修改 XYZ，不包含从位姿到六轴关节角的逆解结果。因此，MOVEL 修改后会明确提示
+影子须等待“计算逆解”成功才更新；MOVEP 当前不提供逆解或影子预览，修改后会明确提示影子不会跟随
+滑轨，但仍可直接发送 `MOVEJ_P` Action。
+
 对于配置的 WORK/TOOL，驱动仍要求 `reference_type`/`reference_name` 与已验证的激活坐标
 完全一致。对于任意 TF frame，Web 节点先把位姿转换到 `/{arm}/base_link`，再以
 `BASE/base` 调用驱动；它不会把任意 TF 名称伪装成 RealMan controller 的 WORK/TOOL。

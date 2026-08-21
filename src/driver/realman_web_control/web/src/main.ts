@@ -267,6 +267,11 @@ function armJointSnapshot(arm: ArmId) {
 function armTargetSnapshot(arm: ArmId) {
   return targetJointsByArm[arm] ?? armJointSnapshot(arm);
 }
+function poseTargetEditedStatus(command = selectedMotionCommand) {
+  if (command === 1) return "位姿已修改：影子等待“计算逆解”成功后更新";
+  if (command === 2) return "MOVEP 位姿目标已修改：MOVEP 不提供逆解/影子预览，影子不会跟随滑轨；可直接发送 MOVEP";
+  return "位姿已修改";
+}
 function updateSelectedArmFromState() {
   currentJoints = [...armJointSnapshot(selectedArm)];
   targetJoints = [...armTargetSnapshot(selectedArm)];
@@ -401,7 +406,7 @@ function renderPoseSliders() {
       input.value = slider.value;
       poseTargetsByArm[selectedArm] = poseInputElements().map((item) => item.value);
       ikPreviewValidByArm[selectedArm] = false;
-      setKinematicsStatus(selectedArm, "位姿已修改，请重新计算逆解");
+      setKinematicsStatus(selectedArm, poseTargetEditedStatus());
       setShadowVisibility(selectedArm);
       updateButtons();
     });
@@ -1062,7 +1067,7 @@ poseInputElements().forEach((input) => {
     poseTargetsByArm[selectedArm] = poseInputElements().map((item) => item.value);
     syncPoseSlidersFromInputs();
     ikPreviewValidByArm[selectedArm] = false;
-    setKinematicsStatus(selectedArm, "位姿已修改，请重新计算逆解");
+    setKinematicsStatus(selectedArm, poseTargetEditedStatus());
     setShadowVisibility(selectedArm);
     updateButtons();
   });

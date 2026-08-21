@@ -356,6 +356,8 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
       .map((value) => JSON.parse(value))
       .filter((message) => message.type === "get_current_pose").length,
   )).toBe(currentPoseCountBeforeMovepFill + 1);
+  await page.locator("#pose-x").fill("0.62");
+  await expect(page.locator("#kinematics-status")).toContainText("MOVEP 不提供逆解/影子预览");
   await page.locator("#execute-motion").click();
   await page.locator("#cancel-motion").click();
   const messages = await page.evaluate(() => (window as any).__webMessages as string[]);

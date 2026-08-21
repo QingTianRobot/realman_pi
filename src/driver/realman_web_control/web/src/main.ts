@@ -222,6 +222,7 @@ const motionSettingsByArm: Partial<Record<ArmId, { velocity: string; timeout: st
 const jointRecordsByArm: Partial<Record<ArmId, JointRecord[]>> = {};
 const recordStatusByArm: Partial<Record<ArmId, string>> = {};
 const activeRecordRequestByArm: Partial<Record<ArmId, string>> = {};
+const recordRequestTimerByArm: Partial<Record<ArmId, number>> = {};
 const activeRecoveryRequestByArm: Partial<Record<ArmId, string>> = {};
 const robotScenes: Partial<Record<ArmId, RobotScene>> = {};
 let renderer: THREE.WebGLRenderer;
@@ -533,6 +534,29 @@ function setRecordStatus(arm: ArmId, message: string) {
   if (arm === selectedArm) recordStatus.textContent = message;
 }
 
+function beginRecordRequest(arm: ArmId, requestIdValue: string, message: string) {
+  const existingTimer = recordRequestTimerByArm[arm];
+  if (existingTimer) window.clearTimeout(existingTimer);
+  activeRecordRequestByArm[arm] = requestIdValue;
+  setRecordStatus(arm, message);
+  recordRequestTimerByArm[arm] = window.setTimeout(() => {
+    if (activeRecordRequestByArm[arm] !== requestIdValue) return;
+    delete activeRecordRequestByArm[arm];
+    delete recordRequestTimerByArm[arm];
+    setRecordStatus(arm, "记录请求超时：请确认网页连接后重试");
+    updateButtons();
+  }, 8000);
+}
+
+function finishRecordRequest(arm: ArmId, requestIdValue: string) {
+  if (activeRecordRequestByArm[arm] !== requestIdValue) return false;
+  delete activeRecordRequestByArm[arm];
+  const timer = recordRequestTimerByArm[arm];
+  if (timer) window.clearTimeout(timer);
+  delete recordRequestTimerByArm[arm];
+  return true;
+}
+
 function setConnection(online: boolean) {
   connection.textContent = online ? "ROS ONLINE" : "OFFLINE";
   connection.classList.toggle("offline", !online);
@@ -836,15 +860,14 @@ function handleMessage(message: Message) {
     updateButtons();
   } else if (message.type === "joint_record_saved") {
     const arm = message.arm as ArmId;
-    delete activeRecordRequestByArm[arm];
+    if (!finishRecordRequest(arm, message.request_id)) return;
     setRecordStatus(arm, `已记录 ${message.record?.label ?? ""}`);
     recordNameInput.value = "";
     if (arm === selectedArm) renderRecordControls();
     updateButtons();
   } else if (message.type === "joint_record_deleted") {
     const arm = message.arm as ArmId;
-    if (activeRecordRequestByArm[arm] !== message.request_id) return;
-    delete activeRecordRequestByArm[arm];
+    if (!finishRecordRequest(arm, message.request_id)) return;
     const recordId = String(message.record?.id ?? "");
     jointRecordsByArm[arm] = (jointRecordsByArm[arm] ?? []).filter((record) => record.id !== recordId);
     setRecordStatus(arm, `已删除 ${message.record?.label ?? "记录"}`);
@@ -852,8 +875,7 @@ function handleMessage(message: Message) {
     updateButtons();
   } else if (message.type === "joint_record_applied") {
     const arm = message.arm as ArmId;
-    if (activeRecordRequestByArm[arm] !== message.request_id) return;
-    delete activeRecordRequestByArm[arm];
+    if (!finishRecordRequest(arm, message.request_id)) return;
     const jointDegrees = Array.isArray(message.joint_degrees) ? message.joint_degrees : [];
     const command = Number(message.command) as MotionCommand;
     if (command === 0) {
@@ -978,7 +1000,7 @@ function handleMessage(message: Message) {
         setKinematicsStatus(arm, `${message.code}: ${message.message}`);
       }
       if (message.request_id === activeRecordRequestByArm[arm]) {
-        delete activeRecordRequestByArm[arm];
+        finishRecordRequest(arm, message.request_id);
         setRecordStatus(arm, `${message.code}: ${message.message}`);
       }
       if (message.request_id === activeRecoveryRequestByArm[arm]) {
@@ -1099,16 +1121,14 @@ saveRecordButton.addEventListener("click", () => {
   const label = recordNameInput.value.trim();
   if (!label) return;
   const requestIdValue = requestId("save-record");
-  activeRecordRequestByArm[selectedArm] = requestIdValue;
-  setRecordStatus(selectedArm, "保存当前关节角…");
+  beginRecordRequest(selectedArm, requestIdValue, "保存当前关节角…");
   send({ type: "save_joint_record", request_id: requestIdValue, arm: selectedArm, label });
   updateButtons();
 });
 applyRecordButton.addEventListener("click", () => {
   if (!canWrite() || !recordSelect.value) return;
   const requestIdValue = requestId("apply-record");
-  activeRecordRequestByArm[selectedArm] = requestIdValue;
-  setRecordStatus(selectedArm, "读取记录…");
+  beginRecordRequest(selectedArm, requestIdValue, "读取记录…");
   send({
     type: "apply_joint_record",
     request_id: requestIdValue,
@@ -1127,8 +1147,7 @@ deleteRecordButton.addEventListener("click", () => {
   const record = jointRecordsByArm[selectedArm]?.find((item) => item.id === recordSelect.value);
   if (!window.confirm(`删除关节记录“${record?.label ?? recordSelect.value}”？此操作不可撤销。`)) return;
   const requestIdValue = requestId("delete-record");
-  activeRecordRequestByArm[selectedArm] = requestIdValue;
-  setRecordStatus(selectedArm, "删除关节记录…");
+  beginRecordRequest(selectedArm, requestIdValue, "删除关节记录…");
   send({ type: "delete_joint_record", request_id: requestIdValue, arm: selectedArm, record_id: recordSelect.value });
   updateButtons();
 });

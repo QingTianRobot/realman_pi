@@ -15,7 +15,7 @@ description: l、m、r 三台 RM65 在 ROS 2、RViz 2 和 GitHub Pages 中共享
 - 位置单位为米，欧拉角单位为弧度；Web 与 ROS 2 使用相同的 `x/y/z/roll/pitch/yaw`。
 - 两个 Web 查看器固定以中间臂 `m` 的基座为**显示原点和相机焦点**。这只是渲染坐标的平移；YAML 中的世界/TF 变换不会被改写。
 - `settings.default_joint_position` 作为六个旋转关节的初始位置。
-- 当前默认布局中，左右机械臂同向，中间机械臂使用 `yaw=pi` 反向。
+- 当前配置保存最近一次生产三臂 ChArUco 标定结果：左臂是布局参考；中、右臂的六自由度位姿来自同一次求解。重新标定后应将成功写回的 `three_robots.yaml` 提交，才能让 GitHub Pages 与生产布局一致。
 
 权威配置是 [`config/ros/three_robots.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/three_robots.yaml)。不要在 launch 文件、网页组件或 RViz 配置中复制布局数值。
 

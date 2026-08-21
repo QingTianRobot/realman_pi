@@ -101,6 +101,17 @@ test("generated web layout matches the authoritative three-arm transforms", asyn
   }
 });
 
+test("authoritative layout retains the calibrated production arrangement", async () => {
+  const source = YAML.parse(await readFile(resolve("../config/ros/three_robots.yaml"), "utf8"));
+
+  // Guard against accidentally publishing the former symmetric planning layout
+  // instead of the current three-arm ChArUco calibration result.
+  expect(source.robots.m.x).not.toBe(0);
+  expect(source.robots.m.y).not.toBe(0);
+  expect(source.robots.r.x).not.toBe(1);
+  expect(source.robots.r.y).not.toBe(0);
+});
+
 test("documentation routes render", async ({ page }) => {
   for (const route of [
     "guide/getting-started",

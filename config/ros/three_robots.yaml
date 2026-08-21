@@ -4,7 +4,8 @@
 # `world` frame is the RViz Fixed Frame. Positive X points to the right side
 # of the layout; positive Y points toward the rear of the workspace.
 robots:
-  # Left and right arms use the same forward-facing orientation.
+  # The left-arm base remains the calibration reference and is deliberately
+  # unchanged by the three-arm ChArUco layout write-back.
   l:
     model: RM65-B
     namespace: l
@@ -17,30 +18,32 @@ robots:
     pitch: 0.0
     yaw: 0.0
 
-  # The middle arm faces backward relative to the left and right arms.
+  # Production ChArUco result. Do not replace with the old (0, 0, 0, pi)
+  # planning pose: GitHub Pages and ROS launch both consume these metres/radians.
   m:
     model: RM65-B
     namespace: m
     frame_prefix: m/
     parent_frame: world
-    x: 0.0
-    y: 0.0
-    z: 0.0
-    roll: 0.0
-    pitch: 0.0
-    yaw: 3.141592653589793
+    x: -0.951261084347
+    y: 0.194742157588
+    z: -0.01881234191
+    roll: -0.0108695283447
+    pitch: -0.0300925763234
+    yaw: -3.1079901671
 
+  # Production ChArUco result expressed in the same world frame as l and m.
   r:
     model: RM65-B
     namespace: r
     frame_prefix: r/
     parent_frame: world
-    x: 1.0
-    y: 0.0
-    z: 0.0
-    roll: 0.0
-    pitch: 0.0
-    yaw: 0.0
+    x: -1.00176934136
+    y: 0.356032898913
+    z: -0.005193665214
+    roll: -0.0264609215657
+    pitch: -0.00812680208536
+    yaw: -0.00848201144029
 
 # Shared launch behavior. Keep these values here so a deployment can change
 # initial joint posture or the RViz display without editing Python launch code.

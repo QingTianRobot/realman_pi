@@ -78,6 +78,7 @@ watchdog 和 lockout，不会直接调用 SDK。
 | `motion_recovery_result` | `success`, `recovered`, `api2_status` | 取消后的事件通道恢复结果 |
 | `joint_records` | `arm`, `records` | 该 arm 可填入运动面板的已保存关节记录 |
 | `joint_record_saved` | `record` | “记录当前”写入 YAML 后的结果 |
+| `joint_record_deleted` | `record` | MOVEJ 页面确认删除当前选择记录后的结果 |
 | `joint_record_applied` | `command`, `joint_degrees`, `pose_position_m`, `pose_quaternion_wxyz` | 选择记录填入当前 MOVEJ/MOVEL/MOVEP 表单 |
 | `tf_frames` | `arm`, `frames[]` | TF 缓存中与该 arm `base_link` 连通的可选参考坐标 |
 
@@ -142,6 +143,8 @@ FK/IK 姿态欧拉角为 rad。MOVEL/MOVEP 的真实发送仍经过驱动的 own
 `config/web-control/joint-records/<arm>/<record-id>.yaml`。每个文件使用
 `realman_joint_record.v1` schema，关节单位为 degree；空目录由
 `config/web-control/joint-records/README.md` 和 `l/`、`m/`、`r/` 子目录约定。
+在 MOVEJ 页面中，选择记录后可点“删除”，浏览器确认后才会删除该 arm 下对应的单个 YAML 文件；
+删除不可撤销，且不会影响其它记录或当前真实机械臂姿态。
 
 选择记录并点击“填入”不会提交真实运动，只会更新当前表单和橙色影子：
 

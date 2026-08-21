@@ -107,6 +107,9 @@ def test_joint_record_messages_are_normalized():
     applied = parse_message(
         '{"type":"apply_joint_record","request_id":"apply-1","arm":"r","record_id":"ready-pose","command":2}'
     )
+    deleted = parse_message(
+        '{"type":"delete_joint_record","request_id":"delete-1","arm":"l","record_id":"ready-pose"}'
+    )
 
     assert listed == {
         "type": "list_joint_records",
@@ -125,6 +128,12 @@ def test_joint_record_messages_are_normalized():
         "arm": "r",
         "record_id": "ready-pose",
         "command": 2,
+    }
+    assert deleted == {
+        "type": "delete_joint_record",
+        "request_id": "delete-1",
+        "arm": "l",
+        "record_id": "ready-pose",
     }
 
 

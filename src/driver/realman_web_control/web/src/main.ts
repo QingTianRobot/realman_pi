@@ -127,6 +127,7 @@ app.innerHTML = `
           <div class="record-apply-row">
             <select id="record-select"></select>
             <button id="apply-record" class="button ghost" type="button" disabled>填入</button>
+            <button id="delete-record" class="button danger" type="button" disabled>删除</button>
           </div>
           <div id="record-status" class="record-status" aria-live="polite">等待记录列表</div>
         </div>
@@ -183,6 +184,7 @@ const recordNameInput = $("#record-name") as HTMLInputElement;
 const saveRecordButton = $("#save-record") as HTMLButtonElement;
 const recordSelect = $("#record-select") as HTMLSelectElement;
 const applyRecordButton = $("#apply-record") as HTMLButtonElement;
+const deleteRecordButton = $("#delete-record") as HTMLButtonElement;
 const recordStatus = $("#record-status");
 const POSE_INPUT_IDS = ["pose-x", "pose-y", "pose-z", "pose-qw", "pose-qx", "pose-qy", "pose-qz"] as const;
 const MOTION_LABELS: Record<MotionCommand, string> = { 0: "MOVEJ", 1: "MOVEL", 2: "MOVEP" };
@@ -460,6 +462,7 @@ function setMotionMode(command: MotionCommand) {
   // Both Cartesian target modes can read the live pose; only MOVEL exposes IK preview.
   poseKinematicsActions.hidden = command === 0;
   solveIkButton.hidden = command !== 1;
+  deleteRecordButton.hidden = command !== 0;
   executeMotionButton.textContent = `发送 ${MOTION_LABELS[command]}`;
   setShadowVisibility(selectedArm);
   if (command !== 0 && (previousCommand === 0 || previousCommand !== command)) {
@@ -838,6 +841,15 @@ function handleMessage(message: Message) {
     recordNameInput.value = "";
     if (arm === selectedArm) renderRecordControls();
     updateButtons();
+  } else if (message.type === "joint_record_deleted") {
+    const arm = message.arm as ArmId;
+    if (activeRecordRequestByArm[arm] !== message.request_id) return;
+    delete activeRecordRequestByArm[arm];
+    const recordId = String(message.record?.id ?? "");
+    jointRecordsByArm[arm] = (jointRecordsByArm[arm] ?? []).filter((record) => record.id !== recordId);
+    setRecordStatus(arm, `已删除 ${message.record?.label ?? "记录"}`);
+    if (arm === selectedArm) renderRecordControls();
+    updateButtons();
   } else if (message.type === "joint_record_applied") {
     const arm = message.arm as ArmId;
     if (activeRecordRequestByArm[arm] !== message.request_id) return;
@@ -1002,6 +1014,7 @@ function updateButtons() {
   const activeRecordRequest = Boolean(activeRecordRequestByArm[selectedArm]);
   saveRecordButton.disabled = !writable || activeRecordRequest || recordNameInput.value.trim() === "" || (currentJointsByArm[selectedArm]?.length ?? 0) !== 6;
   applyRecordButton.disabled = !writable || activeRecordRequest || !recordSelect.value;
+  deleteRecordButton.disabled = !writable || selectedMotionCommand !== 0 || activeRecordRequest || !recordSelect.value;
 }
 
 function loadManifest(next: Manifest) {
@@ -1107,6 +1120,16 @@ applyRecordButton.addEventListener("click", () => {
       reference_name: poseReference().name,
     },
   });
+  updateButtons();
+});
+deleteRecordButton.addEventListener("click", () => {
+  if (!canWrite() || selectedMotionCommand !== 0 || !recordSelect.value) return;
+  const record = jointRecordsByArm[selectedArm]?.find((item) => item.id === recordSelect.value);
+  if (!window.confirm(`删除关节记录“${record?.label ?? recordSelect.value}”？此操作不可撤销。`)) return;
+  const requestIdValue = requestId("delete-record");
+  activeRecordRequestByArm[selectedArm] = requestIdValue;
+  setRecordStatus(selectedArm, "删除关节记录…");
+  send({ type: "delete_joint_record", request_id: requestIdValue, arm: selectedArm, record_id: recordSelect.value });
   updateButtons();
 });
 executeMotionButton.addEventListener("click", () => {

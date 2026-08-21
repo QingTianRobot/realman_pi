@@ -28,6 +28,18 @@ def test_joint_records_keep_duplicate_names_addressable(tmp_path: Path):
     assert store.get("l", "home-2").joint_degrees == (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
 
 
+def test_joint_records_delete_only_the_selected_record(tmp_path: Path):
+    store = JointRecordStore(tmp_path)
+    first = store.save("r", "home", [0, 0, 0, 0, 0, 0])
+    second = store.save("r", "home", [1, 1, 1, 1, 1, 1])
+
+    deleted = store.delete("r", first.record_id)
+
+    assert deleted.record_id == "home"
+    assert not (tmp_path / "r" / "home.yaml").exists()
+    assert store.get("r", second.record_id).joint_degrees == (1.0, 1.0, 1.0, 1.0, 1.0, 1.0)
+
+
 def test_joint_records_reject_bad_arm_and_joint_vectors(tmp_path: Path):
     store = JointRecordStore(tmp_path)
 

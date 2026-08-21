@@ -298,6 +298,8 @@ class WebControlNode(Node):
             self._list_joint_records(client_id, message)
         elif message_type == "save_joint_record":
             self._save_joint_record(client_id, message)
+        elif message_type == "delete_joint_record":
+            self._delete_joint_record(client_id, message)
         elif message_type == "apply_joint_record":
             self._apply_joint_record(client_id, message)
         elif message_type == "get_current_pose":
@@ -719,6 +721,27 @@ class WebControlNode(Node):
             "record": record.event(),
         }
         self._server.send_event(event, client_id)
+        self._send_joint_records(None, arm)
+
+    def _delete_joint_record(self, client_id: str, message: dict[str, Any]) -> None:
+        arm = message["arm"]
+        try:
+            record = self._joint_records.delete(arm, message["record_id"])
+        except ValueError as error:
+            raise ProtocolError(
+                "joint_record_unavailable",
+                str(error),
+                message["request_id"],
+            ) from error
+        self._server.send_event(
+            {
+                "type": "joint_record_deleted",
+                "arm": arm,
+                "request_id": message["request_id"],
+                "record": record.event(),
+            },
+            client_id,
+        )
         self._send_joint_records(None, arm)
 
     def _apply_joint_record(self, client_id: str, message: dict[str, Any]) -> None:

@@ -81,6 +81,13 @@ class JointRecordStore:
         self._write(record)
         return record
 
+    def delete(self, arm: str, record_id: str) -> JointRecord:
+        """Delete exactly one validated record and return its former contents."""
+        record = self.get(arm, record_id)
+        path = self.root / arm / f"{record.record_id}.yaml"
+        path.unlink()
+        return record
+
     def _read(self, path: Path, expected_arm: str) -> JointRecord:
         with path.open("r", encoding="utf-8") as stream:
             document = yaml.safe_load(stream)

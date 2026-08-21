@@ -167,6 +167,13 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
             "arm": arm,
             "label": _string(message.get("label"), "label", maximum=64),
         }
+    if message_type == "delete_joint_record":
+        return {
+            "type": message_type,
+            "request_id": _request_id(message),
+            "arm": arm,
+            "record_id": _string(message.get("record_id"), "record_id", maximum=64),
+        }
     if message_type == "apply_joint_record":
         normalized = {
             "type": message_type,

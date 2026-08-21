@@ -380,5 +380,26 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   expect(motionMessages[1].goal.velocity_percent).toBe(20);
   expect(motionMessages[1].goal.timeout_sec).toBe(12);
   expect(messages.some((value) => JSON.parse(value).type === "cancel_action")).toBe(true);
+  await page.locator("button[data-motion-command=\"0\"]").click();
+  await expect(page.locator("#delete-record")).toBeVisible();
+  await expect(page.locator("#delete-record")).toBeEnabled();
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#delete-record").click();
+  const deleteRequestId = await page.evaluate(() => {
+    const messages = (window as any).__webMessages as string[];
+    const message = messages.map((value) => JSON.parse(value)).findLast((item) => item.type === "delete_joint_record");
+    return message?.request_id || "";
+  });
+  expect(deleteRequestId).not.toBe("");
+  await page.evaluate((requestId) => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "joint_record_deleted",
+      arm: "r",
+      request_id: requestId,
+      record: { id: "ready", label: "Ready" },
+    }) });
+  }, deleteRequestId);
+  await expect(page.locator("#record-select")).toHaveValue("");
+  await expect(page.locator("#record-status")).toContainText("已删除 Ready");
   await page.screenshot({ path: test.info().outputPath("web-control.png"), fullPage: true });
 });

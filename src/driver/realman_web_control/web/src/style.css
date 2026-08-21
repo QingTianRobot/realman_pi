@@ -64,6 +64,7 @@ input[type="range"] { display: block; width: 100%; accent-color: #4dbbb0; }
 .target-field-label { margin: 11px 0 6px; color: #82999d; font-size: 10px; }
 .joint-records { margin: 4px 0 14px; padding: 10px; border: 1px solid #263b40; background: #101c20; }
 .record-save-row, .record-apply-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; }
+.record-apply-row { grid-template-columns: minmax(0, 1fr) auto auto; }
 .record-apply-row { margin-top: 8px; }
 .record-save-row input, .record-apply-row select { width: 100%; min-width: 0; padding: 7px; font-size: 11px; }
 .record-save-row .button, .record-apply-row .button { min-width: 82px; padding: 8px 10px; }

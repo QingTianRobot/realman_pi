@@ -13,6 +13,7 @@ description: l、m、r 三台 RM65 在 ROS 2、RViz 2 和 GitHub Pages 中共享
 - 每台机械臂的 ROS 命名空间必须与 ID 相同，TF 前缀分别为 `l/`、`m/`、`r/`。
 - 三台机械臂必须连接到同一个无前导斜杠的父坐标系，默认是 `world`。
 - 位置单位为米，欧拉角单位为弧度；Web 与 ROS 2 使用相同的 `x/y/z/roll/pitch/yaw`。
+- 两个 Web 查看器固定以中间臂 `m` 的基座为**显示原点和相机焦点**。这只是渲染坐标的平移；YAML 中的世界/TF 变换不会被改写。
 - `settings.default_joint_position` 作为六个旋转关节的初始位置。
 - 当前默认布局中，左右机械臂同向，中间机械臂使用 `yaw=pi` 反向。
 
@@ -51,7 +52,8 @@ config/ros/three_robots.yaml
                RobotViewer.vue / Three.js
 ```
 
-生成内容位于被 Git 忽略的 `website/docs/.vitepress/cache/public/`，不是第二份配置来源。查看器加载每台配置模型，应用世界变换与默认关节位置，再根据三台机械臂的组合边界调整相机。三台机械臂分别使用青绿、橙色和石墨色，便于区分命名空间。
+生成内容位于被 Git 忽略的 `website/docs/.vitepress/cache/public/`，不是第二份配置来源。生成的
+`three-robots.json` 明确写入 `visualizationReferenceArm: "m"`；查看器加载每台配置模型和默认关节位置后，统一减去中臂的平移，把中臂基座放在显示 `(0,0,0)`，再根据三台机械臂的组合边界设置距离。三台机械臂分别使用青绿、橙色和石墨色，便于区分命名空间。运行中的 Web 控制页面也采用同一显示约定，但其 ROS/TF 运动请求仍使用未平移的配置坐标。
 
 GitHub Pages 工作流监听 YAML、URDF、mesh 和网站文件。推送这些路径的变化会重新构建页面，因此线上模型会反映最新提交。
 
@@ -77,6 +79,6 @@ npm run test:e2e
 
 ## 已知边界
 
-- Web 查看器同步机器人布局和默认关节位置，不解析 `config/rviz/three_robots.rviz` 中的 RViz 相机视角。RViz 与 Three.js 的相机参数体系不同。
+- Web 查看器同步机器人布局和默认关节位置，不解析 `config/rviz/three_robots.rviz` 中的 RViz 相机视角。RViz 与 Three.js 的相机参数体系不同；网页的固定中臂居中不改变 RViz 或 TF。
 - 修改 YAML 后，本地 RViz 需要重启对应 Compose 服务；Web 页面需要重新构建。推送到 `main` 后由 GitHub Pages 自动完成 Web 重建。
 - 网页是 URDF 状态预览，不订阅正在运行的 ROS 2 `/tf` 或 `/joint_states`，因此不会实时跟随机械臂控制器。

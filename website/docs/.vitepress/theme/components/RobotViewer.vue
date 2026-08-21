@@ -17,6 +17,7 @@ type RobotConfig = {
 
 type LayoutConfig = {
   rootFrame: string;
+  visualizationReferenceArm: "m";
   defaultJointPosition: number;
   robots: RobotConfig[];
 };
@@ -28,6 +29,7 @@ const meshCount = ref(0);
 const robotCount = ref(0);
 const modelNames = ref("");
 const rootFrame = ref("world");
+const visualizationReferenceArm = ref("m");
 
 let dispose: (() => void) | undefined;
 
@@ -42,6 +44,7 @@ onMounted(async () => {
     robotCount.value = config.robots.length;
     modelNames.value = [...new Set(config.robots.map((robot) => robot.model))].join(" / ");
     rootFrame.value = config.rootFrame;
+    visualizationReferenceArm.value = config.visualizationReferenceArm;
 
     const THREE = await import("three");
     const [{ OrbitControls }, { default: URDFLoader }] = await Promise.all([
@@ -134,6 +137,19 @@ onMounted(async () => {
         return { robot, config: robotConfig };
       }),
     );
+    const referenceRobot = loadedRobots.find(({ config: robotConfig }) => (
+      robotConfig.id === config.visualizationReferenceArm
+    ));
+    if (!referenceRobot) throw new Error("Generated layout does not define the middle-arm visualization reference");
+    // Rendering is middle-arm-relative only. The generated transforms remain the authoritative TF/world values.
+    const referenceTransform = referenceRobot.config.transform;
+    loadedRobots.forEach(({ robot, config: robotConfig }) => {
+      robot.position.sub(new THREE.Vector3(
+        referenceTransform.x,
+        referenceTransform.y,
+        referenceTransform.z,
+      ));
+    });
 
     let modelTimer = 0;
     const prepareModels = (attempt = 0) => {
@@ -175,14 +191,13 @@ onMounted(async () => {
 
       robotsGroup.updateMatrixWorld(true);
       const bounds = new THREE.Box3().setFromObject(robotsGroup);
-      const center = bounds.getCenter(new THREE.Vector3());
       const size = bounds.getSize(new THREE.Vector3());
       const maxDimension = Math.max(size.x, size.y, size.z);
       const focusHeight = Math.max(bounds.min.z + size.z * 0.48, 0.24);
-      controls.target.set(center.x, center.y, focusHeight);
+      controls.target.set(0, 0, focusHeight);
       camera.position.set(
-        center.x + maxDimension * 1.12,
-        center.y - maxDimension * 1.48,
+        maxDimension * 1.12,
+        -maxDimension * 1.48,
         focusHeight + maxDimension * 0.78,
       );
       camera.lookAt(controls.target);
@@ -243,6 +258,7 @@ onBeforeUnmount(() => dispose?.());
     :data-mesh-count="meshCount"
     :data-robot-count="robotCount"
     :data-root-frame="rootFrame"
+    :data-visualization-reference-arm="visualizationReferenceArm"
   >
     <canvas ref="canvas" aria-label="基于配置的 RM65 三机械臂 URDF 三维模型" role="img" />
     <div class="model-readout" aria-hidden="true">

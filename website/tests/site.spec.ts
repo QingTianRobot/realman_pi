@@ -32,6 +32,7 @@ test("homepage renders the configured three-arm scene without layout overflow", 
   await expect(viewer).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
   await expect(viewer).toHaveAttribute("data-robot-count", "3");
   await expect(viewer).toHaveAttribute("data-root-frame", "world");
+  await expect(viewer).toHaveAttribute("data-visualization-reference-arm", "m");
   await expect(viewer).toHaveAttribute("data-mesh-count", /^(?:2[1-9]|[3-9][0-9]+)$/);
   const canvas = viewer.locator("canvas");
   await expect(canvas).toBeVisible();
@@ -81,6 +82,7 @@ test("generated web layout matches the authoritative three-arm transforms", asyn
 
   expect(layout.source).toBe("config/ros/three_robots.yaml");
   expect(layout.rootFrame).toBe(source.robots.l.parent_frame);
+  expect(layout.visualizationReferenceArm).toBe("m");
   expect(layout.defaultJointPosition).toBe(source.settings.default_joint_position);
   for (const robot of layout.robots) {
     const expected = source.robots[robot.id];
@@ -108,6 +110,7 @@ test("documentation routes render", async ({ page }) => {
     "development/",
     "development/documentation-workflow",
     "development/startup-entries",
+    "development/camera-calibration",
     "development/realman-python-driver",
     "development/realman-driver-scaffold",
     "development/realman-action-development",

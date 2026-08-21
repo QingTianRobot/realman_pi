@@ -69,6 +69,8 @@ for (const robot of robots) {
 const generatedLayout = {
   source: "config/ros/three_robots.yaml",
   rootFrame: robots[0].parentFrame,
+  // The visualizer translates this arm to its display origin; robot transforms stay in TF/world coordinates.
+  visualizationReferenceArm: "m",
   defaultJointPosition,
   robots: robots.map((robot) => ({ ...robot, expectedMeshCount: modelMeshCounts.get(robot.model) })),
 };

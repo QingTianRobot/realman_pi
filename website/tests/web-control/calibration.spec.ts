@@ -41,6 +41,12 @@ test.beforeEach(async ({ page }) => {
 test("calibration page loads config and sends atomic capture/solve requests", async ({ page }) => {
   await page.goto("calibration.html");
   await expect(page.getByRole("heading", { level: 1, name: "ChArUco 手眼标定" })).toBeVisible();
+  const topActionHeights = await page.evaluate(() => {
+    const back = document.querySelector<HTMLElement>(".top-actions .button");
+    const connection = document.querySelector<HTMLElement>(".top-actions .status");
+    return [back?.getBoundingClientRect().height, connection?.getBoundingClientRect().height];
+  });
+  expect(topActionHeights[0]).toBe(topActionHeights[1]);
   await expect(page.locator("#config-state")).toHaveText("CONFIG LOADED");
   await expect(page.locator("#config")).toContainText("DICT_5X5_100");
   await expect(page.locator("#config")).toContainText("每臂最少样本：30");

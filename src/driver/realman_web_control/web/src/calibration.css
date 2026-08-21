@@ -6,6 +6,8 @@ body { margin: 0; min-width: 320px; background: #0c1518; }
 .topbar p, .hint { color: #82999d; font-size: 12px; line-height: 1.6; }
 .eyebrow { color: #58c5b9; font-size: 10px; font-weight: 800; letter-spacing: .14em; }
 .top-actions { display: flex; gap: 10px; align-items: center; }
+/* Keep navigation and live connection state visually balanced in the header. */
+.top-actions > .button, .top-actions > .status { display: inline-flex; align-items: center; justify-content: center; min-height: 36px; padding: 0 13px; font-size: 11px; }
 .grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; max-width: 1280px; margin: 0 auto; padding: 24px clamp(18px, 5vw, 76px) 40px; }
 .panel { border: 1px solid #283e42; background: #111e22; padding: 18px; }
 .panel-title { display: flex; justify-content: space-between; align-items: flex-start; gap: 12px; margin-bottom: 18px; }

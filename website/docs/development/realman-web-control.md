@@ -67,7 +67,7 @@ watchdog 和 lockout，不会直接调用 SDK。
 
 | 事件 | 关键字段 | 用途 |
 | --- | --- | --- |
-| `joint_state` | `arm`, `positions_rad`, `stamp_ns` | 各 arm 的实体 URDF 姿态和滑轨 |
+| `joint_state` | `arm`, `positions_rad`, `stamp_ns` | 各 arm 的实体 URDF 姿态唯一来源，以及未编辑时的滑轨值 |
 | `connection` | `arm`, `connected` | 控制器在线状态 |
 | `coordinate_state` | `arm`, `motion_allowed`, `preferred_reference`, `tool`, `work` | 各 arm 的激活坐标、可运动状态和默认参考系 |
 | `action_state` | `action`, `request_id`, `state` | submitting/accepted/canceling |
@@ -100,7 +100,8 @@ MOVEJ 目标关节使用 degree；Web 后端会从 URDF limit 再检查一次。
 当前控制对象，右侧滑条随之控制该 arm。页面会优先使用当前 `coordinate_state` 给出的默认参考系发送目标：
 右侧关节面板标题会显示当前激活的 arm，便于确认选择是否已经切换。
 实时状态只会原位更新三块卡片的文本和选中状态，不会替换按钮节点；三台驱动高频发布
-`joint_state` 时，点击切换仍保持可用。
+`joint_state` 时，点击切换仍保持可用。Action feedback 只用于显示阶段、进度与结果，不能覆盖实体
+URDF；Action 的 validating 阶段没有可用关节读数，序列化为零值会造成模型瞬间跳动。
 在没有人工改动目标之前，右侧滑条会跟随该 arm 的实时 `joint_state`；一旦人工拖动滑条，该 arm
 的目标值就会保持用户输入，直到再次切换或重置。
 

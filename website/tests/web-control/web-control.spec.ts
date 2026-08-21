@@ -183,6 +183,17 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator("#viewer")).toHaveAttribute("data-live-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/, { timeout: 30_000 });
   await expect(page.locator("#viewer")).toHaveAttribute("data-shadow-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/);
   await expect(page.locator("#viewer")).toHaveAttribute("data-visualization-reference-arm", "m");
+  const liveCanvasBeforeFeedback = await page.locator("#canvas").screenshot();
+  await page.evaluate(() => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "action_feedback",
+      arm: "r",
+      action: "execute_motion",
+      feedback: { progress: 0.1, detail: "submitted", current_joint_degrees: [0, 0, 0, 0, 0, 0] },
+    }) });
+  });
+  await page.waitForTimeout(100);
+  expect(await page.locator("#canvas").screenshot()).toEqual(liveCanvasBeforeFeedback);
   await expect(page.locator("#connection")).toContainText("ROS ONLINE");
   await expect(page.locator("#coordinate-state")).toContainText("READY");
   await expect(page.locator("#coordinate-summary")).toContainText("WORK / cell");

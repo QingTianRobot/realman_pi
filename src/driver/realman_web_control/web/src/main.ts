@@ -926,12 +926,10 @@ function handleMessage(message: Message) {
     if (message.arm !== selectedArm) return;
     const item = message.feedback || {};
     feedback.textContent = `${message.action} / ${item.detail || "executing"} / progress ${item.progress ?? "-"}`;
-    if (Array.isArray(item.current_joint_degrees)) {
-      const radians = item.current_joint_degrees.map((value: number) => value * Math.PI / 180);
-      currentJointsByArm[message.arm] = radians;
-      currentJoints = radians;
-      setRobotJoints(robotScenes[message.arm]?.live, radians);
-    }
+    // The action starts with a validating feedback frame whose joint field is
+    // intentionally empty (serialized as six zeroes).  Only /joint_states is
+    // authoritative for the live URDF, otherwise that frame causes a visible
+    // jump before the next state sample restores the actual pose.
     if (Array.isArray(item.commanded_linear_velocity_mps)) feedback.textContent = `velocity / ${item.commanded_linear_velocity_mps.map((value: number) => displayNumber(value)).join(", ")}`;
     progress.style.width = `${Math.max(0, Math.min(100, Number(item.progress || 0) * 100))}%`;
   } else if (message.type === "action_result") {

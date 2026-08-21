@@ -189,6 +189,13 @@ http://<工控机>:8765/calibration.html
 传给 `/camera_calibration/solve`。因此可以在节点或网页重启后复核并重新求解历史采样，
 而不会误建一个空会话。列表不暴露绝对路径，也不会把历史图片自动下载到浏览器。
 
+刷新按钮默认附带 `delete_empty=true`：服务端只会删除 l/m/r 三臂**均没有已接受样本**的
+`0/30` 会话（例如仅留下失败检测的空目录），并在日志栏报告清理数量。取消“刷新时清理
+0/30 空会话”即可只读刷新。对非空或已求解的会话，操作者必须选中该项、点击“删除所选会话”
+并确认；`DELETE /api/calibration/sessions/<session_id>` 会永久删除这个 session 下的图片、样本
+JSON 与结果文件。接口只接受合法的直接 `session-*` 子目录，拒绝路径穿越；需要保留的数据应在
+删除前先归档到 `logs/camera_calibration/archives/`。
+
 ## 配置和已知限制
 
 - `board.dictionary`、网格尺寸和两种边长必须与实体 ChArUco 板一致；

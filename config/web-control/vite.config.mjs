@@ -59,10 +59,15 @@ function devApiPlugin() {
             response.end(JSON.stringify(calibration));
             return;
           }
-          if (url === "/api/calibration/sessions") {
+          if (url === "/api/calibration/sessions" && request.method === "GET") {
             // Local UI development has no ROS log mount; production serves recoverable sessions.
             response.setHeader("Content-Type", "application/json");
-            response.end(JSON.stringify({ sessions: [] }));
+            response.end(JSON.stringify({ sessions: [], deleted_session_ids: [] }));
+            return;
+          }
+          if (url.startsWith("/api/calibration/sessions/") && request.method === "DELETE") {
+            response.setHeader("Content-Type", "application/json");
+            response.end(JSON.stringify({ deleted_session_id: decodeURIComponent(url.split("/").at(-1) || "") }));
             return;
           }
           if (url.startsWith("/models/")) {

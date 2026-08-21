@@ -11,7 +11,7 @@ app.innerHTML = `
   <main class="grid">
     <section class="panel"><div class="panel-title"><div><span class="eyebrow">BOARD CONFIG</span><h2>标定板配置</h2></div><span id="config-state" class="status">LOADING</span></div><div id="config" class="config-list">读取 config/ros/camera_calibration.yaml…</div></section>
     <section class="panel health-panel"><div class="panel-title"><div><span class="eyebrow">CAMERA INPUT HEALTH</span><h2>三路相机输入状态</h2></div><span id="health-state" class="status">WAITING</span></div><div id="camera-health" class="camera-health"><p class="hint">等待标定节点上报图像与 CameraInfo 状态…</p></div></section>
-    <section class="panel"><div class="panel-title"><div><span class="eyebrow">CAPTURE SESSION</span><h2>保存样本</h2></div><span id="session-state" class="status">NO SESSION</span></div><label>Session ID<input id="session" placeholder="留空则自动新建" /></label><label>历史会话<select id="session-history" disabled><option value="">读取历史会话…</option></select></label><div class="session-actions"><button id="refresh-sessions" class="button ghost" type="button">刷新历史会话</button><button id="load-session" class="button ghost" type="button" disabled>加载所选会话</button></div><label class="check"><input id="new-session" type="checkbox" checked /> 新建会话</label><div class="arm-list"><label><input type="checkbox" checked disabled /> LEFT / l / camera_left</label><label><input type="checkbox" checked disabled /> MIDDLE / m / camera_middle</label><label><input type="checkbox" checked disabled /> RIGHT / r / camera_right</label></div><button id="capture" class="button primary" disabled>检测 ChArUco 并保存三臂样本</button><p class="hint">加载历史会话后可继续采样或直接对该会话求解；只有三路图像都检测到足够角点，且三臂末端 TF 都可用时，才会原子保存一批数据。</p></section>
+    <section class="panel"><div class="panel-title"><div><span class="eyebrow">CAPTURE SESSION</span><h2>保存样本</h2></div><span id="session-state" class="status">NO SESSION</span></div><label>Session ID<input id="session" placeholder="留空则自动新建" /></label><label>历史会话<select id="session-history" disabled><option value="">读取历史会话…</option></select></label><label class="check"><input id="delete-empty-sessions" type="checkbox" checked /> 刷新时清理 0/30 空会话</label><div class="session-actions"><button id="refresh-sessions" class="button ghost" type="button">刷新历史会话</button><button id="load-session" class="button ghost" type="button" disabled>加载所选会话</button><button id="delete-session" class="button danger" type="button" disabled>删除所选会话</button></div><label class="check"><input id="new-session" type="checkbox" checked /> 新建会话</label><div class="arm-list"><label><input type="checkbox" checked disabled /> LEFT / l / camera_left</label><label><input type="checkbox" checked disabled /> MIDDLE / m / camera_middle</label><label><input type="checkbox" checked disabled /> RIGHT / r / camera_right</label></div><button id="capture" class="button primary" disabled>检测 ChArUco 并保存三臂样本</button><p class="hint">刷新默认只清理三臂均无已接受样本的 0/30 会话；“删除所选会话”会删除其全部图片、JSON 和求解结果，需确认后执行。</p></section>
     <section class="panel"><div class="panel-title"><div><span class="eyebrow">SOLVE</span><h2>执行标定</h2></div><span id="solve-state" class="status">WAITING</span></div><button id="solve" class="button secondary" disabled>执行三臂手眼标定</button><p class="hint">求解要求 l/m/r 都达到配置的最少样本数和残差阈值，然后计算三台机械臂的相对位姿。</p><pre id="result">等待结果…</pre></section>
     <section class="panel preview-panel"><div class="panel-title"><div><span class="eyebrow">DETECTION PREVIEW</span><h2>最近一次检测画面</h2></div><span id="preview-state" class="status">WAITING</span></div><div id="previews" class="preview-grid"><p class="hint">点击检测后显示左、中、右三路最近画面，并标注每路 ChArUco 检测结果。</p></div></section>
     <section class="panel log-panel"><div class="panel-title"><div><span class="eyebrow">SERVICE LOG</span><h2>实时反馈</h2></div></div><pre id="log"></pre></section>
@@ -23,6 +23,8 @@ const sessionInput = document.querySelector<HTMLInputElement>("#session")!;
 const sessionHistory = document.querySelector<HTMLSelectElement>("#session-history")!;
 const refreshSessionsButton = document.querySelector<HTMLButtonElement>("#refresh-sessions")!;
 const loadSessionButton = document.querySelector<HTMLButtonElement>("#load-session")!;
+const deleteSessionButton = document.querySelector<HTMLButtonElement>("#delete-session")!;
+const deleteEmptySessions = document.querySelector<HTMLInputElement>("#delete-empty-sessions")!;
 const newSession = document.querySelector<HTMLInputElement>("#new-session")!;
 const captureButton = document.querySelector<HTMLButtonElement>("#capture")!;
 const solveButton = document.querySelector<HTMLButtonElement>("#solve")!;
@@ -76,17 +78,19 @@ function renderSessionHistory() {
   sessionHistory.disabled = calibrationSessions.length === 0;
   if (calibrationSessions.some((item) => item.session_id === selected)) sessionHistory.value = selected;
   loadSessionButton.disabled = !sessionHistory.value;
+  deleteSessionButton.disabled = !sessionHistory.value;
 }
 
-async function refreshSessionHistory() {
+async function refreshSessionHistory(deleteEmpty = false) {
   refreshSessionsButton.disabled = true;
   try {
-    const response = await fetch("/api/calibration/sessions");
+    const response = await fetch(`/api/calibration/sessions${deleteEmpty ? "?delete_empty=true" : ""}`);
     if (!response.ok) throw new Error(`HTTP ${response.status}`);
     const body = await response.json();
     calibrationSessions = Array.isArray(body.sessions) ? body.sessions : [];
     renderSessionHistory();
-    writeLog(`已读取 ${calibrationSessions.length} 个历史标定会话`);
+    const deleted = Array.isArray(body.deleted_session_ids) ? body.deleted_session_ids : [];
+    writeLog(`已读取 ${calibrationSessions.length} 个历史标定会话${deleted.length ? `；已清理 ${deleted.length} 个 0/30 空会话` : ""}`);
   } catch (error) {
     calibrationSessions = [];
     renderSessionHistory();
@@ -106,6 +110,30 @@ function loadSelectedSession() {
   solveState.textContent = selected.solved ? "SOLVED" : "READY";
   writeLog(`已加载历史会话 ${sessionId}${selected.solved ? "（已有求解结果）" : ""}`);
   updateButtons();
+}
+
+async function deleteSelectedSession() {
+  const selected = calibrationSessions.find((item) => item.session_id === sessionHistory.value);
+  if (!selected) return;
+  if (!window.confirm(`删除 ${selected.session_id}？\n这会永久删除该会话的图片、样本 JSON 和求解结果。`)) return;
+  deleteSessionButton.disabled = true;
+  try {
+    const response = await fetch(`/api/calibration/sessions/${encodeURIComponent(selected.session_id)}`, { method: "DELETE" });
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    if (sessionId === selected.session_id) {
+      sessionId = "";
+      sessionInput.value = "";
+      sessionState.textContent = "NO SESSION";
+      solveState.textContent = "WAITING";
+    }
+    writeLog(`已删除历史会话 ${selected.session_id}`);
+    await refreshSessionHistory(false);
+    updateButtons();
+  } catch (error) {
+    writeLog(`删除历史会话失败：${String(error)}`);
+  } finally {
+    deleteSessionButton.disabled = !sessionHistory.value;
+  }
 }
 
 function showPreviews(arms: string[], paths: string[], statuses: string[] = [], messages: string[] = []) {
@@ -223,7 +251,11 @@ solveButton.addEventListener("click", () => {
   solveState.textContent = "SOLVING"; writeLog("正在执行三臂手眼和相对位姿求解…"); updateButtons();
 });
 sessionInput.addEventListener("input", () => { sessionId = sessionInput.value.trim(); updateButtons(); });
-sessionHistory.addEventListener("change", () => { loadSessionButton.disabled = !sessionHistory.value; });
-refreshSessionsButton.addEventListener("click", () => { void refreshSessionHistory(); });
+sessionHistory.addEventListener("change", () => {
+  loadSessionButton.disabled = !sessionHistory.value;
+  deleteSessionButton.disabled = !sessionHistory.value;
+});
+refreshSessionsButton.addEventListener("click", () => { void refreshSessionHistory(deleteEmptySessions.checked); });
 loadSessionButton.addEventListener("click", loadSelectedSession);
+deleteSessionButton.addEventListener("click", () => { void deleteSelectedSession(); });
 loadConfig(); void refreshSessionHistory(); connect();

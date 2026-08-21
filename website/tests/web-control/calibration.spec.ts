@@ -140,3 +140,37 @@ test("calibration page loads a historical session and solves that exact session"
   });
   expect(solve.session_id).toBe("session-20260821T102303.053863Z");
 });
+
+test("calibration page prunes empty sessions on refresh and deletes a selected session", async ({ page }) => {
+  const requests: { method: string; url: string }[] = [];
+  await page.route("**/api/calibration/sessions**", async (route) => {
+    const request = route.request();
+    requests.push({ method: request.method(), url: request.url() });
+    if (request.method() === "DELETE") {
+      await route.fulfill({ contentType: "application/json", body: JSON.stringify({ deleted_session_id: "session-delete" }) });
+      return;
+    }
+    await route.fulfill({
+      contentType: "application/json",
+      body: JSON.stringify({
+        sessions: [{
+          session_id: "session-delete",
+          created_at: "2026-08-21T10:23:03+00:00",
+          sample_counts: { l: 1, m: 1, r: 1 },
+          solved: false,
+        }],
+        deleted_session_ids: request.url().includes("delete_empty=true") ? ["session-empty"] : [],
+      }),
+    });
+  });
+  await page.goto("calibration.html");
+  await page.locator("#refresh-sessions").click();
+  await expect(page.locator("#log")).toContainText("已清理 1 个 0/30 空会话");
+  expect(requests.some((request) => request.method === "GET" && request.url.includes("delete_empty=true"))).toBe(true);
+
+  await page.locator("#session-history").selectOption("session-delete");
+  page.once("dialog", (dialog) => dialog.accept());
+  await page.locator("#delete-session").click();
+  await expect(page.locator("#log")).toContainText("已删除历史会话 session-delete");
+  expect(requests.some((request) => request.method === "DELETE" && request.url.endsWith("/session-delete"))).toBe(true);
+});

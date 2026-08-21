@@ -8,6 +8,7 @@ from datetime import datetime, timezone
 import json
 from pathlib import Path
 import re
+import shutil
 import threading
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -154,6 +155,9 @@ class WebControlServer:
         app.router.add_get("/api/layout", self._layout)
         app.router.add_get("/api/calibration", self._calibration)
         app.router.add_get("/api/calibration/sessions", self._calibration_sessions)
+        app.router.add_delete(
+            "/api/calibration/sessions/{session_id}", self._delete_calibration_session
+        )
         app.router.add_get("/api/calibration/preview/{path:.*}", self._calibration_preview)
         app.router.add_get("/ws", self._websocket)
         app.router.add_get("/models/{path:.*}", self._model_asset)
@@ -195,53 +199,100 @@ class WebControlServer:
             raise web.HTTPServiceUnavailable(text="calibration configuration unavailable") from error
         return web.json_response(config)
 
-    async def _calibration_sessions(self, _request: Any) -> Any:
-        """List only recoverable calibration sessions under the configured log root."""
+    def _calibration_sessions_root(self) -> Path:
+        return (self.calibration_log_root / "camera_calibration").resolve()
+
+    @staticmethod
+    def _valid_calibration_session_id(session_id: str) -> bool:
+        return bool(re.fullmatch(r"session-[0-9TZ.\-]+", session_id))
+
+    def _calibration_session_directory(self, session_id: str) -> Path | None:
+        """Return one direct session child, never a caller-selected filesystem path."""
+        if not self._valid_calibration_session_id(session_id):
+            return None
+        root = self._calibration_sessions_root()
+        candidate = (root / session_id).resolve()
+        return candidate if candidate.parent == root else None
+
+    def _calibration_session_summary(self, directory: Path) -> dict[str, Any] | None:
+        session_id = directory.name
+        if not self._valid_calibration_session_id(session_id):
+            return None
+        sample_counts = {arm: 0 for arm in ("l", "m", "r")}
+        try:
+            for metadata_path in (directory / "batches").glob("*/*.json"):
+                try:
+                    sample = json.loads(metadata_path.read_text(encoding="utf-8"))
+                    sample_id = str(sample.get("sample_id", ""))
+                    arm = sample_id.split("-", 1)[0]
+                    if arm in sample_counts and isinstance(sample.get("base_to_tool"), list):
+                        sample_counts[arm] += 1
+                except (OSError, ValueError, json.JSONDecodeError):
+                    continue
+            return {
+                "session_id": session_id,
+                "created_at": datetime.fromtimestamp(
+                    directory.stat().st_mtime, tz=timezone.utc
+                ).isoformat(),
+                "sample_counts": sample_counts,
+                "solved": (directory / "calibration_result.json").is_file(),
+            }
+        except OSError:
+            # A concurrent capture may replace a batch while it is being inspected.
+            return None
+
+    def _list_calibration_sessions(self, delete_empty: bool = False) -> tuple[list[dict[str, Any]], list[str]]:
+        """Return valid sessions and optionally remove only sessions with no accepted samples."""
+        root = self._calibration_sessions_root()
+        try:
+            directories = [path for path in root.iterdir() if path.is_dir()]
+        except FileNotFoundError:
+            return [], []
+        sessions: list[dict[str, Any]] = []
+        deleted: list[str] = []
+        for directory in directories:
+            summary = self._calibration_session_summary(directory)
+            if summary is None:
+                continue
+            if delete_empty and not any(summary["sample_counts"].values()):
+                try:
+                    shutil.rmtree(directory)
+                    deleted.append(summary["session_id"])
+                except OSError as error:
+                    self.logger.error(
+                        f"Empty calibration session {summary['session_id']} could not be deleted: {error}"
+                    )
+                continue
+            sessions.append(summary)
+        sessions.sort(key=lambda item: item["session_id"], reverse=True)
+        return sessions, deleted
+
+    async def _calibration_sessions(self, request: Any) -> Any:
+        """List recoverable sessions and optionally prune sessions with no accepted samples."""
         from aiohttp import web
 
-        sessions_root = self.calibration_log_root / "camera_calibration"
-        sessions: list[dict[str, Any]] = []
         try:
-            directories = [path for path in sessions_root.iterdir() if path.is_dir()]
-        except FileNotFoundError:
-            directories = []
+            delete_empty = request.query.get("delete_empty", "false").lower() == "true"
+            sessions, deleted = self._list_calibration_sessions(delete_empty)
         except OSError as error:
             self.logger.error(f"Calibration sessions could not be read: {error}")
             raise web.HTTPServiceUnavailable(text="calibration sessions unavailable") from error
+        return web.json_response({"sessions": sessions, "deleted_session_ids": deleted})
 
-        for directory in directories:
-            session_id = directory.name
-            if not re.fullmatch(r"session-[0-9TZ.\\-]+", session_id):
-                continue
-            sample_counts = {arm: 0 for arm in ("l", "m", "r")}
-            try:
-                for metadata_path in (directory / "batches").glob("*/*.json"):
-                    try:
-                        sample = json.loads(metadata_path.read_text(encoding="utf-8"))
-                        sample_id = str(sample.get("sample_id", ""))
-                        arm = sample_id.split("-", 1)[0]
-                        if arm in sample_counts and isinstance(sample.get("base_to_tool"), list):
-                            sample_counts[arm] += 1
-                    except (OSError, ValueError, json.JSONDecodeError):
-                        continue
-                result_path = directory / "calibration_result.json"
-                solved = result_path.is_file()
-                created_at = datetime.fromtimestamp(
-                    directory.stat().st_mtime, tz=timezone.utc
-                ).isoformat()
-            except OSError:
-                # A concurrent capture may replace a batch while it is being listed.
-                continue
-            sessions.append(
-                {
-                    "session_id": session_id,
-                    "created_at": created_at,
-                    "sample_counts": sample_counts,
-                    "solved": solved,
-                }
-            )
-        sessions.sort(key=lambda item: item["session_id"], reverse=True)
-        return web.json_response({"sessions": sessions})
+    async def _delete_calibration_session(self, request: Any) -> Any:
+        """Delete one operator-selected session after the browser's explicit confirmation."""
+        from aiohttp import web
+
+        session_id = request.match_info["session_id"]
+        directory = self._calibration_session_directory(session_id)
+        if directory is None or not directory.is_dir():
+            raise web.HTTPNotFound(text="calibration session does not exist")
+        try:
+            shutil.rmtree(directory)
+        except OSError as error:
+            self.logger.error(f"Calibration session {session_id} could not be deleted: {error}")
+            raise web.HTTPServiceUnavailable(text="calibration session could not be deleted") from error
+        return web.json_response({"deleted_session_id": session_id})
 
     async def _calibration_preview(self, request: Any) -> Any:
         from aiohttp import web

@@ -14,8 +14,9 @@ class FakeLogger:
 
 
 class FakeRequest:
-    def __init__(self, path: str):
+    def __init__(self, path: str = "", query: dict[str, str] | None = None):
         self.match_info = {"path": path}
+        self.query = query or {}
 
 
 def _server(static_root: Path) -> WebControlServer:
@@ -102,7 +103,7 @@ def test_calibration_sessions_list_only_valid_sessions_and_sample_counts(tmp_pat
     ignored = static_root / "logs" / "camera_calibration" / "not-a-session"
     ignored.mkdir()
 
-    response = asyncio.run(_server(static_root)._calibration_sessions(None))
+    response = asyncio.run(_server(static_root)._calibration_sessions(FakeRequest()))
 
     payload = json.loads(response.body)
     assert len(payload["sessions"]) == 1
@@ -111,3 +112,41 @@ def test_calibration_sessions_list_only_valid_sessions_and_sample_counts(tmp_pat
     assert listed["sample_counts"] == {"l": 1, "m": 1, "r": 1}
     assert listed["solved"] is True
     assert listed["created_at"].endswith("+00:00")
+
+
+def test_calibration_session_cleanup_and_explicit_delete_are_scoped_to_sessions(tmp_path):
+    static_root = tmp_path / "static"
+    static_root.mkdir()
+    (static_root / "index.html").write_text("ok", encoding="utf-8")
+    sessions_root = static_root / "logs" / "camera_calibration"
+    empty = sessions_root / "session-20260821T100000.000000Z"
+    kept = sessions_root / "session-20260821T100001.000000Z"
+    (empty / "attempts").mkdir(parents=True)
+    batch = kept / "batches" / "batch-1"
+    batch.mkdir(parents=True)
+    (batch / "l-0000.json").write_text(
+        json.dumps({"sample_id": "l-0000-example", "base_to_tool": [[1.0]]}),
+        encoding="utf-8",
+    )
+    server = _server(static_root)
+
+    response = asyncio.run(server._calibration_sessions(FakeRequest(query={"delete_empty": "true"})))
+
+    payload = json.loads(response.body)
+    assert payload["deleted_session_ids"] == [empty.name]
+    assert [session["session_id"] for session in payload["sessions"]] == [kept.name]
+    assert not empty.exists()
+    deleted = asyncio.run(
+        server._delete_calibration_session(
+            type("Request", (), {"match_info": {"session_id": kept.name}})()
+        )
+    )
+    assert json.loads(deleted.body) == {"deleted_session_id": kept.name}
+    assert not kept.exists()
+
+    with pytest.raises(web.HTTPNotFound):
+        asyncio.run(
+            server._delete_calibration_session(
+                type("Request", (), {"match_info": {"session_id": "../outside"}})()
+            )
+        )

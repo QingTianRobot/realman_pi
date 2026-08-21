@@ -1,0 +1,87 @@
+# Authoritative ChArUco hand-eye and three-arm relative-pose calibration contract.
+# All lengths are metres, angles are radians, durations are seconds and image
+# errors are pixels. The browser never overrides topics, frames or thresholds.
+board:
+  type: charuco
+  # OpenCV dictionary name; supported values are DICT_* constants in cv2.aruco.
+  dictionary: DICT_5X5_100
+  # Physical board: CC200-15-11.25. The outer black border is 200 x 150 mm;
+  # the ChArUco pattern is 180 x 135 mm (12 x 9 squares at 15 mm each).
+  squares_x: 12
+  squares_y: 9
+  square_length_m: 0.015
+  marker_length_m: 0.01125
+  outer_width_m: 0.200
+  outer_height_m: 0.150
+  pattern_width_m: 0.180
+  pattern_height_m: 0.135
+  # A sample is rejected unless at least this many interpolated ChArUco corners
+  # are visible. Raise this after validating the physical board and lens FOV.
+  minimum_corners: 12
+
+cameras:
+  left:
+    arm_id: l
+    image_topic: /camera_left/color/image_raw
+    camera_info_topic: /camera_left/color/camera_info
+    optical_frame: camera_left_color_optical_frame
+  middle:
+    arm_id: m
+    image_topic: /camera_middle/color/image_raw
+    camera_info_topic: /camera_middle/color/camera_info
+    optical_frame: camera_middle_color_optical_frame
+  right:
+    arm_id: r
+    image_topic: /camera_right/color/image_raw
+    camera_info_topic: /camera_right/color/camera_info
+    optical_frame: camera_right_color_optical_frame
+
+robots:
+  l:
+    camera_id: left
+    base_frame: l/base_link
+    # Eye-in-hand calibration uses the flange pose, not a mutable tool frame.
+    end_effector_frame: l/link_6
+  m:
+    camera_id: middle
+    base_frame: m/base_link
+    end_effector_frame: m/link_6
+  r:
+    camera_id: right
+    base_frame: r/base_link
+    end_effector_frame: r/link_6
+
+sampling:
+  # Latest image and CameraInfo must both be this fresh at service invocation.
+  maximum_message_age_sec: 0.75
+  # Multi-arm atomic capture rejects frames farther apart than this threshold.
+  maximum_inter_camera_skew_sec: 0.15
+  # Source timestamp-to-receiver-clock delay above this is unhealthy. Keep this
+  # comfortably above normal DDS scheduling jitter but below a stalled stream.
+  maximum_timestamp_delay_sec: 1.0
+  tf_timeout_sec: 0.25
+  # The solver has no upper sample limit and consumes every accepted sample.
+  # Thirty pose-diverse views reduce random image/pose noise; repeated frames at
+  # one unchanged pose do not improve hand-eye observability.
+  minimum_samples_per_arm: 30
+  required_arms: [l, m, r]
+
+solver:
+  # OpenCV eye-in-hand methods: TSAI, PARK, HORAUD, ANDREFF or DANIILIDIS.
+  hand_eye_method: TSAI
+  maximum_hand_eye_residual: 0.050
+  maximum_relative_translation_spread_m: 0.030
+  maximum_relative_rotation_spread_rad: 0.050
+
+services:
+  capture: /camera_calibration/capture_sample
+  solve: /camera_calibration/solve
+diagnostics_topic: /camera_calibration/diagnostics
+# Compact JSON health state for the browser control page. It reports input
+# freshness and timing only; it neither captures samples nor controls cameras.
+camera_health_topic: /camera_calibration/camera_health
+
+storage:
+  # Relative to REALMAN_LOG_ROOT. Each session gets its own directory containing
+  # immutable PNG images, sample JSON records and the final result JSON.
+  output_subdirectory: camera_calibration

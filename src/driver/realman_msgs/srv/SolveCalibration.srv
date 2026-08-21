@@ -1,0 +1,12 @@
+string session_id
+---
+bool success
+bool all_arms_solved
+string session_id
+string result_file
+string result_json
+float64 mean_reprojection_error_px
+uint32[] sample_counts
+bool layout_updated
+string layout_backup_file
+string message

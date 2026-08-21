@@ -1,0 +1,16 @@
+string session_id
+bool start_new_session
+string[] arm_ids
+---
+bool success
+string session_id
+string batch_id
+string[] captured_arm_ids
+uint32[] sample_counts
+string[] sample_ids
+string[] image_paths
+string[] preview_image_paths
+string[] latest_image_paths
+string[] detection_statuses
+string[] detection_messages
+string message

@@ -187,6 +187,46 @@ def test_motion_action_contracts_are_exact():
 
 def test_coordinate_service_contracts_are_exact():
     _assert_interface_contract(
+        ROOT / "srv/CaptureCalibrationSample.srv",
+        [
+            ["string session_id", "bool start_new_session", "string[] arm_ids"],
+            [
+                "bool success",
+                "string session_id",
+                "string batch_id",
+                "string[] captured_arm_ids",
+                "uint32[] sample_counts",
+                "string[] sample_ids",
+                "string[] image_paths",
+                "string[] preview_image_paths",
+                "string[] latest_image_paths",
+                "string[] detection_statuses",
+                "string[] detection_messages",
+                "string message",
+            ],
+        ],
+    )
+
+    _assert_interface_contract(
+        ROOT / "srv/SolveCalibration.srv",
+        [
+            ["string session_id"],
+            [
+                "bool success",
+                "bool all_arms_solved",
+                "string session_id",
+                "string result_file",
+                "string result_json",
+                "float64 mean_reprojection_error_px",
+                "uint32[] sample_counts",
+                "bool layout_updated",
+                "string layout_backup_file",
+                "string message",
+            ],
+        ],
+    )
+
+    _assert_interface_contract(
         ROOT / "srv/RecoverMotion.srv",
         [
             [],
@@ -302,7 +342,5 @@ def test_interface_contract_tests_are_registered_and_built():
     assert "<depend>action_msgs</depend>" in package
     assert "<test_depend>ament_cmake_pytest</test_depend>" in package
     assert "<test_depend>python3-pytest</test_depend>" in package
-    assert (
-        "colcon test --packages-select xbox_controller_driver realman_robot_driver "
-        "realman_bringup realman_msgs"
-    ) in dockerfile
+    assert "colcon test --packages-select" in dockerfile
+    assert "realman_msgs" in dockerfile

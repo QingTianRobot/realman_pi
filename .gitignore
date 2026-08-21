@@ -32,3 +32,6 @@ website/test-results/
 .ace-tool/
 logs/*
 !logs/.gitkeep
+
+# Runtime calibration keeps one recoverable layout snapshot beside the YAML.
+config/ros/*.yaml.bak

@@ -67,6 +67,7 @@ export default defineConfig({
           { text: "维护入口", link: "/development/" },
           { text: "功能文档同步", link: "/development/documentation-workflow" },
           { text: "启动入口索引", link: "/development/startup-entries" },
+          { text: "三臂 ChArUco 手眼标定", link: "/development/camera-calibration" },
           { text: "睿尔曼 Python 驱动查询", link: "/development/realman-python-driver" },
           { text: "睿尔曼三臂驱动与运动控制", link: "/development/realman-driver-scaffold" },
           { text: "睿尔曼 Action 开发与测试", link: "/development/realman-action-development" },

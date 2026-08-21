@@ -16,6 +16,8 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "srv/ForwardKinematics.srv"
   "srv/SolveIk.srv"
   "srv/RecoverMotion.srv"
+  "srv/CaptureCalibrationSample.srv"
+  "srv/SolveCalibration.srv"
   DEPENDENCIES action_msgs
 )
 

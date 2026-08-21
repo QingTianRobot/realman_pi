@@ -343,6 +343,19 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
 
   await page.locator("button[data-motion-command=\"2\"]").click();
   await expect(page.locator("#execute-motion")).toHaveText("发送 MOVEP");
+  await expect(page.locator("#fill-current-pose")).toBeVisible();
+  await expect(page.locator("#solve-ik")).toBeHidden();
+  const currentPoseCountBeforeMovepFill = await page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map((value) => JSON.parse(value))
+      .filter((message) => message.type === "get_current_pose").length,
+  );
+  await page.locator("#fill-current-pose").click();
+  await expect.poll(async () => page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map((value) => JSON.parse(value))
+      .filter((message) => message.type === "get_current_pose").length,
+  )).toBe(currentPoseCountBeforeMovepFill + 1);
   await page.locator("#execute-motion").click();
   await page.locator("#cancel-motion").click();
   const messages = await page.evaluate(() => (window as any).__webMessages as string[]);

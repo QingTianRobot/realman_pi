@@ -114,9 +114,9 @@ XYZ 是该参考系下的绝对目标位置，单位为米；姿态使用 `[w,x,
 进入 MOVEL/MOVEP 或切换参考系时，网页会自动调用 `get_current_pose` 填入当前 XYZ/WXYZ；
 XYZ 数值有效后会出现以当前值为中心、每轴上下 0.2 m 的滑轨，滑轨与数值输入双向同步。
 
-MOVEL 还提供两个只读计算动作。点击“填入当前位置”会调用
+MOVEL/MOVEP 都提供“填入当前位置”动作。点击后会调用
 `/{arm}/get_current_pose`，驱动使用当前关节状态做 FK，并把结果按所选参考系填入
-XYZ 和 WXYZ。修改目标后点击“计算逆解”会通过 WebSocket 的 `solve_ik` 消息调用
+XYZ 和 WXYZ。MOVEL 还提供“计算逆解”：修改目标后点击它会通过 WebSocket 的 `solve_ik` 消息调用
 `/{arm}/solve_ik`；请求种子使用该 arm 的当前实体关节角，驱动将参考系目标转换到算法
 需要的 base 位姿后调用 `rm_algo_inverse_kinematics()`。成功的六个 degree 结果会先经过
 Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条和橙色 URDF 影子。这个过程

@@ -452,7 +452,9 @@ function setMotionMode(command: MotionCommand) {
   jointTarget.hidden = command !== 0;
   poseTarget.hidden = command === 0;
   resetPreviewButton.hidden = command !== 0;
-  poseKinematicsActions.hidden = command !== 1;
+  // Both Cartesian target modes can read the live pose; only MOVEL exposes IK preview.
+  poseKinematicsActions.hidden = command === 0;
+  solveIkButton.hidden = command !== 1;
   executeMotionButton.textContent = `发送 ${MOTION_LABELS[command]}`;
   setShadowVisibility(selectedArm);
   if (command !== 0 && (previousCommand === 0 || previousCommand !== command)) {
@@ -992,7 +994,7 @@ function updateButtons() {
   recoverMotionButton.disabled = !writable || Boolean(activeRecoveryRequestByArm[selectedArm]);
   stopButton.disabled = !writable;
   const activeKinematicsRequest = Boolean(activeKinematicsRequestByArm[selectedArm]);
-  fillCurrentPoseButton.disabled = !writable || selectedMotionCommand !== 1;
+  fillCurrentPoseButton.disabled = !writable || selectedMotionCommand === 0;
   solveIkButton.disabled = !writable || selectedMotionCommand !== 1 || activeKinematicsRequest || !Boolean(readPoseGoal());
   const activeRecordRequest = Boolean(activeRecordRequestByArm[selectedArm]);
   saveRecordButton.disabled = !writable || activeRecordRequest || recordNameInput.value.trim() === "" || (currentJointsByArm[selectedArm]?.length ?? 0) !== 6;
@@ -1131,7 +1133,7 @@ executeMotionButton.addEventListener("click", () => {
   updateButtons();
 });
 fillCurrentPoseButton.addEventListener("click", () => {
-  if (selectedMotionCommand !== 1) return;
+  if (selectedMotionCommand === 0) return;
   requestCurrentPose(selectedArm, true);
 });
 solveIkButton.addEventListener("click", () => {

@@ -44,6 +44,8 @@ ros2 launch realman_bringup system.launch.py \
 | `coordinates_config_file` | `config/ros/realman_coordinates.yaml` | 指定 BASE/WORK/TOOL 坐标配置 |
 | `motion_config_file` | `config/ros/realman_motion.yaml` | 指定运动速度、加速度和 watchdog 限制 |
 | `start_web_control` | `false` | 启动认证 WebSocket、Action 和 URDF 控制桥 |
+| `start_camera_calibration` | `false` | 启动 ChArUco 三臂采样/手眼求解 service |
+| `camera_calibration_config_file` | `config/ros/camera_calibration.yaml` | 指定标定板、相机话题、TF 和求解阈值 |
 | `web_control_config_file` | `config/ros/realman_web_control.yaml` | 指定浏览器控制桥配置 |
 | `wait_for_joy_device` | `false` | 输入设备不存在时持续轮询；Docker 输入服务设为 `true` |
 | `joy_device_path` | `${REALMAN_JOY_DEVICE:-auto}` | 设备路径、glob，或自动扫描 `/dev/input` |
@@ -129,6 +131,9 @@ docker compose run --rm realman_driver_rviz
 | `REALMAN_USE_GUI` | `use_gui` | `true` / `false` |
 | `REALMAN_USE_RVIZ` | `use_rviz` | `true` / `false` |
 | `REALMAN_START_WEB_CONTROL` | `start_web_control` | `true` / `false` |
+| `REALMAN_START_CAMERA_CALIBRATION` | `start_camera_calibration` | `true` / `false` |
+| `REALMAN_CAMERA_CALIBRATION_CONFIG_FILE` | `camera_calibration_config_file` | 标定配置绝对路径 |
+| `REALMAN_UPDATE_LAYOUT_AFTER_CALIBRATION` | `update_layout_after_calibration` | `true`：求解后写回 `three_robots.yaml`；`false`：只保存结果 |
 | `REALMAN_JOINT_RECORD_DIR` | `joint_record_dir` | 默认 `/opt/rm65_ws/config/web-control/joint-records` |
 | `REALMAN_WAIT_FOR_JOY_DEVICE` | `wait_for_joy_device` | `true` / `false` |
 | `REALMAN_JOY_POLL_INTERVAL` | `joy_poll_interval` | `0.1` 以上的秒数 |
@@ -211,6 +216,10 @@ docker compose run --rm realman_bringup
 ${EDITOR:-vi} .env
 source /path/to/realman_pi/functions.zsh
 ```
+
+`FASTDDS_BUILTIN_TRANSPORTS` 也必须由同一 `.env` 提供。生产默认值为 `UDPv4`：它禁止宿主
+Orbbec ROS2 工作区和 Docker 镜像在 Fast DDS 共享内存 ABI 不一致时出现“发现到 topic、但收不到
+Image”的状态。修改该值后必须重启相关 Docker 服务和宿主相机 launch。
 
 Web 控制台不再读取 token；浏览器打开后即可通过 `realman_web_control` 提交动作。该服务
 必须只部署在受信任、隔离的机器人局域网，动作仍然经过 driver 的 ownership、坐标 gate、

@@ -40,8 +40,9 @@ mediamtx 单二进制由 `install_deps.sh` 下载到 `bin/`（需 curl + 可访�
 关键项：`camera.serial`（按串号锁定设备）、`color.*`（彩色分辨率/格式/编码/码率）、`depth.*`
 （深度分辨率/端口/lz4）。Orbbec 支持多台：`orbbec.yaml` 里 `cameras` 下按 side 名
 索引，`serial` 为空的 side 会自动跳过；共用参数在 `stream` 段。启动脚本会动态遍历
-`cameras`，新增 side 只需在 YAML 中添加完整条目（包括唯一 `depth_port`）。默认彩色用
-`format: MJPG`（压缩，兼容 USB 2.0），换 USB 3.0 后可改 `BGR`（无损）。
+`cameras`，新增 side 只需在 YAML 中添加完整条目（包括唯一 `depth_port`）。生产机默认彩色用
+`640x480@10 YUYV`，以规避右侧 Gemini 305 在 USB2/MJPEG 下的持续帧撕裂；换 USB 3.0 后可提高
+分辨率、帧率或改用其他无损格式。
 
 ## 3. 启动 / 停止
 
@@ -94,7 +95,7 @@ depth, seq, ts_us = cli.recv()   # uint16 HxW ndarray
 ## 5. 注意事项
 
 - **USB 带宽**：多台手眼 Gemini 305 在 USB 2.0（480M）上原始 BGR 彩色+深度会超带宽导致彩色饿死，
-  所以默认用 `format: MJPG` 压缩彩色，并把三台并行深度降为 `320x240@15`。换 USB 3.0 口后可把
+  所以默认用 `640x480@10 YUYV` 彩色，并把三台并行深度降为 `320x240@15`。换 USB 3.0 口后可把
   `color.format` 改回 `BGR`（无损）并上调分辨率（1280x800@30 / 深度 640x400@30）。
 - **设备独占**：推流进程直接打开 SDK，因此原来的 `realsense2_camera_node` / orbbec
   `component_container` 不能再同时运行。`sensor_bringup` 的 `cameras.launch.py` 应移除出图节点，

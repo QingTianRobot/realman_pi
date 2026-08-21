@@ -39,6 +39,7 @@ def generate_launch_description():
     three_robots_launch = description_share / "launch" / "three_robots.launch.py"
     driver_share = Path(get_package_share_directory("realman_robot_driver"))
     web_control_share = Path(get_package_share_directory("realman_web_control"))
+    calibration_share = Path(get_package_share_directory("realman_camera_calibration"))
     three_drivers_launch = driver_share / "launch" / "three_realman_drivers.launch.py"
     # Docker mounts the repository configuration at REALMAN_CONFIG_ROOT so edits
     # are picked up on restart. Installed config remains the local build fallback.
@@ -68,6 +69,9 @@ def generate_launch_description():
     coordinates_config_file = LaunchConfiguration("coordinates_config_file")
     motion_config_file = LaunchConfiguration("motion_config_file")
     start_web_control = LaunchConfiguration("start_web_control")
+    start_camera_calibration = LaunchConfiguration("start_camera_calibration")
+    camera_calibration_config_file = LaunchConfiguration("camera_calibration_config_file")
+    update_layout_after_calibration = LaunchConfiguration("update_layout_after_calibration")
     web_control_config_file = LaunchConfiguration("web_control_config_file")
     joint_record_dir = LaunchConfiguration("joint_record_dir")
     wait_for_joy_device = LaunchConfiguration("wait_for_joy_device")
@@ -170,6 +174,21 @@ def generate_launch_description():
                 description="Start the authenticated browser WebSocket/action bridge.",
             ),
             DeclareLaunchArgument(
+                "start_camera_calibration",
+                default_value="false",
+                description="Start ChArUco capture and three-arm calibration services.",
+            ),
+            DeclareLaunchArgument(
+                "camera_calibration_config_file",
+                default_value=str(config_root / "ros" / "camera_calibration.yaml"),
+                description="ChArUco board, camera, TF and solver configuration.",
+            ),
+            DeclareLaunchArgument(
+                "update_layout_after_calibration",
+                default_value=os.environ.get("REALMAN_UPDATE_LAYOUT_AFTER_CALIBRATION", "true"),
+                description="Write calibrated middle/right base poses into three_robots.yaml.",
+            ),
+            DeclareLaunchArgument(
                 "web_control_config_file",
                 default_value=str(config_root / "ros" / "realman_web_control.yaml"),
                 description="Browser bridge settings under the project-root config/ directory.",
@@ -215,6 +234,17 @@ def generate_launch_description():
             ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
+                    str(calibration_share / "launch" / "camera_calibration.launch.py")
+                ),
+                condition=IfCondition(start_camera_calibration),
+                launch_arguments={
+                    "config_file": camera_calibration_config_file,
+                    "layout_config_file": str(three_robots_config),
+                    "update_layout_after_solve": update_layout_after_calibration,
+                }.items(),
+            ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
                     str(web_control_share / "launch" / "web_control.launch.py")
                 ),
                 condition=IfCondition(start_web_control),
@@ -224,6 +254,7 @@ def generate_launch_description():
                     "motion_config_file": motion_config_file,
                     "coordinates_config_file": coordinates_config_file,
                     "joint_record_dir": joint_record_dir,
+                    "calibration_config_file": camera_calibration_config_file,
                 }.items(),
             ),
             Node(

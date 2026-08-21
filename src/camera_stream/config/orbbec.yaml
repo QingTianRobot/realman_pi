@@ -9,11 +9,12 @@ rtsp_port: 8554
 # 共用的流参数（各 side 相机同型号共用；如需差异可移到各相机下覆盖）
 stream:
   color:
-    # 当前 USB 2.0 下 30fps 最高只有 640x480；换 USB 3.0 后可改 1280x800@30
+    # Three cameras share USB2. Keep this aligned with the ROS2 YUYV profile.
     width: 640
     height: 480
-    fps: 30
-    format: MJPG         # USB 2.0 带宽不够，用 MJPG 压缩省带宽；换 USB 3.0 可改 BGR（无损）
+    fps: 10
+    # YUYV avoids persistent MJPEG frame tearing on the right USB2 camera.
+    format: YUYV
     encoder: libx264     # PyAV wheel 不带 NVENC；如需 NVENC 需自建 PyAV 或用 GStreamer
     bitrate_kbps: 4000
   depth:
@@ -27,7 +28,7 @@ stream:
 # 各相机按 side 名索引；serial 为空表示未接入（启动时自动跳过）
 cameras:
   left:
-    serial: "CV2L360000HS"   # USB port 2；现场左侧相机，请按物理安装核对
+    serial: "CV2L36000037"   # 现场左侧相机；与 config/ros/cameras_ros2.yaml 保持一致
     rtsp_path: /orbbec/left/color
     depth_port: 8101
     bind: 0.0.0.0
@@ -37,7 +38,7 @@ cameras:
     depth_port: 8102
     bind: 0.0.0.0
   right:
-    serial: "CV2L36000037"   # USB port 5；现场右侧相机，请按物理安装核对
+    serial: "CV2L360000HS"   # 现场右侧相机；与 config/ros/cameras_ros2.yaml 保持一致
     rtsp_path: /orbbec/right/color
     depth_port: 8103
     bind: 0.0.0.0

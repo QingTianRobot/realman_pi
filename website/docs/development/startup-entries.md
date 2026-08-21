@@ -128,8 +128,9 @@ Orbbec `serial` 会跳过对应 side，错误串号则会在日志中报告找�
 Orbbec wheel 和 `mediamtx`；它不会启动 Docker 容器。
 
 启动脚本现在从 `orbbec.yaml` 动态遍历所有 side。当前生产配置按 USB 物理端口记录为
-`left=CV2L360000HS`（port 2）、`middle=CV2T661000DC`（port 4）、
-`right=CV2L36000037`（port 5）；如果现场重新插拔 USB，必须重新核对物理位置和串号。
+`left=CV2L36000037`、`middle=CV2T661000DC`、`right=CV2L360000HS`。这些是物理安装位置的
+映射，不是 USB 端口号；如果现场重新插拔或更换相机，必须重新核对物理位置和串号，并同时更新
+`config/ros/cameras_ros2.yaml` 与 `src/camera_stream/config/orbbec.yaml`。
 生产机四个相机共用 USB2 总线；三路 Orbbec 使用 `320x240@15` 深度低带宽档并可正常返回深度帧，
 D435 当前无法稳定出帧，因此配置暂时只启用 RealSense 彩色低分辨率流。接入 USB3 后再恢复
 RealSense 深度、更高分辨率和 Orbbec 的 `640x400@30` 深度档。
@@ -137,12 +138,15 @@ RealSense 深度、更高分辨率和 Orbbec 的 `640x400@30` 深度档。
 ### ROS2 图像节点与 RViz2
 
 `rm65_camera_ros2` 使用官方 `orbbec_camera` ROS2 驱动，不使用旧 USB port 路径，而是从
-`config/ros/cameras_ros2.yaml` 读取三台 Gemini 305 的串号。默认彩色档为 `640x480@15 MJPG`，
+`config/ros/cameras_ros2.yaml` 读取三台 Gemini 305 的串号。默认彩色档为 `640x480@10 YUYV`，
 深度档使用 `640x480@15 Y16` 原始 profile 和硬件抽取系数 `2`，实际发布
 `320x240@15`，并关闭点云以适应生产机 USB2 总线。三台相机按独立设备运行，配置默认关闭
 `enable_frame_sync`、`trigger_out_enabled` 和 `software_trigger_enabled`；官方默认同步参数会导致
 后启动的设备只有 publisher 而没有图像帧。默认只打开彩色流，每次启动都会创建
 `logs/YYYYMMDD_HHMMSS/` 并设置 `ROS_LOG_DIR`，节点日志由 rcutils 官方机制生成。
+左侧相机在反光标定板下使用固定彩色曝光 `30`（3 ms）并关闭自动曝光；该值由
+`cameras_ros2.yaml` 的 `cameras.left.color` 管理。若更换光源或相机位置，应先通过
+`/camera_left/get_color_exposure` 验证画面，再调整该值，不能为了通过采样降低 ChArUco 角点门槛。
 三台 Orbbec 与 D435 共用一条 USB2 root hub 时，生产机的
 `/sys/module/usbcore/parameters/usbfs_memory_mb` 应至少为 `256`；函数会在低于该值时告警。
 临时修复和持久化设置分别为：
@@ -171,7 +175,8 @@ rm65_camera_ros2_status
 默认模式实际发布三个 `color/image_raw`、三个 `color/camera_info` 和 TF；深度路径只有显式
 使用 `rm65_camera_ros2 depth` 时才会发布。wrapper 2.7.6 在当前 USB2/libuvc 拓扑下同时
 打开同一设备的彩色和深度会创建 publisher 但不连续出帧，因此两种流是互斥模式。三台彩色
-在 `640x480@15 MJPG` 下已实测约 15 Hz。
+在 `640x480@10 YUYV` 下预期约 10 Hz；YUYV 用于规避右侧设备在 USB2/MJPEG 下的持续帧撕裂，
+实际帧率应以 `ros2 topic hz` 验证。
 
 有图形桌面的机器可以直接启动 RViz2：
 

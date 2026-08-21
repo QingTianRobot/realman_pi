@@ -2,11 +2,19 @@
 # Select by serial number because USB bus paths can change after re-plugging.
 cameras:
   left:
-    serial: "CV2L360000HS"
+    # Physical left camera. This mapping was verified after the initial
+    # installation had left and right serials reversed.
+    serial: "CV2L36000037"
+    color:
+      # The glossy calibration board clips under auto exposure in this view.
+      # Gemini 305 exposure units are 0.1 ms, so 30 is a fixed 3 ms exposure.
+      auto_exposure: false
+      exposure: 30
   middle:
     serial: "CV2T661000DC"
   right:
-    serial: "CV2L36000037"
+    # Physical right camera; keep this aligned with camera_stream/orbbec.yaml.
+    serial: "CV2L360000HS"
 
 # Gemini 305 devices share the USB2 bus on the production host. These profiles
 # keep all three devices within the available bandwidth.
@@ -14,9 +22,10 @@ streams:
   color:
     width: 640
     height: 480
-    # 15Hz is the stable three-camera profile on the production USB2 bus.
-    fps: 15
-    format: MJPG
+    # Uncompressed YUYV avoids persistent MJPEG frame tearing on the right
+    # Gemini 305. At 640x480@10, all three streams remain within USB2 headroom.
+    fps: 10
+    format: YUYV
   depth:
     # Gemini 305 interprets these as the sensor profile before hardware
     # decimation. 640x480 with factor 2 publishes 320x240 depth images.

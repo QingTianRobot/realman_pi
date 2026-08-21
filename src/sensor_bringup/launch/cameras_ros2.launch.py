@@ -31,6 +31,12 @@ def _load_defaults():
         "left_serial": str(cameras.get("left", {}).get("serial", "")),
         "middle_serial": str(cameras.get("middle", {}).get("serial", "")),
         "right_serial": str(cameras.get("right", {}).get("serial", "")),
+        "left_color_auto_exposure": "true"
+        if cameras.get("left", {}).get("color", {}).get("auto_exposure", True)
+        else "false",
+        "left_color_exposure": str(
+            cameras.get("left", {}).get("color", {}).get("exposure", -1)
+        ),
         "color_width": str(color.get("width", 640)),
         "color_height": str(color.get("height", 480)),
         "color_fps": str(color.get("fps", 30)),
@@ -96,6 +102,13 @@ def generate_launch_description():
         DeclareLaunchArgument("left_serial", default_value=defaults["left_serial"]),
         DeclareLaunchArgument("middle_serial", default_value=defaults["middle_serial"]),
         DeclareLaunchArgument("right_serial", default_value=defaults["right_serial"]),
+        DeclareLaunchArgument(
+            "left_color_auto_exposure",
+            default_value=defaults["left_color_auto_exposure"],
+        ),
+        DeclareLaunchArgument(
+            "left_color_exposure", default_value=defaults["left_color_exposure"]
+        ),
         DeclareLaunchArgument("use_left", default_value="true"),
         DeclareLaunchArgument("use_middle", default_value="true"),
         DeclareLaunchArgument("use_right", default_value="true"),
@@ -138,7 +151,12 @@ def generate_launch_description():
         _camera_include(
             "left",
             LaunchConfiguration("left_serial"),
-            {},
+            {
+                "enable_color_auto_exposure": LaunchConfiguration(
+                    "left_color_auto_exposure"
+                ),
+                "color_exposure": LaunchConfiguration("left_color_exposure"),
+            },
             IfCondition(LaunchConfiguration("use_left")),
             0.0,
         ),

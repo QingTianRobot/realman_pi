@@ -21,6 +21,10 @@ x-realman-common: &realman-common
     # Humble hosts using the same domain. Firewalls must permit DDS UDP traffic.
     ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
     ROS_LOCALHOST_ONLY: ${ROS_LOCALHOST_ONLY:-0}
+    # The host Orbbec overlay and the container can carry different Fast DDS
+    # patch versions. Force UDP so image data does not select an incompatible
+    # same-host shared-memory transport after discovery succeeds.
+    FASTDDS_BUILTIN_TRANSPORTS: ${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
     # The launch file scans this path/glob and waits when it is not present.
@@ -38,6 +42,7 @@ x-rm65-rviz-common: &rm65-rviz-common
   environment:
     ROS_DOMAIN_ID: ${ROS_DOMAIN_ID:-0}
     ROS_LOCALHOST_ONLY: ${ROS_LOCALHOST_ONLY:-0}
+    FASTDDS_BUILTIN_TRANSPORTS: ${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
     REALMAN_JOY_DEVICE: ${REALMAN_JOY_DEVICE:-auto}
@@ -130,6 +135,9 @@ services:
       # Web control persists operator-created records here when enabled; keep
       # all other launch/config YAML read-only inside the container.
       - ./config/web-control/joint-records:/opt/rm65_ws/config/web-control/joint-records:rw
+      # The directory mount lets the calibration node atomically replace the
+      # layout and create its .bak file. Node code writes only three_robots.yaml.
+      - ./config/ros:/opt/rm65_ws/config/ros:rw
       - ./logs:/opt/rm65_ws/logs
       - /tmp/.X11-unix:/tmp/.X11-unix:rw
       - ${XAUTHORITY:-/dev/null}:/tmp/.Xauthority:ro
@@ -151,6 +159,8 @@ services:
       - use_gui:=${REALMAN_USE_GUI:-false}
       - use_rviz:=${REALMAN_USE_RVIZ:-false}
       - start_web_control:=${REALMAN_START_WEB_CONTROL:-false}
+      - start_camera_calibration:=${REALMAN_START_CAMERA_CALIBRATION:-false}
+      - update_layout_after_calibration:=${REALMAN_UPDATE_LAYOUT_AFTER_CALIBRATION:-true}
       - wait_for_joy_device:=${REALMAN_WAIT_FOR_JOY_DEVICE:-false}
       - joy_device_path:=${REALMAN_JOY_DEVICE:-auto}
       - joy_poll_interval:=${REALMAN_JOY_POLL_INTERVAL:-1.0}
@@ -158,6 +168,7 @@ services:
       - coordinates_config_file:=${REALMAN_COORDINATES_CONFIG_FILE:-/opt/rm65_ws/config/ros/realman_coordinates.yaml}
       - motion_config_file:=${REALMAN_MOTION_CONFIG_FILE:-/opt/rm65_ws/config/ros/realman_motion.yaml}
       - web_control_config_file:=${REALMAN_WEB_CONTROL_CONFIG_FILE:-/opt/rm65_ws/config/ros/realman_web_control.yaml}
+      - camera_calibration_config_file:=${REALMAN_CAMERA_CALIBRATION_CONFIG_FILE:-/opt/rm65_ws/config/ros/camera_calibration.yaml}
       - joint_record_dir:=${REALMAN_JOINT_RECORD_DIR:-/opt/rm65_ws/config/web-control/joint-records}
 
   # Headless remote-debug target. Publish sensor_msgs/Joy from another Humble
@@ -169,6 +180,7 @@ services:
       # it needs write access only to confirmed joint record files.
       - ./config:/opt/rm65_ws/config:ro
       - ./config/web-control/joint-records:/opt/rm65_ws/config/web-control/joint-records:rw
+      - ./config/ros:/opt/rm65_ws/config/ros:rw
       - ./logs:/opt/rm65_ws/logs
     # Keep the production ROS graph available after host reboot, Docker daemon
     # restart, or an unexpected launch/container exit. Operators can still stop
@@ -183,6 +195,8 @@ services:
       - use_gui:=false
       - use_rviz:=false
       - start_web_control:=${REALMAN_START_WEB_CONTROL:-false}
+      - start_camera_calibration:=${REALMAN_START_CAMERA_CALIBRATION:-false}
+      - update_layout_after_calibration:=${REALMAN_UPDATE_LAYOUT_AFTER_CALIBRATION:-true}
       - joint_record_dir:=${REALMAN_JOINT_RECORD_DIR:-/opt/rm65_ws/config/web-control/joint-records}
 
   # Browser action console. It joins an existing ROS graph and serves the

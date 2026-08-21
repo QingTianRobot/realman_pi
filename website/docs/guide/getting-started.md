@@ -137,12 +137,18 @@ USB2 总线上；三路 Orbbec 使用 `320x240@15` 深度低带宽档可正常�
 
 需要 ROS image topic 时使用官方 Orbbec ROS2 驱动。`rm65_camera_ros2` 会先停止 SDK 推流，
 source ROS2 Humble、Orbbec 和本仓库工作区，然后从 `config/ros/cameras_ros2.yaml` 按串号
-启动三台 Gemini 305。默认使用 USB2 兼容的 `640x480@15 MJPG` 彩色；深度向驱动传入
+启动三台 Gemini 305。默认使用 USB2 兼容的 `640x480@10 YUYV` 彩色；YUYV 用于规避右侧
+设备在 USB2/MJPEG 下的持续帧撕裂；深度向驱动传入
 `640x480@15 Y16` 和硬件抽取系数 `2`，实际发布 `320x240@15`。点云关闭；每次运行的
 官方节点日志写入 `logs/<timestamp>/`。三台相机是独立设备，配置默认关闭帧同步、触发输出和
 软件触发；启用 wrapper 默认同步参数会导致后启动的 USB2 设备只有 publisher 而没有图像帧。
 三台 Orbbec 与 D435 共用 USB2 root hub 时，还需将生产机 `usbfs_memory_mb` 调到至少 `256`；
 启动函数会检查该值并在过小时打印临时和持久化修复命令。
+`cameras.left.color` 固定左侧相机为 3 ms 曝光，以避免反光标定板在自动曝光下过曝；当现场光照
+改变时应调整该配置，而不是降低 ChArUco 的最小角点数。
+生产机的 Orbbec 工作区与 Docker 镜像可能使用不同的 Fast DDS 补丁版本；项目默认从 `.env`
+加载 `FASTDDS_BUILTIN_TRANSPORTS=UDPv4`，避免 DDS 发现到 topic 后选择不兼容的同机共享内存。
+不要将它改回 `DEFAULT`，除非已验证宿主与容器能稳定互收 Image 和 `CameraInfo`。
 wrapper 2.7.6 不能直接用 `320x240` 作为 Gemini 305 的原始深度 profile，否则即使设备枚举
 列表显示该档也会报告 profile 不匹配。
 
@@ -211,7 +217,7 @@ rm65_docker_camera_rviz_stop
 生产机和笔记本必须使用完全相同的 `ROS_DOMAIN_ID`；日常只改 `.env`，不需要在每条命令后
 追加 domain 参数。`rm65_docker_camera_rviz [domain]` 仍保留临时覆盖能力。若 RViz 窗口打开但
 图像为空，先在笔记本执行 `ros2 topic list | grep '/camera_.*color/image_raw'`，再检查两端
-`ROS_LOCALHOST_ONLY=0`、DDS UDP/组播和防火墙设置。专用相机 RViz 只显示三路彩色图像，不加载
+`ROS_LOCALHOST_ONLY=0`、`FASTDDS_BUILTIN_TRANSPORTS=UDPv4`、DDS UDP/组播和防火墙设置。专用相机 RViz 只显示三路彩色图像，不加载
 深度 topic。不要在笔记本执行 `rm65_camera_ros2`，否则它会尝试直接占用笔记本的 USB 相机设备。
 
 两套相机节点不能同时打开 USB 设备。RealSense D435 在现有 USB2 拓扑下仍无法稳定出帧，

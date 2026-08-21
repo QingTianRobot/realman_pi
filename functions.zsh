@@ -500,6 +500,9 @@ rm65_camera_ros2() {
   _rm65_check_camera_usbfs_memory
   export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
   export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
+  # The Orbbec overlay runs on the host while calibration runs in Docker. UDP
+  # keeps Image data interoperable when their Fast DDS shared-memory ABIs differ.
+  export FASTDDS_BUILTIN_TRANSPORTS="${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}"
   _rm65_require_command ros2 || return
   if ! command ros2 pkg prefix orbbec_camera >/dev/null 2>&1; then
     print -u2 -r -- "rm65: orbbec_camera is not in the sourced ROS 2 environment"

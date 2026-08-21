@@ -11,7 +11,7 @@ from launch_ros.actions import Node
 def generate_launch_description():
     package_share = Path(get_package_share_directory("realman_web_control"))
     description_share = Path(get_package_share_directory("rm65_description"))
-    config_root = Path(os.environ.get("REALMAN_CONFIG_ROOT", package_share / "config"))
+    config_root = Path(os.environ.get("REALMAN_CONFIG_ROOT", Path.cwd() / "config"))
 
     return LaunchDescription(
         [
@@ -40,6 +40,11 @@ def generate_launch_description():
                 default_value=str(config_root / "web-control" / "joint-records"),
                 description="Writable Web control joint target records under root config/.",
             ),
+            DeclareLaunchArgument(
+                "calibration_config_file",
+                default_value=str(config_root / "ros" / "camera_calibration.yaml"),
+                description="ChArUco calibration service configuration.",
+            ),
             Node(
                 package="realman_web_control",
                 executable="web_control_node",
@@ -54,6 +59,7 @@ def generate_launch_description():
                         "joint_record_dir": LaunchConfiguration("joint_record_dir"),
                         "description_root": str(description_share),
                         "static_root": str(package_share / "static"),
+                        "calibration_config_file": LaunchConfiguration("calibration_config_file"),
                     }
                 ],
             ),

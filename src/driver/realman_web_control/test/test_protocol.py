@@ -48,6 +48,27 @@ def test_unknown_messages_and_oversized_payloads_are_rejected():
         parse_message("x" * 32, max_bytes=16)
 
 
+def test_calibration_messages_require_all_three_arms():
+    capture = parse_message(
+        '{"type":"capture_calibration_sample","request_id":"cap-1",'
+        '"session_id":"","start_new_session":true,"arm_ids":["l","m","r"]}'
+    )
+    assert capture["arm_ids"] == ["l", "m", "r"]
+    solved = parse_message(
+        '{"type":"solve_calibration","request_id":"solve-1","session_id":"session-1"}'
+    )
+    assert solved == {
+        "type": "solve_calibration",
+        "request_id": "solve-1",
+        "session_id": "session-1",
+    }
+    with pytest.raises(ProtocolError, match="arm_ids"):
+        parse_message(
+            '{"type":"capture_calibration_sample","request_id":"cap-2",'
+            '"arm_ids":["l"]}'
+        )
+
+
 def test_kinematics_messages_are_normalized():
     current = parse_message(
         '{"type":"get_current_pose","request_id":"pose-1","arm":"m"}'

@@ -84,8 +84,8 @@ def _request_id(message: dict[str, Any], *, required: bool = True) -> str:
 
 
 def _reference(goal: dict[str, Any]) -> tuple[int, str]:
-    reference_type = _integer(goal.get("reference_type"), "goal.reference_type", 0, 2)
-    reference_name = _string(goal.get("reference_name"), "goal.reference_name", maximum=32)
+    reference_type = _integer(goal.get("reference_type"), "goal.reference_type", 0, 3)
+    reference_name = _string(goal.get("reference_name"), "goal.reference_name", maximum=128)
     return reference_type, reference_name
 
 
@@ -115,13 +115,45 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
     if message_type == "ping":
         return {"type": "ping"}
 
+    if message_type == "capture_calibration_sample":
+        request_id = _request_id(message)
+        session_id = _string(message.get("session_id", ""), "session_id", maximum=128, allow_empty=True)
+        start_new_session = message.get("start_new_session", False)
+        if not isinstance(start_new_session, bool):
+            raise ProtocolError("invalid_field", "start_new_session must be a boolean", request_id)
+        raw_arms = message.get("arm_ids", ["l", "m", "r"])
+        if not isinstance(raw_arms, list) or set(raw_arms) != ARMS or len(raw_arms) != 3:
+            raise ProtocolError("invalid_field", "arm_ids must contain l, m, and r", request_id)
+        return {
+            "type": message_type,
+            "request_id": request_id,
+            "session_id": session_id,
+            "start_new_session": start_new_session,
+            "arm_ids": [str(arm) for arm in raw_arms],
+        }
+
+    if message_type == "solve_calibration":
+        return {
+            "type": message_type,
+            "request_id": _request_id(message),
+            "session_id": _string(message.get("session_id", ""), "session_id", maximum=128, allow_empty=True),
+        }
+
     arm = _arm(message)
     if message_type == "get_current_pose":
-        return {
+        normalized = {
             "type": message_type,
             "request_id": _request_id(message),
             "arm": arm,
         }
+        if "reference" in message:
+            reference = _mapping(message.get("reference"), "reference")
+            reference_type, reference_name = _reference(reference)
+            normalized["reference"] = {
+                "reference_type": reference_type,
+                "reference_name": reference_name,
+            }
+        return normalized
     if message_type == "list_joint_records":
         return {
             "type": message_type,
@@ -136,13 +168,21 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
             "label": _string(message.get("label"), "label", maximum=64),
         }
     if message_type == "apply_joint_record":
-        return {
+        normalized = {
             "type": message_type,
             "request_id": _request_id(message),
             "arm": arm,
             "record_id": _string(message.get("record_id"), "record_id", maximum=64),
             "command": _integer(message.get("command"), "command", 0, 2),
         }
+        if "reference" in message:
+            reference = _mapping(message.get("reference"), "reference")
+            reference_type, reference_name = _reference(reference)
+            normalized["reference"] = {
+                "reference_type": reference_type,
+                "reference_name": reference_name,
+            }
+        return normalized
     if message_type == "solve_ik":
         request_id = _request_id(message)
         goal = _mapping(message.get("goal"), "goal")

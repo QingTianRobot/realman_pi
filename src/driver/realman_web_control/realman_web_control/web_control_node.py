@@ -4,27 +4,43 @@ from __future__ import annotations
 
 import json
 import math
+import os
+from pathlib import Path
 import queue
 from typing import Any
+from urllib.parse import quote
+
+import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import TwistStamped
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.time import Time
 from realman_msgs.action import CartesianVelocity, ExecuteMotion, ExecuteTrajectory
 from realman_msgs.msg import MotionWaypoint
-from realman_msgs.srv import ForwardKinematics, GetCurrentPose, RecoverMotion, SolveIk
+from realman_msgs.srv import (
+    CaptureCalibrationSample,
+    ForwardKinematics,
+    GetCurrentPose,
+    RecoverMotion,
+    SolveCalibration,
+    SolveIk,
+)
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
+from tf2_ros import Buffer, TransformListener
 
 from .action_bridge import ActionRecord, action_event, assign_fields, message_to_json
 from .joint_records import JointRecordStore
 from .model_manifest import build_manifest
 from .protocol import ProtocolError
+from .tf_pose import transform_stamped_pose
 from .web_server import WebControlServer, load_server_config
 
 
@@ -36,30 +52,40 @@ class WebControlNode(Node):
 
     def __init__(self) -> None:
         super().__init__("realman_web_control")
-        config_root = get_package_share_directory("realman_web_control")
+        package_share = get_package_share_directory("realman_web_control")
+        config_root = Path(
+            os.environ.get("REALMAN_CONFIG_ROOT", str(Path.cwd() / "config"))
+        )
         description_root = get_package_share_directory("rm65_description")
         self.declare_parameter(
             "web_control_config_file",
-            f"{config_root}/config/ros/realman_web_control.yaml",
+            str(config_root / "ros" / "realman_web_control.yaml"),
         )
         self.declare_parameter(
             "layout_config_file",
-            f"{config_root}/config/ros/three_robots.yaml",
+            str(config_root / "ros" / "three_robots.yaml"),
         )
         self.declare_parameter(
             "motion_config_file",
-            f"{config_root}/config/ros/realman_motion.yaml",
+            str(config_root / "ros" / "realman_motion.yaml"),
         )
         self.declare_parameter(
             "coordinates_config_file",
-            f"{config_root}/config/ros/realman_coordinates.yaml",
+            str(config_root / "ros" / "realman_coordinates.yaml"),
         )
         self.declare_parameter(
             "joint_record_dir",
-            f"{config_root}/config/web-control/joint-records",
+            str(config_root / "web-control" / "joint-records"),
         )
         self.declare_parameter("description_root", description_root)
-        self.declare_parameter("static_root", f"{config_root}/static")
+        self.declare_parameter("static_root", f"{package_share}/static")
+        self.declare_parameter(
+            "calibration_config_file",
+            os.environ.get(
+                "REALMAN_CAMERA_CALIBRATION_CONFIG_FILE",
+                f"{os.environ.get('REALMAN_CONFIG_ROOT', '/opt/rm65_ws/config')}/ros/camera_calibration.yaml",
+            ),
+        )
 
         web_config_file = self._parameter("web_control_config_file")
         layout_file = self._parameter("layout_config_file")
@@ -68,6 +94,10 @@ class WebControlNode(Node):
         joint_record_dir = self._parameter("joint_record_dir")
         description_root = self._parameter("description_root")
         static_root = self._parameter("static_root")
+        calibration_config_file = self._parameter("calibration_config_file")
+        calibration_log_root = os.environ.get(
+            "REALMAN_LOG_ROOT", str(config_root.parent / "logs")
+        )
         web_config = load_server_config(web_config_file)
         self._manifest = build_manifest(
             layout_file,
@@ -79,6 +109,10 @@ class WebControlNode(Node):
         self._commands: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue(maxsize=2048)
         self._actions: dict[tuple[str, str], ActionRecord] = {}
         self._coordinate_state: dict[str, dict[str, Any]] = {}
+        self._camera_health: dict[str, Any] = {"type": "camera_health", "inputs": []}
+        self._tf_buffer = Buffer()
+        self._tf_listener = TransformListener(self._tf_buffer, self, spin_thread=False)
+        self._tf_frames_by_arm: dict[str, list[dict[str, Any]]] = {arm: [] for arm in ARMS}
         self._joint_degrees: dict[str, list[float]] = {}
         self._joint_records = JointRecordStore(joint_record_dir)
         self._callback_group = ReentrantCallbackGroup()
@@ -146,7 +180,26 @@ class WebControlNode(Node):
             arm: self.create_client(SolveIk, f"/{arm}/solve_ik", callback_group=self._callback_group)
             for arm in ARMS
         }
+        self._capture_calibration_client = self.create_client(
+            CaptureCalibrationSample,
+            "/camera_calibration/capture_sample",
+            callback_group=self._callback_group,
+        )
+        self._solve_calibration_client = self.create_client(
+            SolveCalibration,
+            "/camera_calibration/solve",
+            callback_group=self._callback_group,
+        )
         self._subscriptions = []
+        self._subscriptions.append(
+            self.create_subscription(
+                String,
+                "/camera_calibration/camera_health",
+                self._camera_health_message,
+                10,
+                callback_group=self._callback_group,
+            )
+        )
         for arm in ARMS:
             self._subscriptions.append(
                 self.create_subscription(
@@ -181,11 +234,18 @@ class WebControlNode(Node):
             manifest=self._manifest,
             static_root=static_root,
             description_root=description_root,
+            calibration_config_file=calibration_config_file,
+            calibration_log_root=calibration_log_root,
             on_command=self._enqueue_command,
             on_client_connected=self._send_cached_state,
             logger=self.get_logger(),
         )
         self._server.start()
+        self._tf_timer = self.create_timer(
+            0.5,
+            self._publish_tf_frames,
+            callback_group=self._callback_group,
+        )
         self._command_timer = self.create_timer(
             0.02,
             self._drain_commands,
@@ -258,8 +318,236 @@ class WebControlNode(Node):
             self._software_stop(client_id, message)
         elif message_type == "recover_motion":
             self._recover_motion(client_id, message)
+        elif message_type == "capture_calibration_sample":
+            self._capture_calibration_sample(client_id, message)
+        elif message_type == "solve_calibration":
+            self._solve_calibration(client_id, message)
         else:
             raise ProtocolError("unsupported_type", f"unsupported message type: {message_type}")
+
+    def _capture_calibration_sample(self, client_id: str, message: dict[str, Any]) -> None:
+        client = self._capture_calibration_client
+        if not client.service_is_ready():
+            raise ProtocolError(
+                "calibration_unavailable",
+                "/camera_calibration/capture_sample is not available",
+                message["request_id"],
+            )
+        request = CaptureCalibrationSample.Request()
+        request.session_id = message["session_id"]
+        request.start_new_session = message["start_new_session"]
+        request.arm_ids = message["arm_ids"]
+        future = client.call_async(request)
+        future.add_done_callback(
+            lambda completed: self._calibration_capture_response(
+                client_id, message["request_id"], completed
+            )
+        )
+
+    def _calibration_capture_response(self, client_id: str, request_id: str, future: Any) -> None:
+        try:
+            response = future.result()
+            event = {
+                "type": "calibration_capture_result",
+                "request_id": request_id,
+                "success": bool(response.success),
+                "session_id": response.session_id,
+                "batch_id": response.batch_id,
+                "captured_arm_ids": list(response.captured_arm_ids),
+                "sample_counts": list(response.sample_counts),
+                "sample_ids": list(response.sample_ids),
+                "image_paths": list(response.image_paths),
+                "preview_image_paths": [
+                    self._calibration_preview_url(path)
+                    for path in response.preview_image_paths
+                ],
+                "latest_image_paths": [
+                    self._calibration_preview_url(path)
+                    for path in response.latest_image_paths
+                ],
+                "detection_statuses": list(response.detection_statuses),
+                "detection_messages": list(response.detection_messages),
+                "message": response.message,
+            }
+        except Exception as error:
+            self.get_logger().error(f"Web calibration capture failed: {error}")
+            event = {
+                "type": "calibration_capture_result",
+                "request_id": request_id,
+                "success": False,
+                "session_id": "",
+                "batch_id": "",
+                "captured_arm_ids": [],
+                "sample_counts": [],
+                "sample_ids": [],
+                "image_paths": [],
+                "preview_image_paths": [],
+                "latest_image_paths": [],
+                "detection_statuses": [],
+                "detection_messages": [],
+                "message": str(error),
+            }
+        self._server.send_event(event, client_id)
+
+    def _calibration_preview_url(self, path: str) -> str:
+        root = Path(os.environ.get("REALMAN_LOG_ROOT", "/opt/rm65_ws/logs")).resolve()
+        candidate = Path(path).resolve()
+        try:
+            relative = candidate.relative_to(root)
+        except ValueError:
+            return ""
+        return "/api/calibration/preview/" + quote(relative.as_posix(), safe="/")
+
+    def _solve_calibration(self, client_id: str, message: dict[str, Any]) -> None:
+        client = self._solve_calibration_client
+        if not client.service_is_ready():
+            raise ProtocolError(
+                "calibration_unavailable",
+                "/camera_calibration/solve is not available",
+                message["request_id"],
+            )
+        request = SolveCalibration.Request()
+        request.session_id = message["session_id"]
+        future = client.call_async(request)
+        future.add_done_callback(
+            lambda completed: self._calibration_solve_response(
+                client_id, message["request_id"], completed
+            )
+        )
+
+    def _calibration_solve_response(self, client_id: str, request_id: str, future: Any) -> None:
+        try:
+            response = future.result()
+            event = {
+                "type": "calibration_solve_result",
+                "request_id": request_id,
+                "success": bool(response.success),
+                "all_arms_solved": bool(response.all_arms_solved),
+                "session_id": response.session_id,
+                "result_file": response.result_file,
+                "result_json": response.result_json,
+                "mean_reprojection_error_px": float(response.mean_reprojection_error_px),
+                "sample_counts": list(response.sample_counts),
+                "layout_updated": bool(response.layout_updated),
+                "layout_backup_file": response.layout_backup_file,
+                "message": response.message,
+            }
+        except Exception as error:
+            self.get_logger().error(f"Web calibration solve failed: {error}")
+            event = {
+                "type": "calibration_solve_result",
+                "request_id": request_id,
+                "success": False,
+                "all_arms_solved": False,
+                "session_id": "",
+                "result_file": "",
+                "result_json": "",
+                "mean_reprojection_error_px": 0.0,
+                "sample_counts": [],
+                "layout_updated": False,
+                "layout_backup_file": "",
+                "message": str(error),
+            }
+        self._server.send_event(event, client_id)
+
+    def _tf_frame_ids(self) -> set[str]:
+        """Return frame names currently known by the shared TF buffer."""
+
+        try:
+            document = yaml.safe_load(self._tf_buffer.all_frames_as_yaml()) or {}
+        except Exception as error:
+            self.get_logger().debug(f"TF frame graph is not ready: {error}")
+            return set()
+        if not isinstance(document, dict):
+            return set()
+        return {
+            str(frame).lstrip("/")
+            for frame in document
+            if isinstance(frame, str) and frame.strip("/")
+        }
+
+    def _tf_can_transform(self, target_frame: str, source_frame: str) -> bool:
+        try:
+            return bool(
+                self._tf_buffer.can_transform(
+                    target_frame,
+                    source_frame,
+                    Time(),
+                    timeout=Duration(seconds=0.0),
+                )
+            )
+        except Exception:
+            return False
+
+    def _frames_for_arm(self, arm: str) -> list[dict[str, Any]]:
+        base_frame = f"{arm}/base_link"
+        return [
+            {"type": 3, "name": frame_id, "frame_id": frame_id}
+            for frame_id in sorted(self._tf_frame_ids())
+            if frame_id == base_frame or self._tf_can_transform(base_frame, frame_id)
+        ]
+
+    def _publish_tf_frames(self) -> None:
+        for arm in ARMS:
+            frames = self._frames_for_arm(arm)
+            if frames == self._tf_frames_by_arm[arm]:
+                continue
+            self._tf_frames_by_arm[arm] = frames
+            self._server.send_event({"type": "tf_frames", "arm": arm, "frames": frames})
+
+    def _send_tf_frames(self, client_id: str) -> None:
+        for arm in ARMS:
+            self._server.send_event(
+                {"type": "tf_frames", "arm": arm, "frames": self._tf_frames_by_arm[arm]},
+                client_id,
+            )
+
+    def _tf_reference_frame(self, arm: str, reference_name: str, request_id: str) -> str:
+        frame_id = reference_name.lstrip("/")
+        if not frame_id or len(frame_id) > 128:
+            raise ProtocolError("coordinate_unavailable", "TF reference name is invalid", request_id)
+        base_frame = f"{arm}/base_link"
+        if not self._tf_can_transform(base_frame, frame_id):
+            raise ProtocolError(
+                "coordinate_unavailable",
+                f"TF frame {frame_id!r} is not connected to {base_frame!r}",
+                request_id,
+            )
+        return frame_id
+
+    def _resolve_reference(
+        self,
+        arm: str,
+        reference_type: int,
+        reference_name: str,
+        request_id: str,
+    ) -> tuple[int, str, str | None]:
+        """Resolve a web reference to driver fields and an optional TF frame."""
+
+        if reference_type == 3:
+            return 0, "base", self._tf_reference_frame(arm, reference_name, request_id)
+        goal = {"reference_type": reference_type, "reference_name": reference_name}
+        self._validate_reference(arm, goal)
+        return reference_type, reference_name, None
+
+    def _transform_pose(
+        self,
+        target_frame: str,
+        source_frame: str,
+        position: Any,
+        quaternion: Any,
+    ) -> tuple[list[float], list[float]]:
+        if target_frame == source_frame:
+            return list(position), list(quaternion)
+        transform = self._tf_buffer.lookup_transform(target_frame, source_frame, Time())
+        transformed_position, transformed_quaternion = transform_stamped_pose(
+            transform, position, quaternion
+        )
+        return list(transformed_position), list(transformed_quaternion)
+
+    @staticmethod
+    def _reference_event(reference_type: int, reference_name: str, frame_id: str | None) -> dict[str, Any]:
+        return {"type": reference_type, "name": reference_name, "frame_id": frame_id or ""}
 
     def _get_current_pose(self, client_id: str, message: dict[str, Any]) -> None:
         arm = message["arm"]
@@ -270,14 +558,25 @@ class WebControlNode(Node):
                 f"/{arm}/get_current_pose is not available",
                 message["request_id"],
             )
-        reference_type, reference_name = self._default_reference(arm)
+        selected = message.get("reference") or {}
+        default_type, default_name = self._default_reference(arm)
+        reference_type = int(selected.get("reference_type", default_type))
+        reference_name = str(selected.get("reference_name", default_name))
+        driver_type, driver_name, tf_frame = self._resolve_reference(
+            arm, reference_type, reference_name, message["request_id"]
+        )
         request = GetCurrentPose.Request()
-        request.reference_type = reference_type
-        request.reference_name = reference_name
+        request.reference_type = driver_type
+        request.reference_name = driver_name
         future = client.call_async(request)
         future.add_done_callback(
             lambda completed: self._current_pose_response(
-                client_id, arm, message["request_id"], completed
+                client_id,
+                arm,
+                message["request_id"],
+                completed,
+                tf_frame,
+                self._reference_event(reference_type, reference_name, tf_frame),
             )
         )
 
@@ -291,10 +590,20 @@ class WebControlNode(Node):
                 f"/{arm}/solve_ik is not available",
                 message["request_id"],
             )
-        reference_type, reference_name = self._default_reference(arm)
-        goal["reference_type"] = reference_type
-        goal["reference_name"] = reference_name
-        self._validate_reference(arm, goal)
+        reference_type = int(goal["reference_type"])
+        reference_name = str(goal["reference_name"])
+        driver_type, driver_name, tf_frame = self._resolve_reference(
+            arm, reference_type, reference_name, message["request_id"]
+        )
+        if reference_type == 3:
+            goal["pose_position_m"], goal["pose_quaternion_wxyz"] = self._transform_pose(
+                f"{arm}/base_link",
+                tf_frame or "",
+                goal["pose_position_m"],
+                goal["pose_quaternion_wxyz"],
+            )
+        goal["reference_type"] = driver_type
+        goal["reference_name"] = driver_name
         request = assign_fields(SolveIk.Request(), goal)
         future = client.call_async(request)
         future.add_done_callback(
@@ -304,10 +613,25 @@ class WebControlNode(Node):
         )
 
     def _current_pose_response(
-        self, client_id: str, arm: str, request_id: str, future: Any
+        self,
+        client_id: str,
+        arm: str,
+        request_id: str,
+        future: Any,
+        tf_frame: str | None,
+        reference: dict[str, Any],
     ) -> None:
         try:
             response = future.result()
+            position = message_to_json(response.pose_position_m)
+            quaternion = message_to_json(response.pose_quaternion_wxyz)
+            if response.success and tf_frame:
+                position, quaternion = self._transform_pose(
+                    tf_frame,
+                    f"{arm}/base_link",
+                    position,
+                    quaternion,
+                )
             event = {
                 "type": "kinematics_result",
                 "operation": "get_current_pose",
@@ -316,8 +640,9 @@ class WebControlNode(Node):
                 "success": bool(response.success),
                 "api2_status": int(response.api2_status),
                 "current_joint_degrees": message_to_json(response.current_joint_degrees),
-                "pose_position_m": message_to_json(response.pose_position_m),
-                "pose_quaternion_wxyz": message_to_json(response.pose_quaternion_wxyz),
+                "pose_position_m": position,
+                "pose_quaternion_wxyz": quaternion,
+                "reference": reference,
                 "message": response.message,
             }
         except Exception as error:
@@ -332,6 +657,7 @@ class WebControlNode(Node):
                 "current_joint_degrees": [],
                 "pose_position_m": [],
                 "pose_quaternion_wxyz": [],
+                "reference": reference,
                 "message": str(error),
             }
         self._server.send_event(event, client_id)
@@ -425,15 +751,16 @@ class WebControlNode(Node):
                 f"/{arm}/forward_kinematics is not available",
                 message["request_id"],
             )
-        reference_type, reference_name = self._default_reference(arm)
-        goal = {
-            "reference_type": reference_type,
-            "reference_name": reference_name,
-        }
-        self._validate_reference(arm, goal)
+        selected = message.get("reference") or {}
+        default_type, default_name = self._default_reference(arm)
+        reference_type = int(selected.get("reference_type", default_type))
+        reference_name = str(selected.get("reference_name", default_name))
+        driver_type, driver_name, tf_frame = self._resolve_reference(
+            arm, reference_type, reference_name, message["request_id"]
+        )
         request = ForwardKinematics.Request()
-        request.reference_type = reference_type
-        request.reference_name = reference_name
+        request.reference_type = driver_type
+        request.reference_name = driver_name
         request.joint_degrees = list(record.joint_degrees)
         future = client.call_async(request)
         future.add_done_callback(
@@ -443,6 +770,8 @@ class WebControlNode(Node):
                 message["request_id"],
                 message["command"],
                 record.event(),
+                tf_frame,
+                self._reference_event(reference_type, reference_name, tf_frame),
                 completed,
             )
         )
@@ -454,10 +783,21 @@ class WebControlNode(Node):
         request_id: str,
         command: int,
         record: dict[str, Any],
+        tf_frame: str | None,
+        reference: dict[str, Any],
         future: Any,
     ) -> None:
         try:
             response = future.result()
+            position = message_to_json(response.pose_position_m)
+            quaternion = message_to_json(response.pose_quaternion_wxyz)
+            if response.success and tf_frame:
+                position, quaternion = self._transform_pose(
+                    tf_frame,
+                    f"{arm}/base_link",
+                    position,
+                    quaternion,
+                )
             event = {
                 "type": "joint_record_applied",
                 "arm": arm,
@@ -467,8 +807,9 @@ class WebControlNode(Node):
                 "success": bool(response.success),
                 "api2_status": int(response.api2_status),
                 "joint_degrees": record["joint_degrees"],
-                "pose_position_m": message_to_json(response.pose_position_m),
-                "pose_quaternion_wxyz": message_to_json(response.pose_quaternion_wxyz),
+                "pose_position_m": position,
+                "pose_quaternion_wxyz": quaternion,
+                "reference": reference,
                 "message": response.message,
             }
         except Exception as error:
@@ -484,6 +825,7 @@ class WebControlNode(Node):
                 "joint_degrees": record["joint_degrees"],
                 "pose_position_m": [],
                 "pose_quaternion_wxyz": [],
+                "reference": reference,
                 "message": str(error),
             }
         self._server.send_event(event, client_id)
@@ -509,12 +851,26 @@ class WebControlNode(Node):
         self._coordinate_state[arm] = payload
         self._server.send_event(payload)
 
+    def _camera_health_message(self, message: String) -> None:
+        try:
+            payload = json.loads(message.data)
+        except json.JSONDecodeError as error:
+            self.get_logger().warn(f"invalid camera health state: {error}")
+            return
+        if payload.get("type") != "camera_health" or not isinstance(payload.get("inputs"), list):
+            self.get_logger().warn("ignoring invalid camera health state")
+            return
+        self._camera_health = payload
+        self._server.send_event(payload)
+
     def _send_cached_state(self, client_id: str) -> None:
+        self._server.send_event(self._camera_health, client_id)
         for arm in ARMS:
             state = self._coordinate_state.get(arm)
             if state is not None:
                 self._server.send_event(state, client_id)
             self._send_joint_records(client_id, arm)
+        self._send_tf_frames(client_id)
 
     def _default_reference(self, arm: str) -> tuple[int, str]:
         state = self._coordinate_state.get(arm, {})
@@ -529,10 +885,20 @@ class WebControlNode(Node):
     def _execute_motion(self, client_id: str, message: dict[str, Any]) -> None:
         arm = message["arm"]
         goal_values = message["goal"]
-        reference_type, reference_name = self._default_reference(arm)
-        goal_values["reference_type"] = reference_type
-        goal_values["reference_name"] = reference_name
-        self._validate_reference(arm, goal_values)
+        reference_type = int(goal_values["reference_type"])
+        reference_name = str(goal_values["reference_name"])
+        driver_type, driver_name, tf_frame = self._resolve_reference(
+            arm, reference_type, reference_name, message["request_id"]
+        )
+        if reference_type == 3 and goal_values["command"] != ExecuteMotion.Goal.MOVEJ:
+            goal_values["pose_position_m"], goal_values["pose_quaternion_wxyz"] = self._transform_pose(
+                f"{arm}/base_link",
+                tf_frame or "",
+                goal_values["pose_position_m"],
+                goal_values["pose_quaternion_wxyz"],
+            )
+        goal_values["reference_type"] = driver_type
+        goal_values["reference_name"] = driver_name
         if goal_values["command"] == ExecuteMotion.Goal.MOVEJ:
             for joint, value in zip(self._robots[arm]["joints"], goal_values["joint_degrees"]):
                 if not joint["lower_deg"] <= value <= joint["upper_deg"]:
@@ -568,10 +934,22 @@ class WebControlNode(Node):
     ) -> None:
         arm = message["arm"]
         goal_values = message["goal"]
-        reference_type, reference_name = self._default_reference(arm)
-        goal_values["reference_type"] = reference_type
-        goal_values["reference_name"] = reference_name
-        self._validate_reference(arm, goal_values)
+        reference_type = int(goal_values["reference_type"])
+        reference_name = str(goal_values["reference_name"])
+        driver_type, driver_name, tf_frame = self._resolve_reference(
+            arm, reference_type, reference_name, message["request_id"]
+        )
+        if reference_type == 3:
+            for waypoint in goal_values["waypoints"]:
+                if waypoint["command"] != MotionWaypoint.MOVEJ:
+                    waypoint["pose_position_m"], waypoint["pose_quaternion_wxyz"] = self._transform_pose(
+                        f"{arm}/base_link",
+                        tf_frame or "",
+                        waypoint["pose_position_m"],
+                        waypoint["pose_quaternion_wxyz"],
+                    )
+        goal_values["reference_type"] = driver_type
+        goal_values["reference_name"] = driver_name
         for index, waypoint in enumerate(goal_values["waypoints"]):
             if waypoint["command"] == MotionWaypoint.MOVEJ:
                 for joint, value in zip(

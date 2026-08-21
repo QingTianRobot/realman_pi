@@ -68,6 +68,7 @@ app.innerHTML = `
     <span id="connection" class="status-pill offline">OFFLINE</span>
     <span id="mode" class="status-pill ready">CONTROL READY</span>
     <span id="auth-button" class="status-pill ready">CONTROL OPEN</span>
+    <a href="/calibration.html" class="button ghost">相机标定</a>
     <button id="cancel-motion" class="button ghost" type="button" disabled>取消 Action</button>
     <button id="recover-motion" class="button secondary" type="button" disabled>恢复机械臂</button>
     <button id="stop-button" class="button danger" type="button" disabled>■ 软件停止</button>
@@ -100,6 +101,10 @@ app.innerHTML = `
             <label>Y<input id="pose-y" type="number" step="0.001" inputmode="decimal" /></label>
             <label>Z<input id="pose-z" type="number" step="0.001" inputmode="decimal" /></label>
           </div>
+          <div class="pose-reference-picker">
+            <label>参考坐标系<select id="pose-reference-frame"></select></label>
+          </div>
+          <div id="pose-sliders" class="pose-sliders" aria-label="XYZ position sliders"></div>
           <div class="target-field-label">四元数 WXYZ</div>
           <div class="pose-inputs quaternion-inputs">
             <label>W<input id="pose-qw" type="number" step="0.001" inputmode="decimal" /></label>
@@ -164,6 +169,8 @@ const selectedArmLabel = $("#selected-arm-label");
 const motionMode = $("#motion-mode");
 const jointTarget = $("#joint-target") as HTMLElement;
 const poseTarget = $("#pose-target") as HTMLElement;
+const poseReferenceFrame = $("#pose-reference-frame") as HTMLSelectElement;
+const poseSliders = $("#pose-sliders") as HTMLElement;
 const poseKinematicsActions = $("#pose-kinematics-actions") as HTMLElement;
 const fillCurrentPoseButton = $("#fill-current-pose") as HTMLButtonElement;
 const solveIkButton = $("#solve-ik") as HTMLButtonElement;
@@ -203,6 +210,9 @@ const currentJointsByArm: Partial<Record<ArmId, number[]>> = {};
 const targetJointsByArm: Partial<Record<ArmId, number[]>> = {};
 const targetEditedByArm: Partial<Record<ArmId, boolean>> = {};
 const poseTargetsByArm: Partial<Record<ArmId, string[]>> = {};
+const poseReferenceByArm: Partial<Record<ArmId, FrameState>> = {};
+const tfFramesByArm: Partial<Record<ArmId, FrameState[]>> = {};
+const poseSliderCentersByArm: Partial<Record<ArmId, number[]>> = {};
 const kinematicsStatusByArm: Partial<Record<ArmId, string>> = {};
 const activeKinematicsRequestByArm: Partial<Record<ArmId, string>> = {};
 const ikPreviewValidByArm: Partial<Record<ArmId, boolean>> = {};
@@ -229,9 +239,16 @@ function robotConfig(arm: ArmId) {
 }
 function requestId(prefix: string) { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`; }
 function canWrite() { return !readOnly && socket?.readyState === WebSocket.OPEN; }
+function displayNumber(value: number, digits = 2) {
+  return Number.isFinite(value) ? value.toFixed(digits) : "";
+}
+function displayValue(value: unknown, digits = 2) {
+  const number = Number(value);
+  return Number.isFinite(number) ? number.toFixed(digits) : String(value ?? "");
+}
 function referenceLabel(frame?: FrameState | null) {
   if (!frame) return "BASE / base";
-  const prefix = frame.type === 1 ? "WORK" : frame.type === 2 ? "TOOL" : "BASE";
+  const prefix = frame.type === 1 ? "WORK" : frame.type === 2 ? "TOOL" : frame.type === 3 ? "TF" : "BASE";
   return `${prefix} / ${frame.name}`;
 }
 function escapeHtml(value: string) {
@@ -277,11 +294,11 @@ function renderCoordinateState() {
   coordinateSummary.innerHTML = `
     <div class="coordinate-row"><span>MOVE</span><strong>${referenceLabel(state.preferred_reference)}</strong></div>
     <div class="coordinate-row"><span>TOOL</span><strong>${referenceLabel(state.tool)}</strong></div>
-    <div class="coordinate-meta">${state.tool?.controller_name ?? state.current_tool} ${state.tool?.payload_kg != null ? ` / ${state.tool.payload_kg.toFixed(3)} kg` : ""}</div>
-    <div class="coordinate-meta">${state.tool?.xyz_m ? `xyz ${state.tool.xyz_m.map((value) => value.toFixed(4)).join(", ")}` : ""}</div>
+    <div class="coordinate-meta">${state.tool?.controller_name ?? state.current_tool} ${state.tool?.payload_kg != null ? ` / ${displayNumber(state.tool.payload_kg)} kg` : ""}</div>
+    <div class="coordinate-meta">${state.tool?.xyz_m ? `xyz ${state.tool.xyz_m.map((value) => displayNumber(value)).join(", ")}` : ""}</div>
     <div class="coordinate-row"><span>WORK</span><strong>${referenceLabel(state.work)}</strong></div>
     <div class="coordinate-meta">${state.work?.controller_name ?? state.current_work}</div>
-    <div class="coordinate-meta">${state.work?.xyz_m ? `xyz ${state.work.xyz_m.map((value) => value.toFixed(4)).join(", ")}` : ""}</div>
+    <div class="coordinate-meta">${state.work?.xyz_m ? `xyz ${state.work.xyz_m.map((value) => displayNumber(value)).join(", ")}` : ""}</div>
   `;
 }
 function renderFleetStrip() {
@@ -328,12 +345,85 @@ function preferredReference() {
   if (state?.preferred_reference) return state.preferred_reference;
   return { type: 0, name: "base", frame_id: `${selectedArm}/base_link` };
 }
+function poseReference(arm: ArmId = selectedArm): FrameState {
+  if (poseReferenceByArm[arm]) return poseReferenceByArm[arm]!;
+  const state = coordinateStates[arm];
+  if (state?.preferred_reference) return state.preferred_reference;
+  return { type: 0, name: "base", frame_id: `${arm}/base_link` };
+}
+function configuredPoseReferences(arm: ArmId): FrameState[] {
+  const frames = robotConfig(arm).frames;
+  return Object.values(frames).map((frame) => ({
+    type: frame.type,
+    name: frame.name,
+    frame_id: frame.frame_id,
+  }));
+}
+function availablePoseReferences(arm: ArmId): FrameState[] {
+  const configured = configuredPoseReferences(arm);
+  const configuredIds = new Set(configured.map((frame) => frame.frame_id));
+  const tfFrames = (tfFramesByArm[arm] ?? []).filter((frame) => !configuredIds.has(frame.frame_id));
+  return [...configured, ...tfFrames];
+}
+function configurePoseReference() {
+  const references = availablePoseReferences(selectedArm);
+  const selected = poseReference(selectedArm);
+  poseReferenceFrame.innerHTML = references.map((frame) =>
+    `<option value="${escapeHtml(frame.frame_id ?? frame.name)}">${escapeHtml(referenceLabel(frame))}</option>`
+  ).join("");
+  const selectedId = selected.frame_id ?? selected.name;
+  if (references.some((frame) => (frame.frame_id ?? frame.name) === selectedId)) {
+    poseReferenceFrame.value = selectedId;
+  } else if (references[0]) {
+    poseReferenceFrame.value = references[0].frame_id ?? references[0].name;
+    poseReferenceByArm[selectedArm] = references[0];
+  }
+}
+function renderPoseSliders() {
+  const values = poseTargetsByArm[selectedArm]?.slice(0, 3).map(Number) ?? [];
+  if (values.length !== 3 || !values.every(Number.isFinite)) {
+    poseSliders.innerHTML = "";
+    return;
+  }
+  const centers = poseSliderCentersByArm[selectedArm] ?? values;
+  poseSliderCentersByArm[selectedArm] = [...centers];
+  const labels = ["X", "Y", "Z"];
+  poseSliders.innerHTML = labels.map((label, index) => {
+    const center = centers[index];
+    const min = center - 0.2;
+    const max = center + 0.2;
+    return `<label>${label}<input data-pose-slider-index="${index}" type="range" min="${min.toFixed(2)}" max="${max.toFixed(2)}" step="0.001" value="${displayNumber(values[index])}" /></label>`;
+  }).join("");
+  poseSliders.querySelectorAll<HTMLInputElement>("input[data-pose-slider-index]").forEach((slider) => {
+    slider.addEventListener("input", () => {
+      const index = Number(slider.dataset.poseSliderIndex);
+      const input = poseInputElements()[index];
+      input.value = slider.value;
+      poseTargetsByArm[selectedArm] = poseInputElements().map((item) => item.value);
+      ikPreviewValidByArm[selectedArm] = false;
+      setKinematicsStatus(selectedArm, "位姿已修改，请重新计算逆解");
+      setShadowVisibility(selectedArm);
+      updateButtons();
+    });
+  });
+}
+function syncPoseSlidersFromInputs() {
+  poseSliders.querySelectorAll<HTMLInputElement>("input[data-pose-slider-index]").forEach((slider) => {
+    const value = Number(poseInputElements()[Number(slider.dataset.poseSliderIndex)].value);
+    if (Number.isFinite(value)) slider.value = String(value);
+  });
+}
 function poseInputElements() {
   return POSE_INPUT_IDS.map((id) => $(`#${id}`) as HTMLInputElement);
 }
 function renderPoseInputs() {
   const values = poseTargetsByArm[selectedArm] ?? ["", "", "", "1", "0", "0", "0"];
-  poseInputElements().forEach((input, index) => { input.value = values[index] ?? ""; });
+  poseInputElements().forEach((input, index) => {
+    const value = values[index] ?? "";
+    input.value = value === "" ? "" : displayValue(value);
+  });
+  configurePoseReference();
+  renderPoseSliders();
 }
 function readPoseGoal() {
   const raw = poseInputElements().map((input) => input.value.trim());
@@ -352,6 +442,7 @@ function readMotionSettings() {
   return { velocity, timeout };
 }
 function setMotionMode(command: MotionCommand) {
+  const previousCommand = selectedMotionCommand;
   selectedMotionCommand = command;
   motionMode.querySelectorAll<HTMLButtonElement>("button[data-motion-command]").forEach((button) => {
     const selected = Number(button.dataset.motionCommand) === command;
@@ -364,6 +455,9 @@ function setMotionMode(command: MotionCommand) {
   poseKinematicsActions.hidden = command !== 1;
   executeMotionButton.textContent = `发送 ${MOTION_LABELS[command]}`;
   setShadowVisibility(selectedArm);
+  if (command !== 0 && (previousCommand === 0 || previousCommand !== command)) {
+    requestCurrentPose(selectedArm);
+  }
   updateButtons();
 }
 function renderMotionEditor() {
@@ -371,16 +465,43 @@ function renderMotionEditor() {
   renderRecordControls();
   const settings = motionSettingsByArm[selectedArm];
   if (settings) {
-    motionVelocityInput.value = settings.velocity;
-    motionTimeoutInput.value = settings.timeout;
+    motionVelocityInput.value = displayValue(settings.velocity);
+    motionTimeoutInput.value = displayValue(settings.timeout);
   }
   motionReference.textContent = referenceLabel(currentCoordinateState()?.preferred_reference);
+  if (selectedMotionCommand !== 0) {
+    configurePoseReference();
+    motionReference.textContent = referenceLabel(poseReference());
+  }
   kinematicsStatus.textContent = kinematicsStatusByArm[selectedArm] ?? "MOVEL 逆解仅更新影子预览";
   setMotionMode(selectedMotionCommand);
+}
+function requestCurrentPose(arm: ArmId, force = false) {
+  if (!canWrite() || (!force && activeKinematicsRequestByArm[arm])) return;
+  const requestIdValue = requestId("current-pose");
+  const reference = poseReference(arm);
+  activeKinematicsRequestByArm[arm] = requestIdValue;
+  setKinematicsStatus(arm, `读取 ${referenceLabel(reference)} 当前位姿…`);
+  send({
+    type: "get_current_pose",
+    request_id: requestIdValue,
+    arm,
+    reference: {
+      reference_type: reference.type,
+      reference_name: reference.name,
+    },
+  });
+  updateButtons();
 }
 function send(message: Message) {
   if (socket?.readyState === WebSocket.OPEN) socket.send(JSON.stringify(message));
 }
+
+document.querySelectorAll<HTMLInputElement>('input[type="number"]').forEach((input) => {
+  input.addEventListener("blur", () => {
+    if (input.value.trim() !== "") input.value = displayValue(input.value);
+  });
+});
 
 function renderRecordControls() {
   const records = jointRecordsByArm[selectedArm] ?? [];
@@ -414,7 +535,7 @@ function setSelectedConnection() {
 function renderJointControls() {
   const controlsHost = $("#joint-controls");
   controlsHost.innerHTML = robot().joints.map((joint, index) => `
-    <label class="joint-row"><span>J${index + 1}<output id="joint-value-${index}">${(targetJoints[index] * 180 / Math.PI).toFixed(1)}°</output></span>
+    <label class="joint-row"><span>J${index + 1}<output id="joint-value-${index}">${displayNumber(targetJoints[index] * 180 / Math.PI)}°</output></span>
     <input data-joint-index="${index}" type="range" min="${joint.lower_deg}" max="${joint.upper_deg}" step="0.1" value="${targetJoints[index] * 180 / Math.PI}" /></label>
   `).join("");
   controlsHost.querySelectorAll<HTMLInputElement>("input[data-joint-index]").forEach((input) => input.addEventListener("input", () => {
@@ -422,7 +543,7 @@ function renderJointControls() {
     targetJoints[index] = Number(input.value) * Math.PI / 180;
     targetJointsByArm[selectedArm] = [...targetJoints];
     targetEditedByArm[selectedArm] = true;
-    $(`#joint-value-${index}`).textContent = `${Number(input.value).toFixed(1)}°`;
+    $(`#joint-value-${index}`).textContent = `${displayNumber(Number(input.value))}°`;
     selectedRobotScene()?.shadow?.setJointValues(Object.fromEntries(targetJoints.map((value, i) => [`joint_${i + 1}`, value])));
   }));
 }
@@ -434,7 +555,7 @@ function setJointInputs(values: number[], target = false) {
     if (!input || !output) return;
     const degrees = value * 180 / Math.PI;
     if (target) { targetJoints[index] = value; input.value = String(degrees); }
-    output.textContent = `${degrees.toFixed(1)}°`;
+    output.textContent = `${displayNumber(degrees)}°`;
   });
 }
 
@@ -520,14 +641,17 @@ function frameScene(includeSelectedShadow = false) {
     if (includeSelectedShadow && id === selectedArm) bounds.expandByObject(robotScene.shadow);
   });
   if (bounds.isEmpty()) return;
-  const center = bounds.getCenter(new THREE.Vector3());
   const size = bounds.getSize(new THREE.Vector3());
   const dimension = Math.max(size.x, size.y, size.z, 0.5);
-  const focusHeight = bounds.min.z + size.z * 0.46;
-  controls.target.set(center.x, center.y, focusHeight);
+  // Keep the base and full arm silhouette visually centered after the compact
+  // viewer height change; this only changes the camera framing, not TF poses.
+  const focusHeight = bounds.min.z + size.z * 0.36;
+  // The browser scene is intentionally expressed relative to the middle arm.
+  // This is display-only: manifest transforms remain the calibrated world/TF poses.
+  controls.target.set(0, 0, focusHeight);
   camera.position.set(
-    center.x + dimension * 1.18,
-    center.y - dimension * 1.65,
+    dimension * 1.18,
+    -dimension * 1.65,
     focusHeight + dimension * 0.82,
   );
   camera.lookAt(controls.target);
@@ -571,10 +695,21 @@ async function loadFleet() {
     grid.rotation.x = Math.PI / 2;
     scene.add(grid);
     const allMeshes: any[] = [];
+    const middleTransform = manifest!.robots.find((robot) => robot.id === "m")?.transform;
+    if (!middleTransform) throw new Error("middle-arm transform is missing from the layout manifest");
     snapshots.forEach(({ config, live, shadow }) => {
-      live.position.set(config.transform.x, config.transform.y, config.transform.z);
+      // Center the visualization on m without mutating calibrated TF/world coordinates.
+      live.position.set(
+        config.transform.x - middleTransform.x,
+        config.transform.y - middleTransform.y,
+        config.transform.z - middleTransform.z,
+      );
       live.rotation.set(config.transform.roll, config.transform.pitch, config.transform.yaw, "ZYX");
-      shadow.position.set(config.transform.x, config.transform.y, config.transform.z);
+      shadow.position.set(
+        config.transform.x - middleTransform.x,
+        config.transform.y - middleTransform.y,
+        config.transform.z - middleTransform.z,
+      );
       shadow.rotation.set(config.transform.roll, config.transform.pitch, config.transform.yaw, "ZYX");
       scene.add(live);
       scene.add(shadow);
@@ -594,6 +729,7 @@ async function loadFleet() {
     frameScene(false);
     viewer.dataset.liveMeshes = String(snapshots.reduce((count, { live }) => count + meshCount(live), 0));
     viewer.dataset.shadowMeshes = String(snapshots.reduce((count, { shadow }) => count + meshCount(shadow), 0));
+    viewer.dataset.visualizationReferenceArm = "m";
     viewerState.setAttribute("hidden", "");
     $("#model-label").textContent = `${selectedConfig.model} / ${selectedArm.toUpperCase()} + 3 arms`;
   } catch (error) {
@@ -630,12 +766,12 @@ function initScene() {
 function configureVelocity() {
   const settings = robot().motion;
   $("#velocity-frame").innerHTML = Object.entries(robot().frames).map(([key, frame]) => `<option value="${key}">${key.toUpperCase()} / ${frame.name}</option>`).join("");
-  $("#velocity-period").setAttribute("value", String(settings.velocity_control_period_ms));
-  $("#velocity-watchdog").setAttribute("value", String(settings.velocity_watchdog_ms));
-  $("#linear-accel").setAttribute("value", String(settings.max_linear_accel_mps2));
-  $("#angular-accel").setAttribute("value", String(settings.max_angular_accel_radps2));
+  $("#velocity-period").setAttribute("value", displayValue(settings.velocity_control_period_ms));
+  $("#velocity-watchdog").setAttribute("value", displayValue(settings.velocity_watchdog_ms));
+  $("#linear-accel").setAttribute("value", displayValue(settings.max_linear_accel_mps2));
+  $("#angular-accel").setAttribute("value", displayValue(settings.max_angular_accel_radps2));
   const names = ["vx", "vy", "vz", "wx", "wy", "wz"];
-  $("#velocity-inputs").innerHTML = names.map((name, index) => `<label>${name}<input id="velocity-${index}" type="number" step="0.01" value="0" /></label>`).join("");
+  $("#velocity-inputs").innerHTML = names.map((name, index) => `<label>${name}<input id="velocity-${index}" type="number" step="0.01" value="0.00" /></label>`).join("");
   const state = currentCoordinateState();
   if (state?.preferred_reference) {
     const frameKey = state.preferred_reference.type === 1 ? "work" : state.preferred_reference.type === 2 ? "tool" : "base";
@@ -655,6 +791,18 @@ function handleMessage(message: Message) {
     if (message.arm === selectedArm) {
       renderCoordinateState();
       if (manifest) configureVelocity();
+    }
+  } else if (message.type === "tf_frames") {
+    const arm = message.arm as ArmId;
+    tfFramesByArm[arm] = Array.isArray(message.frames) ? message.frames : [];
+    if (arm === selectedArm && manifest) {
+      const selected = poseReference(arm);
+      if (selected.type === 3 && !tfFramesByArm[arm]?.some((frame) => frame.frame_id === selected.frame_id)) {
+        delete poseReferenceByArm[arm];
+      }
+      configurePoseReference();
+      renderPoseInputs();
+      updateButtons();
     }
   } else if (message.type === "connection") {
     connectionStates[message.arm] = Boolean(message.connected);
@@ -696,7 +844,10 @@ function handleMessage(message: Message) {
       const quaternion = Array.isArray(message.pose_quaternion_wxyz) ? message.pose_quaternion_wxyz : [];
       if (message.success && position.length === 3 && quaternion.length === 4 && applyJointRecordToJoints(arm, jointDegrees, `已填入 ${message.record?.label ?? "记录"} / ${MOTION_LABELS[command]}`)) {
         poseTargetsByArm[arm] = [...position, ...quaternion].map((value) => String(value));
-        setKinematicsStatus(arm, `记录正解已填入 / ${referenceLabel(coordinateStates[arm]?.preferred_reference)}`);
+        const reference = message.reference as FrameState | undefined;
+        if (reference?.type === 3) poseReferenceByArm[arm] = reference;
+        poseSliderCentersByArm[arm] = [...position];
+        setKinematicsStatus(arm, `记录正解已填入 / ${referenceLabel(reference ?? poseReference(arm))}`);
         if (arm === selectedArm) renderPoseInputs();
       } else {
         setRecordStatus(arm, `记录正解失败 / ${message.message || "forward kinematics failed"}`);
@@ -712,8 +863,11 @@ function handleMessage(message: Message) {
       const quaternion = Array.isArray(message.pose_quaternion_wxyz) ? message.pose_quaternion_wxyz : [];
       if (message.success && position.length === 3 && quaternion.length === 4) {
         poseTargetsByArm[arm] = [...position, ...quaternion].map((value) => String(value));
+        const reference = message.reference as FrameState | undefined;
+        if (reference?.type === 3) poseReferenceByArm[arm] = reference;
+        poseSliderCentersByArm[arm] = [...position];
         ikPreviewValidByArm[arm] = false;
-        setKinematicsStatus(arm, `当前位置已填入 / ${referenceLabel(coordinateStates[arm]?.preferred_reference)}`);
+        setKinematicsStatus(arm, `当前位置已填入 / ${referenceLabel(reference ?? poseReference(arm))}`);
         if (arm === selectedArm) renderPoseInputs();
         if (arm === selectedArm) setShadowVisibility(arm);
       } else {
@@ -771,7 +925,7 @@ function handleMessage(message: Message) {
       currentJoints = radians;
       setRobotJoints(robotScenes[message.arm]?.live, radians);
     }
-    if (Array.isArray(item.commanded_linear_velocity_mps)) feedback.textContent = `velocity / ${item.commanded_linear_velocity_mps.map((value: number) => value.toFixed(3)).join(", ")}`;
+    if (Array.isArray(item.commanded_linear_velocity_mps)) feedback.textContent = `velocity / ${item.commanded_linear_velocity_mps.map((value: number) => displayNumber(value)).join(", ")}`;
     progress.style.width = `${Math.max(0, Math.min(100, Number(item.progress || 0) * 100))}%`;
   } else if (message.type === "action_result") {
     if (message.arm !== selectedArm) return;
@@ -838,7 +992,7 @@ function updateButtons() {
   recoverMotionButton.disabled = !writable || Boolean(activeRecoveryRequestByArm[selectedArm]);
   stopButton.disabled = !writable;
   const activeKinematicsRequest = Boolean(activeKinematicsRequestByArm[selectedArm]);
-  fillCurrentPoseButton.disabled = !writable || selectedMotionCommand !== 1 || activeKinematicsRequest;
+  fillCurrentPoseButton.disabled = !writable || selectedMotionCommand !== 1;
   solveIkButton.disabled = !writable || selectedMotionCommand !== 1 || activeKinematicsRequest || !Boolean(readPoseGoal());
   const activeRecordRequest = Boolean(activeRecordRequestByArm[selectedArm]);
   saveRecordButton.disabled = !writable || activeRecordRequest || recordNameInput.value.trim() === "" || (currentJointsByArm[selectedArm]?.length ?? 0) !== 6;
@@ -855,8 +1009,8 @@ function loadManifest(next: Manifest) {
     poseTargetsByArm[item.id] = poseTargetsByArm[item.id] ?? ["", "", "", "1", "0", "0", "0"];
     jointRecordsByArm[item.id] = jointRecordsByArm[item.id] ?? [];
     motionSettingsByArm[item.id] = motionSettingsByArm[item.id] ?? {
-      velocity: "30",
-      timeout: String(item.motion.default_timeout_sec),
+      velocity: displayValue(30),
+      timeout: displayValue(item.motion.default_timeout_sec),
     };
   });
   currentJoints = [...armJointSnapshot(selectedArm)];
@@ -904,6 +1058,7 @@ motionMode.querySelectorAll<HTMLButtonElement>("button[data-motion-command]").fo
 poseInputElements().forEach((input) => {
   input.addEventListener("input", () => {
     poseTargetsByArm[selectedArm] = poseInputElements().map((item) => item.value);
+    syncPoseSlidersFromInputs();
     ikPreviewValidByArm[selectedArm] = false;
     setKinematicsStatus(selectedArm, "位姿已修改，请重新计算逆解");
     setShadowVisibility(selectedArm);
@@ -942,6 +1097,10 @@ applyRecordButton.addEventListener("click", () => {
     arm: selectedArm,
     record_id: recordSelect.value,
     command: selectedMotionCommand,
+    reference: selectedMotionCommand === 0 ? preferredReference() : {
+      reference_type: poseReference().type,
+      reference_name: poseReference().name,
+    },
   });
   updateButtons();
 });
@@ -951,7 +1110,7 @@ executeMotionButton.addEventListener("click", () => {
   if (!canWrite() || !settings || (selectedMotionCommand !== 0 && !pose)) return;
   const commandLabel = MOTION_LABELS[selectedMotionCommand];
   activeMotionRequest = requestId(commandLabel.toLowerCase());
-  const reference = preferredReference();
+  const reference = selectedMotionCommand === 0 ? preferredReference() : poseReference();
   send({
     type: "execute_motion",
     request_id: activeMotionRequest,
@@ -972,16 +1131,12 @@ executeMotionButton.addEventListener("click", () => {
   updateButtons();
 });
 fillCurrentPoseButton.addEventListener("click", () => {
-  if (!canWrite() || selectedMotionCommand !== 1) return;
-  const requestIdValue = requestId("current-pose");
-  activeKinematicsRequestByArm[selectedArm] = requestIdValue;
-  setKinematicsStatus(selectedArm, "读取当前末端位姿…");
-  send({ type: "get_current_pose", request_id: requestIdValue, arm: selectedArm });
-  updateButtons();
+  if (selectedMotionCommand !== 1) return;
+  requestCurrentPose(selectedArm, true);
 });
 solveIkButton.addEventListener("click", () => {
   const pose = readPoseGoal();
-  const reference = preferredReference();
+  const reference = poseReference();
   const joints = armJointSnapshot(selectedArm);
   if (!canWrite() || selectedMotionCommand !== 1 || !pose || joints.length !== 6) return;
   const requestIdValue = requestId("solve-ik");
@@ -1011,6 +1166,16 @@ startVelocityButton.addEventListener("click", () => {
     const values = Array.from({ length: 6 }, (_, index) => Number(($(`#velocity-${index}`) as HTMLInputElement).value));
     send({ type: "velocity_command", arm: selectedArm, linear: values.slice(0, 3), angular: values.slice(3) });
   }, 20);
+});
+poseReferenceFrame.addEventListener("change", () => {
+  const selected = availablePoseReferences(selectedArm).find(
+    (frame) => (frame.frame_id ?? frame.name) === poseReferenceFrame.value,
+  );
+  if (!selected) return;
+  poseReferenceByArm[selectedArm] = selected;
+  motionReference.textContent = referenceLabel(selected);
+  poseSliderCentersByArm[selectedArm] = undefined;
+  requestCurrentPose(selectedArm, true);
 });
 cancelVelocityButton.addEventListener("click", () => { send({ type: "cancel_action", arm: selectedArm, action: "cartesian_velocity" }); window.clearInterval(velocityTimer); velocityTimer = 0; });
 cancelMotionButton.addEventListener("click", () => { send({ type: "cancel_action", arm: selectedArm, action: "execute_motion" }); });

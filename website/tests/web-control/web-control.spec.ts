@@ -182,6 +182,7 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   }, saveRecordRequestId);
   await expect(page.locator("#viewer")).toHaveAttribute("data-live-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/, { timeout: 30_000 });
   await expect(page.locator("#viewer")).toHaveAttribute("data-shadow-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/);
+  await expect(page.locator("#viewer")).toHaveAttribute("data-visualization-reference-arm", "m");
   await expect(page.locator("#connection")).toContainText("ROS ONLINE");
   await expect(page.locator("#coordinate-state")).toContainText("READY");
   await expect(page.locator("#coordinate-summary")).toContainText("WORK / cell");
@@ -243,7 +244,7 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator("#pose-x")).toHaveValue("");
   await expect(page.locator("#execute-motion")).toBeDisabled();
   await page.locator(".fleet-chip[data-arm=\"r\"]").click();
-  await expect(page.locator("#pose-x")).toHaveValue("0.4");
+  await expect(page.locator("#pose-x")).toHaveValue("0.40");
   await expect(page.locator("#execute-motion")).toBeEnabled();
   await page.locator("#execute-motion").click();
   await page.evaluate(() => {
@@ -264,7 +265,7 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
       .map((value) => JSON.parse(value))
       .filter((message) => message.type === "get_current_pose").length,
   );
-  expect(kinematicsMessageCount).toBe(1);
+  expect(kinematicsMessageCount).toBe(2);
   await page.evaluate(() => {
     (window as any).__webSocket.emit("message", { data: JSON.stringify({
       type: "kinematics_result",

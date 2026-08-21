@@ -1,4 +1,5 @@
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -30,6 +31,8 @@ def _server(static_root: Path) -> WebControlServer:
         manifest={"robots": []},
         static_root=static_root,
         description_root=static_root,
+        calibration_config_file=static_root / "calibration.yaml",
+        calibration_log_root=static_root / "logs",
         on_command=lambda *_args: None,
         on_client_connected=None,
         logger=FakeLogger(),
@@ -64,3 +67,47 @@ def test_static_root_rejects_parent_traversal(tmp_path):
 
     with pytest.raises(web.HTTPNotFound):
         asyncio.run(_server(static_root)._static_asset(FakeRequest("../package.xml")))
+
+
+def test_calibration_preview_is_limited_to_log_root(tmp_path):
+    static_root = tmp_path / "static"
+    static_root.mkdir()
+    (static_root / "index.html").write_text("ok", encoding="utf-8")
+    logs = static_root / "logs" / "session-1"
+    logs.mkdir(parents=True)
+    preview = logs / "l-preview.png"
+    preview.write_bytes(b"png")
+    response = asyncio.run(
+        _server(static_root)._calibration_preview(FakeRequest("session-1/l-preview.png"))
+    )
+    assert response.status == 200
+
+    with pytest.raises(web.HTTPNotFound):
+        asyncio.run(_server(static_root)._calibration_preview(FakeRequest("../index.html")))
+
+
+def test_calibration_sessions_list_only_valid_sessions_and_sample_counts(tmp_path):
+    static_root = tmp_path / "static"
+    static_root.mkdir()
+    (static_root / "index.html").write_text("ok", encoding="utf-8")
+    session = static_root / "logs" / "camera_calibration" / "session-20260821T102303.053863Z"
+    batch = session / "batches" / "20260821T102303.053863Z"
+    batch.mkdir(parents=True)
+    for arm in ("l", "m", "r"):
+        (batch / f"{arm}-0000.json").write_text(
+            json.dumps({"sample_id": f"{arm}-0000-example", "base_to_tool": [[1.0]]}),
+            encoding="utf-8",
+        )
+    (session / "calibration_result.json").write_text("{}", encoding="utf-8")
+    ignored = static_root / "logs" / "camera_calibration" / "not-a-session"
+    ignored.mkdir()
+
+    response = asyncio.run(_server(static_root)._calibration_sessions(None))
+
+    payload = json.loads(response.body)
+    assert len(payload["sessions"]) == 1
+    listed = payload["sessions"][0]
+    assert listed["session_id"] == "session-20260821T102303.053863Z"
+    assert listed["sample_counts"] == {"l": 1, "m": 1, "r": 1}
+    assert listed["solved"] is True
+    assert listed["created_at"].endswith("+00:00")

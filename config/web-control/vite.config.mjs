@@ -51,6 +51,20 @@ function devApiPlugin() {
             response.end(JSON.stringify(await devManifest()));
             return;
           }
+          if (url === "/api/calibration") {
+            const calibration = YAML.parse(
+              await readFile(resolve(repositoryDirectory, "config/ros/camera_calibration.yaml"), "utf8"),
+            );
+            response.setHeader("Content-Type", "application/json");
+            response.end(JSON.stringify(calibration));
+            return;
+          }
+          if (url === "/api/calibration/sessions") {
+            // Local UI development has no ROS log mount; production serves recoverable sessions.
+            response.setHeader("Content-Type", "application/json");
+            response.end(JSON.stringify({ sessions: [] }));
+            return;
+          }
           if (url.startsWith("/models/")) {
             const relative = url.slice("/models/".length);
             const candidate = resolve(descriptionDirectory, relative);
@@ -84,6 +98,14 @@ export default defineConfig({
     outDir: staticDirectory,
     emptyOutDir: true,
     sourcemap: false,
+    rollupOptions: {
+      // Keep motion control and calibration as separate operator pages while
+      // sharing the same authenticated WebSocket/ROS bridge.
+      input: {
+        control: resolve(webDirectory, "index.html"),
+        calibration: resolve(webDirectory, "calibration.html"),
+      },
+    },
   },
   server: {
     host: "127.0.0.1",

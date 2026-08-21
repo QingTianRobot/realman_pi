@@ -4,8 +4,10 @@ from __future__ import annotations
 
 import asyncio
 from dataclasses import dataclass
+from datetime import datetime, timezone
 import json
 from pathlib import Path
+import re
 import threading
 from typing import Any, Callable
 from urllib.parse import urlsplit
@@ -66,6 +68,8 @@ class WebControlServer:
         manifest: dict[str, Any],
         static_root: str | Path,
         description_root: str | Path,
+        calibration_config_file: str | Path,
+        calibration_log_root: str | Path,
         on_command: Callable[[str, dict[str, Any]], None],
         on_client_connected: Callable[[str], None] | None,
         logger: Any,
@@ -74,6 +78,8 @@ class WebControlServer:
         self.manifest = manifest
         self.static_root = Path(static_root).resolve()
         self.description_root = Path(description_root).resolve()
+        self.calibration_config_file = Path(calibration_config_file).resolve()
+        self.calibration_log_root = Path(calibration_log_root).resolve()
         self.on_command = on_command
         self.on_client_connected = on_client_connected
         self.logger = logger
@@ -146,6 +152,9 @@ class WebControlServer:
         app = web.Application(client_max_size=self.config.max_message_bytes)
         app.router.add_get("/healthz", self._health)
         app.router.add_get("/api/layout", self._layout)
+        app.router.add_get("/api/calibration", self._calibration)
+        app.router.add_get("/api/calibration/sessions", self._calibration_sessions)
+        app.router.add_get("/api/calibration/preview/{path:.*}", self._calibration_preview)
         app.router.add_get("/ws", self._websocket)
         app.router.add_get("/models/{path:.*}", self._model_asset)
         app.router.add_get("/{path:.*}", self._static_asset)
@@ -174,6 +183,79 @@ class WebControlServer:
         from aiohttp import web
 
         return web.json_response(self.manifest)
+
+    async def _calibration(self, _request: Any) -> Any:
+        from aiohttp import web
+
+        try:
+            with self.calibration_config_file.open(encoding="utf-8") as stream:
+                config = yaml.safe_load(stream) or {}
+        except OSError as error:
+            self.logger.error(f"Calibration config could not be read: {error}")
+            raise web.HTTPServiceUnavailable(text="calibration configuration unavailable") from error
+        return web.json_response(config)
+
+    async def _calibration_sessions(self, _request: Any) -> Any:
+        """List only recoverable calibration sessions under the configured log root."""
+        from aiohttp import web
+
+        sessions_root = self.calibration_log_root / "camera_calibration"
+        sessions: list[dict[str, Any]] = []
+        try:
+            directories = [path for path in sessions_root.iterdir() if path.is_dir()]
+        except FileNotFoundError:
+            directories = []
+        except OSError as error:
+            self.logger.error(f"Calibration sessions could not be read: {error}")
+            raise web.HTTPServiceUnavailable(text="calibration sessions unavailable") from error
+
+        for directory in directories:
+            session_id = directory.name
+            if not re.fullmatch(r"session-[0-9TZ.\\-]+", session_id):
+                continue
+            sample_counts = {arm: 0 for arm in ("l", "m", "r")}
+            try:
+                for metadata_path in (directory / "batches").glob("*/*.json"):
+                    try:
+                        sample = json.loads(metadata_path.read_text(encoding="utf-8"))
+                        sample_id = str(sample.get("sample_id", ""))
+                        arm = sample_id.split("-", 1)[0]
+                        if arm in sample_counts and isinstance(sample.get("base_to_tool"), list):
+                            sample_counts[arm] += 1
+                    except (OSError, ValueError, json.JSONDecodeError):
+                        continue
+                result_path = directory / "calibration_result.json"
+                solved = result_path.is_file()
+                created_at = datetime.fromtimestamp(
+                    directory.stat().st_mtime, tz=timezone.utc
+                ).isoformat()
+            except OSError:
+                # A concurrent capture may replace a batch while it is being listed.
+                continue
+            sessions.append(
+                {
+                    "session_id": session_id,
+                    "created_at": created_at,
+                    "sample_counts": sample_counts,
+                    "solved": solved,
+                }
+            )
+        sessions.sort(key=lambda item: item["session_id"], reverse=True)
+        return web.json_response({"sessions": sessions})
+
+    async def _calibration_preview(self, request: Any) -> Any:
+        from aiohttp import web
+
+        relative = Path(request.match_info["path"])
+        if relative.is_absolute() or ".." in relative.parts:
+            raise web.HTTPNotFound()
+        candidate = (self.calibration_log_root / relative).resolve()
+        root = self.calibration_log_root
+        if candidate != root and root not in candidate.parents:
+            raise web.HTTPNotFound()
+        if not candidate.is_file() or candidate.suffix.lower() not in {".png", ".jpg", ".jpeg"}:
+            raise web.HTTPNotFound()
+        return web.FileResponse(candidate)
 
     def _origin_allowed(self, request: Any) -> bool:
         origin = request.headers.get("Origin")

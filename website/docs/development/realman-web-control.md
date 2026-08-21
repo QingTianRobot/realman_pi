@@ -13,6 +13,10 @@ description: realman_web_control 的 WebSocket 协议、Action 反馈、软件�
 watchdog 或 lockout。网页保存的关节记录写入 `config/web-control/joint-records/<arm>/`，
 按 `l`、`m`、`r` 分目录存放。
 
+三臂 URDF 画布的显示原点固定为中间臂 `m` 的基座：网页仅在 Three.js 渲染时减去中臂的
+平移，绝不修改 `config/ros/three_robots.yaml` 的世界/TF 布局或任何 Action 的运动坐标。
+这让标定后左右臂位置改变时，中臂仍保持在画面中心。
+
 ```text
 笔记本浏览器
     │ http://工控机:8765/ + /ws
@@ -75,6 +79,7 @@ watchdog 和 lockout，不会直接调用 SDK。
 | `joint_records` | `arm`, `records` | 该 arm 可填入运动面板的已保存关节记录 |
 | `joint_record_saved` | `record` | “记录当前”写入 YAML 后的结果 |
 | `joint_record_applied` | `command`, `joint_degrees`, `pose_position_m`, `pose_quaternion_wxyz` | 选择记录填入当前 MOVEJ/MOVEL/MOVEP 表单 |
+| `tf_frames` | `arm`, `frames[]` | TF 缓存中与该 arm `base_link` 连通的可选参考坐标 |
 
 ### MOVEJ、MOVEL 与 MOVEP
 
@@ -99,23 +104,31 @@ MOVEJ 目标关节使用 degree；Web 后端会从 URDF limit 再检查一次。
 在没有人工改动目标之前，右侧滑条会跟随该 arm 的实时 `joint_state`；一旦人工拖动滑条，该 arm
 的目标值就会保持用户输入，直到再次切换或重置。
 
-MOVEL/MOVEP 面板会直接显示所选机械臂的激活参考系，例如 `WORK / cell`；该名称来自
-`coordinate_state.preferred_reference`，用户不能手工拼写一个与控制器状态不一致的名称。
+MOVEL/MOVEP 面板有独立的“参考坐标系”选择器。列表由 Web 节点的 `tf2_ros.Buffer` 从
+`/tf` 和 `/tf_static` 发现，只保留能与当前 arm 的 `/{arm}/base_link` 连通的 frame；
+因此 `world`、其它机械臂的 link、相机和工装 frame 只要在同一 TF 树中连通，理论上都能
+作为参考系。列表为空时保留 BASE/WORK/TOOL 配置项作为启动过渡状态；发送时后端仍会
+再次查询 TF，frame 不存在或断链会返回 `coordinate_unavailable`。
 XYZ 是该参考系下的绝对目标位置，单位为米；姿态使用 `[w,x,y,z]` 四元数。每个 arm
 分别保留自己的位姿输入，位置未填满、四元数为零或速度/超时越界时发送按钮保持禁用。
+进入 MOVEL/MOVEP 或切换参考系时，网页会自动调用 `get_current_pose` 填入当前 XYZ/WXYZ；
+XYZ 数值有效后会出现以当前值为中心、每轴上下 0.2 m 的滑轨，滑轨与数值输入双向同步。
 
 MOVEL 还提供两个只读计算动作。点击“填入当前位置”会调用
-`/{arm}/get_current_pose`，驱动使用当前关节状态做 FK，并把结果按当前激活参考系填入
+`/{arm}/get_current_pose`，驱动使用当前关节状态做 FK，并把结果按所选参考系填入
 XYZ 和 WXYZ。修改目标后点击“计算逆解”会通过 WebSocket 的 `solve_ik` 消息调用
 `/{arm}/solve_ik`；请求种子使用该 arm 的当前实体关节角，驱动将参考系目标转换到算法
 需要的 base 位姿后调用 `rm_algo_inverse_kinematics()`。成功的六个 degree 结果会先经过
 Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条和橙色 URDF 影子。这个过程
 不会发送 `ExecuteMotion`，需要用户另外点击“发送 MOVEL”才会提交真实运动。
 
-两个服务都要求 `reference_type`/`reference_name` 与驱动已验证的激活坐标完全一致；坐标
-验证失败、控制器状态不可读、目标不可达、SDK API2 非零或结果超限都会返回失败消息。
-服务边界的单位固定为：关节 degree、位置 m、四元数 WXYZ；SDK 算法内部的 FK/IK 姿态
-欧拉角为 rad。MOVEL 的真实发送仍沿用原有的 active reference 和坐标 gate。
+对于配置的 WORK/TOOL，驱动仍要求 `reference_type`/`reference_name` 与已验证的激活坐标
+完全一致。对于任意 TF frame，Web 节点先把位姿转换到 `/{arm}/base_link`，再以
+`BASE/base` 调用驱动；它不会把任意 TF 名称伪装成 RealMan controller 的 WORK/TOOL。
+TF 查询失败、坐标验证失败、控制器状态不可读、目标不可达、SDK API2 非零或结果超限都会
+返回失败消息。服务边界的单位固定为：关节 degree、位置 m、四元数 WXYZ；SDK 算法内部的
+FK/IK 姿态欧拉角为 rad。MOVEL/MOVEP 的真实发送仍经过驱动的 ownership 和坐标 gate；
+任意 TF frame 的目标则在 Web 层先转换为 base 位姿。
 
 ### 关节记录
 
@@ -133,8 +146,9 @@ Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条�
 | `MOVEL` | 调用 `/{arm}/forward_kinematics`，把记录关节正解为当前激活参考系下的 XYZ/WXYZ，再填入位姿输入 |
 | `MOVEP` | 同样调用 `/{arm}/forward_kinematics`，填入 `MOVEJ_P` 所需的目标位姿 |
 
-`forward_kinematics` 与 `get_current_pose` 使用同一套参考系规则：`reference_type` 和
-`reference_name` 必须匹配驱动已验证的激活坐标；坐标 gate 关闭时，MOVEL/MOVEP 记录填入会失败。
+`forward_kinematics` 与 `get_current_pose` 使用同一套参考系规则：配置的参考系必须匹配
+驱动已验证的激活坐标，任意 TF 参考系则先转换到/从 `base_link`；坐标 gate 关闭时，只有
+配置 WORK/TOOL 的驱动查询会被 gate 拒绝，TF 转换本身不绕过控制器运动 gate。
 Web 控制相关 Compose 服务把 `./config` 以可写方式挂到容器内，默认记录目录为
 `/opt/rm65_ws/config/web-control/joint-records`，可用 `REALMAN_JOINT_RECORD_DIR` 覆盖。
 
@@ -190,8 +204,9 @@ Web 控制相关 Compose 服务把 `./config` 以可写方式挂到容器内，�
 }
 ```
 
-未使用的关节或位姿字段可以省略，协议会填入固定长度默认值。后端仍以驱动当前发布的
-`preferred_reference` 覆盖浏览器传入的参考系，防止页面缓存与控制器激活坐标脱节。
+未使用的关节或位姿字段可以省略，协议会填入固定长度默认值。后端会在提交前重新校验
+浏览器传入的参考系；配置 WORK/TOOL 仍受驱动 active frame 校验，任意 TF 参考系会在
+提交前转换为 `BASE/base`。
 取消消息使用 `action: "execute_trajectory"`；取消意味着 immediate stop，不是无缝替换
 后续目标。
 
@@ -249,6 +264,8 @@ Action cancel。浏览器刷新不会留下仍由网页拥有的速度命令。
 - `config/ros/realman_motion.yaml`：速度、加速度、watchdog 默认值；
 - `config/ros/realman_coordinates.yaml`：BASE/WORK/TOOL 当前配置名称；
 - `rm65_description/urdf/<model>.urdf`：六个关节的 lower/upper limit 和 mesh。
+- `config/ros/camera_calibration.yaml`：独立标定页面展示的 ChArUco 配置；标定
+  service 仍由 `realman_camera_calibration` 节点实际执行。
 
 服务端只允许 `/models/urdf/<model>.urdf` 和 `/models/meshes/...` 解析到
 `rm65_description` package 内，`..` 路径会被拒绝。前端为三台机械臂分别加载两份 URDF
@@ -265,7 +282,8 @@ PYTHONPATH=src/driver/realman_web_control \
   python3 -m pytest -q src/driver/realman_web_control/test
 ```
 
-前端源代码在 `src/driver/realman_web_control/web/src/`，配置在
+前端源代码在 `src/driver/realman_web_control/web/src/`，控制页面和
+`calibration.html` 标定页面共用一个 WebSocket 服务；配置在
 `config/web-control/vite.config.mjs`。普通 ROS 镜像不依赖 Node，提交的 `static/` 是可复现
 构建产物；源码变更后在仓库 `website/` 目录执行：
 

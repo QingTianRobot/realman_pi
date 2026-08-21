@@ -19,19 +19,6 @@ setup(
         ("share/ament_index/resource_index/packages", [f"resource/{package_name}"]),
         (f"share/{package_name}", ["package.xml"]),
         (f"share/{package_name}/launch", glob("launch/*.launch.py")),
-        (
-            f"share/{package_name}/config/ros",
-            [
-                "../../../config/ros/realman_web_control.yaml",
-                "../../../config/ros/three_robots.yaml",
-                "../../../config/ros/realman_motion.yaml",
-                "../../../config/ros/realman_coordinates.yaml",
-            ],
-        ),
-        (
-            f"share/{package_name}/config/web-control/joint-records",
-            ["../../../config/web-control/joint-records/README.md"],
-        ),
         (f"share/{package_name}/static", static_files),
         (f"share/{package_name}/static/assets", static_asset_files),
     ],
@@ -41,7 +28,6 @@ setup(
     maintainer_email="maintainer@example.com",
     description="Authenticated WebSocket and browser UI bridge for RealMan ROS actions.",
     license="BSD-3-Clause",
-    tests_require=["pytest"],
     entry_points={
         "console_scripts": [
             "web_control_node = realman_web_control.web_control_node:main",

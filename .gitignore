@@ -16,6 +16,8 @@ Log/
 !.agents/skills/document-feature-updates/**
 !.agents/skills/realman-python-driver/
 !.agents/skills/realman-python-driver/**
+!.agents/skills/realman-ros2-control/
+!.agents/skills/realman-ros2-control/**
 .codex/
 src/.agents/
 src/.codex/

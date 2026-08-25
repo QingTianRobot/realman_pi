@@ -47,8 +47,8 @@ rm65_project_help
 
 | 函数 | 当前用途 | 启动/影响的组件 | 适用场景 | 权威配置与文档 |
 | --- | --- | --- | --- | --- |
-| `rm65_docker_bringup` | 前台启动完整本地系统。 | 三臂描述/TF、真实驱动、RViz、SDL Joy、Xbox 输入；等待实体手柄。 | 本机同时连接显示环境、控制器网络和实体 Xbox 手柄时的完整联调。 | `config/docker/compose.yaml`、[系统 Bringup](./system-bringup#docker-服务) |
-| `rm65_docker_bringup_remote` | 前台启动 headless 远程目标。 | 三臂描述/TF、真实驱动、Xbox 处理节点；不启动 Joy 设备读取和 RViz，可选 Web 控制。 | 工控机作为 ROS 图和真实 SDK 连接的运行端，桌面机另行启动远程 RViz。 | `realman_bringup_remote` 服务、[系统 Bringup](./system-bringup#远程验证) |
+| `rm65_docker_bringup` | 前台启动完整本地系统。 | 三臂描述/TF、真实驱动、RViz、SDL Joy、Xbox 输入、Web 控制和左右夹爪；等待实体手柄。 | 本机同时连接显示环境、控制器网络、RS-485 夹爪和实体 Xbox 手柄时的完整联调。 | `config/docker/compose.yaml`、[系统 Bringup](./system-bringup#docker-服务) |
+| `rm65_docker_bringup_remote` | 前台启动 headless 远程目标。 | 三臂描述/TF、真实驱动、Xbox 处理节点和左右夹爪；不启动 Joy 设备读取和 RViz，可选 Web 控制。 | 工控机作为 ROS 图、真实 SDK 连接和夹爪服务运行端，桌面机另行启动远程 RViz。 | `realman_bringup_remote` 服务、[系统 Bringup](./system-bringup#远程验证) |
 
 ## Bringup 配置入口
 
@@ -71,7 +71,7 @@ rm65_project_help
 | `rm65_docker_bringup_hardware` | 连接真实驱动并显示 RViz，不启用输入。 | `start_robots=true`、`start_driver=true`、`use_rviz=true`、Joy/Xbox/Web 关闭。 | 已接入控制器网络时，先验证真实关节回读与 RViz 显示。 | `config/ros/realman_driver.yaml`、[睿尔曼三臂驱动与运动控制](./realman-driver-scaffold) |
 | `rm65_docker_bringup_headless` | 启动真实驱动和 Xbox 处理节点，不显示 GUI。 | `start_robots=true`、`start_driver=true`、`start_controller=true`、`use_rviz=false`、Joy/Web 关闭。 | 远程主机上运行 headless ROS 图，并允许其他节点发布 `/input/joy`。 | [系统 Bringup](./system-bringup#典型启动组合) |
 | `rm65_docker_bringup_input` | 只启动 Joy 和 Xbox 输入链。 | `start_robots=false`、`start_driver=false`、`start_joy_driver=true`、`start_controller=true`，等待设备。 | 独立验证实体手柄输入，不触碰机械臂或 RViz。 | `config/ros/xbox_controller.yaml`、[Xbox 手柄输入](./xbox-controller) |
-| `rm65_docker_bringup_web` | 启动真实驱动和 Web 控制，不显示 RViz。 | `start_robots=true`、`start_driver=true`、`start_web_control=true`、RViz/Joy/Xbox 关闭。 | 工控机上提供浏览器 Action 控制和 URDF 状态影子。 | `config/ros/realman_web_control.yaml`、[WebSocket 浏览器控制与 URDF 影子](./realman-web-control) |
+| `rm65_docker_bringup_web` | 启动真实驱动、Web 控制和夹爪服务，不显示 RViz。 | `start_robots=true`、`start_driver=true`、`start_web_control=true`、`start_grippers=true`、RViz/Joy/Xbox 关闭。 | 工控机上提供浏览器 Action 控制、夹爪控制和 URDF 状态影子。 | `config/ros/realman_web_control.yaml`、`config/ros/gripper_params.yaml`、[WebSocket 浏览器控制与 URDF 影子](./realman-web-control) |
 
 ## Camera streaming
 
@@ -205,8 +205,8 @@ RealSense D435 仍不作为 ROS2 相机默认路径，
 
 | 函数 | 当前用途 | 启动/影响的组件 | 适用场景 | 权威配置与文档 |
 | --- | --- | --- | --- | --- |
-| `rm65_docker_web_control` | 前台启动独立 Web 控制服务。 | `realman_web_control/web_control.launch.py`；加入已有 ROS 图，但不启动驱动。 | 已有 `realman_bringup_remote` 或其他驱动图运行时，单独观察 WebSocket 协议和页面日志。 | `config/ros/realman_web_control.yaml`、[WebSocket 浏览器控制与 URDF 影子](./realman-web-control) |
-| `rm65_docker_web_control_start` | 后台启动独立 Web 控制服务并打印状态。 | `docker compose up -d realman_web_control`。 | 工控机长期提供 `http://<host>:8765/` 浏览器入口。 | `realman_web_control` Compose 服务 |
+| `rm65_docker_web_control` | 前台启动独立 Web 控制服务。 | `realman_web_control/web_control.launch.py`；加入已有 ROS 图，桥接机械臂 Action 和夹爪服务，但不启动驱动或夹爪节点。 | 已有 `realman_bringup_remote` 或其他驱动/夹爪图运行时，单独观察 WebSocket 协议和页面日志。 | `config/ros/realman_web_control.yaml`、[WebSocket 浏览器控制与 URDF 影子](./realman-web-control) |
+| `rm65_docker_web_control_start` | 后台启动独立 Web 控制服务并打印状态。 | `docker compose up -d realman_web_control`。 | 工控机长期提供 `http://<host>:8765/` 浏览器入口；夹爪控制要求 ROS 图里已有 `/gripper_left` 和 `/gripper_right` 服务。 | `realman_web_control` Compose 服务 |
 | `rm65_docker_web_control_stop` | 停止后台 Web 控制服务。 | `docker compose stop realman_web_control`。 | 关闭浏览器控制桥；不停止真实驱动容器。 | Docker Compose |
 | `rm65_docker_web_control_status` | 查看 Web 控制服务状态。 | `docker compose ps realman_web_control`。 | 判断 Web 服务是否仍在后台运行。 | Docker Compose |
 | `rm65_docker_web_control_logs [-f]` | 查看或跟踪 Web 控制服务日志。 | `docker compose logs --tail=100 ... realman_web_control`。 | 排查 WebSocket、Action client、URDF 资源或授权配置。 | Docker Compose 与 `realman_web_control` 日志 |

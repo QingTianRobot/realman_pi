@@ -57,6 +57,9 @@ RUN python3 -m pip install --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
         --retries 5 \
         --timeout 60 \
+        exceptiongroup \
+        minimalmodbus \
+        pyserial \
         --requirement /opt/rm65_ws/config/python/realman-sdk-requirements.txt
 
 RUN . /opt/ros/humble/setup.sh \

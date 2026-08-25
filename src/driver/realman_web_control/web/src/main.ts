@@ -86,6 +86,14 @@ app.innerHTML = `
     </section>
     <aside class="controls">
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><span id="coordinate-state" class="mini-state">WAIT</span></div><div id="coordinate-summary" class="coordinate-summary"></div></section>
+      <section class="panel panel-section gripper-panel">
+        <div class="panel-heading compact"><div><span class="eyebrow">END EFFECTOR</span><h2>夹爪控制</h2></div><span id="gripper-state" class="mini-state">WAIT</span></div>
+        <div class="gripper-readouts"><div><span>位置</span><strong id="gripper-position">--</strong><small>设备单位</small></div><div><span>力矩到达</span><strong id="gripper-torque">--</strong></div><div><span>报警</span><strong id="gripper-alarm">--</strong></div></div>
+        <label class="gripper-percentage">开合度 <output id="gripper-percentage-value">50%</output><input id="gripper-percentage" type="range" min="0" max="1" step="0.01" value="0.5" /></label>
+        <div class="gripper-actions"><button class="button secondary" type="button" data-gripper-command="open">张开</button><button class="button secondary" type="button" data-gripper-command="close">闭合</button><button class="button ghost" type="button" data-gripper-command="percentage">发送开合度</button><button class="button ghost" type="button" data-gripper-command="grasp_check">检查夹取</button><button class="button ghost" type="button" data-gripper-command="calibrate">重新标定</button><button class="button danger" type="button" data-gripper-command="reset">复位</button></div>
+        <div class="gripper-secondary-actions"><button class="button ghost" type="button" data-gripper-command="enable">使能</button><button class="button ghost" type="button" data-gripper-command="disable">失能</button></div>
+        <div id="gripper-feedback" class="gripper-feedback" aria-live="polite">等待夹爪状态</div>
+      </section>
       <section class="panel panel-section motion-panel">
         <div class="panel-heading compact"><div><span class="eyebrow">MOTION TARGET</span><h2>一次性运动</h2></div><div class="panel-actions"><span id="selected-arm-label" class="mini-state">L</span><button id="reset-preview" class="text-button" type="button">重置目标</button></div></div>
         <div id="motion-mode" class="segmented-control" aria-label="运动类型">
@@ -159,6 +167,14 @@ const actionState = $("#action-state");
 const velocityState = $("#velocity-state");
 const coordinateStateLabel = $("#coordinate-state");
 const coordinateSummary = $("#coordinate-summary");
+const gripperStateLabel = $("#gripper-state");
+const gripperPosition = $("#gripper-position");
+const gripperTorque = $("#gripper-torque");
+const gripperAlarm = $("#gripper-alarm");
+const gripperPercentage = $("#gripper-percentage") as HTMLInputElement;
+const gripperPercentageValue = $("#gripper-percentage-value");
+const gripperFeedback = $("#gripper-feedback");
+const gripperButtons = Array.from(document.querySelectorAll<HTMLButtonElement>("[data-gripper-command]"));
 const feedback = $("#feedback");
 const result = $("#result");
 const progress = $("#progress") as HTMLElement;
@@ -208,6 +224,7 @@ let activeVelocityRequest = "";
 let velocityTimer = 0;
 const coordinateStates: Partial<Record<ArmId, CoordinateState>> = {};
 const connectionStates: Partial<Record<ArmId, boolean>> = {};
+const gripperStates: Partial<Record<ArmId, { position: number | null; torque_reached: boolean; alarm: number }>> = {};
 const currentJointsByArm: Partial<Record<ArmId, number[]>> = {};
 const targetJointsByArm: Partial<Record<ArmId, number[]>> = {};
 const targetEditedByArm: Partial<Record<ArmId, boolean>> = {};
@@ -309,6 +326,31 @@ function renderCoordinateState() {
     <div class="coordinate-meta">${state.work?.xyz_m ? `xyz ${state.work.xyz_m.map((value) => displayNumber(value)).join(", ")}` : ""}</div>
   `;
 }
+function renderGripperState() {
+  const available = selectedArm !== "m";
+  const state = available ? gripperStates[selectedArm] : undefined;
+  gripperStateLabel.textContent = !available ? "N/A" : state ? "ONLINE" : "WAIT";
+  gripperStateLabel.className = `mini-state ${!available ? "" : state ? "accepted" : ""}`;
+  gripperPosition.textContent = state?.position == null ? "--" : displayNumber(state.position, 0);
+  gripperTorque.textContent = state ? (state.torque_reached ? "YES" : "NO") : "--";
+  gripperAlarm.textContent = state ? `0x${Number(state.alarm).toString(16).padStart(2, "0")}` : "--";
+  gripperButtons.forEach((button) => { button.disabled = !available || !canWrite(); });
+  gripperPercentage.disabled = !available || !canWrite();
+  if (!available) gripperFeedback.textContent = "M 臂未配置夹爪";
+  else if (!state && !gripperFeedback.textContent.includes("请求中")) gripperFeedback.textContent = "等待夹爪状态";
+}
+function sendGripperCommand(command: string) {
+  if (selectedArm === "m" || !canWrite()) return;
+  const message: Message = {
+    type: "gripper_command",
+    request_id: requestId(`gripper-${command}`),
+    arm: selectedArm,
+    command,
+  };
+  if (command === "percentage") message.percentage = Number(gripperPercentage.value);
+  send(message);
+  gripperFeedback.textContent = `${selectedArm.toUpperCase()} / ${command} 请求中`;
+}
 function renderFleetStrip() {
   if (!manifest) return;
   const configuredArms = new Set(manifest.robots.map((robotInfo) => robotInfo.id));
@@ -380,8 +422,13 @@ function configurePoseReference() {
     `<option value="${escapeHtml(frame.frame_id ?? frame.name)}">${escapeHtml(referenceLabel(frame))}</option>`
   ).join("");
   const selectedId = selected.frame_id ?? selected.name;
-  if (references.some((frame) => (frame.frame_id ?? frame.name) === selectedId)) {
-    poseReferenceFrame.value = selectedId;
+  const selectedMatch = references.find((frame) =>
+    (frame.frame_id ?? frame.name) === selectedId ||
+    (frame.type === selected.type && frame.name === selected.name)
+  );
+  if (selectedMatch) {
+    poseReferenceFrame.value = selectedMatch.frame_id ?? selectedMatch.name;
+    poseReferenceByArm[selectedArm] = selectedMatch;
   } else if (references[0]) {
     poseReferenceFrame.value = references[0].frame_id ?? references[0].name;
     poseReferenceByArm[selectedArm] = references[0];
@@ -842,6 +889,22 @@ function handleMessage(message: Message) {
     connectionStates[message.arm] = Boolean(message.connected);
     renderFleetStrip();
     if (message.arm === selectedArm) setSelectedConnection();
+  } else if (message.type === "gripper_state") {
+    const arm = message.arm as ArmId;
+    if (arm === "l" || arm === "r") {
+      gripperStates[arm] = {
+        position: message.position == null ? null : Number(message.position),
+        torque_reached: Boolean(message.torque_reached),
+        alarm: Number(message.alarm || 0),
+      };
+      if (arm === selectedArm) renderGripperState();
+    }
+  } else if (message.type === "gripper_command_result") {
+    const arm = message.arm as ArmId;
+    if (arm === selectedArm) {
+      gripperFeedback.textContent = `${arm.toUpperCase()} / ${message.command}: ${message.success ? "成功" : "失败"} / ${message.message || ""}`;
+      renderGripperState();
+    }
   } else if (message.type === "joint_state") {
     currentJointsByArm[message.arm] = message.positions_rad;
     if (!targetEditedByArm[message.arm]) targetJointsByArm[message.arm] = [...message.positions_rad];
@@ -1030,6 +1093,7 @@ function updateButtons() {
   cancelMotionButton.disabled = !writable || !Boolean(activeMotionRequest);
   recoverMotionButton.disabled = !writable || Boolean(activeRecoveryRequestByArm[selectedArm]);
   stopButton.disabled = !writable;
+  renderGripperState();
   const activeKinematicsRequest = Boolean(activeKinematicsRequestByArm[selectedArm]);
   fillCurrentPoseButton.disabled = !writable || selectedMotionCommand === 0;
   solveIkButton.disabled = !writable || selectedMotionCommand !== 1 || activeKinematicsRequest || !Boolean(readPoseGoal());
@@ -1063,6 +1127,7 @@ function loadManifest(next: Manifest) {
   renderMotionEditor();
   configureVelocity();
   renderCoordinateState();
+  renderGripperState();
   renderFleetStrip();
   setSelectedConnection();
   if (!renderer) initScene();
@@ -1088,6 +1153,12 @@ armSelect.addEventListener("change", () => {
   updateSelectedArmFromState();
   const config = robotConfig(selectedArm);
   $("#model-label").textContent = `${config.model} / ${selectedArm.toUpperCase()} + 3 arms`;
+});
+gripperPercentage.addEventListener("input", () => {
+  gripperPercentageValue.textContent = `${Math.round(Number(gripperPercentage.value) * 100)}%`;
+});
+gripperButtons.forEach((button) => {
+  button.addEventListener("click", () => sendGripperCommand(button.dataset.gripperCommand || ""));
 });
 motionMode.querySelectorAll<HTMLButtonElement>("button[data-motion-command]").forEach((button) => {
   button.addEventListener("click", () => {

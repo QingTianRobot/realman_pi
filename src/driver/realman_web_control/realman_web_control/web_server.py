@@ -381,17 +381,21 @@ class WebControlServer:
     async def _static_asset(self, request: Any) -> Any:
         from aiohttp import web
 
+        def response(path: Path) -> Any:
+            headers = {"Cache-Control": "no-cache"} if path.suffix.lower() == ".html" else None
+            return web.FileResponse(path, headers=headers)
+
         relative = request.match_info["path"] or "index.html"
         requested = Path(relative)
         if requested.is_absolute() or ".." in requested.parts:
             raise web.HTTPNotFound()
         candidate = self.static_root / requested
         if candidate.is_file():
-            return web.FileResponse(candidate)
+            return response(candidate)
         if "." not in requested.name:
             index_file = self.static_root / "index.html"
             if index_file.is_file():
-                return web.FileResponse(index_file)
+                return response(index_file)
         raise web.HTTPNotFound()
 
     async def _send_event(self, event: dict[str, Any], client_id: str | None) -> None:

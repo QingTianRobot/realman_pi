@@ -116,12 +116,23 @@ services:
     device_cgroup_rules:
       # Linux input event devices use character-device major 13.
       - "c 13:* r"
+    # Expose the two RS-485 USB adapters used by gripper_ros2. Override these
+    # paths when udev assigns different stable device names on the host.
+    devices:
+      - ${REALMAN_GRIPPER_RIGHT_DEVICE:-/dev/realman/gripper_right}:/dev/ttyUSB0
+      - ${REALMAN_GRIPPER_LEFT_DEVICE:-/dev/realman/gripper_left}:/dev/ttyUSB1
     command:
       - ros2
       - launch
       - realman_bringup
       - system.launch.py
       - wait_for_joy_device:=true
+      - start_web_control:=${REALMAN_START_WEB_CONTROL:-true}
+      - start_grippers:=${REALMAN_START_GRIPPERS:-true}
+      - gripper_config_file:=${REALMAN_GRIPPER_CONFIG_FILE:-/opt/rm65_ws/config/ros/gripper_params.yaml}
+      - gripper_side:=${REALMAN_GRIPPER_SIDE:-both}
+      - gripper_right_port:=${REALMAN_GRIPPER_RIGHT_PORT:-/dev/ttyUSB0}
+      - gripper_left_port:=${REALMAN_GRIPPER_LEFT_PORT:-/dev/ttyUSB1}
       - use_gui:=${RM65_USE_GUI:-false}
       - use_rviz:=${RM65_USE_RVIZ:-true}
 
@@ -147,6 +158,9 @@ services:
       - /dev/input:/dev/input:ro
     device_cgroup_rules:
       - "c 13:* r"
+    devices:
+      - ${REALMAN_GRIPPER_RIGHT_DEVICE:-/dev/realman/gripper_right}:/dev/ttyUSB0
+      - ${REALMAN_GRIPPER_LEFT_DEVICE:-/dev/realman/gripper_left}:/dev/ttyUSB1
     command:
       - ros2
       - launch
@@ -158,7 +172,8 @@ services:
       - start_controller:=${REALMAN_START_CONTROLLER:-false}
       - use_gui:=${REALMAN_USE_GUI:-false}
       - use_rviz:=${REALMAN_USE_RVIZ:-false}
-      - start_web_control:=${REALMAN_START_WEB_CONTROL:-false}
+      - start_web_control:=${REALMAN_START_WEB_CONTROL:-true}
+      - start_grippers:=${REALMAN_START_GRIPPERS:-true}
       - start_camera_calibration:=${REALMAN_START_CAMERA_CALIBRATION:-false}
       - update_layout_after_calibration:=${REALMAN_UPDATE_LAYOUT_AFTER_CALIBRATION:-true}
       - wait_for_joy_device:=${REALMAN_WAIT_FOR_JOY_DEVICE:-false}
@@ -168,6 +183,10 @@ services:
       - coordinates_config_file:=${REALMAN_COORDINATES_CONFIG_FILE:-/opt/rm65_ws/config/ros/realman_coordinates.yaml}
       - motion_config_file:=${REALMAN_MOTION_CONFIG_FILE:-/opt/rm65_ws/config/ros/realman_motion.yaml}
       - web_control_config_file:=${REALMAN_WEB_CONTROL_CONFIG_FILE:-/opt/rm65_ws/config/ros/realman_web_control.yaml}
+      - gripper_config_file:=${REALMAN_GRIPPER_CONFIG_FILE:-/opt/rm65_ws/config/ros/gripper_params.yaml}
+      - gripper_side:=${REALMAN_GRIPPER_SIDE:-both}
+      - gripper_right_port:=${REALMAN_GRIPPER_RIGHT_PORT:-/dev/ttyUSB0}
+      - gripper_left_port:=${REALMAN_GRIPPER_LEFT_PORT:-/dev/ttyUSB1}
       - camera_calibration_config_file:=${REALMAN_CAMERA_CALIBRATION_CONFIG_FILE:-/opt/rm65_ws/config/ros/camera_calibration.yaml}
       - joint_record_dir:=${REALMAN_JOINT_RECORD_DIR:-/opt/rm65_ws/config/web-control/joint-records}
 
@@ -182,6 +201,9 @@ services:
       - ./config/web-control/joint-records:/opt/rm65_ws/config/web-control/joint-records:rw
       - ./config/ros:/opt/rm65_ws/config/ros:rw
       - ./logs:/opt/rm65_ws/logs
+    devices:
+      - ${REALMAN_GRIPPER_RIGHT_DEVICE:-/dev/realman/gripper_right}:/dev/ttyUSB0
+      - ${REALMAN_GRIPPER_LEFT_DEVICE:-/dev/realman/gripper_left}:/dev/ttyUSB1
     # Keep the production ROS graph available after host reboot, Docker daemon
     # restart, or an unexpected launch/container exit. Operators can still stop
     # it intentionally with `docker compose stop realman_bringup_remote`.
@@ -195,6 +217,11 @@ services:
       - use_gui:=false
       - use_rviz:=false
       - start_web_control:=${REALMAN_START_WEB_CONTROL:-false}
+      - start_grippers:=${REALMAN_START_GRIPPERS:-true}
+      - gripper_config_file:=${REALMAN_GRIPPER_CONFIG_FILE:-/opt/rm65_ws/config/ros/gripper_params.yaml}
+      - gripper_side:=${REALMAN_GRIPPER_SIDE:-both}
+      - gripper_right_port:=${REALMAN_GRIPPER_RIGHT_PORT:-/dev/ttyUSB0}
+      - gripper_left_port:=${REALMAN_GRIPPER_LEFT_PORT:-/dev/ttyUSB1}
       - start_camera_calibration:=${REALMAN_START_CAMERA_CALIBRATION:-false}
       - update_layout_after_calibration:=${REALMAN_UPDATE_LAYOUT_AFTER_CALIBRATION:-true}
       - joint_record_dir:=${REALMAN_JOINT_RECORD_DIR:-/opt/rm65_ws/config/web-control/joint-records}

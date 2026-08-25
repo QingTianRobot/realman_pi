@@ -1,6 +1,6 @@
 ---
 title: WebSocket 浏览器控制与 URDF 影子
-description: realman_web_control 的 WebSocket 协议、Action 反馈、软件停止、URDF 预览和测试方法。
+description: realman_web_control 的 WebSocket 协议、Action/夹爪反馈、软件停止、URDF 预览和测试方法。
 ---
 
 # WebSocket 浏览器控制与 URDF 影子
@@ -22,11 +22,15 @@ watchdog 或 lockout。网页保存的关节记录写入 `config/web-control/joi
     │ http://工控机:8765/ + /ws
     ▼
 realman_web_control (aiohttp 线程 + ROS 2 executor)
-    │ ActionClient / Trigger client / TwistStamped publisher
+    │ ActionClient / Trigger client / gripper service client / TwistStamped publisher
     ▼
 /l、/m、/r realman_robot_driver
     ▼
 RealMan SDK / 三台控制器
+
+gripper_left / gripper_right (Changingtek Modbus RTU over RS-485)
+    ▲
+realman_web_control 夹爪服务桥 + 状态订阅
 ```
 
 ## 启动
@@ -55,9 +59,23 @@ export REALMAN_START_WEB_CONTROL=true
 docker compose run --rm realman_bringup_remote
 ```
 
+完整 `realman_bringup` 和 `realman_bringup_custom` Compose 预设默认同时启动左右夹爪、Web
+控制和机械臂驱动。生产默认使用 `config/udev/99-realman-grippers.rules` 创建的
+`/dev/realman/gripper_right` 和 `/dev/realman/gripper_left`，再通过
+`REALMAN_GRIPPER_RIGHT_DEVICE`、`REALMAN_GRIPPER_LEFT_DEVICE` 映射到容器内
+`/dev/ttyUSB0`、`/dev/ttyUSB1`；没有对应硬件时可设置 `REALMAN_START_GRIPPERS=false`。
+权威参数位于
+`config/ros/gripper_params.yaml`，启动参数还支持 `gripper_side`、
+`gripper_right_port` 和 `gripper_left_port`。
+
 浏览器连接 `/ws` 后即可发送运动、取消和软件停止消息，不需要额外输入 token。该服务应
 只部署在受信任、隔离的机器人局域网；它仍然经过既有 driver 的 ownership、坐标 gate、
 watchdog 和 lockout，不会直接调用 SDK。
+
+Web 服务对 `index.html` 和前端路由 fallback 返回 `Cache-Control: no-cache`，浏览器每次
+访问都会重新验证入口文件；JS/CSS 使用 Vite 内容 hash 文件名，因此部署新页面后不会继续
+复用旧 bundle。若页面在该缓存策略部署前已经保持打开，重新加载页面即可看到最新控件；仍有
+旧页面时使用浏览器强制刷新。
 
 ## WebSocket 协议
 
@@ -81,6 +99,23 @@ watchdog 和 lockout，不会直接调用 SDK。
 | `joint_record_deleted` | `record` | MOVEJ 页面确认删除当前选择记录后的结果 |
 | `joint_record_applied` | `command`, `joint_degrees`, `pose_position_m`, `pose_quaternion_wxyz` | 选择记录填入当前 MOVEJ/MOVEL/MOVEP 表单 |
 | `tf_frames` | `arm`, `frames[]` | TF 缓存中与该 arm `base_link` 连通的可选参考坐标 |
+| `gripper_state` | `arm`, `position`, `torque_reached`, `alarm` | 左右夹爪位置、力矩到达和报警反馈 |
+| `gripper_command_result` | `arm`, `command`, `success`, `message` | 夹爪服务调用结果 |
+
+### 夹爪控制
+
+网页将 `l` 映射到 `/gripper_left/*`，将 `r` 映射到 `/gripper_right/*`；`m` 臂没有夹爪，
+页面只显示 `N/A`。浏览器发送的命令统一使用：
+
+```json
+{"type":"gripper_command","request_id":"grip-1","arm":"l","command":"percentage","percentage":0.5}
+```
+
+`command` 可取 `open`、`close`、`percentage`、`grasp_check`、`calibrate`、`reset`、
+`enable` 或 `disable`。百分比范围是 `0.0`（闭合）到 `1.0`（张开）；底层节点启动时自动
+标定，标定期间百分比命令会被拒绝。状态中的 `position` 是夹爪设备单位，
+`torque_reached` 表示达到力矩限制，`alarm` 是底层位掩码。Web 桥不直接访问串口或 SDK，
+仅调用 ROS 服务并转发状态话题。
 
 ### MOVEJ、MOVEL 与 MOVEP
 

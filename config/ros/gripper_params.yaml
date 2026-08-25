@@ -1,0 +1,21 @@
+# Changingtek/知行 gripper parameters for the system bringup.
+# The two serial ports are selected by gripper.launch.py arguments because
+# udev device names can differ between installations.
+/**:
+  ros__parameters:
+    # Modbus RTU link: 8 data bits, no parity, one stop bit.
+    slave_id: 1
+    baudrate: 115200
+    timeout: 0.3
+    # Device position units are actuator-specific; calibration maps the
+    # percentage service onto each gripper's measured open/closed limits.
+    open_pos: 400
+    close_pos: 12000
+    speed: 100
+    force: 60
+    accel: 100
+    decel: 100
+    status_rate: 10.0
+    auto_enable: true
+    auto_calibrate: true
+    calibrate_close_target: 100000

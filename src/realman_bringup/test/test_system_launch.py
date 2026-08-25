@@ -24,6 +24,7 @@ def test_disabled_system_launch_expands_without_starting_processes(tmp_path, mon
             "use_gui",
             "use_rviz",
             "start_web_control",
+            "start_grippers",
             "start_camera_calibration",
             "update_layout_after_calibration",
         )

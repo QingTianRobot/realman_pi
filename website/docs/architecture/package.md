@@ -115,9 +115,12 @@ Compose 使用 host network 和 host IPC，并挂载两个只读/受限的显示
 容器从根目录 `.env` 读取 `ROS_DOMAIN_ID`，模板值为 `0`，并默认设置 `ROS_LOCALHOST_ONLY=0`。使用 host network 后，同一网络中的 Humble 主机可以加入该 ROS 图进行远程调试；主机防火墙必须允许 DDS UDP 流量。带 RViz 的服务额外设置 `QT_X11_NO_MITSHM=1` 和 `LIBGL_ALWAYS_SOFTWARE=1`，降低主机与容器的 OpenGL 驱动冲突概率。
 
 `realman_bringup` 把主机 `/dev/input` 只读映射到容器，并等待
-`*-event-joystick` 设备出现后启动 Joy 驱动。`realman_bringup_remote` 不启动设备驱动和 GUI，
-只保留 ROS 节点供远程 Joy 发布者调试。设备和按键契约见 [Xbox 手柄输入](../development/xbox-controller)，
-系统组合方式见[系统 Bringup](../development/system-bringup)。
+`*-event-joystick` 设备出现后启动 Joy 驱动。完整本地、参数化和 headless 生产服务还把主机
+`/dev/realman/gripper_right` 与 `/dev/realman/gripper_left` 映射到容器 `/dev/ttyUSB0` 和
+`/dev/ttyUSB1`，由 `config/udev/99-realman-grippers.rules` 绑定无序列号的 CH340 RS-485
+适配器。`realman_bringup_remote` 不启动 Joy 设备驱动和 GUI，但默认启动真实驱动、Xbox
+处理节点和左右夹爪；Web 控制可用 `REALMAN_START_WEB_CONTROL=true` 额外打开。设备和按键契约见
+[Xbox 手柄输入](../development/xbox-controller)，系统组合方式见[系统 Bringup](../development/system-bringup)。
 
 `xbox_controller_test` 是独立的实体手柄验证服务，只启动 `/input/joy_node` 和
 `/input/xbox_controller`，不创建机械臂、TF 或 RViz 节点。

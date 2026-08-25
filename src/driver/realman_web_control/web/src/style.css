@@ -91,6 +91,17 @@ input[type="range"] { display: block; width: 100%; accent-color: #4dbbb0; }
 .coordinate-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; color: #c8d8d5; font-size: 11px; }
 .coordinate-row strong { color: #e7efec; font-size: 11px; font-weight: 700; text-align: right; }
 .coordinate-meta, .coordinate-empty { color: #82999d; font-size: 10px; line-height: 1.45; }
+.gripper-readouts { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-bottom: 13px; }
+.gripper-readouts > div { min-width: 0; padding: 8px; border: 1px solid #263b40; background: #101c20; }
+.gripper-readouts span, .gripper-readouts small { display: block; color: #82999d; font-size: 9px; }
+.gripper-readouts strong { display: block; margin: 4px 0 2px; color: #8ee1d2; font-size: 13px; font-variant-numeric: tabular-nums; }
+.gripper-percentage { display: grid; grid-template-columns: 1fr auto; gap: 6px; align-items: center; color: #8fa6a9; font-size: 10px; }
+.gripper-percentage output { color: #8ee1d2; font-variant-numeric: tabular-nums; }
+.gripper-percentage input { grid-column: 1 / -1; width: 100%; }
+.gripper-actions { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 7px; margin-top: 13px; }
+.gripper-actions .button, .gripper-secondary-actions .button { min-width: 0; padding: 8px 5px; font-size: 10px; }
+.gripper-secondary-actions { display: grid; grid-template-columns: 1fr 1fr; gap: 7px; margin-top: 7px; }
+.gripper-feedback { min-height: 28px; margin-top: 9px; color: #9bb5b2; font-size: 10px; line-height: 1.45; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .form-grid label, .velocity-inputs label { display: grid; gap: 5px; color: #8fa6a9; font-size: 10px; }
 .form-grid select, .form-grid input { width: 100%; min-width: 0; padding: 7px; font-size: 11px; }
@@ -132,4 +143,5 @@ dialog input { width: 100%; margin: 8px 0 18px; }
   .velocity-inputs { grid-template-columns: repeat(3, 1fr); row-gap: 8px; }
   .viewer-footer { font-size: 9px; }
   .record-save-row, .record-apply-row { grid-template-columns: 1fr; }
+  .gripper-actions { grid-template-columns: repeat(2, minmax(0, 1fr)); }
 }

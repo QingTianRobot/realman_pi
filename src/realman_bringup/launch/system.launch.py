@@ -39,6 +39,7 @@ def generate_launch_description():
     three_robots_launch = description_share / "launch" / "three_robots.launch.py"
     driver_share = Path(get_package_share_directory("realman_robot_driver"))
     web_control_share = Path(get_package_share_directory("realman_web_control"))
+    gripper_share = Path(get_package_share_directory("gripper_ros2"))
     calibration_share = Path(get_package_share_directory("realman_camera_calibration"))
     three_drivers_launch = driver_share / "launch" / "three_realman_drivers.launch.py"
     # Docker mounts the repository configuration at REALMAN_CONFIG_ROOT so edits
@@ -73,6 +74,11 @@ def generate_launch_description():
     camera_calibration_config_file = LaunchConfiguration("camera_calibration_config_file")
     update_layout_after_calibration = LaunchConfiguration("update_layout_after_calibration")
     web_control_config_file = LaunchConfiguration("web_control_config_file")
+    start_grippers = LaunchConfiguration("start_grippers")
+    gripper_config_file = LaunchConfiguration("gripper_config_file")
+    gripper_side = LaunchConfiguration("gripper_side")
+    gripper_right_port = LaunchConfiguration("gripper_right_port")
+    gripper_left_port = LaunchConfiguration("gripper_left_port")
     joint_record_dir = LaunchConfiguration("joint_record_dir")
     wait_for_joy_device = LaunchConfiguration("wait_for_joy_device")
     joy_device_path = LaunchConfiguration("joy_device_path")
@@ -174,6 +180,31 @@ def generate_launch_description():
                 description="Start the authenticated browser WebSocket/action bridge.",
             ),
             DeclareLaunchArgument(
+                "start_grippers",
+                default_value="true",
+                description="Start the left/right Changingtek grippers over RS-485 Modbus RTU.",
+            ),
+            DeclareLaunchArgument(
+                "gripper_config_file",
+                default_value=str(config_root / "ros" / "gripper_params.yaml"),
+                description="Gripper ROS parameters under the project-root config/ directory.",
+            ),
+            DeclareLaunchArgument(
+                "gripper_side",
+                default_value="both",
+                description="Gripper side to start: left, right, or both.",
+            ),
+            DeclareLaunchArgument(
+                "gripper_right_port",
+                default_value="/dev/ttyUSB0",
+                description="RS-485 serial port for the right gripper.",
+            ),
+            DeclareLaunchArgument(
+                "gripper_left_port",
+                default_value="/dev/ttyUSB1",
+                description="RS-485 serial port for the left gripper.",
+            ),
+            DeclareLaunchArgument(
                 "start_camera_calibration",
                 default_value="false",
                 description="Start ChArUco capture and three-arm calibration services.",
@@ -255,6 +286,18 @@ def generate_launch_description():
                     "coordinates_config_file": coordinates_config_file,
                     "joint_record_dir": joint_record_dir,
                     "calibration_config_file": camera_calibration_config_file,
+                }.items(),
+            ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    str(gripper_share / "launch" / "gripper.launch.py")
+                ),
+                condition=IfCondition(start_grippers),
+                launch_arguments={
+                    "config_file": gripper_config_file,
+                    "side": gripper_side,
+                    "right_port": gripper_right_port,
+                    "left_port": gripper_left_port,
                 }.items(),
             ),
             Node(

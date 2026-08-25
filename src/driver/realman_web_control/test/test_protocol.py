@@ -166,6 +166,30 @@ def test_kinematics_messages_require_complete_vectors():
         )
 
 
+def test_gripper_commands_are_normalized_and_bounded():
+    command = parse_message(
+        '{"type":"gripper_command","request_id":"grip-1","arm":"l",'
+        '"command":"percentage","percentage":0.25}'
+    )
+    assert command == {
+        "type": "gripper_command",
+        "request_id": "grip-1",
+        "arm": "l",
+        "command": "percentage",
+        "percentage": 0.25,
+    }
+    with pytest.raises(ProtocolError, match="percentage"):
+        parse_message(
+            '{"type":"gripper_command","request_id":"grip-2","arm":"l",'
+            '"command":"percentage","percentage":1.1}'
+        )
+    with pytest.raises(ProtocolError, match="no configured gripper"):
+        parse_message(
+            '{"type":"gripper_command","request_id":"grip-3","arm":"m",'
+            '"command":"open"}'
+        )
+
+
 def test_connected_trajectory_and_recovery_messages_are_normalized():
     motion = valid_motion()["goal"]
     parsed = parse_message(

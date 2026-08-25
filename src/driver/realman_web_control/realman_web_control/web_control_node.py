@@ -31,9 +31,10 @@ from realman_msgs.srv import (
     SolveCalibration,
     SolveIk,
 )
+from gripper_ros2_msgs.srv import GripperPercentage
 from sensor_msgs.msg import JointState
-from std_msgs.msg import Bool, String
-from std_srvs.srv import Trigger
+from std_msgs.msg import Bool, Float64, Int32, String
+from std_srvs.srv import SetBool, Trigger
 from tf2_ros import Buffer, TransformListener
 
 from .action_bridge import ActionRecord, action_event, assign_fields, message_to_json
@@ -109,6 +110,7 @@ class WebControlNode(Node):
         self._commands: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue(maxsize=2048)
         self._actions: dict[tuple[str, str], ActionRecord] = {}
         self._coordinate_state: dict[str, dict[str, Any]] = {}
+        self._gripper_state: dict[str, dict[str, Any]] = {}
         self._camera_health: dict[str, Any] = {"type": "camera_health", "inputs": []}
         self._tf_buffer = Buffer()
         self._tf_listener = TransformListener(self._tf_buffer, self, spin_thread=False)
@@ -180,6 +182,26 @@ class WebControlNode(Node):
             arm: self.create_client(SolveIk, f"/{arm}/solve_ik", callback_group=self._callback_group)
             for arm in ARMS
         }
+        self._gripper_nodes = {"l": "gripper_left", "r": "gripper_right"}
+        self._gripper_trigger_clients = {
+            arm: {
+                command: self.create_client(
+                    Trigger,
+                    f"/{node}/{command}",
+                    callback_group=self._callback_group,
+                )
+                for command in ("open", "close", "reset", "calibrate", "grasp_check")
+            }
+            for arm, node in self._gripper_nodes.items()
+        }
+        self._gripper_enable_clients = {
+            arm: self.create_client(SetBool, f"/{node}/enable", callback_group=self._callback_group)
+            for arm, node in self._gripper_nodes.items()
+        }
+        self._gripper_percentage_clients = {
+            arm: self.create_client(GripperPercentage, f"/{node}/percentage", callback_group=self._callback_group)
+            for arm, node in self._gripper_nodes.items()
+        }
         self._capture_calibration_client = self.create_client(
             CaptureCalibrationSample,
             "/camera_calibration/capture_sample",
@@ -227,6 +249,39 @@ class WebControlNode(Node):
                     10,
                     callback_group=self._callback_group,
                 )
+            )
+
+        for arm, node in self._gripper_nodes.items():
+            self._subscriptions.extend(
+                [
+                    self.create_subscription(
+                        Float64,
+                        f"/{node}/position",
+                        lambda message, selected=arm: self._gripper_feedback(
+                            selected, position=message.data
+                        ),
+                        10,
+                        callback_group=self._callback_group,
+                    ),
+                    self.create_subscription(
+                        Bool,
+                        f"/{node}/torque_reached",
+                        lambda message, selected=arm: self._gripper_feedback(
+                            selected, torque_reached=message.data
+                        ),
+                        10,
+                        callback_group=self._callback_group,
+                    ),
+                    self.create_subscription(
+                        Int32,
+                        f"/{node}/alarm",
+                        lambda message, selected=arm: self._gripper_feedback(
+                            selected, alarm=message.data
+                        ),
+                        10,
+                        callback_group=self._callback_group,
+                    ),
+                ]
             )
 
         self._server = WebControlServer(
@@ -324,8 +379,62 @@ class WebControlNode(Node):
             self._capture_calibration_sample(client_id, message)
         elif message_type == "solve_calibration":
             self._solve_calibration(client_id, message)
+        elif message_type == "gripper_command":
+            self._gripper_command(client_id, message)
         else:
             raise ProtocolError("unsupported_type", f"unsupported message type: {message_type}")
+
+    def _gripper_command(self, client_id: str, message: dict[str, Any]) -> None:
+        arm = message["arm"]
+        command = message["command"]
+        if command in self._gripper_trigger_clients[arm]:
+            client = self._gripper_trigger_clients[arm][command]
+            request = Trigger.Request()
+        elif command in ("enable", "disable"):
+            client = self._gripper_enable_clients[arm]
+            request = SetBool.Request()
+            request.data = command == "enable"
+        else:
+            client = self._gripper_percentage_clients[arm]
+            request = GripperPercentage.Request()
+            request.percentage = float(message["percentage"])
+        if not client.service_is_ready():
+            raise ProtocolError(
+                "gripper_unavailable",
+                f"gripper service for {arm}/{command} is not available",
+                message["request_id"],
+            )
+        future = client.call_async(request)
+        future.add_done_callback(
+            lambda completed: self._gripper_command_response(
+                client_id, arm, command, message["request_id"], completed
+            )
+        )
+
+    def _gripper_command_response(
+        self, client_id: str, arm: str, command: str, request_id: str, future: Any
+    ) -> None:
+        try:
+            response = future.result()
+            event = {
+                "type": "gripper_command_result",
+                "arm": arm,
+                "command": command,
+                "request_id": request_id,
+                "success": bool(response.success),
+                "message": str(response.message),
+            }
+        except Exception as error:
+            self.get_logger().error(f"Web gripper command failed for {arm}/{command}: {error}")
+            event = {
+                "type": "gripper_command_result",
+                "arm": arm,
+                "command": command,
+                "request_id": request_id,
+                "success": False,
+                "message": str(error),
+            }
+        self._server.send_event(event, client_id)
 
     def _capture_calibration_sample(self, client_id: str, message: dict[str, Any]) -> None:
         client = self._capture_calibration_client
@@ -886,6 +995,20 @@ class WebControlNode(Node):
         self._camera_health = payload
         self._server.send_event(payload)
 
+    def _gripper_feedback(self, arm: str, **updates: Any) -> None:
+        state = self._gripper_state.setdefault(
+            arm,
+            {
+                "type": "gripper_state",
+                "arm": arm,
+                "position": None,
+                "torque_reached": False,
+                "alarm": 0,
+            },
+        )
+        state.update(updates)
+        self._server.send_event(dict(state))
+
     def _send_cached_state(self, client_id: str) -> None:
         self._server.send_event(self._camera_health, client_id)
         for arm in ARMS:
@@ -893,6 +1016,8 @@ class WebControlNode(Node):
             if state is not None:
                 self._server.send_event(state, client_id)
             self._send_joint_records(client_id, arm)
+        for state in self._gripper_state.values():
+            self._server.send_event(dict(state), client_id)
         self._send_tf_frames(client_id)
 
     def _default_reference(self, arm: str) -> tuple[int, str]:

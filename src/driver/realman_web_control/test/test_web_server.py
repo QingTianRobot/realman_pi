@@ -51,6 +51,18 @@ def test_static_root_serves_index_when_index_is_symlink(tmp_path):
     response = asyncio.run(_server(static_root)._static_asset(FakeRequest("")))
 
     assert response.status == 200
+    assert response.headers["Cache-Control"] == "no-cache"
+
+
+def test_static_spa_fallback_disables_html_caching(tmp_path):
+    static_root = tmp_path / "static"
+    static_root.mkdir()
+    (static_root / "index.html").write_text("ok", encoding="utf-8")
+
+    response = asyncio.run(_server(static_root)._static_asset(FakeRequest("control")))
+
+    assert response.status == 200
+    assert response.headers["Cache-Control"] == "no-cache"
 
 
 def test_web_control_is_open_without_browser_authentication(tmp_path):

@@ -11,6 +11,10 @@ ARMS = frozenset({"l", "m", "r"})
 ACTION_NAMES = frozenset(
     {"execute_motion", "execute_trajectory", "cartesian_velocity"}
 )
+GRIPPER_ARMS = frozenset({"l", "r"})
+GRIPPER_COMMANDS = frozenset(
+    {"open", "close", "reset", "calibrate", "grasp_check", "enable", "disable", "percentage"}
+)
 MAX_REQUEST_ID_LENGTH = 96
 
 
@@ -140,6 +144,28 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
         }
 
     arm = _arm(message)
+    if message_type == "gripper_command":
+        request_id = _request_id(message)
+        if arm not in GRIPPER_ARMS:
+            raise ProtocolError("gripper_unavailable", f"arm {arm} has no configured gripper", request_id)
+        command = message.get("command")
+        if command not in GRIPPER_COMMANDS:
+            raise ProtocolError(
+                "invalid_gripper_command",
+                "command must be open, close, reset, calibrate, grasp_check, enable, disable, or percentage",
+                request_id,
+            )
+        normalized: dict[str, Any] = {
+            "type": message_type,
+            "request_id": request_id,
+            "arm": arm,
+            "command": command,
+        }
+        if command == "percentage":
+            normalized["percentage"] = _number(message.get("percentage"), "percentage")
+            if not 0.0 <= normalized["percentage"] <= 1.0:
+                raise ProtocolError("invalid_field", "percentage must be from 0.0 through 1.0", request_id)
+        return normalized
     if message_type == "get_current_pose":
         normalized = {
             "type": message_type,

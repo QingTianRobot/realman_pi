@@ -5,7 +5,9 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 
 # 系统 Bringup
 
-`realman_bringup` 是系统编排包。它按参数组合三臂描述、RealMan 只读状态驱动、RViz 2、标准 Joy 设备节点和 C++ 输入处理节点，不拥有机械臂 URDF、Xbox 按键语义或 TF 布局数值。
+`realman_bringup` 是系统编排包。它按参数组合三臂描述、RealMan 只读状态驱动、左右
+Changingtek 夹爪、Web 控制、RViz 2、标准 Joy 设备节点和 C++ 输入处理节点，不拥有机械臂
+URDF、夹爪 Modbus 协议、Xbox 按键语义或 TF 布局数值。
 
 手柄设备和按键处理的详细契约见 [Xbox 手柄输入](./xbox-controller)，三臂位姿与 TF 契约见[三臂配置驱动可视化](./three-arm-visualization)。
 
@@ -17,6 +19,8 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 | RealMan 状态回读 | Include `three_realman_drivers.launch.py` | `config/ros/realman_driver.yaml` |
 | Xbox 设备读取 | 创建 `joy/game_controller_node` | `config/ros/xbox_controller.yaml` |
 | 按键边沿处理 | 创建 `xbox_controller_node` | `xbox_controller_driver` |
+| 夹爪控制 | Include `gripper.launch.py`，创建 `/gripper_left` 和 `/gripper_right` | `config/ros/gripper_params.yaml`、RS-485 设备路径 |
+| 浏览器控制 | Include `web_control.launch.py`，桥接机械臂 Action 和夹爪服务 | `config/ros/realman_web_control.yaml` |
 | RViz 2 | 透传 `use_rviz` 给三臂 launch | `config/rviz/three_robots.rviz` |
 | 运行日志 | 创建时间目录并设置 ROS 2 环境变量 | `REALMAN_LOG_ROOT`、`ROS_LOG_DIR` |
 
@@ -44,6 +48,10 @@ ros2 launch realman_bringup system.launch.py \
 | `coordinates_config_file` | `config/ros/realman_coordinates.yaml` | 指定 BASE/WORK/TOOL 坐标配置 |
 | `motion_config_file` | `config/ros/realman_motion.yaml` | 指定运动速度、加速度和 watchdog 限制 |
 | `start_web_control` | `false` | 启动认证 WebSocket、Action 和 URDF 控制桥 |
+| `start_grippers` | `true` | 启动左右夹爪节点；无硬件时设为 `false` |
+| `gripper_config_file` | `config/ros/gripper_params.yaml` | 夹爪 Modbus、速度/力矩和自动标定参数 |
+| `gripper_side` | `both` | `left`、`right` 或 `both` |
+| `gripper_right_port` / `gripper_left_port` | `/dev/ttyUSB0` / `/dev/ttyUSB1` | 容器内两个 RS-485 串口；主机设备使用 udev 固定别名 |
 | `start_camera_calibration` | `false` | 启动 ChArUco 三臂采样/手眼求解 service |
 | `camera_calibration_config_file` | `config/ros/camera_calibration.yaml` | 指定标定板、相机话题、TF 和求解阈值 |
 | `web_control_config_file` | `config/ros/realman_web_control.yaml` | 指定浏览器控制桥配置 |
@@ -71,6 +79,11 @@ realman_bringup/system.launch.py
 │   ├── realman_driver
 │   ├── robot_state_publisher
 │   └── world_transform
+├── /gripper_left
+├── /gripper_right
+├── /realman_web_control
+│   ├── ROS Action/service clients
+│   └── WebSocket browser server
 ├── /input/joy_node
 ├── /input/xbox_controller
 └── /rviz2
@@ -92,8 +105,8 @@ realman_bringup/system.launch.py
 
 | Compose 服务 | 用途 | 显示环境 | 实体手柄 |
 | --- | --- | --- | --- |
-| `realman_bringup` | 完整本地系统 | 需要 `DISPLAY`、`XAUTHORITY` | 等待并读取 `${REALMAN_JOY_DEVICE:-auto}` |
-| `realman_bringup_remote` | 远程/headless 调试 | 不需要 X11 | 不映射设备，不启动 Joy 驱动 |
+| `realman_bringup` | 完整本地系统、夹爪和 Web 控制 | 需要 `DISPLAY`、`XAUTHORITY` | 等待并读取 `${REALMAN_JOY_DEVICE:-auto}`；映射两个 RS-485 设备 |
+| `realman_bringup_remote` | 远程/headless 调试、可选 Web 控制、默认夹爪 | 不需要 X11 | 映射两个 RS-485 设备，不启动 Joy 驱动 |
 | `realman_bringup_custom` | `.env` 参数化组合 | 可选 X11 | 按 `.env` 开关映射并启动 |
 | `realman_remote_rviz` | 只在本机显示远程 ROS 图 | 需要 X11 | 不启动驱动或手柄 |
 | `xbox_controller_test` | 独立手柄测试 | 不需要 X11 | 等待并读取 `${REALMAN_JOY_DEVICE:-auto}` |
@@ -131,6 +144,10 @@ docker compose run --rm realman_driver_rviz
 | `REALMAN_USE_GUI` | `use_gui` | `true` / `false` |
 | `REALMAN_USE_RVIZ` | `use_rviz` | `true` / `false` |
 | `REALMAN_START_WEB_CONTROL` | `start_web_control` | `true` / `false` |
+| `REALMAN_START_GRIPPERS` | `start_grippers` | `true` / `false` |
+| `REALMAN_GRIPPER_RIGHT_DEVICE` / `REALMAN_GRIPPER_LEFT_DEVICE` | Docker `devices` | 主机串口路径 |
+| `REALMAN_GRIPPER_RIGHT_PORT` / `REALMAN_GRIPPER_LEFT_PORT` | `gripper_*_port` | 容器内串口路径 |
+| `REALMAN_GRIPPER_SIDE` | `gripper_side` | `left` / `right` / `both` |
 | `REALMAN_START_CAMERA_CALIBRATION` | `start_camera_calibration` | `true` / `false` |
 | `REALMAN_CAMERA_CALIBRATION_CONFIG_FILE` | `camera_calibration_config_file` | 标定配置绝对路径 |
 | `REALMAN_UPDATE_LAYOUT_AFTER_CALIBRATION` | `update_layout_after_calibration` | `true`：求解后写回 `three_robots.yaml`；`false`：只保存结果 |
@@ -353,10 +370,15 @@ Bringup 当前读取：
 
 - `config/ros/three_robots.yaml`
 - `config/ros/realman_driver.yaml`
+- `config/ros/realman_coordinates.yaml`
+- `config/ros/realman_motion.yaml`
+- `config/ros/realman_web_control.yaml`
+- `config/ros/gripper_params.yaml`
+- `config/ros/camera_calibration.yaml`
 - `config/ros/xbox_controller.yaml`
 - `config/python/realman-sdk-requirements.txt`
 
-配置字段的语义分别由三臂和 Xbox 功能页面维护，Bringup 不复制这些数值。
+配置字段的语义分别由三臂、驱动、Web 控制、夹爪、相机标定和 Xbox 功能页面维护，Bringup 不复制这些数值。
 
 ## ROS 2 运行日志
 
@@ -461,6 +483,7 @@ find logs -maxdepth 2 -type f -name '*.log' -print
 | 日志没有落在项目目录 | `REALMAN_LOG_ROOT` 是否可写，宿主 `logs/` 是否正确挂载 |
 | RViz/GUI 报 Qt/X11 错误 | 图形服务需要有效 `DISPLAY`、`XAUTHORITY` 和 `/tmp/.X11-unix` |
 | 修改 YAML 后行为未变化 | Docker 需重启服务；本地安装需重新构建 `realman_bringup` |
+| 夹爪服务不可用或启动失败 | 核对 `config/udev/99-realman-grippers.rules` 是否生成 `/dev/realman/gripper_*`，Compose `REALMAN_GRIPPER_*_DEVICE` 是否映射到容器 `/dev/ttyUSB0/1`，以及 `REALMAN_START_GRIPPERS` 是否为 `true` |
 | Docker 拉取基础镜像或 APT 超时 | 检查上表镜像变量；单独切换故障源，或临时恢复官方源后重建 |
 
 ## 当前限制

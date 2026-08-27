@@ -1,5 +1,5 @@
 安装教程：
-https://github.com/realsenseai/librealsense/blob/master/doc/installation.md
+https://github.com/realsenseai/librealsense/blob/master/doc/installatpo0i-b.md
 
 https://blog.csdn.net/qq_45445740/article/details/143613024
 

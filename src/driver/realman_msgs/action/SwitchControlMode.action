@@ -1,0 +1,17 @@
+uint8 requested_mode
+string owner_id
+string reason
+uint32 timeout_ms
+uint32 lease_timeout_ms
+---
+bool success
+uint8 terminal_state
+uint64 epoch
+string message
+---
+uint8 phase
+uint8 current_mode
+uint8 requested_mode
+uint64 epoch
+float32 progress
+string detail

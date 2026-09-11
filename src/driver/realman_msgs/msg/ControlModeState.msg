@@ -1,0 +1,19 @@
+uint8 IDLE=0
+uint8 REQUESTED=1
+uint8 STOPPING_CURRENT=2
+uint8 CANCELING_MOTION=3
+uint8 VERIFYING_SAFE=4
+uint8 ACTIVATING_BACKEND=5
+uint8 CONFIRMING_LEASE=6
+uint8 ACTIVE=7
+uint8 FAILED=8
+
+uint8 current_mode
+uint8 requested_mode
+uint8 phase
+string owner_id
+uint64 epoch
+uint32 lease_remaining_ms
+bool healthy
+string failure_code
+string detail

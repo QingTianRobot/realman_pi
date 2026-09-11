@@ -1,0 +1,8 @@
+# Behavior-tree runtime defaults. Paths are container-visible when launched by Compose.
+realman_bt_executor:
+  ros__parameters:
+    tree_file: /opt/rm65_ws/config/behavior-trees/control_mode.xml
+    tick_rate_hz: 10.0
+    switch_timeout_ms: 5000
+    default_lease_timeout_ms: 3000
+    safe_fallback_mode: none

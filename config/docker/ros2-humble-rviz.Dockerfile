@@ -52,7 +52,7 @@ COPY config /opt/rm65_ws/config
 COPY src /opt/rm65_ws/src
 # Keep the behavior-tree runtime reproducible inside the image. The source is
 # copied from the repository snapshot rather than a developer's Downloads path.
-COPY third_party/behavior_tree_cpp /opt/rm65_ws/third_party/behavior_tree_cpp
+COPY third_party/behavior_tree_cpp /opt/rm65_ws/src/behavior_tree_cpp
 
 # Install the pinned vendor API used by the real driver. Mock tests still avoid
 # importing it, while production launches can read real controller state.
@@ -64,8 +64,8 @@ RUN python3 -m pip install --no-cache-dir \
 
 RUN . /opt/ros/humble/setup.sh \
     && colcon build --symlink-install \
-        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration \
-    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration \
+        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration realman_bt realman_bt_mock bt_ros2 \
+    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration realman_bt realman_bt_mock \
     && colcon test-result --verbose
 
 COPY docker/ros_entrypoint.sh /ros_entrypoint.sh

@@ -271,3 +271,12 @@ services:
       - realman_robot_driver
       - three_realman_drivers.launch.py
       - config_file:=/opt/rm65_ws/config/ros/realman_driver_mock.yaml
+
+  # Isolated behavior-tree debug service; it never starts real drivers.
+  realman_bt_web:
+    <<: *realman-common
+    command:
+      - ros2
+      - launch
+      - realman_bt_mock
+      - behavior_tree_mock.launch.py

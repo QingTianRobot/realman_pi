@@ -136,6 +136,7 @@ Commands:
   status              Show camera and Docker service state.
   logs                Show recent camera and bringup logs.
   camera              Run the legacy RTSP/TCP camera helper.
+  bt-test build|mock|web|all  Build, run, or validate isolated behavior-tree scenarios.
   sync                Synchronize the clean main branch to production.
 EOF
 }
@@ -147,6 +148,7 @@ case "$command_name" in
   down) down "$@" ;;
   status) status "$@" ;;
   logs) logs "$@" ;;
+  bt-test) exec "$ROOT/scripts/bt-test.sh" "$@" ;;
   camera) exec zsh -lc 'source "$1/functions.zsh" && rm65_camera_start' _ "$ROOT" ;;
   sync) sync_repo "$@" ;;
   help|-h|--help) usage ;;

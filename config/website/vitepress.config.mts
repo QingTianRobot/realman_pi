@@ -74,6 +74,7 @@ export default defineConfig({
           { text: "三臂配置驱动可视化", link: "/development/three-arm-visualization" },
           { text: "Xbox 手柄输入", link: "/development/xbox-controller" },
           { text: "系统 Bringup", link: "/development/system-bringup" },
+          { text: "行为树控制权与 Mock 测试", link: "/development/behavior-tree-control" },
         ],
       },
     ],

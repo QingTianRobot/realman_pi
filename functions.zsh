@@ -784,7 +784,9 @@ rm65_deploy_sync() {
   fi
 
   print -r -- "rm65: pushing main to origin before production sync"
-  command git -C "$RM65_PROJECT_ROOT" push origin main || return
+  if ! command git -C "$RM65_PROJECT_ROOT" push origin main; then
+    print -u2 -r -- "rm65: warning: GitHub push failed; continuing with direct rsync"
+  fi
 
   quoted_remote_dir="${(q)remote_dir}"
   command ssh "$host" "mkdir -p -- ${quoted_remote_dir}" || return

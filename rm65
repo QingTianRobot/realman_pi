@@ -69,14 +69,14 @@ up() {
   case "$profile" in
     production)
       camera_start
-      if ! compose up -d realman_bringup_remote; then
+      if ! compose up -d realman_bringup_remote realman_web_control; then
         camera_stop
         return 1
       fi
       ;;
     desktop)
       camera_start
-      if ! compose up -d realman_bringup_remote realman_remote_rviz; then
+      if ! compose up -d realman_bringup_remote realman_web_control realman_remote_rviz; then
         camera_stop
         return 1
       fi
@@ -92,13 +92,13 @@ up() {
 }
 
 down() {
-  compose stop realman_bringup_remote realman_remote_rviz || true
+  compose stop realman_bringup_remote realman_web_control realman_remote_rviz || true
   camera_stop
 }
 
 status() {
   if [[ "$DRY_RUN" == "1" ]]; then
-    printf '+ status camera + realman_bringup_remote\n'
+    printf '+ status camera + realman_bringup_remote + realman_web_control\n'
     return 0
   fi
   if [[ -s "$STATE_FILE" ]] && kill -0 "$(<"$STATE_FILE")" 2>/dev/null; then
@@ -106,16 +106,16 @@ status() {
   else
     printf 'camera: stopped\n'
   fi
-  compose ps realman_bringup_remote realman_remote_rviz
+  compose ps realman_bringup_remote realman_web_control realman_remote_rviz
 }
 
 logs() {
   if [[ "$DRY_RUN" == "1" ]]; then
-    printf '+ logs camera + realman_bringup_remote\n'
+    printf '+ logs camera + realman_bringup_remote + realman_web_control\n'
     return 0
   fi
   [[ -f "$LOG_ROOT/rm65-camera.log" ]] && tail -n 100 "$LOG_ROOT/rm65-camera.log" || true
-  compose logs --tail=100 realman_bringup_remote
+  compose logs --tail=100 realman_bringup_remote realman_web_control
 }
 
 sync_repo() {

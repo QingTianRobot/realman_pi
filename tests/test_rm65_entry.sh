@@ -7,6 +7,7 @@ ENTRY="$ROOT/rm65"
 output="$(RM65_DRY_RUN=1 "$ENTRY" up 2>&1)"
 grep -Fq "camera_ros2 color" <<<"$output"
 grep -Fq "realman_bringup_remote" <<<"$output"
+grep -Fq "realman_web_control" <<<"$output"
 if grep -Fq "realman_remote_rviz" <<<"$output"; then
   echo "default up unexpectedly starts RViz" >&2
   exit 1
@@ -14,12 +15,14 @@ fi
 
 output="$(RM65_DRY_RUN=1 "$ENTRY" up desktop 2>&1)"
 grep -Fq "realman_remote_rviz" <<<"$output"
+grep -Fq "realman_web_control" <<<"$output"
 
 output="$(RM65_DRY_RUN=1 "$ENTRY" up model 2>&1)"
 grep -Fq "rm65_three_rviz" <<<"$output"
 
 output="$(RM65_DRY_RUN=1 "$ENTRY" down 2>&1)"
 grep -Fq "realman_bringup_remote" <<<"$output"
+grep -Fq "realman_web_control" <<<"$output"
 
 output="$(RM65_DRY_RUN=1 "$ENTRY" status 2>&1)"
 grep -Fq "status" <<<"$output"

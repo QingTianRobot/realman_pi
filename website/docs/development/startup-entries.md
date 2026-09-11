@@ -23,7 +23,7 @@ rm65_project_help
 日常生产操作优先使用仓库根目录的 `./rm65`，它把 ROS 2 彩色相机和三臂机械臂的生命周期合并管理：
 
 ```bash
-./rm65 up                 # ROS 2 彩色相机 + 三臂真实驱动，无 RViz
+./rm65 up                 # ROS 2 彩色相机 + 三臂真实驱动 + Web control，无 RViz
 ./rm65 up desktop         # 同上，并启动远程 ROS 图 RViz
 ./rm65 up model           # 离线三臂模型 + RViz，不连接真机
 ./rm65 status

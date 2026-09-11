@@ -36,3 +36,6 @@ if "$ENTRY" does-not-exist >/dev/null 2>&1; then
 fi
 
 echo "rm65 entry tests passed"
+
+# Production bringup must publish camera health consumed by Web control.
+grep -Fq "start_camera_calibration:=true" "$ROOT/config/docker/compose.yaml"

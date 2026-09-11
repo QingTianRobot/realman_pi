@@ -322,7 +322,7 @@ rm65_docker_bringup_custom_args \
 ./rm65 up
 ```
 
-该入口同时启动标定使用的 ROS 2 彩色相机链路、三臂真实驱动和 Web control，默认不启动 RViz，适合无桌面的生产机。
+该入口同时启动标定使用的 ROS 2 彩色相机链路、三臂真实驱动、Web control 和相机健康诊断，默认不启动 RViz，适合无桌面的生产机。
 桌面调试时使用 `./rm65 up desktop`；停止、查看状态和日志分别使用 `./rm65 down`、`./rm65 status`、
 `./rm65 logs`。
 

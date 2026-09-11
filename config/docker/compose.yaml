@@ -195,7 +195,9 @@ services:
       - use_gui:=false
       - use_rviz:=false
       - start_web_control:=${REALMAN_START_WEB_CONTROL:-false}
-      - start_camera_calibration:=${REALMAN_START_CAMERA_CALIBRATION:-false}
+      # Keep the camera-health publisher present so the Web calibration page
+      # can show all three ROS 2 image inputs during normal production bringup.
+      - start_camera_calibration:=true
       - update_layout_after_calibration:=${REALMAN_UPDATE_LAYOUT_AFTER_CALIBRATION:-true}
       - joint_record_dir:=${REALMAN_JOINT_RECORD_DIR:-/opt/rm65_ws/config/web-control/joint-records}
 

@@ -784,6 +784,9 @@ rm65_deploy_sync() {
     return 1
   fi
 
+  print -r -- "rm65: pushing main to origin before production sync"
+  command git -C "$RM65_PROJECT_ROOT" push origin main || return
+
   quoted_remote_dir="${(q)remote_dir}"
   excludes=(
     --exclude ".git/"
@@ -827,6 +830,10 @@ rm65_deploy_update() {
 
 rm65_project_help() {
   print -r -- "realman_pi Zsh functions"
+  print -r -- "推荐统一入口: ./rm65 up | down | status | logs | sync"
+  print -r -- "  ./rm65 up                 一键启动 ROS2 彩色相机和 headless 三臂真机"
+  print -r -- "  ./rm65 up desktop         一键启动生产图并显示 RViz"
+  print -r -- "  ./rm65 up model           只显示离线三臂模型"
   print -r -- "启动入口索引: website/docs/development/startup-entries.md"
   print -r -- "每次修改 helper、Compose 服务或 launch 参数时，同步更新网站索引。"
   print -r -- ""

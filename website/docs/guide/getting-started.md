@@ -314,6 +314,18 @@ rm65_docker_bringup_custom_args \
   use_gui:=true use_rviz:=true
 ```
 
+## 一键启动生产运行时
+
+在仓库根目录执行：
+
+```bash
+./rm65 up
+```
+
+该入口同时启动标定使用的 ROS 2 彩色相机链路和三臂真实驱动，默认不启动 RViz，适合无桌面的生产机。
+桌面调试时使用 `./rm65 up desktop`；停止、查看状态和日志分别使用 `./rm65 down`、`./rm65 status`、
+`./rm65 logs`。
+
 ## Docker 启动
 
 克隆仓库并构建镜像：

@@ -18,6 +18,25 @@ source /path/to/realman_pi/functions.zsh
 rm65_project_help
 ```
 
+## 推荐统一入口
+
+日常生产操作优先使用仓库根目录的 `./rm65`，它把 ROS 2 彩色相机和三臂机械臂的生命周期合并管理：
+
+```bash
+./rm65 up                 # ROS 2 彩色相机 + 三臂真实驱动，无 RViz
+./rm65 up desktop         # 同上，并启动远程 ROS 图 RViz
+./rm65 up model           # 离线三臂模型 + RViz，不连接真机
+./rm65 status
+./rm65 logs
+./rm65 down
+./rm65 sync               # 校验 main 后同步生产端
+```
+
+默认相机链路是 `rm65_camera_ros2 color`，与 `config/ros/camera_calibration.yaml` 中的彩色话题一致；
+RTSP/TCP 推流仍可通过 `./rm65 camera` 或原有 `rm65_camera_start` 单独维护。默认 `up` 不启动 RViz，
+生产端不需要 `DISPLAY` 或 `XAUTHORITY`。
+
+
 所有 helper 都从 `functions.zsh` 所在位置定位仓库根目录，因此可以在任意目录调用。函数加载时会读取仓库根目录 `.env` 中的简单 `KEY=value` 配置，并保留当前终端已经显式设置的非空变量。函数不会自动写入 `~/.zshrc`，也不会隐藏底层 Docker、colcon、npm、SSH 命令；遇到未覆盖的参数时，继续直接调用底层命令。
 
 ## 项目入口

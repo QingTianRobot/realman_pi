@@ -20,6 +20,25 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 | RViz 2 | 透传 `use_rviz` 给三臂 launch | `config/rviz/three_robots.rviz` |
 | 运行日志 | 创建时间目录并设置 ROS 2 环境变量 | `REALMAN_LOG_ROOT`、`ROS_LOG_DIR` |
 
+## 统一生产入口
+
+推荐从仓库根目录执行 `./rm65 up`。该命令先在宿主机启动三路 ROS 2 彩色相机，再启动 Docker
+中的 `realman_bringup_remote`（三臂真实驱动、headless、`restart: unless-stopped`），因此标定和
+机械臂节点加入同一个 ROS 2 图。相机启动失败时不会启动 Docker；Docker 启动失败会自动停止相机，
+避免半启动状态。
+
+```bash
+./rm65 up                 # 生产默认，无 RViz
+./rm65 up desktop         # 生产图 + 本机 RViz
+./rm65 up model           # 离线模型查看
+./rm65 down
+./rm65 status
+./rm65 logs
+```
+
+相机后台进程 PID 保存在 `logs/.rm65-camera.pid`，其标准输出写入 `logs/rm65-camera.log`；ROS 2
+节点仍按官方机制写入 `logs/YYYYMMDD_HHMMSS/`。
+
 ## 启动入口
 
 ```bash

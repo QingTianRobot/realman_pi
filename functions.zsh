@@ -760,7 +760,6 @@ rm65_deploy_sync() {
   local branch
   local tree_status
   local quoted_remote_dir
-  local -a excludes
 
   if [[ "$host" == -* || "$host" == *$'\n'* || "$remote_dir" == *$'\n'* ]]; then
     print -u2 -r -- "rm65: invalid production host or directory"
@@ -788,27 +787,14 @@ rm65_deploy_sync() {
   command git -C "$RM65_PROJECT_ROOT" push origin main || return
 
   quoted_remote_dir="${(q)remote_dir}"
-  excludes=(
-    --exclude ".git/"
-    --exclude ".claude/"
-    --exclude ".worktrees/"
-    --exclude "build/"
-    --exclude "install/"
-    --exclude "log/"
-    --exclude "logs/"
-    --exclude "website/node_modules/"
-    --exclude "website/docs/.vitepress/dist/"
-    --exclude "website/test-results/"
-    --exclude "__pycache__/"
-    --exclude "*.pyc"
-    --exclude ".pytest_cache/"
-    --exclude ".venv*/"
-  )
-
   command ssh "$host" "mkdir -p -- ${quoted_remote_dir}" || return
-  command rsync -avz --progress "${excludes[@]}" \
-    "$RM65_PROJECT_ROOT/" "${host}:${remote_dir}/"
+  # Sync only files tracked by Git; generated builds, logs, caches, and local
+  # production artifacts must never be copied by the deployment shortcut.
+  command git -C "$RM65_PROJECT_ROOT" ls-files -z | \
+    command rsync -az --from0 --files-from=- --relative \
+      "$RM65_PROJECT_ROOT/" "${host}:${remote_dir}/"
 }
+
 
 rm65_deploy_update() {
   emulate -L zsh

@@ -1,0 +1,180 @@
+/*
+ * index.css — 编辑器全局与响应式布局
+ *
+ * @author pony
+ * @date 2026-06-30
+ * @version v1.1.0
+ * @last_modified 2026-07-13
+ * @changelog
+ *   - v1.1.0 (2026-07-13): 增加窄屏纵向工作区并避免 React Flow 浮层遮挡节点
+ */
+/* 全局基础样式：重置默认边距，铺满视口，统一字体 */
+* {
+  box-sizing: border-box;
+}
+
+html,
+body,
+#root {
+  margin: 0;
+  padding: 0;
+  height: 100%;
+  width: 100%;
+}
+
+body {
+  font-family: -apple-system, BlinkMacSystemFont, 'Segoe UI', Roboto,
+    'PingFang SC', 'Microsoft YaHei', sans-serif;
+  color: #111827;
+  background: #fff;
+}
+
+button {
+  font-family: inherit;
+}
+
+.bt-editor-app {
+  display: flex;
+  flex-direction: column;
+  width: 100%;
+  height: 100vh;
+  min-width: 0;
+  overflow: hidden;
+}
+
+.bt-toolbar-row {
+  min-height: 48px;
+}
+
+.bt-toolbar-row > strong,
+.bt-toolbar-row > button,
+.bt-toolbar-health,
+.bt-xml-toolbar > button {
+  flex-shrink: 0;
+  white-space: nowrap;
+}
+
+.bt-editor-workspace {
+  display: flex;
+  flex: 1 1 auto;
+  min-width: 0;
+  min-height: 0;
+}
+
+.bt-node-palette {
+  width: 240px;
+  flex: 0 0 240px;
+}
+
+.bt-editor-canvas {
+  height: 100%;
+  min-width: 0;
+  flex: 1 1 auto;
+}
+
+.bt-property-panel {
+  width: 280px;
+  flex: 0 0 280px;
+}
+
+.bt-xml-preview {
+  height: 220px;
+  flex: 0 0 220px;
+}
+
+.bt-xml-toolbar {
+  min-height: 42px;
+}
+
+/* 受限画布没有安全的浮层保留区，隐藏辅助浮层可避免遮住可编辑节点。 */
+@media (max-width: 1439px) {
+  .bt-editor-canvas .react-flow__minimap,
+  .bt-editor-canvas .bt-canvas-legend {
+    display: none;
+  }
+}
+
+@media (max-width: 900px) {
+  html,
+  body,
+  #root {
+    height: auto;
+    min-height: 100%;
+  }
+
+  body {
+    overflow-x: hidden;
+  }
+
+  .bt-editor-app {
+    height: auto;
+    min-height: 100vh;
+    min-height: 100dvh;
+    overflow: visible;
+  }
+
+  .bt-toolbar-row {
+    height: auto;
+    padding: 8px 12px !important;
+    flex-wrap: wrap;
+  }
+
+  .bt-toolbar-health {
+    width: 100%;
+    min-width: 0;
+    margin-left: 0 !important;
+    justify-content: space-between;
+  }
+
+  .bt-editor-workspace {
+    flex: none;
+    flex-direction: column;
+  }
+
+  .bt-node-palette {
+    width: 100%;
+    height: 280px;
+    flex: 0 0 280px;
+    border-right: 0 !important;
+    border-bottom: 1px solid #e5e7eb;
+  }
+
+  .bt-editor-canvas {
+    width: 100%;
+    height: max(420px, 50dvh);
+    min-height: 420px;
+    flex: 0 0 max(420px, 50dvh);
+  }
+
+  .bt-editor-canvas .react-flow__controls {
+    display: none;
+  }
+
+  .bt-property-panel {
+    width: 100%;
+    height: 280px;
+    flex: 0 0 280px;
+    border-top: 1px solid #e5e7eb;
+    border-left: 0 !important;
+  }
+
+  .bt-xml-preview {
+    height: 320px;
+    flex: 0 0 320px;
+  }
+
+  .bt-xml-toolbar {
+    height: auto;
+    padding: 8px 12px !important;
+    flex-wrap: wrap;
+  }
+
+  .bt-xml-toolbar > span:not(.bt-xml-spacer) {
+    min-width: 0;
+    overflow-wrap: anywhere;
+  }
+
+  .bt-xml-spacer {
+    display: none;
+  }
+}

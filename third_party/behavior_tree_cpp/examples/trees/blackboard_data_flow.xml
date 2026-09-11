@@ -1,0 +1,26 @@
+<?xml version="1.0"?>
+<!--
+  黑板数据流示例：先写入 battery_level 和 needs_recharge，再用条件节点读取判断。
+  用途：演示字面量端口、黑板 key、数值比较和 bool 条件的组合。
+-->
+<root main_tree_to_execute="BlackboardFlowTree">
+  <BehaviorTree ID="BlackboardFlowTree">
+    <Sequence name="battery_decision">
+      <SetBlackboard name="cache_battery_level"
+                     value="0.15"
+                     output_key="battery_level"/>
+      <CompareBlackboard name="battery_is_low"
+                         key="battery_level"
+                         op="&lt;"
+                         value="0.20"/>
+      <SetBool name="mark_recharge_required"
+               key="needs_recharge"
+               value="true"/>
+      <CheckBool name="confirm_recharge_required"
+                 key="needs_recharge"
+                 expected="true"/>
+      <PrintMessage name="announce_recharge"
+                    message="battery low, recharge required"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

@@ -1,0 +1,53 @@
+<?xml version="1.0"?>
+<!--
+  bt_ros2/package.xml
+  ROS2(ament_cmake) 包清单 —— 声明 bt_ros2 这个“可选 ROS2 wrapper”的元信息与依赖。
+
+  设计说明：
+    - 这是 bt_core 的可选包装层。核心库 bt_core 零 ROS 依赖；本包把行为树接到
+      ROS2 的“参数 / 话题 / 定时器”上。
+    - 依赖里区分：
+        buildtool_depend = ament_cmake（构建系统）
+        depend           = 既是构建期也是运行期依赖（rclcpp / 消息与服务接口）
+        exec_depend      = 仅在 launch 运行时需要的 Python 包
+    - bt_core 不是 ROS 包，不能用 <depend> 走 rosdep 解析，
+      而是通过 CMake 的 find_package / add_subdirectory 提供（见 CMakeLists.txt 说明），
+      因此这里**不**把 bt_core 写成 ROS 依赖项，避免 colcon 误判为缺失的 ROS 包。
+    - 不引用远程 xml-model；ament_package 会解析本清单，xmllint 因此可离线运行，
+      不把 download.ros.org 的可用性误当成仓库测试结果。
+-->
+<package format="3">
+  <name>bt_ros2</name>
+  <version>0.1.0</version>
+  <description>
+    bt_core 行为树框架的可选 ROS2(ament_cmake) wrapper：提供周期 tick 行为树的
+    执行器节点(BtExecutorNode)，以及把 ROS2 topic 桥接成行为树条件/动作节点的
+    示例适配器。核心库零 ROS 依赖，本包仅在 ROS2 场景下编译。
+  </description>
+
+  <maintainer email="dev@example.com">BT-X Maintainer</maintainer>
+  <license>Apache-2.0</license>
+
+  <!-- 构建系统 -->
+  <buildtool_depend>ament_cmake</buildtool_depend>
+
+  <!-- 构建期 + 运行期依赖 -->
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>std_msgs</depend>
+  <depend>sensor_msgs</depend>
+  <depend>std_srvs</depend>
+
+  <!-- launch 文件在运行时通过这些 Python 包解析共享目录并启动节点。 -->
+  <exec_depend>ament_index_python</exec_depend>
+  <exec_depend>launch</exec_depend>
+  <exec_depend>launch_ros</exec_depend>
+
+  <!-- 测试期（可选，启用 BUILD_TESTING 时用）-->
+  <test_depend>ament_lint_auto</test_depend>
+  <test_depend>ament_lint_common</test_depend>
+
+  <export>
+    <build_type>ament_cmake</build_type>
+  </export>
+</package>

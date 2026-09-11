@@ -50,6 +50,9 @@ WORKDIR /opt/rm65_ws
 # directory. Keep this path aligned with ROOT_CONFIG_DIR in CMakeLists.txt.
 COPY config /opt/rm65_ws/config
 COPY src /opt/rm65_ws/src
+# Keep the behavior-tree runtime reproducible inside the image. The source is
+# copied from the repository snapshot rather than a developer's Downloads path.
+COPY third_party/behavior_tree_cpp /opt/rm65_ws/third_party/behavior_tree_cpp
 
 # Install the pinned vendor API used by the real driver. Mock tests still avoid
 # importing it, while production launches can read real controller state.

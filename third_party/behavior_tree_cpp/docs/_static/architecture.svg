@@ -1,0 +1,50 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1120" height="520" viewBox="0 0 1120 520" role="img" aria-labelledby="title desc">
+  <title id="title">BehaviorTree.CPP-X architecture</title>
+  <desc id="desc">Layered architecture showing editor, server, core, nodes, and ROS2 wrapper.</desc>
+  <defs>
+    <linearGradient id="bg" x1="0" y1="0" x2="1" y2="1">
+      <stop offset="0" stop-color="#fbf4e6"/>
+      <stop offset="1" stop-color="#e6f0ea"/>
+    </linearGradient>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto" markerUnits="strokeWidth">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2f5d50"/>
+    </marker>
+  </defs>
+  <rect width="1120" height="520" fill="url(#bg)" rx="24"/>
+  <text x="56" y="60" font-family="Georgia, serif" font-size="32" font-weight="700" fill="#18211f">BehaviorTree.CPP-X</text>
+  <text x="56" y="92" font-family="Arial, sans-serif" font-size="16" fill="#4d5a56">Core stays ROS-free; integration layers connect editor, plugins, and ROS2 data.</text>
+
+  <g font-family="Arial, sans-serif" font-size="16" fill="#18211f">
+    <rect x="56" y="145" width="220" height="96" rx="16" fill="#ffffff" stroke="#2f5d50" stroke-width="2"/>
+    <text x="86" y="180" font-weight="700">bt_editor</text>
+    <text x="86" y="208" font-size="14">React + React Flow</text>
+
+    <rect x="450" y="145" width="220" height="96" rx="16" fill="#ffffff" stroke="#2f5d50" stroke-width="2"/>
+    <text x="480" y="180" font-weight="700">bt_server</text>
+    <text x="480" y="208" font-size="14">HTTP API + plugin load</text>
+
+    <rect x="844" y="145" width="220" height="96" rx="16" fill="#ffffff" stroke="#2f5d50" stroke-width="2"/>
+    <text x="874" y="180" font-weight="700">bt_nodes</text>
+    <text x="874" y="208" font-size="14">Control / Data / Function</text>
+
+    <rect x="450" y="312" width="220" height="96" rx="16" fill="#2f5d50" stroke="#23463c" stroke-width="2"/>
+    <text x="480" y="347" font-weight="700" fill="#ffffff">bt_core</text>
+    <text x="480" y="375" font-size="14" fill="#ffffff">Factory + Tree + XML</text>
+
+    <rect x="844" y="312" width="220" height="96" rx="16" fill="#ffffff" stroke="#8b5e34" stroke-width="2"/>
+    <text x="874" y="347" font-weight="700">bt_ros2</text>
+    <text x="874" y="375" font-size="14">Topic nodes + executor</text>
+
+    <line x1="276" y1="193" x2="442" y2="193" stroke="#2f5d50" stroke-width="3" marker-end="url(#arrow)"/>
+    <text x="320" y="178" font-size="13" fill="#2f5d50">/api</text>
+
+    <line x1="670" y1="193" x2="836" y2="193" stroke="#2f5d50" stroke-width="3" marker-end="url(#arrow)"/>
+    <text x="704" y="178" font-size="13" fill="#2f5d50">loadPlugin</text>
+
+    <line x1="560" y1="241" x2="560" y2="304" stroke="#2f5d50" stroke-width="3" marker-end="url(#arrow)"/>
+    <text x="576" y="280" font-size="13" fill="#2f5d50">tick / XML</text>
+
+    <line x1="844" y1="360" x2="678" y2="360" stroke="#8b5e34" stroke-width="3" marker-end="url(#arrow)"/>
+    <text x="704" y="345" font-size="13" fill="#8b5e34">wraps, not owned by core</text>
+  </g>
+</svg>

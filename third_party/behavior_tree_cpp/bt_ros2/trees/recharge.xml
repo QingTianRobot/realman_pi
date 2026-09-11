@@ -1,0 +1,42 @@
+<?xml version="1.0"?>
+<!--
+  ROS2 回充示例：外部 /battery_state 发布 sensor_msgs/BatteryState，
+  ReadBattery 把 percentage 写入黑板 battery_level，随后用 CompareBlackboard
+  判断是否低于阈值。低电量时发布回充命令，并等待 /dock/is_docked 为 true。
+-->
+<root main_tree_to_execute="RechargeTree">
+  <BehaviorTree ID="RechargeTree">
+    <Fallback name="battery_guard">
+      <Sequence name="battery_ok">
+        <ReadBattery name="read_battery"
+                     topic="/battery_state"
+                     timeout_ms="2000"
+                     qos_profile="sensor_data"
+                     level="{battery_level}"/>
+        <CompareBlackboard name="enough_power"
+                           key="battery_level"
+                           op="&gt;="
+                           value="0.20"/>
+      </Sequence>
+
+      <Sequence name="recharge_flow">
+        <CompareBlackboard name="needs_recharge"
+                           key="battery_level"
+                           op="&lt;"
+                           value="0.20"/>
+        <RechargeTask name="recharge"
+                      command_topic="/robot/command"
+                      dock_topic="/dock/is_docked"
+                      target="main_dock"
+                      timeout_ms="30000"
+                      command_qos_depth="10"
+                      dock_qos_depth="10"
+                      dock_qos_profile="default"/>
+        <TaskDoneNotifier name="notify_recharge_done"
+                          topic="/bt/task_done"
+                          subscriber_wait_timeout_ms="3000"
+                          task_name="recharge"/>
+      </Sequence>
+    </Fallback>
+  </BehaviorTree>
+</root>

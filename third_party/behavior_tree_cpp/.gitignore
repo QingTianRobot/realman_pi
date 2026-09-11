@@ -1,0 +1,78 @@
+# ============================================================================
+#  BehaviorTree.CPP-X .gitignore
+# ============================================================================
+
+# ---- C++ / CMake 构建产物 --------------------------------------------------
+build/
+build_*/
+cmake-build-*/
+*.o
+*.obj
+*.a
+*.lib
+*.so
+*.so.*
+*.dylib
+*.dll
+*.exe
+*.out
+compile_commands.json
+CMakeCache.txt
+CMakeFiles/
+cmake_install.cmake
+CTestTestfile.cmake
+Testing/
+_deps/
+install_manifest.txt
+
+# ---- 调试 / 崩溃文件 -------------------------------------------------------
+*.dSYM/
+*.su
+*.idb
+*.pdb
+core
+*.core
+
+# ---- 前端 (bt_editor) ------------------------------------------------------
+node_modules/
+bt_editor/dist/
+bt_editor/.vite/
+bt_editor/test-results/
+bt_editor/playwright-report/
+bt_editor/*.local
+npm-debug.log*
+yarn-debug.log*
+yarn-error.log*
+pnpm-debug.log*
+.eslintcache
+
+# ---- ROS2 (bt_ros2) colcon 产物 -------------------------------------------
+install/
+log/
+# 注意：保留 bt_ros2/launch/*.py 与 bt_ros2/trees/*.xml（它们是源文件）
+
+# ---- IDE / 编辑器 ----------------------------------------------------------
+.vscode/
+.idea/
+*.swp
+*.swo
+*~
+.clangd/
+.cache/
+
+# ---- 操作系统 --------------------------------------------------------------
+.DS_Store
+Thumbs.db
+
+# ---- 临时文件 --------------------------------------------------------------
+*.log
+*.tmp
+.cc-tmp/
+docs/_build/
+
+# ---- 工具/会话状态(非项目内容) -------------------------------------------
+.omc/
+.ace-tool/
+.codex/
+__pycache__/
+*.pyc

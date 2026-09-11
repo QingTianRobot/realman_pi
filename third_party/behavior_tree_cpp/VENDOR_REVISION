@@ -1,0 +1,8 @@
+source: /home/server5090/Downloads/behavior_tree_cpp
+commit: dd43712d30dfcbb19887776a5c312ac4a4fe4a67
+snapshot-date: 2026-09-11
+
+This directory is a repository-local source snapshot used by the realman_pi
+Docker and ROS 2 builds. Runtime consumers must not resolve the source from the
+host Downloads path above; the path is retained only as provenance for the
+snapshot import. See THIRD_PARTY_NOTICES.md for dependency license notices.

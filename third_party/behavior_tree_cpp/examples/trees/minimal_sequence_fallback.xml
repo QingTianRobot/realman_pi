@@ -1,0 +1,16 @@
+<?xml version="1.0"?>
+<!--
+  最小控制流示例：Fallback 先尝试主路径，主路径成功后不会执行备用路径。
+  用途：确认控制节点、动作节点和 name 命名规范的最小闭环。
+-->
+<root main_tree_to_execute="MinimalTree">
+  <BehaviorTree ID="MinimalTree">
+    <Fallback name="choose_patrol_or_idle">
+      <Sequence name="patrol_path">
+        <AlwaysSuccess name="precheck_ok"/>
+        <PrintMessage name="say_patrol" message="patrol path selected"/>
+      </Sequence>
+      <PrintMessage name="say_idle" message="fallback idle path"/>
+    </Fallback>
+  </BehaviorTree>
+</root>

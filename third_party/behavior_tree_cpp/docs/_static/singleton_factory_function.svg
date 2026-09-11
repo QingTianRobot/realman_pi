@@ -1,0 +1,67 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1180" height="470" viewBox="0 0 1180 470" role="img" aria-labelledby="title desc">
+  <title id="title">Singleton, Factory and generator function-reference flow</title>
+  <desc id="desc">Startup registers business functions into the singleton FunctionRegistry; NodeFactory builds FunctionAction and FunctionCondition nodes from XML; those nodes look up functions by name and read/write the shared Blackboard to drive the recharge loop.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2f5d50"/>
+    </marker>
+    <marker id="arrow_brown" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#8b5e34"/>
+    </marker>
+  </defs>
+  <rect width="1180" height="470" fill="#fbf4e6" rx="22"/>
+  <text x="52" y="56" font-family="Georgia, serif" font-size="28" font-weight="700" fill="#18211f">单例 + 工厂 + 生成器引用函数</text>
+
+  <g font-family="Arial, sans-serif" font-size="15" fill="#18211f">
+    <!-- Generator functions (business lambdas/functions) -->
+    <rect x="52" y="108" width="230" height="120" rx="14" fill="#fff" stroke="#8b5e34" stroke-width="2"/>
+    <text x="74" y="138" font-weight="700" fill="#8b5e34">生成器引用函数</text>
+    <text x="74" y="164" font-size="13">readBattery / isLowBattery</text>
+    <text x="74" y="186" font-size="13">sendRechargeCommand</text>
+    <text x="74" y="208" font-size="13">notifyDone（普通函数/lambda）</text>
+
+    <!-- Singleton registry -->
+    <rect x="360" y="108" width="230" height="120" rx="14" fill="#fff" stroke="#2f5d50" stroke-width="2"/>
+    <text x="382" y="138" font-weight="700">单例 FunctionRegistry</text>
+    <text x="382" y="164" font-size="13">instance()：全局唯一</text>
+    <text x="382" y="186" font-size="13">registerAction / registerCondition</text>
+    <text x="382" y="208" font-size="13">按函数名保存 std::function</text>
+
+    <!-- Factory -->
+    <rect x="668" y="108" width="230" height="120" rx="14" fill="#fff" stroke="#2f5d50" stroke-width="2"/>
+    <text x="690" y="138" font-weight="700">工厂 NodeFactory</text>
+    <text x="690" y="164" font-size="13">按 XML 标签建节点</text>
+    <text x="690" y="186" font-size="13">FunctionAction /</text>
+    <text x="690" y="208" font-size="13">FunctionCondition</text>
+
+    <!-- Blackboard -->
+    <rect x="976" y="108" width="164" height="120" rx="14" fill="#2f5d50" stroke="#23463c" stroke-width="2"/>
+    <text x="998" y="152" font-weight="700" fill="#fff">Blackboard</text>
+    <text x="998" y="178" font-size="13" fill="#fff">battery_level</text>
+    <text x="998" y="200" font-size="13" fill="#fff">recharge_done</text>
+
+    <!-- register arrow: functions -> registry -->
+    <line x1="282" y1="168" x2="352" y2="168" stroke="#8b5e34" stroke-width="3" marker-end="url(#arrow_brown)"/>
+    <text x="256" y="98" font-size="13" fill="#8b5e34">程序启动登记一次</text>
+
+    <!-- registry <- factory lookup by name -->
+    <line x1="668" y1="150" x2="592" y2="150" stroke="#2f5d50" stroke-width="3" marker-end="url(#arrow)"/>
+    <text x="600" y="120" font-size="12" fill="#2f5d50">按名取用</text>
+
+    <!-- factory -> blackboard tick read/write -->
+    <line x1="898" y1="168" x2="968" y2="168" stroke="#2f5d50" stroke-width="3" marker-end="url(#arrow)"/>
+
+    <!-- XML at bottom feeding factory -->
+    <rect x="668" y="300" width="230" height="86" rx="14" fill="#fff" stroke="#2f5d50" stroke-width="2"/>
+    <text x="690" y="332" font-weight="700">XML 行为树</text>
+    <text x="690" y="358" font-size="13">&lt;FunctionAction function="..."/&gt;</text>
+    <line x1="783" y1="300" x2="783" y2="232" stroke="#2f5d50" stroke-width="3" marker-end="url(#arrow)"/>
+    <text x="792" y="270" font-size="12" fill="#2f5d50">只引用函数名</text>
+
+    <!-- closed loop caption -->
+    <text x="52" y="330" font-size="15" font-weight="700" fill="#18211f">回充闭环</text>
+    <text x="52" y="356" font-size="13" fill="#18211f">读电量 → 写黑板 → 判低电</text>
+    <text x="52" y="378" font-size="13" fill="#18211f">→ 发回充命令 → 通知完成</text>
+    <text x="52" y="424" font-size="13" fill="#8b5e34">改业务只改函数，行为树 XML 与节点类都不动。</text>
+  </g>
+</svg>

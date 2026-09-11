@@ -1,0 +1,37 @@
+<?xml version="1.0"?>
+<!--
+  bt_ros2/trees/example.xml
+  示例行为树 —— 演示 ROS 适配器节点与 bt_nodes 控制节点的组合。
+
+  标签名 = BtExecutorNode 注册的节点注册名（见 bt_executor_node.cpp::registerNodeTypes）：
+    Sequence / Fallback / Parallel / Inverter / Retry   ← bt_nodes（header-only）
+    RosTopicCondition / RosTopicAction                  ← bt_ros2 适配器节点
+
+  本树语义：
+    顺序执行：
+      1) RosTopicCondition 检查 /robot/ready 是否为 true
+         - default="true"：在尚未收到该 topic 任何消息时也先视为“就绪”，
+           这样首次演示无需外部 publisher 即可继续往下走。
+      2) RosTopicAction 向 /bt/chatter 发布一条问候消息（同步动作，发完即成功）。
+    两步都成功 → 根 Sequence 返回 SUCCESS，BtExecutorNode 打印终结状态并停止 tick。
+
+  端口值写法（见 API_CONTRACT.md）：
+    - 字面量： topic="/robot/ready"
+    - 重映射： message="{greeting}"  表示从黑板 key "greeting" 读取（本示例用字面量，
+               保持自包含、开箱即跑）。
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="root">
+      <!-- 条件：检查机器人是否就绪（订阅 std_msgs/Bool） -->
+      <RosTopicCondition name="check_ready"
+                         topic="/robot/ready"
+                         default="true"/>
+
+      <!-- 动作：发布一条问候（std_msgs/String） -->
+      <RosTopicAction name="say_hello"
+                      topic="/bt/chatter"
+                      message="hello from behavior tree"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

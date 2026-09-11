@@ -1,0 +1,56 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1160" height="420" viewBox="0 0 1160 420" role="img" aria-labelledby="title desc">
+  <title id="title">ROS2 recharge flow</title>
+  <desc id="desc">Battery topic is read into blackboard, then RechargeTask publishes one command, waits for dock, and allows one completion notification.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2f5d50"/>
+    </marker>
+  </defs>
+  <rect width="1160" height="420" fill="#eaf2ed" rx="22"/>
+  <text x="52" y="58" font-family="Georgia, serif" font-size="30" font-weight="700" fill="#18211f">ROS2 message → Blackboard → Recharge command</text>
+  <g font-family="Arial, sans-serif" font-size="15" fill="#18211f">
+    <rect x="52" y="140" width="190" height="86" rx="14" fill="#fff" stroke="#2f5d50" stroke-width="2"/>
+    <text x="78" y="173" font-weight="700">/battery_state</text>
+    <text x="78" y="198" font-size="13">BatteryState.percentage</text>
+
+    <rect x="292" y="140" width="170" height="86" rx="14" fill="#fff" stroke="#2f5d50" stroke-width="2"/>
+    <text x="318" y="173" font-weight="700">ReadBattery</text>
+    <text x="318" y="198" font-size="13">RosInputNode</text>
+
+    <rect x="512" y="140" width="172" height="86" rx="14" fill="#2f5d50" stroke="#23463c" stroke-width="2"/>
+    <text x="538" y="173" font-weight="700" fill="#fff">Blackboard</text>
+    <text x="538" y="198" font-size="13" fill="#fff">battery_level</text>
+
+    <rect x="734" y="140" width="184" height="86" rx="14" fill="#fff" stroke="#2f5d50" stroke-width="2"/>
+    <text x="760" y="173" font-weight="700">CompareBlackboard</text>
+    <text x="760" y="198" font-size="13">battery &lt; 0.20</text>
+
+    <rect x="968" y="140" width="150" height="86" rx="14" fill="#fff" stroke="#8b5e34" stroke-width="2"/>
+    <text x="994" y="173" font-weight="700">RechargeTask</text>
+    <text x="994" y="198" font-size="13">publish once · RUNNING</text>
+
+    <line x1="242" y1="183" x2="284" y2="183" stroke="#2f5d50" stroke-width="3" marker-end="url(#arrow)"/>
+    <line x1="462" y1="183" x2="504" y2="183" stroke="#2f5d50" stroke-width="3" marker-end="url(#arrow)"/>
+    <line x1="684" y1="183" x2="726" y2="183" stroke="#2f5d50" stroke-width="3" marker-end="url(#arrow)"/>
+    <line x1="918" y1="183" x2="960" y2="183" stroke="#8b5e34" stroke-width="3" marker-end="url(#arrow)"/>
+
+    <rect x="52" y="282" width="190" height="62" rx="14" fill="#fff" stroke="#8b5e34" stroke-width="2"/>
+    <text x="78" y="310" font-weight="700">/robot/command</text>
+    <text x="78" y="330" font-size="13">start_recharge:main_dock</text>
+
+    <rect x="292" y="282" width="170" height="62" rx="14" fill="#fff" stroke="#8b5e34" stroke-width="2"/>
+    <text x="318" y="310" font-weight="700">/dock/is_docked</text>
+    <text x="318" y="330" font-size="13">Bool.data = true</text>
+
+    <rect x="734" y="282" width="184" height="62" rx="14" fill="#fff" stroke="#8b5e34" stroke-width="2"/>
+    <text x="760" y="310" font-weight="700">TaskDoneNotifier</text>
+    <text x="760" y="330" font-size="13">/bt/task_done</text>
+
+    <line x1="1043" y1="226" x2="1043" y2="260" stroke="#8b5e34" stroke-width="3"/>
+    <line x1="1043" y1="260" x2="147" y2="260" stroke="#8b5e34" stroke-width="3"/>
+    <line x1="147" y1="260" x2="147" y2="274" stroke="#8b5e34" stroke-width="3" marker-end="url(#arrow)"/>
+    <line x1="462" y1="313" x2="960" y2="313" stroke="#8b5e34" stroke-width="3" marker-end="url(#arrow)"/>
+    <line x1="960" y1="313" x2="960" y2="250" stroke="#8b5e34" stroke-width="3" marker-end="url(#arrow)"/>
+    <line x1="968" y1="226" x2="918" y2="282" stroke="#8b5e34" stroke-width="3" marker-end="url(#arrow)"/>
+  </g>
+</svg>

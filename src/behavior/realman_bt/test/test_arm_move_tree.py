@@ -16,7 +16,6 @@ def test_arm_move_tree_has_single_safe_movej():
     assert move is not None
     assert move.attrib["arm_id"] == "{arm_id}"
     assert move.attrib["dry_run"] == "{dry_run}"
-    assert move.attrib["joint_degrees"] == "0,-20,30,0,45,0"
+    assert move.attrib["joint_degrees"] == "0,0,0,0,0,0"
     assert move.attrib["velocity_percent"] == "10"
     assert len(list(sequence)) == 1
-

@@ -137,6 +137,7 @@ Commands:
   logs                Show recent camera and bringup logs.
   camera              Run the legacy RTSP/TCP camera helper.
   bt-test build|mock|web|all  Build, run, or validate isolated behavior-tree scenarios.
+  bt [arm_id]          Start behavior-tree ROS executor plus preview server/editor.
   sync                Synchronize the clean main branch to production.
 EOF
 }
@@ -149,6 +150,7 @@ case "$command_name" in
   status) status "$@" ;;
   logs) logs "$@" ;;
   bt-test) exec "$ROOT/scripts/bt-test.sh" "$@" ;;
+  bt) exec "$ROOT/scripts/bt.sh" "$@" ;;
   camera) exec zsh -lc 'source "$1/functions.zsh" && rm65_camera_start' _ "$ROOT" ;;
   sync) sync_repo "$@" ;;
   help|-h|--help) usage ;;

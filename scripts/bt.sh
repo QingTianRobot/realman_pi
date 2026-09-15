@@ -59,6 +59,18 @@ fi
 need_cmd cmake
 need_cmd curl
 need_cmd npm
+if [[ -n "${REALMAN_ROS_SETUP:-}" && -f "$REALMAN_ROS_SETUP" ]]; then
+  # Allow deployments whose ROS workspace is installed outside this checkout.
+  # shellcheck disable=SC1090
+  source "$REALMAN_ROS_SETUP"
+elif [[ -f /opt/ros/humble/setup.bash ]]; then
+  # shellcheck disable=SC1091
+  source /opt/ros/humble/setup.bash
+fi
+if [[ -f "$ROOT/install/setup.bash" ]]; then
+  # shellcheck disable=SC1091
+  source "$ROOT/install/setup.bash"
+fi
 need_cmd ros2
 
 if [[ "$DRY_RUN" == "false" ]]; then

@@ -75,6 +75,7 @@ export default defineConfig({
           { text: "Xbox 手柄输入", link: "/development/xbox-controller" },
           { text: "系统 Bringup", link: "/development/system-bringup" },
           { text: "行为树控制权与 Mock 测试", link: "/development/behavior-tree-control" },
+          { text: "行为树机械臂移动 Demo", link: "/development/behavior-tree-motion" },
           { text: "Changingtek 夹爪控制", link: "/development/gripper-control" },
         ],
       },

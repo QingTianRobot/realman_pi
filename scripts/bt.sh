@@ -99,6 +99,10 @@ wait_http() {
 BT_TREE_WORKSPACE="$WORKSPACE" "$BT_SERVER_BIN" "$BT_SERVER_HOST" "$BT_SERVER_PORT" &
 SERVER_PID=$!
 wait_http "http://$BT_SERVER_HOST:$BT_SERVER_PORT/api/health" "$SERVER_PID" || { say "bt_server failed to become ready" >&2; exit 1; }
+if ! curl -fsS "http://$BT_SERVER_HOST:$BT_SERVER_PORT/api/nodes" | grep -Fq '"registration_name":"MoveJ"'; then
+  say "bt_server does not expose the preview MoveJ node" >&2
+  exit 1
+fi
 
 pushd "$VENDOR_ROOT/bt_editor" >/dev/null
 if [[ ! -d node_modules ]]; then npm install; fi

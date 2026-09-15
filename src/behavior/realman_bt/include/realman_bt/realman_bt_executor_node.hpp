@@ -1,10 +1,12 @@
 #pragma once
 
 #include <memory>
+#include <cstdint>
 #include <string>
 
 #include "bt_core/node_factory.hpp"
 #include "bt_core/tree.hpp"
+#include "realman_bt/runtime_snapshot.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/trigger.hpp"
@@ -30,6 +32,9 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
   bt_core::NodeFactory factory_;
   bt_core::Blackboard::Ptr blackboard_;
   std::unique_ptr<bt_core::Tree> tree_;
+  std::unique_ptr<RuntimeSnapshotWriter> snapshot_writer_;
+  std::string tree_id_;
+  std::uint64_t snapshot_sequence_{0};
   rclcpp::TimerBase::SharedPtr timer_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr status_pub_;
   rclcpp::Service<Trigger>::SharedPtr start_service_;

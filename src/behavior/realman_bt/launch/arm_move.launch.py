@@ -30,6 +30,11 @@ def _log_directory() -> Path:
     return run_directory
 
 
+def _default_runtime_snapshot_file() -> str:
+    """Store runtime state beside the active behavior-tree workspace."""
+    return os.environ.get("BT_TREE_WORKSPACE", "/tmp/realman-bt-workspace") + "/runtime.json"
+
+
 def generate_launch_description():
     tree_file = DeclareLaunchArgument(
         "tree_file",
@@ -62,6 +67,11 @@ def generate_launch_description():
         default_value="true",
         description="Stop ticking after SUCCESS or FAILURE.",
     )
+    runtime_snapshot_file = DeclareLaunchArgument(
+        "runtime_snapshot_file",
+        default_value=_default_runtime_snapshot_file(),
+        description="Atomic JSON file containing the latest behavior-tree runtime snapshot.",
+    )
 
     executor = Node(
         package="realman_bt",
@@ -76,6 +86,7 @@ def generate_launch_description():
                 "tick_rate_hz": LaunchConfiguration("tick_rate_hz"),
                 "autostart": LaunchConfiguration("autostart"),
                 "stop_on_terminal": LaunchConfiguration("stop_on_terminal"),
+                "runtime_snapshot_file": LaunchConfiguration("runtime_snapshot_file"),
             }
         ],
     )
@@ -90,6 +101,7 @@ def generate_launch_description():
             tick_rate_hz,
             autostart,
             stop_on_terminal,
+            runtime_snapshot_file,
             executor,
         ]
     )

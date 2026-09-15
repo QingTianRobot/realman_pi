@@ -40,6 +40,7 @@ target_include_directories(realman_bt_executor PRIVATE
   "${BT_VENDOR_ROOT}/bt_nodes")
 target_compile_features(realman_bt_executor PRIVATE cxx_std_17)
 target_link_libraries(realman_bt_executor bt::core)
+target_link_libraries(realman_bt_executor runtime_snapshot)
 ament_target_dependencies(realman_bt_executor
   rclcpp rclcpp_action realman_msgs std_msgs std_srvs)
 install(TARGETS realman_bt_executor DESTINATION lib/${PROJECT_NAME})

@@ -2,6 +2,7 @@
 
 #include <chrono>
 #include <cmath>
+#include <filesystem>
 #include <stdexcept>
 
 #include "bt_core/xml_parser.hpp"
@@ -15,12 +16,15 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   const std::string tree_file = declare_parameter<std::string>("tree_file", "");
   const std::string arm_id = declare_parameter<std::string>("arm_id", "r");
   const bool dry_run = declare_parameter<bool>("dry_run", true);
+  const std::string runtime_snapshot_file = declare_parameter<std::string>(
+      "runtime_snapshot_file", "/tmp/realman-bt-workspace/runtime.json");
   tick_rate_hz_ = declare_parameter<double>("tick_rate_hz", 10.0);
   autostart_ = declare_parameter<bool>("autostart", true);
   stop_on_terminal_ = declare_parameter<bool>("stop_on_terminal", true);
   if (tree_file.empty()) throw std::invalid_argument("tree_file must be set");
   if (arm_id != "l" && arm_id != "m" && arm_id != "r") throw std::invalid_argument("arm_id must be l, m, or r");
   if (!std::isfinite(tick_rate_hz_) || tick_rate_hz_ <= 0.0) throw std::invalid_argument("tick_rate_hz must be positive");
+  if (runtime_snapshot_file.empty()) throw std::invalid_argument("runtime_snapshot_file must be set");
 
   blackboard_->set<std::string>("arm_id", arm_id);
   blackboard_->set<bool>("dry_run", dry_run);
@@ -30,6 +34,14 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   bt_core::XmlParser parser(factory_);
   auto tree = parser.loadFromFile(tree_file, blackboard_);
   tree_ = std::make_unique<bt_core::Tree>(std::move(tree));
+  tree_id_ = std::filesystem::path(tree_file).stem().string();
+  if (tree_id_.empty()) tree_id_ = tree_file;
+  snapshot_writer_ = std::make_unique<RuntimeSnapshotWriter>(runtime_snapshot_file);
+  try {
+    snapshot_writer_->writeIdle(tree_id_);
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(get_logger(), "failed to write idle behavior tree snapshot: %s", error.what());
+  }
   status_pub_ = create_publisher<std_msgs::msg::String>("~/bt_status", 10);
   start_service_ = create_service<Trigger>(
       "~/start",
@@ -72,6 +84,14 @@ void RealmanBtExecutorNode::onTick() {
   } catch (const std::exception& error) {
     RCLCPP_ERROR(get_logger(), "behavior tree tick failed: %s", error.what());
     tree_->halt();
+  }
+  ++snapshot_sequence_;
+  if (snapshot_writer_) {
+    try {
+      snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_);
+    } catch (const std::exception& error) {
+      RCLCPP_ERROR(get_logger(), "failed to write behavior tree snapshot: %s", error.what());
+    }
   }
   std_msgs::msg::String message;
   message.data = bt_core::toStr(status);

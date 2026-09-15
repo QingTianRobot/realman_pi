@@ -58,7 +58,8 @@ ros2 launch realman_bt arm_move.launch.py \
 
     REALMAN_BT_DRY_RUN=false ./rm65 bt r
 
-此模式仍需确保生产驱动已经由 `./rm65 up` 启动；执行器会向 `/r/execute_motion` 发送真实
+脚本会自动加载 `/opt/ros/humble/setup.bash` 和仓库 `install/setup.bash`；非标准 ROS 工作区可用
+`REALMAN_ROS_SETUP=/path/to/setup.bash` 指定环境。此模式仍需确保生产驱动已经由 `./rm65 up` 启动；执行器会向 `/r/execute_motion` 发送真实
 `ExecuteMotion` goal。可用 `REALMAN_BT_ARM_ID=l|m|r`、`BT_SERVER_PORT` 和 `BT_EDITOR_PORT`
 覆盖默认参数。编辑器保存的是临时 workspace 副本，不会覆盖 `config/behavior-trees/arm_move.xml`。
 

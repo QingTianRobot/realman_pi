@@ -56,9 +56,6 @@ if [[ "$TEST_MODE" == "1" ]]; then
   exit 0
 fi
 
-need_cmd cmake
-need_cmd curl
-need_cmd npm
 if [[ -n "${REALMAN_ROS_SETUP:-}" && -f "$REALMAN_ROS_SETUP" ]]; then
   # Allow deployments whose ROS workspace is installed outside this checkout.
   # shellcheck disable=SC1090
@@ -71,8 +68,6 @@ if [[ -f "$ROOT/install/setup.bash" ]]; then
   # shellcheck disable=SC1091
   source "$ROOT/install/setup.bash"
 fi
-need_cmd ros2
-
 if [[ "$DRY_RUN" == "false" ]]; then
   cat >&2 <<'EOF'
 rm65 bt: WARNING: real motion is enabled (REALMAN_BT_DRY_RUN=false).
@@ -80,6 +75,10 @@ rm65 bt: WARNING: real motion is enabled (REALMAN_BT_DRY_RUN=false).
   and confirm the target joint values before continuing.
 EOF
 fi
+need_cmd cmake
+need_cmd curl
+need_cmd npm
+need_cmd ros2
 
 if [[ ! -x "$BT_SERVER_BIN" ]]; then
   say "building preview server"

@@ -15,6 +15,7 @@
 
 #include "demo_nodes.hpp"
 #include "json_util.hpp"
+#include "runtime_snapshot_service.hpp"
 #include "tree_api_service.hpp"
 
 #include "httplib.h"
@@ -40,6 +41,13 @@ std::filesystem::path editorDist() {
     if (*env) return env;
   }
   return {};
+}
+
+std::filesystem::path runtimeSnapshot() {
+  if (const char* env = std::getenv("BT_RUNTIME_SNAPSHOT")) {
+    if (*env) return env;
+  }
+  return defaultWorkspace() / "runtime.json";
 }
 
 }  // namespace
@@ -70,9 +78,24 @@ int main(int argc, char** argv) {
   std::cout << "[bt_server] 已注册节点数: " << factory.size() << std::endl;
 
   bt_server::TreeApiService api(factory, defaultWorkspace());
+  const bt_server::RuntimeSnapshotService runtime_api(runtimeSnapshot());
+  const char* read_only_env = std::getenv("BT_READ_ONLY");
+  const bool read_only = read_only_env && std::string(read_only_env) == "true";
   std::cout << "[bt_server] 树文件 workspace: " << api.workspace() << std::endl;
 
   httplib::Server svr;
+
+  // Gate before route dispatch, so no POST handler can execute or persist
+  // a tree in the production runtime monitor.
+  svr.set_pre_routing_handler(
+      [read_only](const httplib::Request& req, httplib::Response& res) {
+        if (read_only && req.method == "POST" && req.path.rfind("/api/", 0) == 0) {
+          sendJson(bt_server::RuntimeSnapshotService::readOnlyMutation(), res);
+          res.set_header("Allow", "GET, OPTIONS");
+          return httplib::Server::HandlerResponse::Handled;
+        }
+        return httplib::Server::HandlerResponse::Unhandled;
+      });
 
   // In the driver container, serve the prebuilt editor under the same origin
   // as the preview-only API. cpp-httplib rejects traversal beyond this root.
@@ -107,6 +130,10 @@ int main(int argc, char** argv) {
 
   svr.Get("/api/nodes", [&api](const httplib::Request&, httplib::Response& res) {
     sendJson(api.nodes(), res);
+  });
+  svr.Get("/api/runtime", [&runtime_api](const httplib::Request&,
+                                        httplib::Response& res) {
+    sendJson(runtime_api.runtime(), res);
   });
   svr.Post("/api/tree/load", [&api](const httplib::Request& req,
                                     httplib::Response& res) {
@@ -169,7 +196,7 @@ int main(int argc, char** argv) {
   std::cout << "[bt_server] 接口: /api/health /api/nodes /api/tree/load "
                "/api/tree/validate /api/tree/format /api/tree/export "
                "/api/tree/tick /api/tree/run /api/tree/structure "
-               "/api/trees /api/tree/open /api/tree/save"
+               "/api/trees /api/tree/open /api/tree/save /api/runtime"
             << std::endl;
 
   if (!svr.listen(host.c_str(), port)) {

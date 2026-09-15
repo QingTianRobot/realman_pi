@@ -12,6 +12,7 @@
 add_executable(bt_server
   src/main.cpp
   src/tree_api_service.cpp
+  src/runtime_snapshot_service.cpp
 )
 
 # 头文件搜索路径:

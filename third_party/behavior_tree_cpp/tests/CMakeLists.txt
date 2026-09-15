@@ -117,6 +117,27 @@ if(BT_BUILD_SERVER)
       bt::core
       GTest::gtest_main
   )
+
+  add_executable(test_bt_server_runtime
+    ${CMAKE_SOURCE_DIR}/bt_server/test/runtime_snapshot_service_test.cpp
+    ${CMAKE_SOURCE_DIR}/bt_server/src/runtime_snapshot_service.cpp
+  )
+  target_include_directories(test_bt_server_runtime
+    PRIVATE
+      ${CMAKE_SOURCE_DIR}/bt_server/src
+  )
+  target_link_libraries(test_bt_server_runtime
+    PRIVATE
+      bt::core
+      GTest::gtest_main
+  )
+  # Exercise the real HTTP routes with the standard-library Python client.
+  find_package(Python3 COMPONENTS Interpreter REQUIRED)
+  add_test(NAME bt_server_runtime_http
+    COMMAND ${Python3_EXECUTABLE}
+      ${CMAKE_SOURCE_DIR}/bt_server/test/runtime_http_test.py
+      $<TARGET_FILE:bt_server>
+  )
 endif()
 
 # 真实 DSO 边界回归：宿主注册函数，动态插件创建 FunctionAction 并调用。
@@ -158,6 +179,9 @@ gtest_discover_tests(test_bt_advanced)
 gtest_discover_tests(test_subtree)
 if(TARGET test_bt_server_preview)
   gtest_discover_tests(test_bt_server_preview)
+endif()
+if(TARGET test_bt_server_runtime)
+  gtest_discover_tests(test_bt_server_runtime)
 endif()
 if(TARGET bt::nodes)
   gtest_discover_tests(test_data_nodes)

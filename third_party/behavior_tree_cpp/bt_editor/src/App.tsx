@@ -92,6 +92,7 @@ export default function App() {
   const [edges, setEdges] = useState<BtEdge[]>([]);
   // 节点 manifest（来自 /api/nodes）
   const [manifests, setManifests] = useState<NodeManifest[]>([]);
+  const [manifestsFetched, setManifestsFetched] = useState(false);
   const [paletteLoading, setPaletteLoading] = useState(false);
   const [paletteError, setPaletteError] = useState<string | null>(null);
   // 选中节点 id
@@ -151,6 +152,7 @@ export default function App() {
     try {
       const list = await fetchNodes();
       setManifests(list);
+      setManifestsFetched(true);
     } catch (err) {
       const msg = err instanceof Error ? err.message : String(err);
       setPaletteError(msg);
@@ -190,7 +192,7 @@ export default function App() {
     if (
       !treeName ||
       paletteLoading ||
-      manifests.length === 0 ||
+      !manifestsFetched ||
       openedTreeFromUrlRef.current
     ) {
       return;
@@ -219,7 +221,7 @@ export default function App() {
         );
       }
     })();
-  }, [manifests, paletteLoading, pushToast]);
+  }, [manifests, manifestsFetched, paletteLoading, pushToast]);
 
   // -------------------------------------------------------------------------
   // React Flow 变更处理

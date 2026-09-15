@@ -40,6 +40,7 @@ import {
   tickTree,
   runTree,
   checkHealth,
+  openTree,
 } from './api/client';
 import { exportToXml, importFromXml, dfsPreorderIds } from './utils/xml';
 import { layoutTree } from './utils/layout';
@@ -105,6 +106,8 @@ export default function App() {
   const [toasts, setToasts] = useState<ToastItem[]>([]);
   // 记录每条 toast 的定时器，便于卸载时清理
   const timersRef = useRef<Map<number, ReturnType<typeof setTimeout>>>(new Map());
+  // URL 中的 ?tree= 参数只在首次满足 manifest 就绪条件时消费一次。
+  const openedTreeFromUrlRef = useRef(false);
 
   // -------------------------------------------------------------------------
   // Toast 管理
@@ -180,6 +183,43 @@ export default function App() {
     // 首次健康检查静默（不弹 toast，未连接由顶部提示条体现）
     void recheckHealth(false);
   }, [reloadNodes, recheckHealth]);
+
+  // 启动时按 URL 打开工作区树；等待 manifest 到位后才能正确恢复节点类型和端口。
+  useEffect(() => {
+    const treeName = new URLSearchParams(window.location.search).get('tree');
+    if (
+      !treeName ||
+      paletteLoading ||
+      manifests.length === 0 ||
+      openedTreeFromUrlRef.current
+    ) {
+      return;
+    }
+    openedTreeFromUrlRef.current = true;
+
+    void (async () => {
+      try {
+        const { xml } = await openTree(treeName);
+        const { nodes: newNodes, edges: newEdges } = importFromXml(xml, manifests);
+        setNodes(newNodes);
+        setEdges(newEdges);
+        setSelectedId(null);
+        nodeIdSeq += newNodes.length;
+
+        const result = await loadTree(xml);
+        if (!result.ok) {
+          pushToast('error', `载入失败：${result.error ?? '未知错误'}`);
+          return;
+        }
+        pushToast('success', `已打开树：${treeName}`);
+      } catch (err) {
+        pushToast(
+          'error',
+          `打开树失败：${err instanceof Error ? err.message : String(err)}`,
+        );
+      }
+    })();
+  }, [manifests, paletteLoading, pushToast]);
 
   // -------------------------------------------------------------------------
   // React Flow 变更处理

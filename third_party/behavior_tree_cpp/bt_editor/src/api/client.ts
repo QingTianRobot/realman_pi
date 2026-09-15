@@ -9,6 +9,7 @@ import type {
   NodeManifest,
   LoadResult,
   ExportResult,
+  OpenTreeResult,
   TickResult,
   RunResult,
   ValidateResult,
@@ -61,6 +62,13 @@ export async function formatTree(xml: string): Promise<FormatResult> {
 /** GET /api/tree/export —— 从后端取当前树的 XML */
 export async function exportTree(): Promise<ExportResult> {
   return requestJson<ExportResult>('/api/tree/export');
+}
+
+/** GET /api/tree/open —— 从工作区打开指定树文件 */
+export async function openTree(name: string): Promise<OpenTreeResult> {
+  return requestJson<OpenTreeResult>(
+    `/api/tree/open?name=${encodeURIComponent(name)}`,
+  );
 }
 
 /** POST /api/tree/tick —— 执行一拍并取回每个节点的运行态 */

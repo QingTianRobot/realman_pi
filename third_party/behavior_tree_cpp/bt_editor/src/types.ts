@@ -47,6 +47,11 @@ export interface ExportResult {
   xml: string;
 }
 
+/** GET /api/tree/open 的响应 */
+export interface OpenTreeResult {
+  xml: string;
+}
+
 /** 单个节点的运行态状态 */
 export type RunStatus = 'IDLE' | 'RUNNING' | 'SUCCESS' | 'FAILURE';
 

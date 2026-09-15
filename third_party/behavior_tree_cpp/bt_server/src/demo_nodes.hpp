@@ -109,6 +109,34 @@ public:
   }
 };
 
+// ---------------------------------------------------------------------------
+//  预览动作节点：MoveJ —— 仅用于 bt_server 可视化预览，不是硬件驱动。
+// ---------------------------------------------------------------------------
+/**
+ * @brief 预览用关节运动动作。
+ *
+ * This node deliberately performs no ROS, network, or hardware operations.
+ * It exists so the standalone bt_server can load and tick arm_move.xml safely.
+ */
+class MoveJPreviewNode : public bt_core::ActionNode {
+public:
+  using ActionNode::ActionNode;
+
+  static bt_core::PortsList providedPorts() {
+    return bt_core::makePorts(
+        bt_core::InputPort<std::string>("arm_id", "arm", "目标机械臂标识"),
+        bt_core::InputPort<std::string>("dry_run", "true", "预览模式"),
+        bt_core::InputPort<std::string>("joint_degrees", "", "关节角度(度)"),
+        bt_core::InputPort<std::string>("velocity_percent", "10", "速度百分比"),
+        bt_core::InputPort<std::string>("blend_radius_percent", "0", "混合半径百分比"),
+        bt_core::InputPort<std::string>("timeout_sec", "30", "超时时间(秒)"));
+  }
+
+  bt_core::NodeStatus tick() override {
+    return bt_core::NodeStatus::SUCCESS;
+  }
+};
+
 /**
  * @brief 把上面所有示例节点注册进给定工厂。
  * @param factory 目标工厂(服务启动时调用一次)。
@@ -122,6 +150,7 @@ inline void registerDemoNodes(bt_core::NodeFactory& factory) {
   factory.registerNodeType<AlwaysSuccessNode>("AlwaysSuccess");
   factory.registerNodeType<AlwaysFailureNode>("AlwaysFailure");
   factory.registerNodeType<CheckBatteryNode>("CheckBattery");
+  factory.registerNodeType<MoveJPreviewNode>("MoveJ");
 }
 
 }  // namespace bt_server

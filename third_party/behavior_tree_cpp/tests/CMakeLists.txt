@@ -104,6 +104,21 @@ target_link_libraries(test_subtree
     GTest::gtest_main
 )
 
+if(BT_BUILD_SERVER)
+  add_executable(test_bt_server_preview
+    ${CMAKE_SOURCE_DIR}/bt_server/test/preview_nodes_test.cpp
+  )
+  target_include_directories(test_bt_server_preview
+    PRIVATE
+      ${CMAKE_SOURCE_DIR}/bt_server/src
+  )
+  target_link_libraries(test_bt_server_preview
+    PRIVATE
+      bt::core
+      GTest::gtest_main
+  )
+endif()
+
 # 真实 DSO 边界回归：宿主注册函数，动态插件创建 FunctionAction 并调用。
 if(TARGET bt::nodes)
   # 独立 MODULE DSO：生命周期测试不能重用 libbt_nodes，因为测试进程已直接
@@ -141,6 +156,9 @@ include(GoogleTest)
 gtest_discover_tests(test_bt_core)
 gtest_discover_tests(test_bt_advanced)
 gtest_discover_tests(test_subtree)
+if(TARGET test_bt_server_preview)
+  gtest_discover_tests(test_bt_server_preview)
+endif()
 if(TARGET bt::nodes)
   gtest_discover_tests(test_data_nodes)
   gtest_discover_tests(test_ros_bases)

@@ -1,6 +1,16 @@
 # Compose defaults this to a DaoCloud Docker Hub proxy for faster pulls in
 # mainland China. Override ROS_BASE_IMAGE=ros:humble-ros-base to use Docker Hub.
 ARG ROS_BASE_IMAGE=docker.m.daocloud.io/library/ros:humble-ros-base
+
+# Node is confined to this stage. The runtime image receives only the static
+# editor files, keeping the driver container free of npm and dev-server state.
+FROM node:22-bookworm AS bt_editor_build
+WORKDIR /opt/bt_editor
+COPY third_party/behavior_tree_cpp/bt_editor/package.json third_party/behavior_tree_cpp/bt_editor/package-lock.json ./
+RUN npm ci
+COPY third_party/behavior_tree_cpp/bt_editor ./
+RUN npm run build
+
 FROM ${ROS_BASE_IMAGE}
 
 # These build arguments intentionally remain replaceable for private mirrors or
@@ -33,6 +43,8 @@ RUN find -L /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
         python3-numpy \
         python3-opencv \
         python3-yaml \
+        cmake \
+        curl \
         ros-humble-ament-cmake-gtest \
         ros-humble-ament-cmake-pytest \
         ros-humble-diagnostic-msgs \
@@ -53,6 +65,17 @@ COPY src /opt/rm65_ws/src
 # Keep the behavior-tree runtime reproducible inside the image. The source is
 # copied from the repository snapshot rather than a developer's Downloads path.
 COPY third_party/behavior_tree_cpp /opt/rm65_ws/src/behavior_tree_cpp
+RUN mkdir -p /opt/rm65_ws/third_party && ln -s /opt/rm65_ws/src/behavior_tree_cpp /opt/rm65_ws/third_party/behavior_tree_cpp
+
+# Build the preview-only HTTP server independently of ROS packages. Its editor
+# files are copied from the Node build stage below and served from one origin.
+RUN cmake -S /opt/rm65_ws/src/behavior_tree_cpp -B /opt/rm65_ws/behavior_tree/build \
+        -DBT_BUILD_NODES=OFF \
+        -DBT_BUILD_SERVER=ON \
+        -DBT_BUILD_TESTS=OFF \
+        -DBT_BUILD_EXAMPLES=OFF \
+    && cmake --build /opt/rm65_ws/behavior_tree/build --target bt_server \
+    && install -D -m 0755 /opt/rm65_ws/behavior_tree/build/bin/bt_server /opt/rm65_ws/behavior_tree/bin/bt_server
 
 # Install the pinned vendor API used by the real driver. Mock tests still avoid
 # importing it, while production launches can read real controller state.
@@ -68,7 +91,10 @@ RUN . /opt/ros/humble/setup.sh \
     && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration realman_bt realman_bt_mock \
     && colcon test-result --verbose
 
+COPY --from=bt_editor_build /opt/bt_editor/dist /opt/rm65_ws/behavior_tree/editor-dist
 COPY docker/ros_entrypoint.sh /ros_entrypoint.sh
+COPY docker/bt_container_entrypoint.sh /usr/local/bin/bt-start
+RUN chmod +x /ros_entrypoint.sh /usr/local/bin/bt-start
 
 ENTRYPOINT ["/ros_entrypoint.sh"]
 CMD ["ros2", "launch", "rm65_description", "display.launch.py"]

@@ -35,6 +35,13 @@ std::filesystem::path defaultWorkspace() {
   return "examples/trees";
 }
 
+std::filesystem::path editorDist() {
+  if (const char* env = std::getenv("BT_EDITOR_DIST")) {
+    if (*env) return env;
+  }
+  return {};
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -66,6 +73,18 @@ int main(int argc, char** argv) {
   std::cout << "[bt_server] 树文件 workspace: " << api.workspace() << std::endl;
 
   httplib::Server svr;
+
+  // In the driver container, serve the prebuilt editor under the same origin
+  // as the preview-only API. cpp-httplib rejects traversal beyond this root.
+  const auto static_root = editorDist();
+  if (!static_root.empty() && std::filesystem::is_directory(static_root)) {
+    if (!svr.set_mount_point("/", static_root.string().c_str())) {
+      std::cerr << "[bt_server] failed to mount editor assets: "
+                << static_root << std::endl;
+      return 1;
+    }
+    std::cout << "[bt_server] editor assets: " << static_root << std::endl;
+  }
 
   svr.set_post_routing_handler(
       [](const httplib::Request&, httplib::Response& res) {

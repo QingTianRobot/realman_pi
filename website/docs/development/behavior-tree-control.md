@@ -31,4 +31,9 @@ mock 节点不会连接 SDK/CAN，也不会发布生产控制命令。可通过 
 单拍 tick、连续 run，并显示活动节点、Action feedback、控制模式、owner、epoch 和失败原因。
 生产 Web 控制页面只请求模式，不绕过仲裁层发送动作。
 
+编辑器支持通过 URL 直接打开工作区树：访问 `bt_editor/?tree=arm_move.xml` 后，前端先拉取
+`/api/nodes`，再请求 `GET /api/tree/open?name=arm_move.xml`，将返回的 XML 导入画布并同步到
+`/api/tree/load`。文件名会进行 URL 编码；打开失败会显示错误 toast。该 URL 参数只在启动时消费一次，
+因此后续编辑不会因 React 状态更新而重复打开或覆盖画布。
+
 相关配置：[`config/ros/behavior_tree.yaml`](../../../config/ros/behavior_tree.yaml)。

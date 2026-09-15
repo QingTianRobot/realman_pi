@@ -93,7 +93,7 @@ RUN python3 -m pip install --no-cache-dir \
 
 RUN . /opt/ros/humble/setup.sh \
     && colcon build --symlink-install \
-        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock bt_ros2 \
+        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock \
     && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock \
     && colcon test-result --verbose
 

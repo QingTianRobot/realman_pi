@@ -250,6 +250,7 @@ class CoordinateManager:
         arm: str,
         *,
         verified_result_callback: Callable[[CoordinateVerification], None] | None = None,
+        ownership_already_acquired: bool = False,
     ) -> CoordinateVerification:
         """Explicitly write and select the arm defaults, then read them back."""
         profile = self._profile(arm)
@@ -272,7 +273,12 @@ class CoordinateManager:
                     return self._failure(arm, status, error)
             return self.verify(adapter, arm)
 
-        return self._run_mutation(arm, operation, verified_result_callback)
+        return self._run_mutation(
+            arm,
+            operation,
+            verified_result_callback,
+            ownership_already_acquired=ownership_already_acquired,
+        )
 
     def select_tool(
         self,
@@ -351,10 +357,15 @@ class CoordinateManager:
         arm: str,
         operation: Callable[[], CoordinateVerification],
         verified_result_callback: Callable[[CoordinateVerification], None] | None,
+        *,
+        ownership_already_acquired: bool = False,
     ) -> CoordinateVerification:
-        ownership_error = self._acquire_mutation(arm)
-        if ownership_error:
-            return self._failure(arm, -1, ownership_error)
+        if ownership_already_acquired:
+            ownership_error = ""
+        else:
+            ownership_error = self._acquire_mutation(arm)
+            if ownership_error:
+                return self._failure(arm, -1, ownership_error)
 
         release_error: Exception | None = None
         try:
@@ -366,10 +377,11 @@ class CoordinateManager:
                 arm, result, verified_result_callback
             )
         finally:
-            try:
-                self._release_mutation(arm)
-            except Exception as error:
-                release_error = error
+            if not ownership_already_acquired:
+                try:
+                    self._release_mutation(arm)
+                except Exception as error:
+                    release_error = error
 
         if release_error is not None:
             return self._failure(arm, -1, f"ownership release failed: {release_error}")

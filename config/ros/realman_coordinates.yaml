@@ -1,11 +1,13 @@
 # Desired controller coordinate profiles for the three fixed RM65 arms.
-# These are desired state only: startup verifies and blocks motion on a mismatch;
-# it never writes controller frames without an explicit apply/select request.
+# The configured frames are authoritative. Startup verifies and automatically
+# reconciles a readable mismatch by writing/selecting these frames, then reading
+# them back. Read/write failures keep motion blocked.
+
 version: 1
 policy:
-  # Startup reads the active controller frames. No controller write is implicit.
+  # Legacy compatibility field; startup always verifies and reconciles mismatch.
   on_start: verify
-  # A controller/profile discrepancy is a safety boundary for later motion actions.
+  # A controller/profile discrepancy is reconciled at startup; failures block motion.
   on_mismatch: block_motion
 
 robots:

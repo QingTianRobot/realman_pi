@@ -183,6 +183,12 @@ services:
   # host on the same ROS_DOMAIN_ID to exercise the controller node without USB.
   realman_bringup_remote:
     <<: *realman-common
+    devices:
+      # Stable udev aliases prevent ttyUSB numbering changes after reconnect/reboot.
+      # Environment overrides are useful on development hosts without these aliases.
+      - ${REALMAN_GRIPPER_RIGHT_DEVICE:-/dev/realman/gripper_right}:/dev/realman/gripper_right
+      - ${REALMAN_GRIPPER_LEFT_DEVICE:-/dev/realman/gripper_left}:/dev/realman/gripper_left
+      - ${REALMAN_GRIPPER_MID_DEVICE:-/dev/realman/gripper_mid}:/dev/realman/gripper_mid
     volumes:
       # REALMAN_START_WEB_CONTROL=true runs the browser bridge in this service;
       # it needs write access only to confirmed joint record files.
@@ -200,6 +206,8 @@ services:
       - realman_bringup
       - system.launch.py
       - start_joy_driver:=false
+      - start_gripper:=${REALMAN_START_GRIPPER:-true}
+      - gripper_config_file:=${REALMAN_GRIPPER_CONFIG_FILE:-/opt/rm65_ws/config/ros/gripper.yaml}
       - use_gui:=false
       - use_rviz:=false
       - start_web_control:=${REALMAN_START_WEB_CONTROL:-false}

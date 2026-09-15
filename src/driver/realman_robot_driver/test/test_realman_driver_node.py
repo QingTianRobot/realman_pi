@@ -433,13 +433,60 @@ def test_coordinates_ownership_exceptions_are_structured_failures(failure: str):
     assert ownership.owner is None
 
 
-def test_verify_only_startup_reads_without_controller_writes():
+def test_startup_mismatch_is_automatically_applied_even_with_verify_policy():
     module = _coordinate_services_module()
     manager, adapter, ownership = _coordinate_context()
 
-    module.run_startup_coordinate_policy(manager, adapter, ownership, "l")
+    result = module.run_startup_coordinate_policy(manager, adapter, ownership, "l")
 
+    assert result.success is True
+    assert result.matched is True
+    assert [call[0] for call in adapter.calls] == [
+        "current_tool_frame",
+        "current_work_frame",
+        "set_tool_frame",
+        "set_work_frame",
+        "change_tool_frame",
+        "change_work_frame",
+        "current_tool_frame",
+        "current_work_frame",
+    ]
+
+
+def test_startup_read_failure_does_not_write_controller_frames():
+    module = _coordinate_services_module()
+    manager, adapter, ownership = _coordinate_context()
+
+    def failed_tool_read():
+        adapter.calls.append(("current_tool_frame",))
+        return 37, None
+
+    adapter.current_tool_frame = failed_tool_read
+    result = module.run_startup_coordinate_policy(manager, adapter, ownership, "l")
+
+    assert result.success is False
+    assert result.api2_status == 37
     assert adapter.calls == [("current_tool_frame",), ("current_work_frame",)]
+
+
+def test_startup_reconciles_when_recovery_already_holds_ownership():
+    module = _coordinate_services_module()
+    manager, adapter, ownership = _coordinate_context()
+    assert ownership.acquire("l") is True
+
+    result = module.run_startup_coordinate_policy(
+        manager,
+        adapter,
+        ownership,
+        "l",
+        ownership_already_acquired=True,
+    )
+
+    assert result.success is True
+    assert result.matched is True
+    assert ownership.owner == "coordinate"
+    assert "set_tool_frame" in [call[0] for call in adapter.calls]
+    ownership.release("l")
 
 
 def test_explicit_apply_startup_verifies_before_writing_and_reading_back():
@@ -938,6 +985,12 @@ def test_connect_returns_coordinate_api_failure_instead_of_ready_status():
     ]
 
     assert "verification.api2_status" in returns
+
+
+def test_recovery_connect_reconciles_coordinates_while_holding_recovery_ownership():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert "ownership_already_acquired=event_recovery" in source
 
 
 def test_mock_coordinate_profile_is_configured_before_auto_connect():

@@ -408,3 +408,59 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator("#record-status")).toContainText("已删除 Ready");
   await page.screenshot({ path: test.info().outputPath("web-control.png"), fullPage: true });
 });
+
+test("keeps the last live pose when a duplicate publisher emits an all-zero sample", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
+  await expect(page.locator("#joint-stamp")).toContainText("42");
+  await page.evaluate(() => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "joint_state", arm: "l", positions_rad: [0.4, 0.2, -0.3, 0.1, 0.5, -0.2], stamp_ns: 100,
+    }) });
+  });
+  await expect(page.locator("#joint-stamp")).toContainText("100");
+  await page.evaluate(() => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "joint_state", arm: "l", positions_rad: [0, 0, 0, 0, 0, 0], stamp_ns: 101,
+    }) });
+  });
+  await expect(page.locator("#joint-stamp")).toContainText("100");
+});
+
+test("clears MOVEL waiting feedback placeholder when the action is rejected", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("button[data-motion-command=\"1\"]").click();
+  await page.locator("#pose-x").fill("0.4");
+  await page.locator("#pose-y").fill("0.1");
+  await page.locator("#pose-z").fill("0.5");
+  await expect(page.locator("#execute-motion")).toBeEnabled();
+  await page.locator("#execute-motion").click();
+  await expect(page.locator("#feedback")).toContainText("等待 feedback");
+  const requestId = await page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map((value) => JSON.parse(value))
+      .findLast((item) => item.type === "execute_motion").request_id,
+  );
+  await page.evaluate((id) => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "action_state", arm: "l", action: "execute_motion", request_id: id,
+      state: "rejected", message: "driver rejected motion goal",
+    }) });
+  }, requestId);
+  await expect(page.locator("#feedback")).toContainText("driver rejected motion goal");
+  await expect(page.locator("#feedback")).not.toContainText("等待 feedback");
+});
+
+test("warns when MOVEL has no feedback without permitting a second motion", async ({ page }) => {
+  test.setTimeout(25_000);
+  await page.goto("/");
+  await page.locator("button[data-motion-command=\"1\"]").click();
+  await page.locator("#pose-x").fill("0.4");
+  await page.locator("#pose-y").fill("0.1");
+  await page.locator("#pose-z").fill("0.5");
+  await page.locator("#execute-motion").click();
+  await expect(page.locator("#feedback")).toContainText("等待 feedback");
+  await expect(page.locator("#feedback")).toContainText("尚未收到", { timeout: 12_000 });
+  await expect(page.locator("#execute-motion")).toBeDisabled();
+  await expect(page.locator("#cancel-motion")).toBeEnabled();
+});

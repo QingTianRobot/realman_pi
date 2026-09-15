@@ -58,6 +58,7 @@ esac
 rm -rf "$BT_TREE_WORKSPACE"
 mkdir -p "$BT_TREE_WORKSPACE"
 cp "$BT_TREE_FILE" "$BT_TREE_WORKSPACE/arm_move.xml"
+runtime_tree_file="$BT_TREE_WORKSPACE/arm_move.xml"
 
 server_pid=""
 executor_pid=""
@@ -106,7 +107,7 @@ echo "[bt-start] starting ROS executor for arm ${REALMAN_BT_ARM_ID} (dry_run=${R
 ros2 launch realman_bt arm_move.launch.py \
   arm_id:="$REALMAN_BT_ARM_ID" \
   dry_run:="$REALMAN_BT_DRY_RUN" \
-  tree_file:="$BT_TREE_FILE" &
+  tree_file:="$runtime_tree_file" &
 executor_pid=$!
 
 echo "[bt-start] editor: http://<host>:${BT_SERVER_PORT}/?tree=arm_move.xml"

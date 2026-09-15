@@ -41,27 +41,38 @@ ros2 launch realman_bt arm_move.launch.py \
 
 ## 驱动测试与可视化
 
-先在一个终端启动行为树之外的生产项目：
+行为树的执行器、preview-only `bt_server` 和静态 `bt_editor` 都运行在
+`realman_bringup_remote` 驱动容器中。`./rm65 up` 只启动驱动及其他生产组件，不会自动执行行为树。
+首次修改 Dockerfile 或行为树编辑器后，先重建一次镜像：
+
+    docker compose build realman_bringup_remote
+
+然后按顺序执行：
+
+终端 1：
 
     ./rm65 up
 
-再在第二个终端启动行为树执行器、预览后端和编辑器：
+终端 2：
 
-    ./rm65 bt
+    ./rm65 bt r
 
-编辑器地址为 `http://127.0.0.1:5173/?tree=arm_move.xml`，预览后端为
-`http://127.0.0.1:8080`。编辑器中的 Tick/Run 只调用 bt_server 的 preview-only
-`MoveJ`，不会连接 ROS Action，也不会移动真实机械臂。按 `Ctrl-C` 会清理这三个行为树进程。
+启动器会先确认 `realman_bringup_remote` 正在运行，再在容器内等待
+`/r/execute_motion` Action Server 就绪；驱动未启动或 Action 超时都不会启动行为树。
+可视化网页由同一容器在宿主网络监听 `0.0.0.0:8080`，地址为
+`http://<host>:8080/?tree=arm_move.xml`。编辑器中的 Tick/Run 只调用 bt_server 的
+preview-only `MoveJ`，不会连接 ROS Action，也不会移动真实机械臂。按 `Ctrl-C` 只清理行为树
+执行器和预览服务，驱动容器继续运行；使用 `./rm65 down` 才停止驱动。
 
-`./rm65 bt` 默认等价于 `dry_run=true`。只有在已清空工作区、低速运行、急停可达并人工确认
-目标关节后，才允许显式开启真机执行：
+`./rm65 bt` 默认等价于 `REALMAN_BT_DRY_RUN=true`。只有在已清空工作区、低速运行、急停可达并
+人工确认目标关节后，才允许显式开启真机执行：
 
     REALMAN_BT_DRY_RUN=false ./rm65 bt r
 
-脚本会自动加载 `/opt/ros/humble/setup.bash` 和仓库 `install/setup.bash`；非标准 ROS 工作区可用
-`REALMAN_ROS_SETUP=/path/to/setup.bash` 指定环境。此模式仍需确保生产驱动已经由 `./rm65 up` 启动；执行器会向 `/r/execute_motion` 发送真实
-`ExecuteMotion` goal。可用 `REALMAN_BT_ARM_ID=l|m|r`、`BT_SERVER_PORT` 和 `BT_EDITOR_PORT`
-覆盖默认参数。编辑器保存的是临时 workspace 副本，不会覆盖 `config/behavior-trees/arm_move.xml`。
+显式关闭 dry-run 后，容器启动日志会再次打印安全警告，执行器才会向 `/r/execute_motion`
+发送真实 `ExecuteMotion` goal。可用 `REALMAN_BT_ARM_ID=l|m|r`、`BT_SERVER_PORT` 和
+`BT_PUBLIC_HOST` 覆盖默认参数；编辑器保存的是容器临时 workspace 副本，不会覆盖
+`config/behavior-trees/arm_move.xml`。
 
 执行器发布根节点状态：
 
@@ -78,22 +89,17 @@ behavior-trees/arm_move.xml，launch 会优先使用该配置。
 
 ## 真机执行
 
-先确保工作区清空、急停可达、速度和目标关节均已人工确认。先完成一次 dry-run，再分别启动驱动和行为树：
+先确保工作区清空、急停可达、速度和目标关节均已人工确认。先完成一次 dry-run，再启动驱动容器和行为树：
 
 终端 1：
 
     source /opt/ros/humble/setup.bash
     source install/setup.bash
-    ros2 launch realman_robot_driver realman_driver.launch.py namespace:=r
+    ./rm65 up
 
 终端 2：
 
-    source /opt/ros/humble/setup.bash
-    source install/setup.bash
-    ros2 launch realman_bt arm_move.launch.py \
-      arm_id:=r \
-      dry_run:=false \
-      tick_rate_hz:=10.0
+    REALMAN_BT_DRY_RUN=false ./rm65 bt r
 
 dry_run=false 会向 /r/execute_motion 发送真实 MoveJ goal。可用以下命令确认 Action 图和执行状态：
 

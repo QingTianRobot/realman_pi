@@ -139,6 +139,7 @@ app.innerHTML = `
         <button id="execute-motion" class="button primary full" type="button" disabled>发送 MOVEJ</button>
       </section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">CARTESIAN</span><h2>末端速度</h2></div><span id="velocity-state" class="mini-state">IDLE</span></div><div class="form-grid"><label>参考系<select id="velocity-frame"></select></label><label>周期 (ms)<input id="velocity-period" type="number" min="1" step="1" /></label><label>看门狗 (ms)<input id="velocity-watchdog" type="number" min="1" step="1" /></label><label>线加速度<input id="linear-accel" type="number" min="0.001" step="0.01" /></label><label>角加速度<input id="angular-accel" type="number" min="0.001" step="0.01" /></label></div><div id="velocity-inputs" class="velocity-inputs"></div><div class="inline-actions"><button id="start-velocity" class="button secondary" type="button" disabled>启动速度 Action</button><button id="cancel-velocity" class="button ghost" type="button" disabled>取消</button></div></section>
+      <section id="gripper-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">GRIPPER</span><h2>夹爪控制</h2></div><span id="gripper-state" class="mini-state">WAIT</span></div><div class="form-grid"><label>设备<select id="gripper-select"></select></label><label>开合度 (0=闭合)<input id="gripper-percentage" type="range" min="0" max="1" step="0.01" value="1" /></label></div><div class="inline-actions"><button id="gripper-open" class="button secondary" type="button">打开</button><button id="gripper-close" class="button secondary" type="button">闭合</button><button id="gripper-enable" class="button ghost" type="button">使能</button><button id="gripper-reset" class="button danger" type="button">复位</button></div><div id="gripper-feedback" class="feedback">等待夹爪状态</div></section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">ACTION MONITOR</span><h2>运行反馈</h2></div><span id="action-state" class="mini-state">IDLE</span></div><div class="progress-track"><div id="progress" class="progress-bar"></div></div><div id="feedback" class="feedback">尚未发送 Action</div><pre id="result" class="result" aria-live="polite">等待结果…</pre></section>
     </aside>
   </main>
@@ -202,13 +203,18 @@ let selectedMotionCommand: MotionCommand = 0;
 let targetJoints: number[] = [];
 let currentJoints: number[] = [];
 let socket: WebSocket | undefined;
+const gripperStates: Record<string, any> = {};
+let selectedGripper = "";
 let readOnly = false;
 let activeMotionRequest = "";
+let motionFeedbackTimer = 0;
 let activeVelocityRequest = "";
 let velocityTimer = 0;
 const coordinateStates: Partial<Record<ArmId, CoordinateState>> = {};
 const connectionStates: Partial<Record<ArmId, boolean>> = {};
 const currentJointsByArm: Partial<Record<ArmId, number[]>> = {};
+const lastJointStampByArm: Partial<Record<ArmId, number>> = {};
+const nonZeroJointStateByArm: Partial<Record<ArmId, boolean>> = {};
 const targetJointsByArm: Partial<Record<ArmId, number[]>> = {};
 const targetEditedByArm: Partial<Record<ArmId, boolean>> = {};
 const poseTargetsByArm: Partial<Record<ArmId, string[]>> = {};
@@ -813,12 +819,37 @@ function configureVelocity() {
   }
 }
 
+function sendGripper(command: string, extra: Record<string, unknown> = {}) {
+  if (!selectedGripper || !canWrite()) return;
+  send({ type: "gripper_command", request_id: requestId("gripper"), name: selectedGripper, command, ...extra });
+}
+function renderGripperState() {
+  const state = gripperStates[selectedGripper];
+  if (!state) return;
+  $("#gripper-state").textContent = state.connected ? "ONLINE" : "OFFLINE";
+  $("#gripper-feedback").textContent = `位置 ${state.position ?? 0} / 速度 ${state.speed ?? 0} / 电流 ${state.current ?? 0} / 力矩 ${state.torque_reached ? "到达" : "未到达"} / 报警 0x${Number(state.alarm ?? 0).toString(16)}`;
+}
+function updateGripperList(list: any[]) {
+  const select = $("#gripper-select") as HTMLSelectElement;
+  select.innerHTML = list.map((item) => `<option value="${String(item.name)}">${String(item.name)}</option>`).join("");
+  if (!selectedGripper && list.length) selectedGripper = String(list[0].name);
+  select.value = selectedGripper;
+  renderGripperState();
+}
+
 function handleMessage(message: Message) {
   if (message.type === "hello") {
     readOnly = Boolean(message.read_only);
     mode.textContent = readOnly ? "READ ONLY" : "CONTROL READY";
     mode.classList.toggle("ready", !readOnly);
     if (message.layout) loadManifest(message.layout);
+  } else if (message.type === "gripper_list") {
+    updateGripperList(Array.isArray(message.grippers) ? message.grippers : []);
+  } else if (message.type === "gripper_state") {
+    gripperStates[String(message.name)] = message;
+    renderGripperState();
+  } else if (message.type === "gripper_result") {
+    if (message.message) $("#gripper-feedback").textContent = String(message.message);
   } else if (message.type === "coordinate_state") {
     coordinateStates[message.arm] = message as CoordinateState;
     renderFleetStrip();
@@ -843,12 +874,25 @@ function handleMessage(message: Message) {
     renderFleetStrip();
     if (message.arm === selectedArm) setSelectedConnection();
   } else if (message.type === "joint_state") {
-    currentJointsByArm[message.arm] = message.positions_rad;
-    if (!targetEditedByArm[message.arm]) targetJointsByArm[message.arm] = [...message.positions_rad];
-    setRobotJoints(robotScenes[message.arm]?.live, message.positions_rad);
-    if (message.arm === selectedArm) {
-      currentJoints = message.positions_rad;
-      $("#joint-stamp").textContent = `joint_states / ${message.stamp_ns || 0}`;
+    const arm = message.arm as ArmId;
+    const positions = Array.isArray(message.positions_rad) ? message.positions_rad.map(Number) : [];
+    const stamp = Number(message.stamp_ns);
+    if (!(["l", "m", "r"] as ArmId[]).includes(arm) || positions.length !== 6 ||
+        !positions.every(Number.isFinite) || !Number.isFinite(stamp) || stamp <= 0 ||
+        (lastJointStampByArm[arm] !== undefined && stamp <= lastJointStampByArm[arm]!)) return;
+    // A second ROS publisher can emit its default all-zero pose while the real
+    // driver is still publishing the unchanged robot pose. Keep the last
+    // known-good visual state instead of making the model jump to zero.
+    const allZero = positions.every((value) => value === 0);
+    if (allZero && nonZeroJointStateByArm[arm]) return;
+    lastJointStampByArm[arm] = stamp;
+    if (!allZero) nonZeroJointStateByArm[arm] = true;
+    currentJointsByArm[arm] = positions;
+    if (!targetEditedByArm[arm]) targetJointsByArm[arm] = [...positions];
+    setRobotJoints(robotScenes[arm]?.live, positions);
+    if (arm === selectedArm) {
+      currentJoints = positions;
+      $("#joint-stamp").textContent = `joint_states / ${stamp}`;
     }
     renderFleetStrip();
   } else if (message.type === "joint_records") {
@@ -948,16 +992,28 @@ function handleMessage(message: Message) {
       renderFleetStrip();
       return;
     }
+    if (message.action === "execute_motion" && activeMotionRequest && message.request_id && message.request_id !== activeMotionRequest) return;
     actionState.textContent = String(message.state).toUpperCase();
     actionState.className = `mini-state ${message.state}`;
     if (message.action === "cartesian_velocity") velocityState.textContent = String(message.state).toUpperCase();
     if (["rejected", "error"].includes(message.state)) {
-      if (message.action === "execute_motion") activeMotionRequest = "";
+      if (message.action === "execute_motion") {
+        window.clearTimeout(motionFeedbackTimer);
+        motionFeedbackTimer = 0;
+        feedback.textContent = `${message.action} / ${message.message || `action ${message.state}`}`;
+        progress.style.width = "0%";
+        activeMotionRequest = "";
+      }
       if (message.action === "cartesian_velocity") { activeVelocityRequest = ""; window.clearInterval(velocityTimer); velocityTimer = 0; }
       updateButtons();
     }
   } else if (message.type === "action_feedback") {
     if (message.arm !== selectedArm) return;
+    if (message.action === "execute_motion") {
+      if (activeMotionRequest && message.request_id && message.request_id !== activeMotionRequest) return;
+      window.clearTimeout(motionFeedbackTimer);
+      motionFeedbackTimer = 0;
+    }
     const item = message.feedback || {};
     feedback.textContent = `${message.action} / ${item.detail || "executing"} / progress ${item.progress ?? "-"}`;
     // The action starts with a validating feedback frame whose joint field is
@@ -968,6 +1024,14 @@ function handleMessage(message: Message) {
     progress.style.width = `${Math.max(0, Math.min(100, Number(item.progress || 0) * 100))}%`;
   } else if (message.type === "action_result") {
     if (message.arm !== selectedArm) return;
+    if (message.action === "execute_motion") {
+      if (activeMotionRequest && message.request_id && message.request_id !== activeMotionRequest) return;
+      window.clearTimeout(motionFeedbackTimer);
+      motionFeedbackTimer = 0;
+      if (feedback.textContent.includes("等待 feedback") || feedback.textContent.includes("尚未收到")) {
+        feedback.textContent = `${message.action} / ${message.result?.message || "已收到运行结果"}`;
+      }
+    }
     result.textContent = JSON.stringify(message.result, null, 2);
     actionState.textContent = "RESULT";
     activeMotionRequest = message.action === "execute_motion" ? "" : activeMotionRequest;
@@ -992,7 +1056,13 @@ function handleMessage(message: Message) {
     updateButtons();
   } else if (message.type === "error") {
     result.textContent = `${message.code}: ${message.message}`;
-    if (message.request_id === activeMotionRequest) activeMotionRequest = "";
+    if (activeMotionRequest && message.request_id === activeMotionRequest) {
+      window.clearTimeout(motionFeedbackTimer);
+      motionFeedbackTimer = 0;
+      feedback.textContent = `execute_motion / ${message.code}: ${message.message}`;
+      progress.style.width = "0%";
+      activeMotionRequest = "";
+    }
     if (message.request_id === activeVelocityRequest) { activeVelocityRequest = ""; window.clearInterval(velocityTimer); velocityTimer = 0; }
     for (const arm of ["l", "m", "r"] as ArmId[]) {
       if (message.request_id === activeKinematicsRequestByArm[arm]) {
@@ -1176,6 +1246,14 @@ executeMotionButton.addEventListener("click", () => {
     },
   });
   feedback.textContent = `${commandLabel} / ${referenceLabel(reference)} / 等待 feedback…`;
+  window.clearTimeout(motionFeedbackTimer);
+  const pendingRequestId = activeMotionRequest;
+  const pendingArm = selectedArm;
+  motionFeedbackTimer = window.setTimeout(() => {
+    motionFeedbackTimer = 0;
+    if (activeMotionRequest !== pendingRequestId || selectedArm !== pendingArm) return;
+    feedback.textContent = `${commandLabel} / 尚未收到 Action feedback；运行状态未知，请勿重复发送。检查 /${pendingArm}/execute_motion 和驱动日志，必要时使用软件停止。`;
+  }, 8_000);
   updateButtons();
 });
 fillCurrentPoseButton.addEventListener("click", () => {
@@ -1237,4 +1315,10 @@ recoverMotionButton.addEventListener("click", () => {
   updateButtons();
 });
 fetch("/api/layout").then((response) => response.json()).then(loadManifest).catch((error) => { viewerState.textContent = `布局加载失败: ${String(error)}`; });
+($("#gripper-select") as HTMLSelectElement).addEventListener("change", (event) => { selectedGripper = (event.target as HTMLSelectElement).value; renderGripperState(); });
+$("#gripper-open").addEventListener("click", () => sendGripper("open"));
+$("#gripper-close").addEventListener("click", () => sendGripper("close"));
+$("#gripper-enable").addEventListener("click", () => sendGripper("enable"));
+$("#gripper-reset").addEventListener("click", () => sendGripper("reset"));
+$("#gripper-percentage").addEventListener("change", (event) => sendGripper("percentage", { percentage: Number((event.target as HTMLInputElement).value) }));
 connect();

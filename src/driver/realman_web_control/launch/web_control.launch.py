@@ -41,6 +41,11 @@ def generate_launch_description():
                 description="Writable Web control joint target records under root config/.",
             ),
             DeclareLaunchArgument(
+                "gripper_config_file",
+                default_value=str(config_root / "ros" / "gripper.yaml"),
+                description="Changingtek gripper topology under root config/ros.",
+            ),
+            DeclareLaunchArgument(
                 "calibration_config_file",
                 default_value=str(config_root / "ros" / "camera_calibration.yaml"),
                 description="ChArUco calibration service configuration.",
@@ -60,6 +65,7 @@ def generate_launch_description():
                         "description_root": str(description_share),
                         "static_root": str(package_share / "static"),
                         "calibration_config_file": LaunchConfiguration("calibration_config_file"),
+                        "gripper_config_file": LaunchConfiguration("gripper_config_file"),
                     }
                 ],
             ),

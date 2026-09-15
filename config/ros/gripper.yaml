@@ -1,0 +1,55 @@
+# Changingtek gripper topology. Position values are device units (normally
+# 0.01 mm); speed and force values are percentages in the range 0..100.
+# Stable udev aliases keep each physical gripper mapped to the same ROS name.
+buses:
+  - port: /dev/realman/gripper_right
+    baudrate: 115200
+    timeout: 0.3
+    poll_hz: 20.0
+    auto_reconnect: true
+    reconnect_interval: 5.0
+    grippers:
+      - name: gripper_right
+        slave_id: 1
+        open_position: 4000
+        close_position: 12000
+        min_position: 0
+        max_position: 12000
+        speed_pct: 100
+        force_pct: 60
+        accel: 100
+        decel: 100
+  - port: /dev/realman/gripper_left
+    baudrate: 115200
+    timeout: 0.3
+    poll_hz: 20.0
+    auto_reconnect: true
+    reconnect_interval: 5.0
+    grippers:
+      - name: gripper_left
+        slave_id: 1
+        open_position: 400
+        close_position: 949
+        min_position: 0
+        max_position: 949
+        speed_pct: 100
+        force_pct: 60
+        accel: 100
+        decel: 100
+  - port: /dev/realman/gripper_mid
+    baudrate: 115200
+    timeout: 0.3
+    poll_hz: 20.0
+    auto_reconnect: true
+    reconnect_interval: 5.0
+    grippers:
+      - name: gripper_mid
+        slave_id: 1
+        open_position: 0
+        close_position: 9000
+        min_position: 0
+        max_position: 9000
+        speed_pct: 100
+        force_pct: 100
+        accel: 2000
+        decel: 2000

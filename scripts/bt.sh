@@ -2,72 +2,34 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-VENDOR_ROOT="$ROOT/third_party/behavior_tree_cpp"
-BT_BUILD_DIR="${BT_BUILD_DIR:-$VENDOR_ROOT/build}"
-BT_SERVER_BIN="${BT_SERVER_BIN:-$BT_BUILD_DIR/bin/bt_server}"
-BT_SERVER_HOST="${BT_SERVER_HOST:-127.0.0.1}"
-BT_SERVER_PORT="${BT_SERVER_PORT:-8080}"
-BT_EDITOR_HOST="${BT_EDITOR_HOST:-127.0.0.1}"
-BT_EDITOR_PORT="${BT_EDITOR_PORT:-5173}"
+COMPOSE_FILE="$ROOT/docker-compose.yml"
 ARM_ID="${1:-${REALMAN_BT_ARM_ID:-r}}"
 DRY_RUN="${REALMAN_BT_DRY_RUN:-true}"
-TEST_MODE="${RM65_DRY_RUN:-0}"
-WORKSPACE="${BT_TREE_WORKSPACE:-$(mktemp -d "${TMPDIR:-/tmp}/realman-bt-workspace.XXXXXX")}"
-TREE_SOURCE="$ROOT/config/behavior-trees/arm_move.xml"
+BT_PORT="${BT_SERVER_PORT:-8080}"
+BT_PUBLIC_HOST="${BT_PUBLIC_HOST:-127.0.0.1}"
+RM65_DRY_RUN="${RM65_DRY_RUN:-0}"
 
-SERVER_PID=""
-EDITOR_PID=""
-ROS_PID=""
+case "$ARM_ID" in
+  l|m|r) ;;
+  *) printf 'rm65 bt: arm_id must be l, m, or r (got %s)\n' "$ARM_ID" >&2; exit 2 ;;
+esac
+case "$DRY_RUN" in
+  true|false) ;;
+  *) printf 'rm65 bt: REALMAN_BT_DRY_RUN must be true or false\n' >&2; exit 2 ;;
+esac
 
 say() { printf 'rm65 bt: %s\n' "$*"; }
-need_cmd() {
-  command -v "$1" >/dev/null 2>&1 || { printf 'rm65 bt: missing required command: %s\n' "$1" >&2; exit 1; }
-}
-
-cleanup() {
-  local status=$?
-  for pid in "$ROS_PID" "$EDITOR_PID" "$SERVER_PID"; do
-    if [[ -n "$pid" ]] && kill -0 "$pid" >/dev/null 2>&1; then
-      kill "$pid" >/dev/null 2>&1 || true
-      wait "$pid" >/dev/null 2>&1 || true
-    fi
-  done
-  if [[ -z "${BT_TREE_WORKSPACE:-}" && -d "$WORKSPACE" ]]; then
-    rm -rf "$WORKSPACE"
+compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
+run() {
+  if [[ "$RM65_DRY_RUN" == "1" ]]; then
+    printf '+ '
+    printf '%q ' "$@"
+    printf '\n'
+  else
+    "$@"
   fi
-  exit "$status"
 }
-trap cleanup EXIT INT TERM
 
-if [[ "$DRY_RUN" != "true" && "$DRY_RUN" != "false" ]]; then
-  printf 'rm65 bt: REALMAN_BT_DRY_RUN must be true or false\n' >&2
-  exit 2
-fi
-
-mkdir -p "$WORKSPACE"
-cp "$TREE_SOURCE" "$WORKSPACE/arm_move.xml"
-
-if [[ "$TEST_MODE" == "1" ]]; then
-  say "preview workspace: $WORKSPACE/arm_move.xml"
-  say "build bt_server in $BT_BUILD_DIR"
-  say "start bt_server http://$BT_SERVER_HOST:$BT_SERVER_PORT"
-  say "start editor http://$BT_EDITOR_HOST:$BT_EDITOR_PORT/?tree=arm_move.xml"
-  say "ros2 launch realman_bt arm_move.launch.py arm_id:=$ARM_ID dry_run:=$DRY_RUN tree_file:=$WORKSPACE/arm_move.xml"
-  exit 0
-fi
-
-if [[ -n "${REALMAN_ROS_SETUP:-}" && -f "$REALMAN_ROS_SETUP" ]]; then
-  # Allow deployments whose ROS workspace is installed outside this checkout.
-  # shellcheck disable=SC1090
-  source "$REALMAN_ROS_SETUP"
-elif [[ -f /opt/ros/humble/setup.bash ]]; then
-  # shellcheck disable=SC1091
-  source /opt/ros/humble/setup.bash
-fi
-if [[ -f "$ROOT/install/setup.bash" ]]; then
-  # shellcheck disable=SC1091
-  source "$ROOT/install/setup.bash"
-fi
 if [[ "$DRY_RUN" == "false" ]]; then
   cat >&2 <<'EOF'
 rm65 bt: WARNING: real motion is enabled (REALMAN_BT_DRY_RUN=false).
@@ -75,49 +37,39 @@ rm65 bt: WARNING: real motion is enabled (REALMAN_BT_DRY_RUN=false).
   and confirm the target joint values before continuing.
 EOF
 fi
-need_cmd cmake
-need_cmd curl
-need_cmd npm
-need_cmd ros2
 
-if [[ ! -x "$BT_SERVER_BIN" ]]; then
-  say "building preview server"
-  cmake -S "$VENDOR_ROOT" -B "$BT_BUILD_DIR" -DBT_BUILD_NODES=OFF -DBT_BUILD_SERVER=ON -DBT_BUILD_TESTS=OFF -DBT_BUILD_EXAMPLES=OFF
-  cmake --build "$BT_BUILD_DIR" --target bt_server
+say "editor: http://${BT_PUBLIC_HOST}:${BT_PORT}/?tree=arm_move.xml"
+say "behavior tree runs inside the realman_bringup_remote driver container"
+
+if [[ "$RM65_DRY_RUN" == "1" ]]; then
+  run docker compose -f "$COMPOSE_FILE" ps -q realman_bringup_remote
+  container_id="dry-run"
+else
+  container_id="$(compose ps -q realman_bringup_remote)"
+  if [[ -z "$container_id" ]]; then
+    printf 'rm65 bt: realman_bringup_remote is not running; run ./rm65 up first\n' >&2
+    exit 1
+  fi
+  if [[ "$(docker inspect -f '{{.State.Running}}' "$container_id" 2>/dev/null || true)" != "true" ]]; then
+    printf 'rm65 bt: realman_bringup_remote is not running; run ./rm65 up first\n' >&2
+    exit 1
+  fi
 fi
 
-wait_http() {
-  local url="$1" pid="$2"
-  for _ in {1..100}; do
-    curl -fsS "$url" >/dev/null 2>&1 && return 0
-    kill -0 "$pid" >/dev/null 2>&1 || return 1
-    sleep 0.1
-  done
-  return 1
-}
+exec_args=(
+  docker compose -f "$COMPOSE_FILE" exec -T
+  -e BT_AUTOSTART=true
+  -e "REALMAN_BT_ARM_ID=$ARM_ID"
+  -e "REALMAN_BT_DRY_RUN=$DRY_RUN"
+  -e "BT_SERVER_HOST=${BT_SERVER_HOST:-0.0.0.0}"
+  -e "BT_SERVER_PORT=$BT_PORT"
+  realman_bringup_remote /usr/local/bin/bt-start
+)
 
-BT_TREE_WORKSPACE="$WORKSPACE" "$BT_SERVER_BIN" "$BT_SERVER_HOST" "$BT_SERVER_PORT" &
-SERVER_PID=$!
-wait_http "http://$BT_SERVER_HOST:$BT_SERVER_PORT/api/health" "$SERVER_PID" || { say "bt_server failed to become ready" >&2; exit 1; }
-if ! curl -fsS "http://$BT_SERVER_HOST:$BT_SERVER_PORT/api/nodes" | grep -Fq '"registration_name":"MoveJ"'; then
-  say "bt_server does not expose the preview MoveJ node" >&2
-  exit 1
+if [[ "$RM65_DRY_RUN" == "1" ]]; then
+  run "${exec_args[@]}"
+  exit 0
 fi
 
-pushd "$VENDOR_ROOT/bt_editor" >/dev/null
-if [[ ! -d node_modules ]]; then npm install; fi
-BT_BACKEND_URL="http://$BT_SERVER_HOST:$BT_SERVER_PORT" npm run dev -- --host "$BT_EDITOR_HOST" --port "$BT_EDITOR_PORT" &
-EDITOR_PID=$!
-popd >/dev/null
-wait_http "http://$BT_EDITOR_HOST:$BT_EDITOR_PORT/" "$EDITOR_PID" || {
-  say "bt_editor failed to become ready" >&2
-  exit 1
-}
-
-say "preview backend: http://$BT_SERVER_HOST:$BT_SERVER_PORT"
-say "editor: http://$BT_EDITOR_HOST:$BT_EDITOR_PORT/?tree=arm_move.xml"
-
-ros2 launch realman_bt arm_move.launch.py \
-  arm_id:="$ARM_ID" dry_run:="$DRY_RUN" tree_file:="$WORKSPACE/arm_move.xml" &
-ROS_PID=$!
-wait "$ROS_PID"
+say "waiting for /${ARM_ID}/execute_motion and starting behavior tree"
+run "${exec_args[@]}"

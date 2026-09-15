@@ -139,6 +139,19 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
             "session_id": _string(message.get("session_id", ""), "session_id", maximum=128, allow_empty=True),
         }
 
+    if message_type == "gripper_command":
+        request_id = _request_id(message)
+        name = _string(message.get("name"), "name", maximum=96)
+        command = message.get("command")
+        if command not in {"open", "close", "reset", "enable", "disable", "percentage", "grasp_check"}:
+            raise ProtocolError("invalid_command", "unsupported gripper command", request_id)
+        normalized = {"type": message_type, "request_id": request_id, "name": name, "command": command}
+        if command == "percentage":
+            normalized["percentage"] = _number(message.get("percentage"), "percentage")
+            if not 0.0 <= normalized["percentage"] <= 1.0:
+                raise ProtocolError("invalid_field", "percentage must be from 0.0 through 1.0", request_id)
+        return normalized
+
     arm = _arm(message)
     if message_type == "get_current_pose":
         normalized = {

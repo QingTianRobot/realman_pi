@@ -103,6 +103,16 @@ MOVEJ 目标关节使用 degree；Web 后端会从 URDF limit 再检查一次。
 实时状态只会原位更新三块卡片的文本和选中状态，不会替换按钮节点；三台驱动高频发布
 `joint_state` 时，点击切换仍保持可用。Action feedback 只用于显示阶段、进度与结果，不能覆盖实体
 URDF；Action 的 validating 阶段没有可用关节读数，序列化为零值会造成模型瞬间跳动。
+Web 控制桥和浏览器都会校验 `joint_state` 的六轴有限数值及单调递增的 `stamp_ns`。检测到
+驱动已经提供过非零姿态后，来自重复/假发布者的全零样本会被丢弃，实体 URDF 和关节面板保留
+最后一个有效姿态；收到更新的真实样本后会自动继续更新。该保护只作用于可视化数据链路，不能
+推断或锁定机械臂真实位置。生产 `start_driver:=true` 启动时必须禁用 `joint_state_publisher`，
+否则应先检查 `ros2 topic info /<arm>/joint_states --verbose` 并停止重复发布源。
+发送 MOVEL 后如果驱动返回 rejected/error，反馈区会立即显示错误并清零进度，不会继续显示“等待
+feedback”。如果 8 秒内没有收到任何该请求的 Action feedback，页面会提示“运行状态未知”，但仍
+保持发送按钮禁用、保留取消/软件停止路径；这不会自动重发命令。此时应检查 `/{arm}/execute_motion`
+Action 服务和驱动日志，确认轨迹是否仍在控制器中运行。
+驱动对非阻塞 MOVEL/MOVEJ_P 会保留“提交调用返回前就到达”的成功事件；因此极短位姿运动不会因回调竞态被误判为超时。MOVEJ 仍要求提交返回后再接受事件，以避免复用旧轨迹回调。
 在没有人工改动目标之前，右侧滑条会跟随该 arm 的实时 `joint_state`；一旦人工拖动滑条，该 arm
 的目标值就会保持用户输入，直到再次切换或重置。
 
@@ -128,7 +138,7 @@ Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条�
 影子须等待“计算逆解”成功才更新；MOVEP 当前不提供逆解或影子预览，修改后会明确提示影子不会跟随
 滑轨，但仍可直接发送 `MOVEJ_P` Action。
 
-对于配置的 WORK/TOOL，驱动仍要求 `reference_type`/`reference_name` 与已验证的激活坐标
+对于配置的 WORK/TOOL，驱动会在连接时自动将可读的激活坐标失配修复为配置值，并仍要求 `reference_type`/`reference_name` 与已验证的激活坐标
 完全一致。对于任意 TF frame，Web 节点先把位姿转换到 `/{arm}/base_link`，再以
 `BASE/base` 调用驱动；它不会把任意 TF 名称伪装成 RealMan controller 的 WORK/TOOL。
 TF 查询失败、坐标验证失败、控制器状态不可读、目标不可达、SDK API2 非零或结果超限都会

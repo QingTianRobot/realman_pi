@@ -60,3 +60,11 @@ def test_runtime_snapshot_export_declares_bt_core_dependency():
     # The installed realman_bt target has a public bt::core link interface;
     # make sure consumers load the vendored bt_core package before resolving it.
     assert 'ament_export_dependencies(bt_core)' in source
+
+
+def test_runtime_snapshot_export_does_not_leak_vendor_source_include_path():
+    source = CMAKE.read_text()
+    target_block = source.split('add_library(runtime_snapshot', 1)[1].split(
+        'add_executable(realman_bt_executor', 1
+    )[0]
+    assert '"${BT_VENDOR_ROOT}"' not in target_block

@@ -22,8 +22,7 @@ target_compile_features(control_mode_state_machine PUBLIC cxx_std_17)
 add_library(runtime_snapshot src/runtime_snapshot.cpp)
 target_include_directories(runtime_snapshot PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
-  $<INSTALL_INTERFACE:include>
-  "${BT_VENDOR_ROOT}")
+  $<INSTALL_INTERFACE:include>)
 target_compile_features(runtime_snapshot PUBLIC cxx_std_17)
 target_link_libraries(runtime_snapshot PUBLIC bt::core)
 

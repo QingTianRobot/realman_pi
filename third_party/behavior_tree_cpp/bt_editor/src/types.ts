@@ -55,6 +55,38 @@ export interface OpenTreeResult {
 /** 单个节点的运行态状态 */
 export type RunStatus = 'IDLE' | 'RUNNING' | 'SUCCESS' | 'FAILURE';
 
+/** Executor-owned runtime data. Paths express hierarchy; keys identify nodes. */
+export interface RuntimeNode {
+  key: string;
+  name: string;
+  registration_name: string;
+  kind: string;
+  path: string;
+  status: RunStatus;
+}
+
+/** Missing executor snapshots contain only state, root_status and nodes. */
+export interface RuntimeSnapshot {
+  schema_version?: number;
+  tree_id?: string;
+  sequence?: number;
+  timestamp_ms?: number;
+  state?: 'IDLE';
+  root_status: RunStatus;
+  nodes: RuntimeNode[];
+}
+
+/** Optional server-owned structure, unavailable (404) in runtime-only mode. */
+export interface TreeStructure {
+  nodes: Array<{
+    id: number;
+    registration_name: string;
+    name: string;
+    type: string;
+    children: number[];
+  }>;
+}
+
 /** POST /api/tree/tick 返回的单节点状态 */
 export interface TickNodeStatus {
   id: string;

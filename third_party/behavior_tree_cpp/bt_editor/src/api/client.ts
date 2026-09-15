@@ -15,6 +15,8 @@ import type {
   ValidateResult,
   FormatResult,
   HealthResult,
+  RuntimeSnapshot,
+  TreeStructure,
 } from '../types';
 
 /** 统一的 JSON 请求封装：检查 HTTP 状态码并解析 JSON */
@@ -84,4 +86,21 @@ export async function runTree(): Promise<RunResult> {
 /** GET /api/health —— 健康检查，返回后端版本 */
 export async function checkHealth(): Promise<HealthResult> {
   return requestJson<HealthResult>('/api/health');
+}
+
+/** Read the executor snapshot; bypass HTTP caches so ticks remain observable. */
+export async function fetchRuntime(signal?: AbortSignal): Promise<RuntimeSnapshot> {
+  const value = await requestJson<RuntimeSnapshot>('/api/runtime', { signal, cache: 'no-store' });
+  const statuses = ['IDLE', 'RUNNING', 'SUCCESS', 'FAILURE'];
+  if (!value || !statuses.includes(value.root_status) || !Array.isArray(value.nodes) ||
+      !value.nodes.every((node) => node &&
+        ['key', 'name', 'registration_name', 'kind', 'path'].every((key) =>
+          typeof node[key as keyof typeof node] === 'string') && statuses.includes(node.status))) {
+    throw new Error('运行态快照格式无效');
+  }
+  return value;
+}
+
+export async function fetchStructure(): Promise<TreeStructure> {
+  return requestJson<TreeStructure>('/api/tree/structure');
 }

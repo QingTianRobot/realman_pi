@@ -129,6 +129,8 @@ test("documentation routes render", async ({ page }) => {
     "development/three-arm-visualization",
     "development/xbox-controller",
     "development/system-bringup",
+    "development/behavior-tree-motion",
+    "development/gripper-control",
     "troubleshooting",
   ]) {
     await page.goto(route);

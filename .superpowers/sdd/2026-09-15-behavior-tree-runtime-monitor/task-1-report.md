@@ -27,3 +27,23 @@ standalone focused contract test passed, covering idle output, DFS keys/paths,
 status/kind values, escaping, and replacement cleanup.
 
 Commit: `feat: add behavior tree runtime snapshot contract`
+
+## Follow-up export fix
+
+The installed `runtime_snapshot` target links `bt::core` publicly.  The
+vendored `bt_core` CMake project already installs `bt_coreConfig.cmake` and
+exports that target, so `realman_bt` now records `bt_core` with
+`ament_export_dependencies`.  Consumers loading `find_package(realman_bt)`
+will therefore load the `bt::core` target before resolving the exported
+`runtime_snapshot` interface.  A focused contract test checks that this
+dependency declaration remains alongside the runtime snapshot export.
+
+Verification:
+
+```text
+git diff --check  # passed
+python3 -m pytest -q src/behavior/realman_bt/test/test_tree_contract.py
+  # unavailable: pytest is not installed in this environment
+cmake ...
+  # unavailable: cmake is not installed in this environment
+```

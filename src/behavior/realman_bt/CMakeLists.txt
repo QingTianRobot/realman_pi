@@ -66,4 +66,10 @@ if(BUILD_TESTING)
 endif()
 
 ament_export_targets(export_${PROJECT_NAME})
+# runtime_snapshot links bt::core through its public interface.  bt_core is
+# vendored into this package, but its CMake install rules also provide a
+# standalone bt_coreConfig.cmake/bt::core target.  Record that package
+# dependency so consumers of find_package(realman_bt) load bt::core before
+# resolving the exported runtime_snapshot target.
+ament_export_dependencies(bt_core)
 ament_package()

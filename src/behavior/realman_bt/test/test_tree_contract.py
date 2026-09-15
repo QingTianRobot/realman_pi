@@ -5,6 +5,7 @@ ROOT = Path(__file__).parents[4]
 LAUNCH = ROOT / 'src/behavior/realman_bt/launch/arm_move.launch.py'
 EXECUTOR = ROOT / 'src/behavior/realman_bt/src/realman_bt_executor_node.cpp'
 EXECUTOR_HEADER = ROOT / 'src/behavior/realman_bt/include/realman_bt/realman_bt_executor_node.hpp'
+CMAKE = ROOT / 'src/behavior/realman_bt/CMakeLists.txt'
 
 
 def test_control_mode_tree_has_supervised_sequence():
@@ -50,3 +51,12 @@ def test_executor_increments_sequence_and_writes_snapshot_for_every_tick_status(
     # possible tick results (SUCCESS/FAILURE/RUNNING) are persisted.
     assert 'if (stop_on_terminal_ && bt_core::isStatusCompleted(status))' in tick_body
     assert tick_body.index('if (stop_on_terminal_ && bt_core::isStatusCompleted(status))') > write_index
+
+
+def test_runtime_snapshot_export_declares_bt_core_dependency():
+    source = CMAKE.read_text()
+    assert 'install(TARGETS control_mode_state_machine runtime_snapshot' in source
+    assert 'target_link_libraries(runtime_snapshot PUBLIC bt::core)' in source
+    # The installed realman_bt target has a public bt::core link interface;
+    # make sure consumers load the vendored bt_core package before resolving it.
+    assert 'ament_export_dependencies(bt_core)' in source

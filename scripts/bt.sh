@@ -94,6 +94,10 @@ if [[ ! -d node_modules ]]; then npm install; fi
 BT_BACKEND_URL="http://$BT_SERVER_HOST:$BT_SERVER_PORT" npm run dev -- --host "$BT_EDITOR_HOST" --port "$BT_EDITOR_PORT" &
 EDITOR_PID=$!
 popd >/dev/null
+wait_http "http://$BT_EDITOR_HOST:$BT_EDITOR_PORT/" "$EDITOR_PID" || {
+  say "bt_editor failed to become ready" >&2
+  exit 1
+}
 
 say "preview backend: http://$BT_SERVER_HOST:$BT_SERVER_PORT"
 say "editor: http://$BT_EDITOR_HOST:$BT_EDITOR_PORT/?tree=arm_move.xml"

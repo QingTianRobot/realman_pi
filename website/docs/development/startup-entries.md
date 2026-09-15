@@ -26,6 +26,7 @@ rm65_project_help
 ./rm65 up                 # ROS 2 彩色相机 + 三臂真实驱动 + Web control + 相机健康诊断，无 RViz
 ./rm65 up desktop         # 同上，并启动远程 ROS 图 RViz
 ./rm65 up model           # 离线三臂模型 + RViz，不连接真机
+./rm65 bt                 # 独立行为树执行器 + preview bt_server + 可视化编辑器
 ./rm65 status
 ./rm65 logs
 ./rm65 down
@@ -35,6 +36,13 @@ rm65_project_help
 默认相机链路是 `rm65_camera_ros2 color`，与 `config/ros/camera_calibration.yaml` 中的彩色话题一致；
 RTSP/TCP 推流仍可通过 `./rm65 camera` 或原有 `rm65_camera_start` 单独维护。默认 `up` 不启动 RViz，
 生产端不需要 `DISPLAY` 或 `XAUTHORITY`。
+
+行为树驱动测试使用两个终端：先执行 `./rm65 up` 启动生产 ROS/相机/Web 项目，再执行
+`./rm65 bt`。后者默认 `REALMAN_BT_DRY_RUN=true`，编辑器地址为
+`http://127.0.0.1:5173/?tree=arm_move.xml`，预览后端为 `http://127.0.0.1:8080`；编辑器
+Tick/Run 不连接真实 Action。只有完成安全检查后才可用
+`REALMAN_BT_DRY_RUN=false ./rm65 bt r` 发送真实 MoveJ，按 `Ctrl-C` 清理行为树子进程。
+详细参数和边界见[行为树机械臂移动 Demo](./behavior-tree-motion)。
 
 
 所有 helper 都从 `functions.zsh` 所在位置定位仓库根目录，因此可以在任意目录调用。函数加载时会读取仓库根目录 `.env` 中的简单 `KEY=value` 配置，并保留当前终端已经显式设置的非空变量。函数不会自动写入 `~/.zshrc`，也不会隐藏底层 Docker、colcon、npm、SSH 命令；遇到未覆盖的参数时，继续直接调用底层命令。

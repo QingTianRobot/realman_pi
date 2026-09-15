@@ -19,7 +19,16 @@ target_include_directories(control_mode_state_machine PUBLIC
   $<INSTALL_INTERFACE:include>)
 target_compile_features(control_mode_state_machine PUBLIC cxx_std_17)
 
-install(TARGETS control_mode_state_machine EXPORT export_${PROJECT_NAME})
+add_library(runtime_snapshot src/runtime_snapshot.cpp)
+target_include_directories(runtime_snapshot PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>
+  "${BT_VENDOR_ROOT}")
+target_compile_features(runtime_snapshot PUBLIC cxx_std_17)
+target_link_libraries(runtime_snapshot PUBLIC bt::core)
+
+install(TARGETS control_mode_state_machine runtime_snapshot
+  EXPORT export_${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 add_executable(realman_bt_executor
   src/main.cpp
@@ -44,6 +53,13 @@ if(BUILD_TESTING)
   add_executable(test_control_mode_state_machine test/test_control_mode_state_machine.cpp)
   target_link_libraries(test_control_mode_state_machine PRIVATE control_mode_state_machine)
   add_test(NAME test_control_mode_state_machine COMMAND test_control_mode_state_machine)
+
+  add_executable(test_runtime_snapshot test/test_runtime_snapshot.cpp)
+  target_include_directories(test_runtime_snapshot PRIVATE
+    "${BT_VENDOR_ROOT}")
+  target_link_libraries(test_runtime_snapshot PRIVATE runtime_snapshot)
+  add_test(NAME test_runtime_snapshot COMMAND test_runtime_snapshot)
+
   ament_add_pytest_test(test_tree_contract test/test_tree_contract.py)
   ament_add_pytest_test(test_arm_move_tree test/test_arm_move_tree.py)
 endif()

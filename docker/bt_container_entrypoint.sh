@@ -1,5 +1,9 @@
 #!/usr/bin/env bash
-set -euo pipefail
+# ROS 2's generated setup scripts read optional variables (for example
+# AMENT_TRACE_SETUP_FILES) without guarding them against nounset.  Load the
+# environments before enabling `set -u`, then keep strict mode for the actual
+# behavior-tree launcher.
+set -eo pipefail
 
 # This is intentionally invoked through `docker compose exec` after the
 # long-lived driver launch is ready. It never starts automatically with `up`.
@@ -14,6 +18,8 @@ set -euo pipefail
 : "${BT_SERVER_BIN:=/opt/rm65_ws/behavior_tree/bin/bt_server}"
 : "${BT_TREE_FILE:=/opt/rm65_ws/config/behavior-trees/arm_move.xml}"
 : "${BT_TREE_WORKSPACE:=/tmp/realman-bt-workspace}"
+: "${BT_READ_ONLY:=true}"
+: "${BT_RUNTIME_SNAPSHOT:=$BT_TREE_WORKSPACE/runtime.json}"
 
 if [[ "${BT_AUTOSTART,,}" != "true" && "${BT_AUTOSTART}" != "1" ]]; then
   echo "[bt-start] disabled (set BT_AUTOSTART=true to start behavior tree)" >&2
@@ -22,6 +28,7 @@ fi
 
 source /opt/ros/humble/setup.bash
 source /opt/rm65_ws/install/setup.bash
+set -u
 
 action_name="/${REALMAN_BT_ARM_ID}/execute_motion"
 deadline=$((SECONDS + BT_ACTION_TIMEOUT_SEC))
@@ -82,7 +89,8 @@ if [[ "${REALMAN_BT_DRY_RUN,,}" == "false" || "${REALMAN_BT_DRY_RUN}" == "0" ]];
   echo "[bt-start] REAL MOTION ENABLED: clear workspace, use low speed, keep E-stop reachable, confirm target joints" >&2
 fi
 
-echo "[bt-start] starting preview server at http://${BT_SERVER_HOST}:${BT_SERVER_PORT}"
+echo "[bt-start] starting read-only runtime monitor at http://${BT_SERVER_HOST}:${BT_SERVER_PORT}"
+BT_READ_ONLY="$BT_READ_ONLY" BT_RUNTIME_SNAPSHOT="$BT_RUNTIME_SNAPSHOT" \
 BT_TREE_WORKSPACE="$BT_TREE_WORKSPACE" BT_EDITOR_DIST="$BT_EDITOR_DIST" \
   "$BT_SERVER_BIN" "$BT_SERVER_HOST" "$BT_SERVER_PORT" &
 server_pid=$!
@@ -107,9 +115,10 @@ echo "[bt-start] starting ROS executor for arm ${REALMAN_BT_ARM_ID} (dry_run=${R
 ros2 launch realman_bt arm_move.launch.py \
   arm_id:="$REALMAN_BT_ARM_ID" \
   dry_run:="$REALMAN_BT_DRY_RUN" \
-  tree_file:="$runtime_tree_file" &
-executor_pid=$!
+  tree_file:="$runtime_tree_file" \
+  runtime_snapshot_file:="$BT_RUNTIME_SNAPSHOT" &
+  executor_pid=$!
 
-echo "[bt-start] editor: http://<host>:${BT_SERVER_PORT}/?tree=arm_move.xml"
+echo "[bt-start] monitor: http://<host>:${BT_SERVER_PORT}/"
 echo "[bt-start] press Ctrl-C to stop behavior-tree processes (driver continues)"
 wait "$executor_pid"

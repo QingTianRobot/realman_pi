@@ -11,7 +11,9 @@ grep -Fq 'BT_AUTOSTART=true' <<<"$output"
 grep -Fq 'REALMAN_BT_ARM_ID=r' <<<"$output"
 grep -Fq 'REALMAN_BT_DRY_RUN=true' <<<"$output"
 grep -Fq '/usr/local/bin/bt-start' <<<"$output"
-grep -Fq 'http://127.0.0.1:8080/?tree=arm_move.xml' <<<"$output"
+grep -Fq 'monitor: http://127.0.0.1:8080/' <<<"$output"
+grep -Fq 'BT_READ_ONLY=true' <<<"$output"
+grep -Fq 'BT_RUNTIME_SNAPSHOT=/tmp/realman-bt-workspace/runtime.json' <<<"$output"
 
 if REALMAN_BT_DRY_RUN=maybe "$ROOT/scripts/bt.sh" r >/dev/null 2>&1; then
   echo 'invalid dry-run value unexpectedly accepted' >&2

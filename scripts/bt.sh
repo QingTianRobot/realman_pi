@@ -38,7 +38,7 @@ rm65 bt: WARNING: real motion is enabled (REALMAN_BT_DRY_RUN=false).
 EOF
 fi
 
-say "editor: http://${BT_PUBLIC_HOST}:${BT_PORT}/?tree=arm_move.xml"
+say "monitor: http://${BT_PUBLIC_HOST}:${BT_PORT}/"
 say "behavior tree runs inside the realman_bringup_remote driver container"
 
 if [[ "$RM65_DRY_RUN" == "1" ]]; then
@@ -63,6 +63,8 @@ exec_args=(
   -e "REALMAN_BT_DRY_RUN=$DRY_RUN"
   -e "BT_SERVER_HOST=${BT_SERVER_HOST:-0.0.0.0}"
   -e "BT_SERVER_PORT=$BT_PORT"
+  -e BT_READ_ONLY=true
+  -e BT_RUNTIME_SNAPSHOT=/tmp/realman-bt-workspace/runtime.json
   realman_bringup_remote /usr/local/bin/bt-start
 )
 

@@ -9,6 +9,10 @@ WORKDIR /opt/bt_editor
 COPY third_party/behavior_tree_cpp/bt_editor/package.json third_party/behavior_tree_cpp/bt_editor/package-lock.json ./
 RUN npm ci
 COPY third_party/behavior_tree_cpp/bt_editor ./
+# vite.config.ts imports this shared repository-root setting. The Node build
+# stage has its own filesystem, so provide the exact /config path resolved by
+# ../../../config/behavior-tree/frontend from /opt/bt_editor.
+COPY config/behavior-tree /config/behavior-tree
 RUN npm run build
 
 FROM ${ROS_BASE_IMAGE}

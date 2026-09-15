@@ -17,8 +17,9 @@ Sequence 和 MoveJ，不替换生产 ./rm65 up 编排，也不会自动启动机
            -> /<arm_id>/execute_motion (realman_msgs/action/ExecuteMotion)
 
 MoveJ 使用 command=MOVEJ、reference_type=BASE，joint_degrees 为六个角度（单位：度），
-velocity_percent 和 blend_radius_percent 的范围分别为 1..100 和 0..100。示例目标是
-0,-20,30,0,45,0，速度为 10%；请按实际 RM65 安装姿态和工作空间重新确认目标。
+velocity_percent 和 blend_radius_percent 的范围分别为 1..100 和 0..100。当前示例目标是
+0,0,0,0,0,0，速度为 10%，单次 Action 超时为 120 秒；仍需按实际 RM65 安装姿态和工作空间
+确认该目标是否安全。
 
 权威树文件为 config/behavior-trees/arm_move.xml，其中 arm_id 和 dry_run 通过黑板重映射，能被
 launch 参数覆盖。
@@ -41,7 +42,7 @@ ros2 launch realman_bt arm_move.launch.py \
 
 ## 驱动测试与可视化
 
-行为树的执行器、preview-only `bt_server` 和静态 `bt_editor` 都运行在
+行为树的执行器、只读运行监视器和静态前端都运行在
 `realman_bringup_remote` 驱动容器中。`./rm65 up` 只启动驱动及其他生产组件，不会自动执行行为树。
 首次修改 Dockerfile 或行为树编辑器后，先重建一次镜像：
 
@@ -60,9 +61,15 @@ ros2 launch realman_bt arm_move.launch.py \
 启动器会先确认 `realman_bringup_remote` 正在运行，再在容器内等待
 `/r/execute_motion` Action Server 就绪；驱动未启动或 Action 超时都不会启动行为树。
 可视化网页由同一容器在宿主网络监听 `0.0.0.0:8080`，地址为
-`http://<host>:8080/?tree=arm_move.xml`。编辑器中的 Tick/Run 只调用 bt_server 的
-preview-only `MoveJ`，不会连接 ROS Action，也不会移动真实机械臂。按 `Ctrl-C` 只清理行为树
-执行器和预览服务，驱动容器继续运行；使用 `./rm65 down` 才停止驱动。
+`http://<host>:8080/`。这是运行监视器，不是行为树编辑器：页面从 `GET /api/runtime`
+读取执行器原子写入的快照，不提供加载、保存、Tick 或 Run 控件，也不会向 ROS Action
+发送请求。容器以 `BT_READ_ONLY=true` 启动 `bt_server`，所有 `/api/` 写入请求都会返回
+`405`。执行器通过 `runtime_snapshot_file=/tmp/realman-bt-workspace/runtime.json`
+发布快照；页面在快照尚不存在时显示 IDLE。
+
+监视器每 500 ms 轮询。网络中断或快照暂时损坏时，页面保留最后一次有效树并标记
+“连接中断/数据可能已过期”，恢复后自动重试；这类页面状态不会停止执行器。按 `Ctrl-C`
+只清理行为树执行器和监视器服务，驱动容器继续运行；使用 `./rm65 down` 才停止驱动。
 
 `./rm65 bt` 默认等价于 `REALMAN_BT_DRY_RUN=true`。只有在已清空工作区、低速运行、急停可达并
 人工确认目标关节后，才允许显式开启真机执行：
@@ -71,7 +78,7 @@ preview-only `MoveJ`，不会连接 ROS Action，也不会移动真实机械臂�
 
 显式关闭 dry-run 后，容器启动日志会再次打印安全警告，执行器才会向 `/r/execute_motion`
 发送真实 `ExecuteMotion` goal。可用 `REALMAN_BT_ARM_ID=l|m|r`、`BT_SERVER_PORT` 和
-`BT_PUBLIC_HOST` 覆盖默认参数；编辑器保存的是容器临时 workspace 副本，不会覆盖
+`BT_PUBLIC_HOST` 覆盖默认参数；运行监视器只读，容器临时 workspace 和快照不会覆盖
 `config/behavior-trees/arm_move.xml`。
 
 执行器发布根节点状态：

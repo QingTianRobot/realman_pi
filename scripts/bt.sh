@@ -3,15 +3,24 @@ set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 COMPOSE_FILE="$ROOT/docker-compose.yml"
-ARM_ID="${1:-${REALMAN_BT_ARM_ID:-r}}"
+SELECTOR="${1:-${REALMAN_BT_ARM_ID:-r}}"
 DRY_RUN="${REALMAN_BT_DRY_RUN:-true}"
 BT_PORT="${BT_SERVER_PORT:-8080}"
 BT_PUBLIC_HOST="${BT_PUBLIC_HOST:-127.0.0.1}"
 RM65_DRY_RUN="${RM65_DRY_RUN:-0}"
 
-case "$ARM_ID" in
-  l|m|r) ;;
-  *) printf 'rm65 bt: arm_id must be l, m, or r (got %s)\n' "$ARM_ID" >&2; exit 2 ;;
+case "$SELECTOR" in
+  l|m|r)
+    ARM_ID="$SELECTOR"
+    BT_TREE_FILE="/opt/rm65_ws/config/behavior-trees/arm_move.xml"
+    BT_REQUIRED_ARMS="$SELECTOR"
+    ;;
+  three)
+    ARM_ID="r"
+    BT_TREE_FILE="/opt/rm65_ws/config/behavior-trees/three_arm_staged_move.xml"
+    BT_REQUIRED_ARMS="l,m,r"
+    ;;
+  *) printf 'rm65 bt: selector must be l, m, r, or three (got %s)\n' "$SELECTOR" >&2; exit 2 ;;
 esac
 case "$DRY_RUN" in
   true|false) ;;
@@ -61,6 +70,8 @@ exec_args=(
   -e BT_AUTOSTART=true
   -e "REALMAN_BT_ARM_ID=$ARM_ID"
   -e "REALMAN_BT_DRY_RUN=$DRY_RUN"
+  -e "BT_TREE_FILE=$BT_TREE_FILE"
+  -e "BT_REQUIRED_ARMS=$BT_REQUIRED_ARMS"
   -e "BT_SERVER_HOST=${BT_SERVER_HOST:-0.0.0.0}"
   -e "BT_SERVER_PORT=$BT_PORT"
   -e BT_READ_ONLY=true

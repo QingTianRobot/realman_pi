@@ -6,7 +6,6 @@
 #include <stdexcept>
 #include <utility>
 
-#include "realman_bt/realman_bt_executor_node.hpp"
 #include "realman_bt/runtime_snapshot.hpp"
 namespace realman_bt {
 namespace {

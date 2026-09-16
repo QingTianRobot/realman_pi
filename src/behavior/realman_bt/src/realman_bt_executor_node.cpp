@@ -9,6 +9,7 @@
 #include "bt_core/xml_parser.hpp"
 #include "bt_nodes/control/sequence_node.hpp"
 #include "realman_bt/move_j_node.hpp"
+#include "realman_bt/three_arm_move_j_node.hpp"
 
 namespace realman_bt {
 namespace {
@@ -49,6 +50,7 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
       });
   factory_.registerNodeType<bt_nodes::SequenceNode>("Sequence");
   factory_.registerNodeType<MoveJNode>("MoveJ");
+  factory_.registerNodeType<ThreeArmMoveJNode>("ThreeArmMoveJ");
   bt_core::XmlParser parser(factory_);
   auto tree = parser.loadFromFile(tree_file, blackboard_);
   tree_ = std::make_unique<bt_core::Tree>(std::move(tree));

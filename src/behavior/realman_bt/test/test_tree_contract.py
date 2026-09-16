@@ -6,6 +6,7 @@ LAUNCH = ROOT / 'src/behavior/realman_bt/launch/arm_move.launch.py'
 EXECUTOR = ROOT / 'src/behavior/realman_bt/src/realman_bt_executor_node.cpp'
 EXECUTOR_HEADER = ROOT / 'src/behavior/realman_bt/include/realman_bt/realman_bt_executor_node.hpp'
 CMAKE = ROOT / 'src/behavior/realman_bt/CMakeLists.txt'
+THREE_ARM = ROOT / 'src/behavior/realman_bt/src/three_arm_move_j_node.cpp'
 
 
 def test_control_mode_tree_has_supervised_sequence():
@@ -186,6 +187,14 @@ def test_halted_pending_goal_is_drained_by_executor_owned_async_state():
     assert 'create_wall_timer' in executor
     assert 'drainCancellationQueue' in executor
     assert 'if (remaining != current)' in executor
+
+
+def test_three_arm_movej_is_registered_and_failure_handoffs_other_goals():
+    executor = EXECUTOR.read_text()
+    source = THREE_ARM.read_text()
+    assert 'registerNodeType<ThreeArmMoveJNode>("ThreeArmMoveJ")' in executor
+    assert 'if (!handoff(arm) && arm.goal_handle)' in source
+    assert 'bool handed_off{false};' in (ROOT / 'src/behavior/realman_bt/include/realman_bt/three_arm_move_j_node.hpp').read_text()
 
 
 def test_movej_marks_cancellation_only_after_request_succeeds_and_retries_errors():

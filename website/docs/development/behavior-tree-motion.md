@@ -1,28 +1,42 @@
 ---
 title: 行为树机械臂移动 Demo
-description: 使用 vendored BehaviorTree.CPP-X 行为树执行一次 RealMan MoveJ。
+description: 使用 vendored BehaviorTree.CPP-X 执行单臂或三臂同步分阶段 RealMan MoveJ。
 ---
 
 # 行为树机械臂移动 Demo
 
-realman_bt 提供一个独立的 ROS 2 C++ 执行器，用于从 XML 加载最小行为树并执行一次关节移动。它参考
-third_party/behavior_tree_cpp 的 NodeFactory -> XmlParser -> Tree::tickOnce() 链路，当前只注册
-Sequence 和 MoveJ，不替换生产 ./rm65 up 编排，也不会自动启动机械臂驱动。
+realman_bt 提供一个独立的 ROS 2 C++ 执行器，用于从 XML 加载行为树并执行关节移动。它参考
+third_party/behavior_tree_cpp 的 NodeFactory -> XmlParser -> Tree::tickOnce() 链路，注册
+Sequence、MoveJ 和 ThreeArmMoveJ，不替换生产 ./rm65 up 编排，也不会自动启动机械臂驱动。
 
 ## 数据流
 
     arm_move.launch.py
       -> realman_bt_executor
            -> arm_move.xml: Sequence -> MoveJ
-           -> /<arm_id>/execute_motion (realman_msgs/action/ExecuteMotion)
+           -> three_arm_staged_move.xml: Sequence -> ThreeArmMoveJ -> ThreeArmMoveJ
+           -> /l|m|r/execute_motion (realman_msgs/action/ExecuteMotion)
 
 MoveJ 使用 command=MOVEJ、reference_type=BASE，joint_degrees 为六个角度（单位：度），
 velocity_percent 和 blend_radius_percent 的范围分别为 1..100 和 0..100。当前示例目标是
 0,0,0,0,0,0，速度为 10%，单次 Action 超时为 120 秒；仍需按实际 RM65 安装姿态和工作空间
 确认该目标是否安全。
 
-权威树文件为 config/behavior-trees/arm_move.xml，其中 arm_id 和 dry_run 通过黑板重映射，能被
-launch 参数覆盖。
+单臂权威树文件为 config/behavior-trees/arm_move.xml，其中 arm_id 和 dry_run 通过黑板重映射，能被
+launch 参数覆盖。三臂权威树文件为 config/behavior-trees/three_arm_staged_move.xml；每个
+ThreeArmMoveJ 叶节点先确认三路 Action Server 都可用，在同一行为树 tick 中依次提交 l/m/r 三个异步
+goal，并在三路都成功后返回 SUCCESS。任一路失败或超时会使叶节点失败，并取消或移交仍未完成的 goal。
+
+三臂树由有状态 Sequence 编排两个阶段：
+
+| 阶段 | L（度） | M（度） | R（度） |
+| --- | --- | --- | --- |
+| `all_zero` | `0,0,0,0,0,0` | `0,0,0,0,0,0` | `0,0,0,0,0,0` |
+| `requested_pose` | `24,20,66,24,84,14.5` | `0,18,70,0,90,9` | `15,22,65,23,82,-7.5` |
+
+只有 `all_zero` 的三台机械臂全部完成后，Sequence 才开始 `requested_pose`。两个阶段均使用 10% 速度、
+0% 交融半径和 120 秒 Action 超时。“同时”表示三个 goal 在同一次 tick 中提交并共同等待，不保证三台
+机械臂在物理上完全同一时刻到达。
 
 ## 构建
 
@@ -58,7 +72,12 @@ ros2 launch realman_bt arm_move.launch.py \
 
     ./rm65 bt r
 
-启动器会先在容器内启动只读监视器网页，再等待 `/r/execute_motion` Action Server
+三臂分阶段树使用：
+
+    ./rm65 bt three
+
+单臂启动器会先在容器内启动只读监视器网页，再等待所选 `/l|m|r/execute_motion` Action Server；
+`three` 模式会等待 `/l/execute_motion`、`/m/execute_motion`、`/r/execute_motion` 三路 Action Server
 就绪；因此驱动尚未完成 ROS 图发现时，网页也能立即打开并显示等待状态，而执行器仍不会在
 Action 未就绪时启动。可视化网页由同一容器在宿主网络监听 `0.0.0.0:8080`，地址为
 `http://<host>:8080/`。这是运行监视器，不是行为树编辑器：页面从 `GET /api/runtime`
@@ -72,13 +91,17 @@ Action 未就绪时启动。可视化网页由同一容器在宿主网络监听 
 “连接中断/数据可能已过期”，恢复后自动重试；这类页面状态不会停止执行器。按 `Ctrl-C`
 只清理行为树执行器和监视器服务，驱动容器继续运行；使用 `./rm65 down` 才停止驱动。
 
-`./rm65 bt` 默认等价于 `REALMAN_BT_DRY_RUN=true`。只有在已清空工作区、低速运行、急停可达并
-人工确认目标关节后，才允许显式开启真机执行：
+`./rm65 bt` 默认等价于 `REALMAN_BT_DRY_RUN=true`。单臂和三臂模式都只校验目标，不发送 Action goal。
+只有在已清空三台机械臂的工作区、急停可达并人工确认目标关节后，才允许显式开启真机执行：
 
     REALMAN_BT_DRY_RUN=false ./rm65 bt r
 
-显式关闭 dry-run 后，容器启动日志会再次打印安全警告，执行器才会向 `/r/execute_motion`
-发送真实 `ExecuteMotion` goal。可用 `REALMAN_BT_ARM_ID=l|m|r`、`BT_SERVER_PORT` 和
+三臂真实运动命令为：
+
+    REALMAN_BT_DRY_RUN=false ./rm65 bt three
+
+显式关闭 dry-run 后，容器启动日志会再次打印安全警告，执行器才会发送真实 `ExecuteMotion` goal。
+可用 `REALMAN_BT_ARM_ID=l|m|r`、`BT_SERVER_PORT` 和
 `BT_PUBLIC_HOST` 覆盖默认参数；运行监视器只读，容器临时 workspace 和快照不会覆盖
 `config/behavior-trees/arm_move.xml`。
 
@@ -163,8 +186,11 @@ behavior-trees/arm_move.xml，launch 会优先使用该配置。
 
     REALMAN_BT_DRY_RUN=false ./rm65 bt r
 
-dry_run=false 会向 /r/execute_motion 发送真实 MoveJ goal。可用以下命令确认 Action 图和执行状态：
+三臂任务把最后一行替换为 `REALMAN_BT_DRY_RUN=false ./rm65 bt three`。`dry_run=false` 会发送真实
+MoveJ goal。可用以下命令确认 Action 图和执行状态：
 
+    ros2 action info /l/execute_motion
+    ros2 action info /m/execute_motion
     ros2 action info /r/execute_motion
     ros2 topic echo /realman_bt_executor/bt_status
 
@@ -172,15 +198,15 @@ dry_run=false 会向 /r/execute_motion 发送真实 MoveJ goal。可用以下命
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| tree_file | 安装后的 behavior-trees/arm_move.xml | XML 绝对路径 |
+| tree_file | 安装后的 behavior-trees/arm_move.xml | XML 绝对路径；`three` 入口改用 three_arm_staged_move.xml |
 | arm_id | r | 只能是 l、m 或 r |
 | dry_run | true | true 只校验；false 发真实 goal |
 | tick_rate_hz | 20.0 | 行为树 tick 频率（Hz） |
 | autostart | true | 节点加载后立即 tick |
 | stop_on_terminal | true | SUCCESS/FAILURE 后停止 timer |
 
-当前实现只支持一个 MoveJ 示例节点，不支持 control_mode.xml 中的控制权节点，也不自动注册生产
-任务树里的 SelectControlMode、ControlLeaseGuard 等自定义节点。需要扩展树时，应在执行器中显式
+当前实现支持单臂 MoveJ 和三臂 ThreeArmMoveJ，不支持 control_mode.xml 中的控制权节点，也不自动注册
+生产任务树里的 SelectControlMode、ControlLeaseGuard 等自定义节点。需要扩展树时，应在执行器中显式
 注册对应节点，并同步更新 XML 契约测试。节点、端口、Action/Service 接入、取消所有权或运行诊断变更时，
 遵守项目 [行为树开发 Skill](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/developing-realman-behavior-trees/SKILL.md) 的 dry-run
 边界和验证顺序。

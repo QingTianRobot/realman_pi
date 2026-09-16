@@ -17,6 +17,7 @@ set -eo pipefail
 : "${BT_EDITOR_DIST:=/opt/rm65_ws/behavior_tree/editor-dist}"
 : "${BT_SERVER_BIN:=/opt/rm65_ws/behavior_tree/bin/bt_server}"
 : "${BT_TREE_FILE:=/opt/rm65_ws/config/behavior-trees/arm_move.xml}"
+: "${BT_REQUIRED_ARMS:=$REALMAN_BT_ARM_ID}"
 : "${BT_TREE_WORKSPACE:=/tmp/realman-bt-workspace}"
 : "${BT_READ_ONLY:=true}"
 : "${BT_RUNTIME_SNAPSHOT:=$BT_TREE_WORKSPACE/runtime.json}"
@@ -53,8 +54,8 @@ esac
 
 rm -rf "$BT_TREE_WORKSPACE"
 mkdir -p "$BT_TREE_WORKSPACE"
-cp "$BT_TREE_FILE" "$BT_TREE_WORKSPACE/arm_move.xml"
-runtime_tree_file="$BT_TREE_WORKSPACE/arm_move.xml"
+runtime_tree_file="$BT_TREE_WORKSPACE/$(basename "$BT_TREE_FILE")"
+cp "$BT_TREE_FILE" "$runtime_tree_file"
 
 server_pid=""
 executor_pid=""
@@ -100,15 +101,19 @@ if ! curl -fsS "http://127.0.0.1:${BT_SERVER_PORT}/api/health" >/dev/null 2>&1; 
   exit 1
 fi
 
-action_name="/${REALMAN_BT_ARM_ID}/execute_motion"
-deadline=$((SECONDS + BT_ACTION_TIMEOUT_SEC))
-echo "[bt-start] waiting for ${action_name} (timeout ${BT_ACTION_TIMEOUT_SEC}s)"
-until ros2 action info "$action_name" 2>/dev/null | grep -Eq 'Action servers:[[:space:]]*[1-9][0-9]*'; do
-  if (( SECONDS >= deadline )); then
-    echo "[bt-start] Action ${action_name} is not ready; behavior tree not started" >&2
-    exit 1
-  fi
-  sleep "$BT_ACTION_POLL_SEC"
+IFS="," read -r -a required_arms <<<"$BT_REQUIRED_ARMS"
+for arm_id in "${required_arms[@]}"; do
+  case "$arm_id" in l|m|r) ;; *) echo "[bt-start] invalid arm id: $arm_id" >&2; exit 2 ;; esac
+  action_name="/${arm_id}/execute_motion"
+  deadline=$((SECONDS + BT_ACTION_TIMEOUT_SEC))
+  echo "[bt-start] waiting for ${action_name} (timeout ${BT_ACTION_TIMEOUT_SEC}s)"
+  until ros2 action info "$action_name" 2>/dev/null | grep -Eq 'Action servers:[[:space:]]*[1-9][0-9]*'; do
+    if (( SECONDS >= deadline )); then
+      echo "[bt-start] Action ${action_name} is not ready; behavior tree not started" >&2
+      exit 1
+    fi
+    sleep "$BT_ACTION_POLL_SEC"
+  done
 done
 
 echo "[bt-start] starting ROS executor for arm ${REALMAN_BT_ARM_ID} (dry_run=${REALMAN_BT_DRY_RUN})"

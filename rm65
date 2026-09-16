@@ -137,7 +137,7 @@ Commands:
   logs                Show recent camera and bringup logs.
   camera              Run the legacy RTSP/TCP camera helper.
   bt-test build|mock|web|all  Build, run, or validate isolated behavior-tree scenarios.
-  bt [arm_id]          Start behavior tree inside the driver container; serve editor on :8080.
+  bt [l|m|r|three]     Start a single-arm or staged three-arm behavior tree; serve monitor on :8080.
   sync                Synchronize the clean main branch to production.
 EOF
 }

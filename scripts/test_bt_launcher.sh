@@ -21,3 +21,9 @@ if REALMAN_BT_DRY_RUN=maybe "$ROOT/scripts/bt.sh" r >/dev/null 2>&1; then
 fi
 
 printf 'behavior-tree launcher dry-run plan: PASS\n'
+
+three_output="$(RM65_DRY_RUN=1 REALMAN_BT_DRY_RUN=true "$ROOT/scripts/bt.sh" three)"
+grep -Fq 'BT_TREE_FILE=/opt/rm65_ws/config/behavior-trees/three_arm_staged_move.xml' <<<"$three_output"
+grep -Fq 'BT_REQUIRED_ARMS=l\,m\,r' <<<"$three_output"
+
+printf 'three-arm behavior-tree launcher dry-run plan: PASS\n'

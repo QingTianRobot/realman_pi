@@ -65,7 +65,7 @@ rm65_project_help
 | `rm65_docker_remote_rviz [domain]` | 在当前桌面前台显示远程 ROS 图 |
 | `rm65_docker_remote_rviz_start [domain]` | 在当前桌面后台持续运行远程 RViz |
 | `rm65_docker_remote_rviz_status` / `logs [-f]` / `stop` | 查看、跟踪或停止后台 RViz |
-| `rm65_docker_camera_rviz [domain]` | 在当前桌面直接查看生产机左、中、右三路相机画面 |
+| `rm65_docker_camera_rviz [domain]` | 在当前桌面直接查看生产机左、中、右三路 Orbbec 加全局 RealSense D435 共四路彩色画面（缺少 `realsense2_camera` 时第四格为空） |
 | `rm65_docker_camera_rviz_start [domain]` / `stop` / `status` / `logs` | 后台启动、停止、检查或查看相机 RViz |
 | `rm65_ros_build` | 使用本机 Humble 构建到 `realman_bringup` |
 | `rm65_web_build` / `rm65_web_test` | 构建或测试文档网站 |
@@ -186,7 +186,7 @@ rm65_camera_ros2_stop
 rm65_camera_start
 ```
 
-### 查看三路实拍画面
+### 查看四路实拍画面
 
 生产机启动 `rm65_camera_ros2 color` 后，笔记本不需要连接 USB 相机，只需加入相同的 ROS domain
 并启动专用相机 RViz。它只订阅图像 topic，不启动 RealMan SDK、机械臂驱动或本地相机节点：
@@ -197,12 +197,14 @@ rm65_docker_build realman_camera_rviz  # 首次使用或镜像更新后执行
 rm65_docker_camera_rviz                 # 前台打开 RViz，关闭窗口或 Ctrl-C 停止
 ```
 
-RViz 中会显示：
+RViz 中会显示（前三路由 Orbbec 提供，第四路由 RealSense D435 提供；宿主机缺少
+`realsense2_camera` 驱动时 `rm65_camera_ros2` 自动降级为仅 Orbbec，此时第四格无图像）：
 
 ```text
 /camera_left/color/image_raw
 /camera_middle/color/image_raw
 /camera_right/color/image_raw
+/camera_global/d435/color/image_raw
 ```
 
 也可以让 RViz 在后台运行：
@@ -217,7 +219,7 @@ rm65_docker_camera_rviz_stop
 生产机和笔记本必须使用完全相同的 `ROS_DOMAIN_ID`；日常只改 `.env`，不需要在每条命令后
 追加 domain 参数。`rm65_docker_camera_rviz [domain]` 仍保留临时覆盖能力。若 RViz 窗口打开但
 图像为空，先在笔记本执行 `ros2 topic list | grep '/camera_.*color/image_raw'`，再检查两端
-`ROS_LOCALHOST_ONLY=0`、`FASTDDS_BUILTIN_TRANSPORTS=UDPv4`、DDS UDP/组播和防火墙设置。专用相机 RViz 只显示三路彩色图像，不加载
+`ROS_LOCALHOST_ONLY=0`、`FASTDDS_BUILTIN_TRANSPORTS=UDPv4`、DDS UDP/组播和防火墙设置。专用相机 RViz 只显示四路彩色图像（三路 Orbbec + 一路 D435），不加载
 深度 topic。不要在笔记本执行 `rm65_camera_ros2`，否则它会尝试直接占用笔记本的 USB 相机设备。
 
 两套相机节点不能同时打开 USB 设备。RealSense D435 在现有 USB2 拓扑下仍无法稳定出帧，

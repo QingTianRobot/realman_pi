@@ -60,10 +60,12 @@ mode branch is always, in this order, `InputModeGuard`, `ActivateInputMode`,
 then its input leaf. `ActivateInputMode` publishes active state synchronously
 before the leaf runs, including for a placeholder.
 
-A successful selection first selects and activates `none` for one router tick,
-then selects and activates the requested mode on the following tick. This
-neutral handoff is what makes a new mode take over a running branch without
-waiting for it to finish. Non-Web selection from the browser cancels Web-owned
+A change from the current active mode first selects and activates `none` for
+one router tick, then selects and activates the requested mode on the following
+tick. This neutral handoff is what makes a new mode take over a running branch
+without waiting for it to finish. Reselecting the already active mode instead
+returns its existing request ID immediately: it has no neutral tick and does
+not increment `epoch`. Non-Web selection from the browser cancels Web-owned
 Actions before requesting the global mode. A Web motion request may supersede
 a pending non-Web request, but may be forwarded only after matching
 `ACTIVE/web` state.

@@ -18,8 +18,9 @@ Policy 和 Pika 都是 RUNNING 占位叶，只产生每次进入一次的诊断�
 RUNNING 分支。每个分支严格是 `InputModeGuard` → `ActivateInputMode` → 输入叶：activation
 同步发布状态，故叶开始前已是 active。
 
-一次选择先进入 `SWITCHING` 并选择 `none`。下一 tick 必须激活/运行这个中性分支，下一 tick
-才选择并激活目标模式；这让 Policy/Pika 不必自行结束即可交接。Web 离开到非 Web 模式时，桥先取消
+切换到不同模式时，选择先进入 `SWITCHING` 并选择 `none`。下一 tick 必须激活/运行这个中性分支，
+下一 tick 才选择并激活目标模式；这让 Policy/Pika 不必自行结束即可交接。重选已经 active 的模式会
+立即返回已有 request ID，不经过中性 tick，`epoch` 也不会递增。Web 离开到非 Web 模式时，桥先取消
 所有 Web-owned Action，再请求全局模式；Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。
 
 ## 输入路由 ROS 契约

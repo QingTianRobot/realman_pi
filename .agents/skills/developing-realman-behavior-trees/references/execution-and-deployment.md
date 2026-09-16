@@ -15,7 +15,12 @@ Run commands from the repository root. Inspect `scripts/bt.sh`, `docker/bt_conta
 | Keep executor and monitor alive | `BT_EXIT_ON_TERMINAL=false ./rm65 bt three`. |
 | Persistent input router | `./rm65 bt control`; requires the existing driver container, uses `control_router.launch.py`, and stays up until Ctrl-C. |
 
-The CLI's only selectors are `l`, `m`, `r`, and `three`; it overwrites `BT_TREE_FILE`. For another XML, use the existing ROS launch's `tree_file:=<absolute-path>` argument or invoke the container entrypoint with an explicit `BT_TREE_FILE` and `BT_REQUIRED_ARMS`. Do not claim `./rm65 bt path.xml` works. A direct ROS launch does not provide the container lock, monitor, or archival wrapper.
+The CLI selectors are `l`, `m`, `r`, and `three` for one-shot motion trees,
+plus `control` for the persistent input router; each overwrites `BT_TREE_FILE`.
+For another XML, use the existing ROS launch's `tree_file:=<absolute-path>`
+argument or invoke the container entrypoint with an explicit `BT_TREE_FILE` and
+`BT_REQUIRED_ARMS`. Do not claim `./rm65 bt path.xml` works. A direct ROS
+launch does not provide the container lock, monitor, or archival wrapper.
 
 For example, this explicitly selects the existing three-arm XML through the wrapper; replace only the tree path with another mounted XML when needed. `BT_REQUIRED_ARMS` is a comma-separated subset of `l,m,r`:
 

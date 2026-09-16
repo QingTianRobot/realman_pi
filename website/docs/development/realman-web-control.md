@@ -86,6 +86,8 @@ transient-local 订阅 `/realman_bt_executor/input_mode_state`。同一 YAML 的
 状态显示为 active，却保持隐藏且不可选。没有正在运行的路由器或 discovery 不健康时，卡片隐藏；
 既有直接 Action 控制继续兼容，仅在两项 router service 都确认为不可用时启用。服务只短暂失联或
 catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返回 `input_mode_unavailable`，而不是绕过仲裁。
+若 service 在等待 Web override 的已排队运动期间消失，该命令失败并被永久丢弃；即使之后确认 router
+不存在，也只有一个后续、独立的新请求才可走 direct control。
 
 浏览器请求为 `{"type":"select_input_mode","request_id":"<non-empty up to 96 chars>","mode_id":"policy"}`；
 `mode_id` 必须为 lower-case ASCII identifier。输入模式相关服务端事件恰有三种：
@@ -96,9 +98,14 @@ catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返
 | `input_mode_result` | `request_id`、`executor_request_id`、`accepted`、`message` |
 | `input_mode_state` | `requested_mode`、`selected_mode`、`active_mode`、`phase`（`ACTIVE`/`SWITCHING`/`FAILED`）、`request_id`、`epoch`、`detail` |
 
-对非 Web picker 选择，桥总是先取消它持有的 Web Action，再请求 router。router 先运行一 tick 的
-`none` 中性分支，下一 tick 才激活目标模式；而浏览器运动先请求 `web`，只在同一请求的
-`ACTIVE/web` 状态到达后才会转发。Policy 与 Pika 目前只是 RUNNING 占位，不产生任何 robot goal。
+对非 Web picker 选择，桥总是先取消它持有的 Web Action，再请求 router。切换到不同模式时，router
+先运行一 tick 的 `none` 中性分支，下一 tick 才激活目标模式；重选 active 模式直接返回已有 request ID，
+没有中性 tick，`epoch` 不变。路由仅拦截 `execute_motion`、`execute_trajectory` 和
+`start_cartesian_velocity`：这些浏览器运动先请求 `web`，只在同一请求的 `ACTIVE/web` 状态到达后才会转发。
+`software_stop` 绕过路由；夹爪、恢复、标定、运动学、位姿和记录操作均是 mode-neutral（包括
+`gripper_command`、`recover_motion`、`capture_calibration_sample`、`solve_calibration`、
+`get_current_pose`、`solve_ik`、`list_joint_records`、`save_joint_record`、`delete_joint_record` 与
+`apply_joint_record`）。Policy 与 Pika 目前只是 RUNNING 占位，不产生任何 robot goal。
 排查卡片缺失或停留在 SWITCHING 时，先检查 router 是否显式运行、三个 ROS 名称是否在同一 domain，
 以及 `input_mode_state.detail` 或 `input_mode_timeout`/`input_mode_failed` 事件；不要添加硬编码选项。
 

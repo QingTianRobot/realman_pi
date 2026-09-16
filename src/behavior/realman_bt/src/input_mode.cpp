@@ -97,9 +97,21 @@ InputModeRequestResult InputModeCoordinator::request(
   if (!isRegistered(mode_id)) {
     return {false, 0, "unknown input mode: " + mode_id};
   }
-  if (snapshot_.phase == InputModePhase::kActive &&
-      snapshot_.active_mode == mode_id) {
-    return {true, snapshot_.request_id, "already active"};
+  if (snapshot_.active_mode == mode_id) {
+    if (snapshot_.phase == InputModePhase::kActive) {
+      return {true, snapshot_.request_id, "already active"};
+    }
+    if (snapshot_.phase == InputModePhase::kSwitching) {
+      const auto request_id = next_request_id_++;
+      snapshot_.requested_mode = mode_id;
+      snapshot_.selected_mode = mode_id;
+      snapshot_.phase = InputModePhase::kActive;
+      snapshot_.request_id = request_id;
+      snapshot_.detail.clear();
+      transition_step_ = TransitionStep::kIdle;
+      notifyObserver();
+      return {true, request_id, "already active"};
+    }
   }
 
   const auto request_id = next_request_id_++;
@@ -138,8 +150,12 @@ std::string InputModeCoordinator::selectForTick(Clock::time_point now) {
 }
 
 void InputModeCoordinator::activate(const std::string& mode_id,
-                                    Clock::time_point) {
+                                    Clock::time_point now) {
   ensureConfigurationValid();
+  if (snapshot_.phase == InputModePhase::kSwitching && now >= deadline_) {
+    fail("input mode switch timed out", now);
+    throw std::logic_error("input mode switch timed out");
+  }
   if (mode_id != snapshot_.selected_mode) {
     throw std::logic_error("cannot activate unselected input mode: " + mode_id);
   }
@@ -159,6 +175,11 @@ void InputModeCoordinator::activate(const std::string& mode_id,
     snapshot_.active_mode = "none";
     transition_step_ = TransitionStep::kReadyToSelectRequested;
     if (active_changed) notifyObserver();
+    return;
+  }
+
+  if (transition_step_ == TransitionStep::kReadyToSelectRequested &&
+      mode_id == "none") {
     return;
   }
 

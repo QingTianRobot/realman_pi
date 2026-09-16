@@ -22,6 +22,15 @@ void assertInvalidArgument(Callable&& callable) {
   }
 }
 
+template <typename Callable>
+void assertLogicError(Callable&& callable) {
+  try {
+    callable();
+    assert(false);
+  } catch (const std::logic_error&) {
+  }
+}
+
 InputModeRegistry makeRegistry() {
   InputModeRegistry registry;
   registry.registerMode("web", "Web", false);
@@ -224,6 +233,33 @@ void testSameActiveRequestIsIdempotent() {
                  InputModePhase::kActive, first.request_id, 1);
 }
 
+void testRepeatedNeutralActivationIsIdempotent() {
+  using Clock = InputModeCoordinator::Clock;
+  const auto now = Clock::time_point{};
+  auto registry = makeRegistry();
+  std::vector<InputModeSnapshot> events;
+  InputModeCoordinator coordinator(
+      registry, std::chrono::milliseconds(100), "none",
+      [&](const InputModeSnapshot& snapshot) { events.push_back(snapshot); });
+
+  const auto request = coordinator.request("policy", "browser", now);
+  coordinator.activate("none", now);
+  const auto event_count = events.size();
+  const auto epoch = coordinator.snapshot().epoch;
+
+  coordinator.activate("none", now);
+
+  assert(events.size() == event_count);
+  assertSnapshot(coordinator.snapshot(), "policy", "none", "none",
+                 InputModePhase::kSwitching, request.request_id, epoch);
+  assert(coordinator.selectForTick(now) == "policy");
+  assert(coordinator.snapshot().phase == InputModePhase::kSwitching);
+  assert(coordinator.snapshot().epoch == epoch);
+  coordinator.activate("policy", now);
+  assert(coordinator.snapshot().phase == InputModePhase::kActive);
+  assert(coordinator.snapshot().epoch == epoch + 1);
+}
+
 void testSupersedingRequestUsesLatestModeAndRequestId() {
   using Clock = InputModeCoordinator::Clock;
   const auto now = Clock::time_point{};
@@ -239,6 +275,39 @@ void testSupersedingRequestUsesLatestModeAndRequestId() {
   assert(coordinator.snapshot().request_id == second.request_id);
   coordinator.activate("none", now);
   assert(coordinator.selectForTick(now) == "pika");
+}
+
+void testRequestForActiveModeCancelsPendingDifferentMode() {
+  using Clock = InputModeCoordinator::Clock;
+  const auto now = Clock::time_point{};
+  auto registry = makeRegistry();
+  std::vector<InputModeSnapshot> events;
+  InputModeCoordinator coordinator(
+      registry, std::chrono::milliseconds(100), "none",
+      [&](const InputModeSnapshot& snapshot) { events.push_back(snapshot); });
+
+  const auto policy = coordinator.request("policy", "browser", now);
+  coordinator.activate("none", now);
+  assert(coordinator.selectForTick(now) == "policy");
+  coordinator.activate("policy", now);
+  assert(coordinator.snapshot().epoch == 1);
+
+  const auto pika = coordinator.request("pika", "browser", now);
+  assert(pika.accepted && pika.request_id == policy.request_id + 1);
+  const auto event_count_with_pending_request = events.size();
+
+  const auto cancel = coordinator.request("policy", "browser", now);
+
+  assert(cancel.accepted && cancel.request_id == pika.request_id + 1);
+  assert(events.size() == event_count_with_pending_request + 1);
+  assertSnapshot(coordinator.snapshot(), "policy", "policy", "policy",
+                 InputModePhase::kActive, cancel.request_id, 1);
+
+  const auto event_count_after_cancel = events.size();
+  assert(coordinator.selectForTick(now) == "policy");
+  coordinator.activate("policy", now);
+  assert(events.size() == event_count_after_cancel);
+  assert(coordinator.snapshot().epoch == 1);
 }
 
 void testRejectedRequestsDoNotMutateStateOrConsumeRequestIds() {
@@ -283,6 +352,32 @@ void testTimeoutPublishesFailedBeforeSchedulingFallback() {
                  InputModePhase::kSwitching, request.request_id, 0);
 }
 
+void testActivationAfterDeadlinePublishesFailedInsteadOfActive() {
+  using Clock = InputModeCoordinator::Clock;
+  const auto start = Clock::time_point{};
+  auto registry = makeRegistry();
+  std::vector<InputModeSnapshot> events;
+  InputModeCoordinator coordinator(
+      registry, std::chrono::milliseconds(100), "none",
+      [&](const InputModeSnapshot& snapshot) { events.push_back(snapshot); });
+
+  const auto request = coordinator.request("policy", "browser", start);
+  coordinator.activate("none", start);
+  assert(coordinator.selectForTick(start + std::chrono::milliseconds(99)) ==
+         "policy");
+  const auto event_count_before_activation = events.size();
+
+  assertLogicError([&] {
+    coordinator.activate("policy", start + std::chrono::milliseconds(101));
+  });
+
+  assert(events.size() == event_count_before_activation + 1);
+  assert(events.back().phase == InputModePhase::kFailed);
+  assertSnapshot(coordinator.snapshot(), "policy", "policy", "none",
+                 InputModePhase::kFailed, request.request_id, 0);
+  assert(coordinator.snapshot().detail == "input mode switch timed out");
+}
+
 void testExplicitFailurePublishesBeforeFallback() {
   using Clock = InputModeCoordinator::Clock;
   const auto now = Clock::time_point{};
@@ -317,9 +412,12 @@ int main() {
   testCoordinatorValidatesFallbackOnlyOnFirstUse();
   testCompleteNeutralTransitionSequences();
   testSameActiveRequestIsIdempotent();
+  testRepeatedNeutralActivationIsIdempotent();
   testSupersedingRequestUsesLatestModeAndRequestId();
+  testRequestForActiveModeCancelsPendingDifferentMode();
   testRejectedRequestsDoNotMutateStateOrConsumeRequestIds();
   testTimeoutPublishesFailedBeforeSchedulingFallback();
+  testActivationAfterDeadlinePublishesFailedInsteadOfActive();
   testExplicitFailurePublishesBeforeFallback();
   return 0;
 }

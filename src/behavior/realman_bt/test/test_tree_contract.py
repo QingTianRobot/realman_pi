@@ -9,15 +9,6 @@ CMAKE = ROOT / 'src/behavior/realman_bt/CMakeLists.txt'
 THREE_ARM = ROOT / 'src/behavior/realman_bt/src/three_arm_move_j_node.cpp'
 
 
-def test_control_mode_tree_has_supervised_sequence():
-    root = ET.parse(ROOT / 'config/behavior-trees/control_mode.xml').getroot()
-    assert root.attrib['main_tree_to_execute'] == 'MainTree'
-    tags = [node.tag for node in root.iter()]
-    assert tags.count('SelectControlMode') == 1
-    assert tags.count('SwitchControlMode') == 1
-    assert tags.count('ControlLeaseGuard') == 1
-
-
 def test_pick_tree_uses_bounded_retry_and_strategy_fallback():
     root = ET.parse(ROOT / 'config/behavior-trees/pick_task.xml').getroot()
     retry = next(node for node in root.iter('Retry'))
@@ -71,7 +62,7 @@ def test_executor_increments_sequence_and_writes_snapshot_for_every_tick_status(
 
 def test_runtime_snapshot_export_declares_bt_core_dependency():
     source = CMAKE.read_text()
-    assert 'install(TARGETS control_mode_state_machine runtime_snapshot' in source
+    assert 'install(TARGETS input_mode runtime_snapshot' in source
     assert 'target_link_libraries(runtime_snapshot PUBLIC bt::core)' in source
     # The installed realman_bt target has a public bt::core link interface;
     # make sure consumers load the vendored bt_core package before resolving it.

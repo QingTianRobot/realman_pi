@@ -27,6 +27,14 @@ target_include_directories(runtime_snapshot PUBLIC
 target_compile_features(runtime_snapshot PUBLIC cxx_std_17)
 target_link_libraries(runtime_snapshot PUBLIC bt::core)
 
+add_library(input_mode_nodes src/input_mode_nodes.cpp)
+target_include_directories(input_mode_nodes PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(input_mode_nodes PUBLIC cxx_std_17)
+target_link_libraries(input_mode_nodes PUBLIC
+  input_mode runtime_snapshot bt::core)
+
 add_library(move_j_nodes
   src/move_j_node.cpp
   src/three_arm_move_j_node.cpp)
@@ -38,7 +46,7 @@ target_link_libraries(move_j_nodes runtime_snapshot bt::core)
 ament_target_dependencies(move_j_nodes
   rclcpp rclcpp_action realman_msgs)
 
-install(TARGETS input_mode runtime_snapshot
+install(TARGETS input_mode runtime_snapshot input_mode_nodes
   EXPORT export_${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 add_executable(realman_bt_executor
@@ -62,6 +70,7 @@ install(TARGETS move_j_nodes
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME} FILES_MATCHING PATTERN "*.py")
 install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/arm_move.xml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/control_router.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/three_arm_staged_move.xml"
   DESTINATION share/${PROJECT_NAME}/behavior-trees)
 
@@ -70,6 +79,14 @@ if(BUILD_TESTING)
   add_executable(test_input_mode test/test_input_mode.cpp)
   target_link_libraries(test_input_mode PRIVATE input_mode)
   add_test(NAME test_input_mode COMMAND test_input_mode)
+
+  add_executable(test_input_mode_nodes test/test_input_mode_nodes.cpp)
+  target_include_directories(test_input_mode_nodes PRIVATE
+    "${BT_VENDOR_ROOT}"
+    "${BT_VENDOR_ROOT}/bt_nodes")
+  target_compile_features(test_input_mode_nodes PRIVATE cxx_std_17)
+  target_link_libraries(test_input_mode_nodes PRIVATE input_mode_nodes)
+  add_test(NAME test_input_mode_nodes COMMAND test_input_mode_nodes)
 
   add_executable(test_runtime_snapshot test/test_runtime_snapshot.cpp)
   target_include_directories(test_runtime_snapshot PRIVATE
@@ -97,6 +114,7 @@ if(BUILD_TESTING)
   add_test(NAME test_reactive_control_nodes COMMAND test_reactive_control_nodes)
 
   ament_add_pytest_test(test_tree_contract test/test_tree_contract.py)
+  ament_add_pytest_test(test_control_router_tree test/test_control_router_tree.py)
   ament_add_pytest_test(test_arm_move_tree test/test_arm_move_tree.py)
   ament_add_pytest_test(test_three_arm_move_tree test/test_three_arm_move_tree.py)
 endif()

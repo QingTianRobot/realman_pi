@@ -14,6 +14,9 @@
 
 namespace realman_bt {
 
+inline constexpr char kRuntimeDiagnosticsBlackboardKey[] =
+    "__realman_bt_runtime_diagnostics__";
+
 struct RuntimeEvent {
   std::uint64_t timestamp_ms;
   std::string severity;

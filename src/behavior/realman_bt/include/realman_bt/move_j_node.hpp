@@ -9,15 +9,12 @@
 
 #include "bt_core/leaf_node.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
+#include "realman_bt/runtime_snapshot.hpp"
 #include "realman_msgs/action/execute_motion.hpp"
 
 namespace realman_bt {
 
 inline constexpr char kRosNodeBlackboardKey[] = "__realman_bt_ros_node__";
-inline constexpr char kRuntimeDiagnosticsBlackboardKey[] =
-    "__realman_bt_runtime_diagnostics__";
-
-class RuntimeDiagnostics;
 
 class MoveJCancellationDrain {
  public:

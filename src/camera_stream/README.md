@@ -1,5 +1,12 @@
 # camera_stream — 相机流抽离 + 局域网推流
 
+> **[DEPRECATED]** 本 RTSP 推流方案已弃用，不再是相机出图主线。
+> 生产已回归 ROS2 节点出图：三路 Orbbec + 全局 RealSense D435 由
+> `src/sensor_bringup/launch/cameras_ros2.launch.py` 发布（入口 `rm65_camera_ros2`
+> 或 `start_sensors.sh`）。`rm65_camera_ros2` / `start_sensors.sh` 会在启动前调用
+> `scripts/stop_streaming.sh` 停掉本推流以释放 USB 设备，两者互斥、不可同时运行。
+> 以下内容仅作历史参考保留。
+
 把全局相机（RealSense D435）和手眼相机（Orbbec Gemini 305）的图像帧从 ROS2/DDS 里抽离，
 改为 SDK 直读 + 局域网推流：彩色走 RTSP(H.264)，深度走独立 TCP 通道。ROS2 仅保留
 CameraInfo/TF 元数据（由 `ros2_bridge.py` 发布），图像帧不再经过 ROS2。

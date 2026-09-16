@@ -11,10 +11,13 @@
   <buildtool_depend>ament_cmake</buildtool_depend>
   <exec_depend>python3-yaml</exec_depend>
 
-  <!-- 注意: realsense2_camera 和 orbbec_camera 位于独立工作区
-       (src/sensor/realsense_ws 和 src/sensor/OrbbecSDK_ROS2)，
+  <!-- 注意: realsense2_camera 和 orbbec_camera 位于独立工作区/子模块
+       (src/sensor/realsense/realsense_ws 和 src/sensor/OrbbecSDK_ROS2)，
        不在此声明 exec_depend，避免 colcon 交叉检查。
-       运行时通过 start_sensors.sh 同时 source 三个工作区提供。 -->
+       realsense2_camera 依赖 librealsense2；realsense_ws 子模块初始化并 colcon
+       构建后，由 rm65_camera_ros2 / start_sensors.sh source 其 install/setup.sh
+       提供 ROS2 节点出图。缺少该 overlay 时 rm65_camera_ros2 自动降级
+       use_realsense:=false，三路 Orbbec 仍正常启动。 -->
 
   <export>
     <build_type>ament_cmake</build_type>

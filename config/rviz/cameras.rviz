@@ -1,5 +1,7 @@
-# ROS 2 color camera viewer. Image displays subscribe directly to the Orbbec
-# color topics; depth displays are intentionally omitted for the production UI.
+# ROS 2 color camera viewer. Image displays subscribe directly to the three
+# Orbbec color topics plus the global RealSense D435 color topic so all four
+# production cameras appear in one RViz window. Depth displays are intentionally
+# omitted for the production UI.
 Panels:
   - Class: rviz_common/Displays
     Name: Displays
@@ -59,6 +61,19 @@ Visualization Manager:
         History Policy: Keep Last
         Reliability Policy: Reliable
         Value: /camera_right/color/image_raw
+      Value: true
+    # Global RealSense D435 shares the same UDPv4 DDS transport as the Orbbec
+    # nodes; namespace/camera_name come from cameras_ros2.launch.py defaults
+    # (camera_global/d435) and must stay in sync with realsense_d435.launch.py.
+    - Class: rviz_default_plugins/Image
+      Enabled: true
+      Name: Global color
+      Topic:
+        Depth: 5
+        Durability Policy: Volatile
+        History Policy: Keep Last
+        Reliability Policy: Reliable
+        Value: /camera_global/d435/color/image_raw
       Value: true
   Enabled: true
   Global Options:

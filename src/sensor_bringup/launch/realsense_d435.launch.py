@@ -20,7 +20,7 @@ from launch_ros.substitutions import FindPackageShare
 
 def generate_launch_description():
     upstream_launch = PathJoinSubstitution(
-        [FindPackageShare("realsense2_camera"), "rs_launch.py"]
+        [FindPackageShare("realsense2_camera"), "launch", "rs_launch.py"]
     )
 
     declarations = [

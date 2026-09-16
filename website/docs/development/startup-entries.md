@@ -270,7 +270,7 @@ RealSense D435 已通过 `realsense_d435.launch.py` 接入 ROS2 节点路径（�
 | `rm65_docker_remote_rviz_stop` | 停止后台远程 RViz。 | `docker compose stop realman_remote_rviz`。 | 关闭桌面机 RViz-only 服务，不影响工控机驱动和机械臂。 | Docker Compose |
 | `rm65_docker_remote_rviz_status` | 查看后台远程 RViz 状态。 | `docker compose ps realman_remote_rviz`。 | 确认 RViz 容器是否仍在运行。 | Docker Compose |
 | `rm65_docker_remote_rviz_logs [-f]` | 查看或跟踪远程 RViz 日志。 | `docker compose logs --tail=100 ... realman_remote_rviz`。 | 排查 DDS 发现、TF、joint state 或显示授权问题。 | Docker Compose、[故障排查](../troubleshooting) |
-| `rm65_docker_camera_rviz [domain]` | 前台显示生产机三路 Orbbec 彩色图像；省略 `domain` 时读取 `.env` 的 `ROS_DOMAIN_ID`。 | `realman_camera_rviz` 和只含彩色 Image display 的 `config/rviz/cameras.rviz`；不启动驱动、本地相机或深度显示。 | 笔记本查看生产机的 `/camera_left`、`/camera_middle`、`/camera_right` 实拍画面。 | `.env`、[快速开始：查看三路实拍画面](../guide/getting-started#查看三路实拍画面) |
+| `rm65_docker_camera_rviz [domain]` | 前台显示生产机三路 Orbbec 加全局 RealSense D435 共四路彩色图像；省略 `domain` 时读取 `.env` 的 `ROS_DOMAIN_ID`；宿主机未构建 `realsense2_camera` 时 `rm65_camera_ros2` 降级为仅 Orbbec，第四格无图像。 | `realman_camera_rviz` 和只含彩色 Image display 的 `config/rviz/cameras.rviz`；不启动驱动、本地相机或深度显示。 | 笔记本查看生产机的 `/camera_left`、`/camera_middle`、`/camera_right` 与 `/camera_global/d435` 实拍画面。 | `.env`、[快速开始：查看四路实拍画面](../guide/getting-started#查看四路实拍画面) |
 | `rm65_docker_camera_rviz_start [domain]` | 后台启动三路相机 RViz；省略 `domain` 时读取 `.env`。 | `docker compose up -d realman_camera_rviz`。 | 日常持续查看相机画面。 | `.env`、`realman_camera_rviz` Compose 服务 |
 | `rm65_docker_camera_rviz_stop` | 停止后台相机 RViz。 | `docker compose stop realman_camera_rviz`。 | 关闭笔记本上的相机查看器，不影响生产机相机。 | Docker Compose |
 | `rm65_docker_camera_rviz_status` | 查看后台相机 RViz 状态。 | `docker compose ps realman_camera_rviz`。 | 确认相机 RViz 容器是否运行。 | Docker Compose |

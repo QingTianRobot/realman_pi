@@ -5,6 +5,7 @@
 #include <cstdint>
 #include <deque>
 #include <filesystem>
+#include <mutex>
 #include <string>
 #include <vector>
 
@@ -45,6 +46,7 @@ class RuntimeDiagnostics {
 
   TickStats tick_stats_;
   std::deque<RuntimeEvent> events_;
+  mutable std::mutex mutex_;
 };
 
 /**

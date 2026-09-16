@@ -78,6 +78,7 @@ void appendDiagnostics(std::ostringstream& json,
 }  // namespace
 
 void RuntimeDiagnostics::recordTick(bt_core::NodeStatus status) {
+  std::lock_guard<std::mutex> lock(mutex_);
   ++tick_stats_.total;
   switch (status) {
     case bt_core::NodeStatus::RUNNING:
@@ -95,11 +96,13 @@ void RuntimeDiagnostics::recordTick(bt_core::NodeStatus status) {
 }
 
 void RuntimeDiagnostics::recordEvent(RuntimeEvent event) {
+  std::lock_guard<std::mutex> lock(mutex_);
   events_.push_back(std::move(event));
   if (events_.size() > kMaxEvents) events_.pop_front();
 }
 
 RuntimeDiagnosticsSnapshot RuntimeDiagnostics::snapshot() const {
+  std::lock_guard<std::mutex> lock(mutex_);
   return {tick_stats_, {events_.begin(), events_.end()}};
 }
 

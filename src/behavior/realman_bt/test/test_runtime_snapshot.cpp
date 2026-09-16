@@ -3,6 +3,8 @@
 #include <fstream>
 #include <sstream>
 #include <string>
+#include <thread>
+#include <vector>
 
 #include "bt_core/leaf_node.hpp"
 #include "bt_core/tree.hpp"
@@ -67,6 +69,26 @@ void testDiagnosticsRetainsTheMostRecentTwoHundredEvents() {
   assert(snapshot.events.size() == 200);
   assert(snapshot.events.front().detail == "event-1");
   assert(snapshot.events.back().detail == "event-200");
+}
+
+void testDiagnosticsSupportsConcurrentRecording() {
+  realman_bt::RuntimeDiagnostics diagnostics;
+  constexpr int kWorkers = 8;
+  constexpr int kTicksPerWorker = 10000;
+  std::vector<std::thread> workers;
+  workers.reserve(kWorkers);
+  for (int worker = 0; worker < kWorkers; ++worker) {
+    workers.emplace_back([&diagnostics]() {
+      for (int tick = 0; tick < kTicksPerWorker; ++tick) {
+        diagnostics.recordTick(bt_core::NodeStatus::SUCCESS);
+      }
+    });
+  }
+  for (auto& worker : workers) worker.join();
+
+  const auto snapshot = diagnostics.snapshot();
+  assert(snapshot.tick_stats.total == kWorkers * kTicksPerWorker);
+  assert(snapshot.tick_stats.success == kWorkers * kTicksPerWorker);
 }
 
 void testEventsAreSerializedWithEscapedText() {
@@ -167,6 +189,7 @@ void testJsonEscapingAndAtomicReplacement() {
 int main() {
   testIdleSnapshot();
   testDiagnosticsRetainsTheMostRecentTwoHundredEvents();
+  testDiagnosticsSupportsConcurrentRecording();
   testEventsAreSerializedWithEscapedText();
   testTreeSnapshotUsesStableDfsKeysAndStatuses();
   testJsonEscapingAndAtomicReplacement();

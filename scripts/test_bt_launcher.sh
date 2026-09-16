@@ -33,3 +33,12 @@ grep -Fq 'BT_TREE_FILE=/opt/rm65_ws/config/behavior-trees/three_arm_staged_move.
 grep -Fq 'BT_REQUIRED_ARMS=l\,m\,r' <<<"$three_output"
 
 printf 'three-arm behavior-tree launcher dry-run plan: PASS\n'
+
+control_output="$(RM65_DRY_RUN=1 "$ROOT/scripts/bt.sh" control)"
+grep -Fq 'BT_TREE_FILE=/opt/rm65_ws/config/behavior-trees/control_router.xml' <<<"$control_output"
+grep -Fq 'BT_REQUIRED_ARMS=l\,m\,r' <<<"$control_output"
+grep -Fq 'BT_LAUNCH_FILE=control_router.launch.py' <<<"$control_output"
+grep -Fq 'BT_STOP_ON_TERMINAL=false' <<<"$control_output"
+grep -Fq 'BT_EXIT_ON_TERMINAL=false' <<<"$control_output"
+
+printf 'persistent control-router launcher dry-run plan: PASS\n'

@@ -18,9 +18,11 @@ set -eo pipefail
 : "${BT_SERVER_BIN:=/opt/rm65_ws/behavior_tree/bin/bt_server}"
 : "${BT_TREE_FILE:=/opt/rm65_ws/config/behavior-trees/arm_move.xml}"
 : "${BT_REQUIRED_ARMS:=$REALMAN_BT_ARM_ID}"
+: "${BT_LAUNCH_FILE:=arm_move.launch.py}"
 : "${BT_TREE_WORKSPACE:=/tmp/realman-bt-workspace}"
 : "${BT_READ_ONLY:=true}"
 : "${BT_RUNTIME_SNAPSHOT:=$BT_TREE_WORKSPACE/runtime.json}"
+: "${BT_STOP_ON_TERMINAL:=true}"
 : "${BT_EXIT_ON_TERMINAL:=true}"
 : "${BT_RUNTIME_ARCHIVE_ROOT:=${REALMAN_LOG_ROOT:-/opt/rm65_ws/logs}/behavior-trees}"
 readonly BT_INSTANCE_LOCK=/tmp/realman-bt.lock
@@ -53,6 +55,14 @@ case "$BT_TREE_WORKSPACE" in
     echo "[bt-start] BT_TREE_WORKSPACE must remain under /tmp/realman-bt-workspace" >&2
     exit 2
     ;;
+esac
+case "$BT_LAUNCH_FILE" in
+  arm_move.launch.py|control_router.launch.py) ;;
+  *) echo "[bt-start] unsupported BT_LAUNCH_FILE: $BT_LAUNCH_FILE" >&2; exit 2 ;;
+esac
+case "$BT_STOP_ON_TERMINAL" in
+  true|false) ;;
+  *) echo "[bt-start] BT_STOP_ON_TERMINAL must be true or false" >&2; exit 2 ;;
 esac
 case "$BT_EXIT_ON_TERMINAL" in
   true|false) ;;
@@ -155,10 +165,11 @@ for arm_id in "${required_arms[@]}"; do
 done
 
 echo "[bt-start] starting ROS executor for arm ${REALMAN_BT_ARM_ID} (dry_run=${REALMAN_BT_DRY_RUN})"
-ros2 launch realman_bt arm_move.launch.py \
+ros2 launch realman_bt "$BT_LAUNCH_FILE" \
   arm_id:="$REALMAN_BT_ARM_ID" \
   dry_run:="$REALMAN_BT_DRY_RUN" \
   tree_file:="$runtime_tree_file" \
+  stop_on_terminal:="$BT_STOP_ON_TERMINAL" \
   exit_on_terminal:="$BT_EXIT_ON_TERMINAL" \
   runtime_snapshot_file:="$BT_RUNTIME_SNAPSHOT" &
   executor_pid=$!

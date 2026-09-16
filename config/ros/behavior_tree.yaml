@@ -1,8 +1,10 @@
-# Behavior-tree runtime defaults. Paths are container-visible when launched by Compose.
+# Persistent global input router. The tree is started explicitly with ./rm65 bt control.
 realman_bt_executor:
   ros__parameters:
-    tree_file: /opt/rm65_ws/config/behavior-trees/control_mode.xml
-    tick_rate_hz: 10.0
-    switch_timeout_ms: 5000
-    default_lease_timeout_ms: 3000
-    safe_fallback_mode: none
+    tree_file: /opt/rm65_ws/config/behavior-trees/control_router.xml
+    tick_rate_hz: 10.0  # Hz; each tick reevaluates the global input selection.
+    switch_timeout_ms: 5000  # Maximum Web/selector wait before FAILED and safe none.
+    safe_fallback_mode: none  # Must match a registered, selectable XML mode.
+    autostart: true
+    stop_on_terminal: false
+    exit_on_terminal: false

@@ -16,13 +16,25 @@ case "$SELECTOR" in
     ARM_ID="$SELECTOR"
     BT_TREE_FILE="/opt/rm65_ws/config/behavior-trees/arm_move.xml"
     BT_REQUIRED_ARMS="$SELECTOR"
+    BT_LAUNCH_FILE="arm_move.launch.py"
+    BT_STOP_ON_TERMINAL="true"
     ;;
   three)
     ARM_ID="r"
     BT_TREE_FILE="/opt/rm65_ws/config/behavior-trees/three_arm_staged_move.xml"
     BT_REQUIRED_ARMS="l,m,r"
+    BT_LAUNCH_FILE="arm_move.launch.py"
+    BT_STOP_ON_TERMINAL="true"
     ;;
-  *) printf 'rm65 bt: selector must be l, m, r, or three (got %s)\n' "$SELECTOR" >&2; exit 2 ;;
+  control)
+    ARM_ID="r"
+    BT_TREE_FILE="/opt/rm65_ws/config/behavior-trees/control_router.xml"
+    BT_REQUIRED_ARMS="l,m,r"
+    BT_LAUNCH_FILE="control_router.launch.py"
+    BT_STOP_ON_TERMINAL="false"
+    BT_EXIT_ON_TERMINAL="false"
+    ;;
+  *) printf 'rm65 bt: selector must be l, m, r, three, or control (got %s)\n' "$SELECTOR" >&2; exit 2 ;;
 esac
 case "$DRY_RUN" in
   true|false) ;;
@@ -78,6 +90,8 @@ exec_args=(
   -e "REALMAN_BT_DRY_RUN=$DRY_RUN"
   -e "BT_TREE_FILE=$BT_TREE_FILE"
   -e "BT_REQUIRED_ARMS=$BT_REQUIRED_ARMS"
+  -e "BT_LAUNCH_FILE=$BT_LAUNCH_FILE"
+  -e "BT_STOP_ON_TERMINAL=$BT_STOP_ON_TERMINAL"
   -e "BT_SERVER_HOST=${BT_SERVER_HOST:-0.0.0.0}"
   -e "BT_SERVER_PORT=$BT_PORT"
   -e BT_READ_ONLY=true

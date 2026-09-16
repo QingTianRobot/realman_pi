@@ -229,3 +229,52 @@ def test_next_separate_command_is_direct_after_confirmed_disappearance(bridge):
     start(controller)
     assert not forwarded(controller.update_catalog(None))
     assert len(forwarded(controller.intercept_motion("browser-b", motion("move-2")))) == 1
+
+
+def test_unhealthy_discovery_discards_pending_motion_without_enabling_direct_control(bridge):
+    controller, _ = bridge
+    token = start(controller)
+    effects = controller.update_catalog(None, confirmed_absent=False)
+    assert errors(effects)
+    assert not forwarded(controller.selection_response(token, True, 41, "late"))
+    effects = controller.intercept_motion("browser-b", motion("move-2"))
+    assert errors(effects)
+    assert not forwarded(effects)
+    controller.update_catalog(None, confirmed_absent=True)
+    assert len(forwarded(controller.intercept_motion("browser-b", motion("move-3")))) == 1
+
+
+@pytest.mark.parametrize("regressive_phase", ["ACTIVE", "SWITCHING"])
+def test_failure_before_selection_response_cannot_regress_to_active(bridge, regressive_phase):
+    controller, _ = bridge
+    token = start(controller)
+    controller.update_state(state(41, phase="FAILED", epoch=2, detail="branch failed"))
+    assert controller.update_state(state(41, phase=regressive_phase, epoch=2)) == []
+    effects = controller.selection_response(token, True, 41, "accepted")
+    assert not forwarded(effects)
+    assert errors(effects)[0].payload["code"] == "input_mode_failed"
+    assert errors(effects)[0].payload["message"] == "branch failed"
+    assert not forwarded(controller.update_state(state(41, epoch=3)))
+
+
+def test_active_state_does_not_regress_to_switching_for_same_request_and_epoch(bridge):
+    controller, _ = bridge
+    controller.update_catalog(CATALOG)
+    controller.update_state(state(41, epoch=2))
+    assert controller.update_state(state(41, phase="SWITCHING", epoch=2)) == []
+    assert controller.cached_events()[1].payload["phase"] == "ACTIVE"
+
+
+def test_disappearance_late_old_state_and_restart_reset_ordering(bridge):
+    controller, _ = bridge
+    controller.update_catalog(CATALOG)
+    controller.update_state(state(41, epoch=2))
+    controller.update_catalog(None)
+    assert controller.update_state(state(41, epoch=2)) == []
+    effects = controller.update_catalog(CATALOG)
+    assert [effect.payload["type"] for effect in effects] == ["input_mode_list"]
+    startup = controller.update_state(state(0, "none", epoch=0))
+    assert startup[0].payload["request_id"] == 0
+    token = controller.intercept_motion("browser", motion())[0].token
+    controller.selection_response(token, True, 1, "accepted after restart")
+    assert len(forwarded(controller.update_state(state(1, epoch=1)))) == 1

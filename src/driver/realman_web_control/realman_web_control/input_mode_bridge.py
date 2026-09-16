@@ -68,6 +68,8 @@ class InputModeBridge:
         self._timeout = web_override_timeout_sec
         self._clock = clock
         self._catalog: tuple[InputModeOption, ...] | None = None
+        self._direct_control_allowed = True
+        self._generation = 0
         self._snapshot: InputModeSnapshot | None = None
         self._state_revision = 0
         self._next_token = 0
@@ -81,6 +83,10 @@ class InputModeBridge:
     def pending_token(self) -> int | None:
         return self._pending.token if self._pending is not None else None
 
+    @property
+    def generation(self) -> int:
+        return self._generation
+
     def cached_events(self, client_id: str | None = None) -> list[InputModeEffect]:
         events = [InputModeEffect("send_event", client_id, {
             "type": "input_mode_list", "available": self.available,
@@ -92,12 +98,20 @@ class InputModeBridge:
             }))
         return events
 
-    def update_catalog(self, modes: tuple[InputModeOption, ...] | None) -> list[InputModeEffect]:
+    def update_catalog(self, modes: tuple[InputModeOption, ...] | None, *,
+                       confirmed_absent: bool = True) -> list[InputModeEffect]:
         effects = []
         if modes is None:
             effects = self._discard("input_mode_unavailable", "input mode router is unavailable")
             self._snapshot = None
+            self._state_revision = 0
+        elif not self.available:
+            self._generation += 1
+            self._snapshot = None
+            self._state_revision = 0
         self._catalog = tuple(modes) if modes is not None else None
+        # An unhealthy or pending probe is not evidence that the router is absent.
+        self._direct_control_allowed = modes is None and confirmed_absent
         return effects + self.cached_events()
 
     @staticmethod
@@ -125,6 +139,9 @@ class InputModeBridge:
         if message["type"] not in MOTION_TYPES:
             raise ValueError("only qualifying motion messages may enter the input mode gate")
         if not self.available:
+            if not self._direct_control_allowed:
+                return [self._error(client_id, message["request_id"], "input_mode_unavailable",
+                                    "input mode discovery is unhealthy; command discarded")]
             return [InputModeEffect("forward_motion", client_id, deepcopy(message))]
         if not any(option.id == "web" for option in self._catalog):
             return [self._error(client_id, message["request_id"], "input_mode_unknown", "router has no web input mode")]
@@ -166,11 +183,21 @@ class InputModeBridge:
 
     def update_state(self, snapshot: InputModeSnapshot) -> list[InputModeEffect]:
         effects = self.expire()
+        if not self.available:
+            return effects
         previous = self._snapshot
         if previous is not None and (
             snapshot.request_id < previous.request_id or snapshot.epoch < previous.epoch
         ):
             return effects
+        if previous is not None and snapshot.request_id == previous.request_id:
+            # FAILED is terminal for this request, including before its service
+            # response arrives. A late ACTIVE/SWITCHING sample cannot revive it.
+            if previous.phase == "FAILED" and snapshot.phase != "FAILED":
+                return effects
+            if (snapshot.epoch == previous.epoch and previous.phase == "ACTIVE"
+                    and snapshot.phase == "SWITCHING"):
+                return effects
         self._snapshot = snapshot
         self._state_revision += 1
         if self.available:

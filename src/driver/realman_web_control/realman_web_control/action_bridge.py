@@ -47,6 +47,9 @@ class ActionRecord:
     frame_id: str = ""
     goal_handle: Any = None
     cancel_requested: bool = False
+    # True once cancellation transport submission succeeds; no ack is required.
+    cancel_submitted: bool = False
+    result_unavailable: bool = False
 
 
 def action_event(record: ActionRecord, state: str, **values: Any) -> dict[str, Any]:

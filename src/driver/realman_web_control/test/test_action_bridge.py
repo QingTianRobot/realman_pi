@@ -30,3 +30,12 @@ def test_message_conversion_prefers_ros_fields_over_iterable_protocol():
     assign_fields(message, {"value": 4, "items": array("d", [1, 2])})
 
     assert message_to_json(message) == {"value": 4, "items": [1, 2]}
+
+
+def test_cancellation_submission_tracking_is_not_part_of_browser_action_event():
+    record = ActionRecord("l", "execute_motion", "owner", "request",
+                          cancel_requested=True, cancel_submitted=True, result_unavailable=True)
+    assert action_event(record, "cancel_requested") == {
+        "type": "action_state", "arm": "l", "action": "execute_motion",
+        "request_id": "request", "state": "cancel_requested",
+    }

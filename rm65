@@ -61,7 +61,15 @@ camera_stop() {
 }
 
 compose() {
-  run docker compose -f "$ROOT/docker-compose.yml" "$@"
+  case "${REALMAN_DRIVER_CONFIG_FILE:-}" in
+    */realman_driver_mock.yaml)
+      # Mock robot drivers must remain isolated from independently managed
+      # gripper serial devices, even if a caller inherited the production default.
+      run env REALMAN_START_GRIPPER=false \
+        docker compose -f "$ROOT/docker-compose.yml" "$@"
+      ;;
+    *) run docker compose -f "$ROOT/docker-compose.yml" "$@" ;;
+  esac
 }
 
 up() {
@@ -137,7 +145,8 @@ Commands:
   logs                Show recent camera and bringup logs.
   camera              Run the legacy RTSP/TCP camera helper.
   bt-test build|mock|web|all  Build, run, or validate isolated behavior-tree scenarios.
-  bt [l|m|r|three]     Run one behavior tree; monitor on :8080 exits at terminal state.
+  bt [l|m|r|three]    Run a one-shot behavior tree; executor and :8080 monitor exit at terminal state.
+  bt control          Run the persistent input router and :8080 monitor until Ctrl-C.
   sync                Synchronize the clean main branch to production.
 EOF
 }

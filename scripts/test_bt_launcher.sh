@@ -42,3 +42,17 @@ grep -Fq 'BT_STOP_ON_TERMINAL=false' <<<"$control_output"
 grep -Fq 'BT_EXIT_ON_TERMINAL=false' <<<"$control_output"
 
 printf 'persistent control-router launcher dry-run plan: PASS\n'
+
+help_output="$("$ROOT/rm65" help)"
+grep -Fq 'bt [l|m|r|three]' <<<"$help_output"
+grep -Fq 'Run a one-shot behavior tree; executor and :8080 monitor exit at terminal state.' <<<"$help_output"
+grep -Fq 'bt control' <<<"$help_output"
+grep -Fq 'Run the persistent input router and :8080 monitor until Ctrl-C.' <<<"$help_output"
+
+functions_help_output="$(zsh -fc 'source "$1/functions.zsh"; rm65_project_help' _ "$ROOT")"
+grep -Fq './rm65 bt [l|m|r|three]' <<<"$functions_help_output"
+grep -Fq '单次运行行为树；终态后执行器和 :8080 监视器自动退出' <<<"$functions_help_output"
+grep -Fq './rm65 bt control' <<<"$functions_help_output"
+grep -Fq '常驻运行全局输入路由；按 Ctrl-C 后执行器和 :8080 监视器退出' <<<"$functions_help_output"
+
+printf 'behavior-tree executable help contract: PASS\n'

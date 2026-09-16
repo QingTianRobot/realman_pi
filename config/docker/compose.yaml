@@ -215,7 +215,9 @@ services:
       - system.launch.py
       - start_joy_driver:=false
       # Keep the production driver YAML as the default while allowing an
-      # explicit mock config for safe end-to-end launch validation.
+      # explicit mock config for safe end-to-end launch validation. `./rm65`
+      # forces grippers off for that mock; direct Compose callers must pass
+      # REALMAN_START_GRIPPER=false as shown in the verification workflow.
       - driver_config_file:=${REALMAN_DRIVER_CONFIG_FILE:-/opt/rm65_ws/config/ros/realman_driver.yaml}
       - start_gripper:=${REALMAN_START_GRIPPER:-true}
       - gripper_config_file:=${REALMAN_GRIPPER_CONFIG_FILE:-/opt/rm65_ws/config/ros/gripper.yaml}

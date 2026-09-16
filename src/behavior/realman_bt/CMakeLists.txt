@@ -14,11 +14,11 @@ if(NOT TARGET bt::core)
   add_subdirectory("${BT_VENDOR_ROOT}/bt_core" "${CMAKE_CURRENT_BINARY_DIR}/bt_core")
 endif()
 
-add_library(control_mode_state_machine src/control_mode_state_machine.cpp)
-target_include_directories(control_mode_state_machine PUBLIC
+add_library(input_mode src/input_mode.cpp)
+target_include_directories(input_mode PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
-target_compile_features(control_mode_state_machine PUBLIC cxx_std_17)
+target_compile_features(input_mode PUBLIC cxx_std_17)
 
 add_library(runtime_snapshot src/runtime_snapshot.cpp)
 target_include_directories(runtime_snapshot PUBLIC
@@ -38,7 +38,7 @@ target_link_libraries(move_j_nodes runtime_snapshot bt::core)
 ament_target_dependencies(move_j_nodes
   rclcpp rclcpp_action realman_msgs)
 
-install(TARGETS control_mode_state_machine runtime_snapshot
+install(TARGETS input_mode runtime_snapshot
   EXPORT export_${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
 add_executable(realman_bt_executor
@@ -67,9 +67,9 @@ install(FILES
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
-  add_executable(test_control_mode_state_machine test/test_control_mode_state_machine.cpp)
-  target_link_libraries(test_control_mode_state_machine PRIVATE control_mode_state_machine)
-  add_test(NAME test_control_mode_state_machine COMMAND test_control_mode_state_machine)
+  add_executable(test_input_mode test/test_input_mode.cpp)
+  target_link_libraries(test_input_mode PRIVATE input_mode)
+  add_test(NAME test_input_mode COMMAND test_input_mode)
 
   add_executable(test_runtime_snapshot test/test_runtime_snapshot.cpp)
   target_include_directories(test_runtime_snapshot PRIVATE

@@ -21,7 +21,7 @@ Catch malformed input, client creation, send-goal, goal-response, result-listene
 
 Use an Action for long-running or cancellable motion. `~/start` and `~/stop` are `std_srvs/srv/Trigger` Services for short executor control only; they must not become substitutes for a motion Action.
 
-After `async_send_goal`, keep the client and pending response alive. A deadline while awaiting the response stays `RUNNING`; a delayed accepted goal is cancelled once, then retained until a terminal result. A halt transfers pending responses and accepted nonterminal handles to the executor-owned `MoveJCancellationDrain`, driven separately from tree ticks. This also applies when `async_get_result()` setup throws after acceptance. Mark cancellation requested only after `async_cancel_goal()` succeeds; retain and retry on an exception. Never cancel a goal with a ready terminal result.
+After `async_send_goal`, keep the client and pending response alive. A deadline while awaiting the response stays `RUNNING`; a delayed accepted goal is cancelled once cancellation submission succeeds. A halt transfers pending responses and accepted nonterminal handles to the executor-owned `MoveJCancellationDrain`, driven separately from tree ticks. This also applies when `async_get_result()` setup throws after acceptance. The drain retains pending responses until rejection and accepted handles until `async_cancel_goal()` successfully submits; retain and retry on a submission exception. It releases tracking immediately after successful submission and does not wait for cancel acknowledgement or a terminal result. Never cancel a goal with a ready terminal result. Process shutdown still stops the drain timer; robot safety after process exit depends on the driver software stop and an accessible emergency stop.
 
 ## Dry-Run and Tests
 
@@ -35,6 +35,6 @@ For an authoring change, add or update focused coverage for the port bounds and 
 - Does `failureReason()` exist before every terminal `FAILURE` path that has a cause?
 - Are malformed, non-finite, short, and long joint lists rejected before client creation?
 - Are velocity `[1, 100]`, blend `[0, 100]`, and positive finite timeout each tested independently?
-- Does timeout retain pending-response ownership, cancel delayed acceptance once, and wait for terminal completion?
+- Does timeout retain pending-response ownership and cancel delayed acceptance once after successful submission, without claiming to await acknowledgement or terminal completion?
 - Does halt preserve ownership when the response is pending, result setup failed, or cancel submission throws?
 - Does dry-run prove that no Action client or goal exists?

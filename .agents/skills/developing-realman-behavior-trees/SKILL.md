@@ -18,7 +18,7 @@ Read the existing node, executor, XML tree, and focused tests. Register a new no
 
 Use an Action for long-running or cancellable robot motion. Use a Service only for a short executor control request. A terminal node result must preserve a useful `failureReason()` before returning `FAILURE`.
 
-Treat an accepted Action as owned until a terminal result has been observed or executor-owned cancellation draining has completed. A halt must not discard a pending goal response, an accepted handle, or a failed result-listener setup.
+Treat a pending goal response or accepted Action as owned until it is rejected or executor-owned cancellation draining successfully submits cancellation. A halt must not discard a pending goal response, an accepted handle, or a failed result-listener setup.
 
 ## Validation Order
 

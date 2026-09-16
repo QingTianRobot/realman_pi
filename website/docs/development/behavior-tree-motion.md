@@ -117,17 +117,19 @@ RUNNING、SUCCESS 或 FAILURE 计数，再写出快照。事件语义如下：
 `request`、`response` 事件以及终态树 halt 后的事件都会立即写出新的快照序号，无需等待下一次 tick。
 
 超时不会在已发送 goal 仍等待响应时直接把树标记为 FAILURE：执行器保持 MoveJ 为 RUNNING，直到收到
-拒绝响应，或在延迟接受后立即发出一次 cancel 并等待该 Action 的终态结果。这样不会在机械臂仍可能执行
-已接受目标时失去跟踪。halt 只对尚未收到终态结果的已接受 goal 发出一次 cancel；成功、失败、或已请求
-超时取消的 Action 不会重复取消。服务的 `request` 和 `response` 事件、以及终态树 halt 后的事件，都会
-立即写出新的运行快照序号，无需等待下一次 tick。
+拒绝响应，或在延迟接受后成功提交一次 cancel 请求。这样不会在机械臂仍可能执行已接受目标时过早丢弃
+client。halt 只把 pending goal response 或已接受但未终态的 handle 交给 drain；它们会保留到响应被拒绝或
+`async_cancel_goal()` 成功提交为止。取消提交抛出异常时不会标记为已取消，后续 drain/tick 会保留并重试；
+提交成功后 drain 立即释放跟踪，不等待取消确认或 Action 终态结果。服务的 `request` 和 `response` 事件、
+以及终态树 halt 后的事件，都会立即写出新的运行快照序号，无需等待下一次 tick。
 
 `/stop` 或树 halt 恰好发生在 `send_goal` 与 goal 响应之间时，MoveJ 会把 Action client 和 pending
 response 转交给 executor 拥有的 cancellation drain。该 drain 由独立 50 ms ROS timer 驱动，不会重新 tick
-已停止的树，并在收到延迟接受响应后发送 cancel 才释放 client。已经接受但尚未终态的 goal 也通过同一 drain
-重试 cancel；`async_cancel_goal` 抛出异常时不会标记为已取消，后续 drain/tick 会保留 Action 并重试。节点进程
-销毁会停止该 ROS timer，因此应先让 drain 完成并确认运行快照；进程退出后的机器人安全仍依赖急停和驱动的
-软件停止机制。
+已停止的树。它等待 pending response；拒绝时记录并释放，延迟接受时尝试提交 cancel。已接受但未终态的 goal
+也直接进入同一 drain。`async_cancel_goal()` 仅在成功提交后才让 drain 释放跟踪；其提交异常会记录并在后续
+timer tick 重试，drain 不等待 cancel acknowledgement 或 Action terminal result。节点进程销毁会停止该
+ROS timer，因此应在可用时让 cancel 提交完成并确认运行快照；进程退出后的机器人安全仍依赖驱动的软件停止
+机制和可达的急停，不能由此 drain 保证。
 
 如果 goal 已被接受但 `async_get_result` 建立结果监听时抛出异常，MoveJ 会记录 FAILURE；其已接受且没有
 终态结果的 handle 仍被视为 in-flight。随后的 halt 会将该 handle 交给同一 cancellation drain，而不会因

@@ -50,8 +50,10 @@ logger 的 WARN/ERROR。MoveJ 仍只经 `/<arm_id>/execute_motion` Action 执行
 和 `/realman_bt_executor/stop` 仅控制 executor tick，不能替代运动接口。首次修改 Dockerfile 或前端后需执行
 `docker compose build realman_bringup_remote`。只有完成安全检查后才可用
 `REALMAN_BT_DRY_RUN=false ./rm65 bt r` 发送真实 MoveJ；按 `Ctrl-C` 只清理行为树进程，
-不会停止驱动容器。若停止时 Action 尚未终态，executor 的 cancellation drain 会继续等待或重试取消，
-不重新启动树。详细参数、失败细节和边界见[行为树机械臂移动 Demo](./behavior-tree-motion)。
+不会停止驱动容器。若停止时 Action 尚未终态，executor 的 cancellation drain 会保留 pending response 或
+accepted handle，直到收到拒绝或成功提交 cancel；提交异常会重试，成功提交后立即释放，不等待取消确认或
+终态结果，也不重新启动树。进程退出后的机器人安全仍依赖驱动的软件停止机制和可达的急停。详细参数、失败
+细节和边界见[行为树机械臂移动 Demo](./behavior-tree-motion)。
 
 
 所有 helper 都从 `functions.zsh` 所在位置定位仓库根目录，因此可以在任意目录调用。函数加载时会读取仓库根目录 `.env` 中的简单 `KEY=value` 配置，并保留当前终端已经显式设置的非空变量。函数不会自动写入 `~/.zshrc`，也不会隐藏底层 Docker、colcon、npm、SSH 命令；遇到未覆盖的参数时，继续直接调用底层命令。

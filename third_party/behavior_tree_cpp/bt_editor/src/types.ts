@@ -66,6 +66,24 @@ export interface RuntimeNode {
   failure_reason?: string;
 }
 
+/** Cumulative behavior-tree tick outcomes emitted by schema-v2 snapshots. */
+export interface TickStats {
+  running: number;
+  success: number;
+  failure: number;
+  total: number;
+}
+
+/** A bounded diagnostic emitted by the executor with a schema-v2 snapshot. */
+export interface RuntimeEvent {
+  timestamp_ms: number;
+  severity: 'INFO' | 'WARN' | 'ERROR';
+  source: 'ACTION' | 'SERVICE' | 'ROS_LOG';
+  interface_name: string;
+  phase: string;
+  detail: string;
+}
+
 /** Missing executor snapshots contain only state, root_status and nodes. */
 export interface RuntimeSnapshot {
   schema_version?: number;
@@ -76,6 +94,8 @@ export interface RuntimeSnapshot {
   root_status: RunStatus;
   nodes: RuntimeNode[];
   failure_reason?: string;
+  tick_stats?: TickStats;
+  events?: RuntimeEvent[];
 }
 
 export interface RuntimeFetchResult {

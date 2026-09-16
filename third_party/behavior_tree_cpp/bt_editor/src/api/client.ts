@@ -96,6 +96,44 @@ export async function fetchRuntime(signal?: AbortSignal): Promise<RuntimeSnapsho
   return result.snapshot;
 }
 
+const RUN_STATUSES = ['IDLE', 'RUNNING', 'SUCCESS', 'FAILURE'] as const;
+const EVENT_SEVERITIES = ['INFO', 'WARN', 'ERROR'] as const;
+const EVENT_SOURCES = ['ACTION', 'SERVICE', 'ROS_LOG'] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isFiniteNumber(value: unknown): value is number {
+  return typeof value === 'number' && Number.isFinite(value);
+}
+
+function isTickStats(value: unknown): boolean {
+  return isRecord(value) && ['running', 'success', 'failure', 'total'].every(
+    (field) => isFiniteNumber(value[field]),
+  );
+}
+
+function isRuntimeEvent(value: unknown): boolean {
+  return isRecord(value) &&
+    isFiniteNumber(value.timestamp_ms) &&
+    typeof value.severity === 'string' && EVENT_SEVERITIES.includes(value.severity as typeof EVENT_SEVERITIES[number]) &&
+    typeof value.source === 'string' && EVENT_SOURCES.includes(value.source as typeof EVENT_SOURCES[number]) &&
+    ['interface_name', 'phase', 'detail'].every((field) => typeof value[field] === 'string');
+}
+
+function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
+  return isRecord(value) &&
+    typeof value.root_status === 'string' && RUN_STATUSES.includes(value.root_status as typeof RUN_STATUSES[number]) &&
+    Array.isArray(value.nodes) &&
+    value.nodes.every((node) => isRecord(node) &&
+      ['key', 'name', 'registration_name', 'kind', 'path'].every((field) =>
+        typeof node[field] === 'string') &&
+      typeof node.status === 'string' && RUN_STATUSES.includes(node.status as typeof RUN_STATUSES[number])) &&
+    (value.tick_stats === undefined || isTickStats(value.tick_stats)) &&
+    (value.events === undefined || (Array.isArray(value.events) && value.events.every(isRuntimeEvent)));
+}
+
 export async function fetchRuntimeResponse(signal?: AbortSignal, etag?: string): Promise<RuntimeFetchResult> {
   const resp = await fetch('/api/runtime', {
     signal,
@@ -104,12 +142,8 @@ export async function fetchRuntimeResponse(signal?: AbortSignal, etag?: string):
   });
   if (resp.status === 304) return { snapshot: null, etag, notModified: true };
   if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} @ /api/runtime`);
-  const value = (await resp.json()) as RuntimeSnapshot;
-  const statuses = ['IDLE', 'RUNNING', 'SUCCESS', 'FAILURE'];
-  if (!value || !statuses.includes(value.root_status) || !Array.isArray(value.nodes) ||
-      !value.nodes.every((node) => node &&
-        ['key', 'name', 'registration_name', 'kind', 'path'].every((key) =>
-          typeof node[key as keyof typeof node] === 'string') && statuses.includes(node.status))) {
+  const value: unknown = await resp.json();
+  if (!isRuntimeSnapshot(value)) {
     throw new Error('运行态快照格式无效');
   }
   return { snapshot: value, etag: resp.headers.get('ETag') ?? undefined, notModified: false };

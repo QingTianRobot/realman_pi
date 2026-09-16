@@ -54,4 +54,76 @@ describe('runtime reads', () => {
     await expect(fetchRuntimeResponse(undefined, '"7"')).resolves.toMatchObject({ etag: '"7"', notModified: true, snapshot: null });
     expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ headers: expect.objectContaining({ 'If-None-Match': '"7"' }) }));
   });
+
+  it('reads a complete diagnostics snapshot', async () => {
+    const snapshot = {
+      schema_version: 2,
+      root_status: 'FAILURE',
+      nodes: [],
+      tick_stats: { running: 3, success: 5, failure: 2, total: 10 },
+      events: [{
+        timestamp_ms: 1726473600000,
+        severity: 'ERROR',
+        source: 'ACTION',
+        interface_name: '/r/execute_motion',
+        phase: 'result',
+        detail: 'target rejected',
+      }],
+    };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(snapshot)));
+
+    await expect(fetchRuntime()).resolves.toEqual(snapshot);
+  });
+
+  it.each([
+    ['non-numeric tick statistics', {
+      root_status: 'RUNNING',
+      nodes: [],
+      tick_stats: { running: 1, success: 0, failure: 0, total: '1' },
+    }],
+    ['an unknown event severity', {
+      root_status: 'RUNNING',
+      nodes: [],
+      events: [{
+        timestamp_ms: 1726473600000,
+        severity: 'DEBUG',
+        source: 'ACTION',
+        interface_name: '/r/execute_motion',
+        phase: 'result',
+        detail: 'ignored',
+      }],
+    }],
+    ['an unknown event source', {
+      root_status: 'RUNNING',
+      nodes: [],
+      events: [{
+        timestamp_ms: 1726473600000,
+        severity: 'INFO',
+        source: 'EXECUTOR',
+        interface_name: 'realman_bt_executor',
+        phase: 'tick',
+        detail: 'ignored',
+      }],
+    }],
+  ])('rejects %s without replacing a previously accepted snapshot', async (_, malformed) => {
+    const accepted = { root_status: 'IDLE', nodes: [] } as const;
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response(JSON.stringify(accepted)))
+      .mockResolvedValueOnce(new Response(JSON.stringify(malformed)));
+
+    const prior = await fetchRuntime();
+    await expect(fetchRuntime()).rejects.toThrow('运行态快照格式无效');
+    expect(prior).toEqual(accepted);
+    expect(fetchMock).toHaveBeenCalledTimes(2);
+  });
+
+  it('accepts legacy snapshots that omit diagnostics fields', async () => {
+    const legacy = { root_status: 'SUCCESS', nodes: [] };
+    vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(legacy)));
+
+    await expect(fetchRuntimeResponse()).resolves.toMatchObject({
+      snapshot: legacy,
+      notModified: false,
+    });
+  });
 });

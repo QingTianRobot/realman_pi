@@ -28,7 +28,19 @@ mock 节点不会连接 SDK/CAN，也不会发布生产控制命令。可通过 
 ## 网页调试
 
 生产端使用 `behavior_tree_cpp` 的只读 `bt_server + bt_editor` 运行监视器，页面显示活动节点、
-Action 状态和失败原因，但不加载 XML、校验、格式化、单拍 tick 或连续 run。
+Action 状态、失败原因、累计 Tick 成功/失败比例图和最新诊断事件，但不加载 XML、校验、格式化、单拍 tick
+或连续 run。诊断事件来自 schema-v2 快照：最多显示执行器保留的最新 200 条，并可区分 `ACTION`、
+`SERVICE`、`ROS_LOG` 和 `EXECUTOR` 来源；`/rosout` 仅纳入 `realman_bt_executor` 与 `rclcpp_action`
+logger 的 WARN/ERROR。详细字段、失败细节和 cancellation drain 约束见
+[行为树机械臂移动 Demo](./behavior-tree-motion#运行诊断契约)。
+
+MoveJ 使用 `/<arm_id>/execute_motion` Action 承载长时、可取消的运动；`/realman_bt_executor/start`
+和 `/realman_bt_executor/stop` 是只管理 tick timer 的短 `std_srvs/srv/Trigger` Service，不能用于替代
+运动 Action。停止或 halt 遇到尚未终态的 goal 时，executor 继续用独立 timer drain 该 goal 的取消流程，
+不会通过恢复 tree tick 来处理它。
+
+新增或调整行为树节点、端口、Action/Service 接入、取消或运行诊断时，使用项目
+[行为树开发 Skill](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/developing-realman-behavior-trees/SKILL.md)。
 生产 Web 控制页面只请求模式，不绕过仲裁层发送动作。
 
 编辑器支持通过 URL 直接打开工作区树：访问 `bt_editor/?tree=arm_move.xml` 后，前端先拉取

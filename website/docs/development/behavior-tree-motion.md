@@ -86,23 +86,35 @@ Action 未就绪时启动。可视化网页由同一容器在宿主网络监听 
 
     /realman_bt_executor/bt_status  (std_msgs/msg/String)
 
-节点失败时，运行快照会记录 `failure_reason`（例如 Action 被拒绝、超时或驱动返回的错误消息）。
-在网页中点击失败节点，可在右侧“失败原因”区域查看该文本；如果底层没有提供消息，则显示
+## 运行诊断契约
+
+节点失败时，运行快照会记录根节点或节点自己的 `failure_reason`（例如 Action 被拒绝、超时或驱动返回的错误消息）。
+在网页中点击失败节点，可在右侧“失败原因”区域查看原始细节；如果底层没有提供消息，则显示
 “未提供失败原因”。
 
 运行快照使用 JSON `schema_version: 2`。除树节点状态外，它还包含 `tick_stats`（`running`、
-`success`、`failure`、`total`）和 `events`。执行器可将事件写入
+`success`、`failure`、`total`）和 `events`。每个事件有
 `timestamp_ms`、`severity`、`source`、`interface_name`、`phase`、`detail` 字段；事件历史最多保留
-最近 200 条，新的事件会淘汰最旧条目。未接入诊断记录器的现有调用仍会产生 v2 快照，其中统计值为
+最新 200 条，溢出时淘汰最旧条目。未接入诊断记录器的既有调用仍会产生 v2 快照，其中统计值为
 零且事件为空；快照仍通过同目录 `.tmp` 文件原子替换，读取方不会看到半写入 JSON。
 
+监视器把累计 `SUCCESS` 和 `FAILURE` 显示为相对 `total` 的横向 Tick 图，并同时显示运行中和总 Tick
+计数。它不是时间序列，也不能驱动或重置执行器。诊断日志按事件时间倒序显示，`ERROR` 事件以可访问的告警状态
+呈现；前端会拒绝无效的可选统计或事件字段，但仍兼容不含诊断字段的旧快照。
+
 执行器本身拥有诊断记录器，因此每次 tick（包括抛出异常后停止树的 tick）都会先计入唯一的
-RUNNING、SUCCESS 或 FAILURE 计数，再写出快照。`/realman_bt_executor/start` 和
-`/realman_bt_executor/stop` 分别写入 `SERVICE` 的 `request`、`response` 事件，响应消息原样放入
-`detail`。MoveJ 写入 `ACTION` 事件，接口名为 `/<arm_id>/execute_motion`，阶段包括
-`wait_server`、`send_goal`、`goal_accepted`、`goal_rejected`、`result`、`timeout` 和 `cancel`；失败原因
-优先使用 Action 返回消息，否则记录 ROS Action 结果码。dry-run 只写入验证完成的 `result` 事件，绝不
-创建或发送 Action goal。
+RUNNING、SUCCESS 或 FAILURE 计数，再写出快照。事件语义如下：
+
+| `source` | 接口与阶段 | 细节规则 |
+| --- | --- | --- |
+| `ACTION` | `/<arm_id>/execute_motion`：`wait_server`、`send_goal`、`goal_accepted`、`goal_rejected`、`result`、`timeout`、`cancel` | MoveJ 的长时、可取消运动生命周期；失败原因优先使用 Action 返回消息，否则使用 ROS Action 结果码。dry-run 仅写入验证完成的 `result`，绝不创建或发送 Action goal。 |
+| `SERVICE` | `/realman_bt_executor/start`、`/realman_bt_executor/stop`：`request`、`response` | 仅控制执行器短请求；响应消息原样保留在 `detail`。 |
+| `ROS_LOG` | 已过滤的 `/rosout`：`rosout` | 只记录 logger 名称含 `realman_bt_executor` 或 `rclcpp_action` 的 WARN/ERROR；原始 `msg` 文本原样保留在 `detail`，不替代 ROS 2 节点日志。 |
+| `EXECUTOR` | `realman_bt_executor`：`exception` | 记录执行器 tick 抛出的异常及原始错误文本。 |
+
+`ExecuteMotion` Action 是唯一承载真实 MoveJ 的长时、可取消接口；`~/start` 和 `~/stop`
+(`std_srvs/srv/Trigger`) 只启动或停止 executor 的 tick timer，不能替代运动 Action。每个 Service 的
+`request`、`response` 事件以及终态树 halt 后的事件都会立即写出新的快照序号，无需等待下一次 tick。
 
 超时不会在已发送 goal 仍等待响应时直接把树标记为 FAILURE：执行器保持 MoveJ 为 RUNNING，直到收到
 拒绝响应，或在延迟接受后立即发出一次 cancel 并等待该 Action 的终态结果。这样不会在机械臂仍可能执行
@@ -111,9 +123,9 @@ RUNNING、SUCCESS 或 FAILURE 计数，再写出快照。`/realman_bt_executor/s
 立即写出新的运行快照序号，无需等待下一次 tick。
 
 `/stop` 或树 halt 恰好发生在 `send_goal` 与 goal 响应之间时，MoveJ 会把 Action client 和 pending
-response 转交给执行器拥有的取消 drain。该 drain 由独立 50 ms ROS timer 驱动，不会重新 tick 已停止的树，
-并在收到延迟接受响应后发送 cancel 才释放 client。已经接受但尚未终态的 goal 也通过同一 drain 重试
-cancel；`async_cancel_goal` 抛出异常时不会标记为已取消，后续 drain/tick 会保留 Action 并重试。节点进程
+response 转交给 executor 拥有的 cancellation drain。该 drain 由独立 50 ms ROS timer 驱动，不会重新 tick
+已停止的树，并在收到延迟接受响应后发送 cancel 才释放 client。已经接受但尚未终态的 goal 也通过同一 drain
+重试 cancel；`async_cancel_goal` 抛出异常时不会标记为已取消，后续 drain/tick 会保留 Action 并重试。节点进程
 销毁会停止该 ROS timer，因此应先让 drain 完成并确认运行快照；进程退出后的机器人安全仍依赖急停和驱动的
 软件停止机制。
 
@@ -166,4 +178,6 @@ dry_run=false 会向 /r/execute_motion 发送真实 MoveJ goal。可用以下命
 
 当前实现只支持一个 MoveJ 示例节点，不支持 control_mode.xml 中的控制权节点，也不自动注册生产
 任务树里的 SelectControlMode、ControlLeaseGuard 等自定义节点。需要扩展树时，应在执行器中显式
-注册对应节点，并同步更新 XML 契约测试。
+注册对应节点，并同步更新 XML 契约测试。节点、端口、Action/Service 接入、取消所有权或运行诊断变更时，
+遵守项目 [行为树开发 Skill](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/developing-realman-behavior-trees/SKILL.md) 的 dry-run
+边界和验证顺序。

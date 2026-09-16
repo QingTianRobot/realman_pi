@@ -14,6 +14,9 @@ description: realman_pi 功能契约、实现边界、配置来源和验证方�
 | [功能文档同步](./documentation-workflow) | 功能完成门槛、Web 手册结构和验证流程 | `.agents/skills/document-feature-updates/SKILL.md` |
 | [启动入口索引](./startup-entries) | `functions.zsh` 每个启动、构建、测试和部署入口的当前用途、组件范围和权威配置 | `functions.zsh`、`config/docker/compose.yaml` |
 | [睿尔曼 Python 驱动查询 Skill](./realman-python-driver) | Python API 文档检索、驱动开发约束、版本与安全核对流程 | `.agents/skills/realman-python-driver/SKILL.md` |
+| [行为树控制权与 Mock 测试](./behavior-tree-control) | 控制权仲裁、隔离 mock、只读运行监视器和 Action/Service 边界 | `config/behavior-trees/`、`src/behavior/realman_bt/` |
+| [行为树机械臂移动 Demo](./behavior-tree-motion) | MoveJ dry-run、schema-v2 运行诊断、失败细节和取消 drain | `config/behavior-trees/arm_move.xml`、`.agents/skills/developing-realman-behavior-trees/SKILL.md` |
+| [行为树开发 Skill](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/developing-realman-behavior-trees/SKILL.md) | 节点、端口、Action/Service、取消与运行诊断的 dry-run 开发约束 | `.agents/skills/developing-realman-behavior-trees/SKILL.md` |
 | [睿尔曼三臂驱动与运动控制](./realman-driver-scaffold) | 三臂关节回读、可取消运动、坐标系、末端速度、RViz 和 mock 验证 | `config/ros/realman_driver.yaml`、`config/ros/realman_coordinates.yaml`、`config/ros/realman_motion.yaml` |
 | [睿尔曼 Action 开发与测试](./realman-action-development) | Action IDL、生命周期、安全状态机、速度 session、扩展步骤和测试矩阵 | `src/driver/realman_msgs/action/`、`config/ros/realman_motion.yaml` |
 | [WebSocket 浏览器控制与 URDF 影子](./realman-web-control) | WebSocket 直连控制、坐标状态、关节记录、Action feedback/result、滑轨影子和软件停止 | `config/ros/realman_web_control.yaml`、`config/web-control/joint-records/`、`src/driver/realman_web_control/` |
@@ -22,7 +25,6 @@ description: realman_pi 功能契约、实现边界、配置来源和验证方�
 | [三臂配置驱动可视化](./three-arm-visualization) | ROS 2 三臂命名空间、完整 TF、RViz 2 和 Web 三维场景的数据流 | `config/ros/three_robots.yaml` |
 | [Xbox 手柄输入](./xbox-controller) | SDL event 设备、`/input/joy`、C++ 按键边沿和输入测试 | `config/ros/xbox_controller.yaml` |
 | [系统 Bringup](./system-bringup) | 三臂、RViz、输入节点、远程运行和日志的启动编排 | `config/docker/compose.yaml` |
-| [行为树机械臂移动 Demo](./behavior-tree-motion) | 独立 C++ 行为树执行器、MoveJ Action、dry-run 和真机启动顺序 | `config/behavior-trees/arm_move.xml` |
 | [Changingtek 夹爪控制](./gripper-control) | 多串口并行驱动、ROS 2 service/topic 和 Web control | `config/ros/gripper.yaml` |
 
 ROS 节点日志统一遵守项目 skill [`ros2-logging-conventions`](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/ros2-logging-conventions/SKILL.md)：官方 ROS 2 打印接口、彩色 rcutils 输出、时间目录和节点日志文件。

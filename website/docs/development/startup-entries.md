@@ -44,10 +44,14 @@ RTSP/TCP 推流仍可通过 `./rm65 camera` 或原有 `rm65_camera_start` 单独
 `http://<host>:8080/`。监视器只读 `GET /api/runtime` 快照，不提供编辑、Tick 或 Run，
 网页服务先于 Action readiness 启动，所以驱动发现尚未完成时也会显示等待页；执行器仍会等待
 Action Server 后再 tick。快照轮询使用 `ETag`，序号未变化时返回 `304`，并在连接中断时保留最后一次有效数据并提示过期状态。
-点击失败节点可在详情面板查看 `failure_reason`。首次修改 Dockerfile 或前端后需执行
+监视器读取 schema-v2 快照，显示累计 Tick 成功/失败比例图、最近最多 200 条事件和失败节点的
+`failure_reason`；事件来源为 `ACTION`、`SERVICE`、`ROS_LOG` 或 `EXECUTOR`，其中 `/rosout` 只保留指定
+logger 的 WARN/ERROR。MoveJ 仍只经 `/<arm_id>/execute_motion` Action 执行；`/realman_bt_executor/start`
+和 `/realman_bt_executor/stop` 仅控制 executor tick，不能替代运动接口。首次修改 Dockerfile 或前端后需执行
 `docker compose build realman_bringup_remote`。只有完成安全检查后才可用
 `REALMAN_BT_DRY_RUN=false ./rm65 bt r` 发送真实 MoveJ；按 `Ctrl-C` 只清理行为树进程，
-不会停止驱动容器。详细参数和边界见[行为树机械臂移动 Demo](./behavior-tree-motion)。
+不会停止驱动容器。若停止时 Action 尚未终态，executor 的 cancellation drain 会继续等待或重试取消，
+不重新启动树。详细参数、失败细节和边界见[行为树机械臂移动 Demo](./behavior-tree-motion)。
 
 
 所有 helper 都从 `functions.zsh` 所在位置定位仓库根目录，因此可以在任意目录调用。函数加载时会读取仓库根目录 `.env` 中的简单 `KEY=value` 配置，并保留当前终端已经显式设置的非空变量。函数不会自动写入 `~/.zshrc`，也不会隐藏底层 Docker、colcon、npm、SSH 命令；遇到未覆盖的参数时，继续直接调用底层命令。

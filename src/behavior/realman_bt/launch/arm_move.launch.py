@@ -54,7 +54,7 @@ def generate_launch_description():
     )
     tick_rate_hz = DeclareLaunchArgument(
         "tick_rate_hz",
-        default_value="10.0",
+        default_value="20.0",
         description="Behavior-tree tick frequency in Hz.",
     )
     autostart = DeclareLaunchArgument(

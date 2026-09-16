@@ -18,7 +18,7 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   const bool dry_run = declare_parameter<bool>("dry_run", true);
   const std::string runtime_snapshot_file = declare_parameter<std::string>(
       "runtime_snapshot_file", "/tmp/realman-bt-workspace/runtime.json");
-  tick_rate_hz_ = declare_parameter<double>("tick_rate_hz", 10.0);
+  tick_rate_hz_ = declare_parameter<double>("tick_rate_hz", 20.0);
   autostart_ = declare_parameter<bool>("autostart", true);
   stop_on_terminal_ = declare_parameter<bool>("stop_on_terminal", true);
   if (tree_file.empty()) throw std::invalid_argument("tree_file must be set");

@@ -125,7 +125,7 @@ dry_run=false 会向 /r/execute_motion 发送真实 MoveJ goal。可用以下命
 | tree_file | 安装后的 behavior-trees/arm_move.xml | XML 绝对路径 |
 | arm_id | r | 只能是 l、m 或 r |
 | dry_run | true | true 只校验；false 发真实 goal |
-| tick_rate_hz | 10.0 | 行为树 tick 频率（Hz） |
+| tick_rate_hz | 20.0 | 行为树 tick 频率（Hz） |
 | autostart | true | 节点加载后立即 tick |
 | stop_on_terminal | true | SUCCESS/FAILURE 后停止 timer |
 

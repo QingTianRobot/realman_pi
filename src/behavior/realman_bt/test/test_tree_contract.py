@@ -32,6 +32,13 @@ def test_arm_move_launch_exposes_runtime_snapshot_file_with_workspace_default():
     assert '"runtime_snapshot_file": LaunchConfiguration("runtime_snapshot_file")' in source
 
 
+def test_arm_move_launch_defaults_to_twenty_hz_ticks():
+    source = LAUNCH.read_text()
+    assert 'default_value="20.0"' in source
+    executor = EXECUTOR.read_text()
+    assert '"tick_rate_hz", 20.0' in executor
+
+
 def test_executor_writes_idle_snapshot_after_loading_tree():
     source = EXECUTOR.read_text()
     header = EXECUTOR_HEADER.read_text()

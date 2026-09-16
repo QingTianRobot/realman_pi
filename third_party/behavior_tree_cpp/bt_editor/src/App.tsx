@@ -78,7 +78,7 @@ export default function App() {
       {paused && <p className="pause-notice">页面刷新已暂停，执行器继续运行。</p>}
       <div className="monitor-workspace">
         <RuntimeTree key={snapshot?.tree_id ?? 'waiting'} nodes={nodes} selectedKey={selectedKey} onSelect={setSelectedKey} />
-        <RuntimeDetails node={selected} nodes={nodes} />
+        <RuntimeDetails node={selected} nodes={nodes} tickStats={snapshot?.tick_stats} events={snapshot?.events ?? []} />
       </div>
     </main>
     <footer><span>REALMAN RUNTIME MONITOR</span><span>{paused ? '页面刷新已暂停' : '每 500 ms 自动刷新'}</span></footer>

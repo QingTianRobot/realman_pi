@@ -6,6 +6,41 @@ import App from './App';
 const snapshot = {
   schema_version: 1, tree_id: 'ArmMove', sequence: 42, timestamp_ms: 1789459200000,
   root_status: 'RUNNING',
+  tick_stats: { running: 1, success: 7, failure: 2, total: 10 },
+  events: [
+    {
+      timestamp_ms: 1789459201000,
+      severity: 'WARN',
+      source: 'ROS_LOG',
+      interface_name: '/rosout',
+      phase: 'result',
+      detail: 'unknown result response, ignoring...',
+    },
+    {
+      timestamp_ms: 1789459202000,
+      severity: 'ERROR',
+      source: 'ACTION',
+      interface_name: '/rm_driver/execute_motion',
+      phase: 'result',
+      detail: 'MoveJ goal rejected',
+    },
+    {
+      timestamp_ms: 1789459203000,
+      severity: 'INFO',
+      source: 'SERVICE',
+      interface_name: '/realman_bt_executor/start',
+      phase: 'request',
+      detail: 'Executor start accepted',
+    },
+    {
+      timestamp_ms: 1789459204000,
+      severity: 'INFO',
+      source: 'EXECUTOR',
+      interface_name: 'ArmMove',
+      phase: 'tick',
+      detail: 'Tick 42 completed',
+    },
+  ],
   nodes: [
     { key: 'n0', name: 'Main sequence', registration_name: 'Sequence', kind: 'Control', path: '0', status: 'RUNNING' },
     { key: 'n1', name: 'Ready', registration_name: 'CheckReady', kind: 'Condition', path: '0/0', status: 'SUCCESS' },
@@ -76,7 +111,7 @@ describe('read-only runtime monitor', () => {
       expect(container.querySelector(`[role="treeitem"][data-status="${status}"]`)).not.toBeNull();
     }
     expect(container.querySelector('textarea, [contenteditable="true"], [draggable="true"], .react-flow')).toBeNull();
-    expect(container.textContent).not.toMatch(/节点面板|属性编辑|XML|载入示例|导出|保存|单步|Tick|运行到/);
+    expect(container.textContent).not.toMatch(/节点面板|属性编辑|XML|载入示例|导出|保存|单步|运行到/);
     expect([...container.querySelectorAll('button')].map((item) => item.textContent).join(' ')).not.toMatch(/Load|Save|Tick|Run|加载|运行/);
     expect(requests.every((item) => item.method === 'GET')).toBe(true);
     expect(requests.map((item) => item.url)).toContain('/api/runtime');
@@ -93,7 +128,7 @@ describe('read-only runtime monitor', () => {
     failure = false;
     response = { ...snapshot, sequence: 43, root_status: 'SUCCESS' };
     await advance();
-    expect(container.querySelector('[role="alert"]')).toBeNull();
+    expect(container.querySelector('.connection-alert[role="alert"]')).toBeNull();
     expect(container.textContent).toContain('43');
   });
 
@@ -131,6 +166,38 @@ describe('read-only runtime monitor', () => {
   it('shows the selected node failure reason in the inspector', async () => {
     await render();
     await click('Move arm');
+    expect(container.querySelector('[aria-label="节点详情"]')?.textContent).toContain('MoveJ timed out after 120 seconds');
+  });
+
+  it('shows cumulative tick outcome totals with success and failure bar widths', async () => {
+    await render();
+    const chart = container.querySelector('[aria-label="Tick 统计"]');
+    expect(chart?.textContent).toContain('SUCCESS');
+    expect(chart?.textContent).toContain('7');
+    expect(chart?.textContent).toContain('FAILURE');
+    expect(chart?.textContent).toContain('2');
+    expect(chart?.textContent).toContain('总 Tick 10');
+    expect(chart?.querySelector<HTMLElement>('[data-outcome="SUCCESS"]')?.style.width).toBe('70%');
+    expect(chart?.querySelector<HTMLElement>('[data-outcome="FAILURE"]')?.style.width).toBe('20%');
+  });
+
+  it('renders diagnostic records newest first with all source labels and error emphasis', async () => {
+    await render();
+    const diagnostics = container.querySelector('[aria-label="诊断日志"]');
+    const records = [...diagnostics!.querySelectorAll('[data-diagnostic-event]')];
+    expect(records.map((record) => record.getAttribute('data-source'))).toEqual(['EXECUTOR', 'SERVICE', 'ACTION', 'ROS_LOG']);
+    expect(records[0].textContent).toContain('EXECUTOR');
+    expect(records[1].textContent).toContain('SERVICE');
+    expect(records[2].textContent).toContain('ACTION');
+    expect(records[3].textContent).toContain('ROS_LOG');
+    expect(records[2].getAttribute('role')).toBe('alert');
+  });
+
+  it('renders ROS diagnostic detail verbatim without changing the selected failure reason', async () => {
+    await render();
+    await click('Move arm');
+    const diagnostics = container.querySelector('[aria-label="诊断日志"]');
+    expect(diagnostics?.textContent).toContain('unknown result response, ignoring...');
     expect(container.querySelector('[aria-label="节点详情"]')?.textContent).toContain('MoveJ timed out after 120 seconds');
   });
 

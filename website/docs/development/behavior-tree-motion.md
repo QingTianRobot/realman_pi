@@ -137,7 +137,8 @@ ROS timer，因此应在可用时让 cancel 提交完成并确认运行快照；
 
 执行器还订阅 `/rosout`（`rcl_interfaces/msg/Log`）。仅 logger 名称包含
 `realman_bt_executor` 或 `rclcpp_action` 的 WARN/ERROR 消息会写入 `ROS_LOG` 事件；原始 `msg` 文本不作
-修改地写入 `detail`。这只用于诊断快照，不替代 ROS 2 官方日志或其节点日志文件。
+修改地写入 `detail`。过滤后的日志会立即推进快照序号并落盘，因此即使 Action 日志迟于行为树终态到达、
+tick timer 已停止，网页下一次轮询仍能看到它。这只用于诊断快照，不替代 ROS 2 官方日志或其节点日志文件。
 
 并提供手动控制服务：
 

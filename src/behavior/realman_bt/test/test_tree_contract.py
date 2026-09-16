@@ -158,6 +158,16 @@ def test_executor_flushes_diagnostics_for_service_events_and_terminal_halts():
     assert stop_body.rindex('flushSnapshot();') > stop_body.index('response->message')
 
 
+def test_executor_flushes_rosout_diagnostics_for_terminal_or_late_action_errors():
+    source = EXECUTOR.read_text()
+    rosout_body = source[
+        source.index('void RealmanBtExecutorNode::handleRosout'):
+        source.index('\n}  // namespace realman_bt', source.index('void RealmanBtExecutorNode::handleRosout'))
+    ]
+    assert 'recordEvent(' in rosout_body
+    assert 'flushSnapshot();' in rosout_body
+
+
 def test_halted_pending_goal_is_drained_by_executor_owned_async_state():
     header = (ROOT / 'src/behavior/realman_bt/include/realman_bt/move_j_node.hpp').read_text()
     movej = (ROOT / 'src/behavior/realman_bt/src/move_j_node.cpp').read_text()

@@ -212,6 +212,10 @@ void RealmanBtExecutorNode::handleRosout(
   }
   recordEvent(message->level == rcl_interfaces::msg::Log::ERROR ? "ERROR" : "WARN",
               "ROS_LOG", message->name, "rosout", message->msg);
+  // The tree may already have reached a terminal state and stopped its tick
+  // timer. Persist diagnostics immediately so late Action warnings/errors
+  // remain visible to the read-only web monitor.
+  flushSnapshot();
 }
 
 }  // namespace realman_bt

@@ -31,7 +31,7 @@ The four `tick_stats` counters and each diagnostic event `timestamp_ms` are non-
 | `ROS_LOG` | Filtered WARN/ERROR `/rosout` from logger names containing `realman_bt_executor` or `rclcpp_action`; phase `rosout`. |
 | `EXECUTOR` | Executor exceptions; phase `exception`. |
 
-Flush snapshots before and after start/stop Service work, and after terminal halt, so events do not require a later tick to become visible. The read-only monitor polls `GET /api/runtime`, uses ETag/`If-None-Match`, accepts `304`, and must provide no mutation route or control.
+Flush snapshots before and after start/stop Service work, after terminal halt, and immediately after accepting a filtered `/rosout` event. A ROS Action warning can arrive after terminal ticking has stopped, so it must not depend on a later tick to become visible. The read-only monitor polls `GET /api/runtime`, uses ETag/`If-None-Match`, accepts `304`, and must provide no mutation route or control.
 
 ## Diagnostics Tests
 

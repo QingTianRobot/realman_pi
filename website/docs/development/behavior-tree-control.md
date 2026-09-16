@@ -9,7 +9,9 @@ description: RealMan 控制模式切换、工业任务树和隔离 mock 验证�
 `motion_coordinator`。持久输入路由器的权威定义是
 [`config/behavior-trees/control_router.xml`](../../../config/behavior-trees/control_router.xml)：
 当前目录顺序为 `web`、`policy`、`pika`、`none`。其中 `policy`、`pika` 和
-`none` 可由选择器请求；`web` 是粘性且最高优先级的非可选覆盖，只有浏览器运动仲裁可请求它。
+`none` 可由浏览器选择器请求；`web` 是粘性且最高优先级的覆盖，不出现在浏览器选择器中。
+ROS selection service 接受任何已注册模式（包括 `web`），只要求调用者提供非空 `requester_id`；
+该字段用于请求关联，并非 service 层的身份验证或授权。
 Policy 和 Pika 都是 RUNNING 占位叶，只产生每次进入一次的诊断，绝不发送 robot goal。
 
 `InputModeGuard` 的 `mode`、`label`、`selectable` 字面量在 XML 构造时注册目录，
@@ -21,7 +23,9 @@ RUNNING 分支。每个分支严格是 `InputModeGuard` → `ActivateInputMode` 
 切换到不同模式时，选择先进入 `SWITCHING` 并选择 `none`。下一 tick 必须激活/运行这个中性分支，
 下一 tick 才选择并激活目标模式；这让 Policy/Pika 不必自行结束即可交接。重选已经 active 的模式会
 立即返回已有 request ID，不经过中性 tick，`epoch` 也不会递增。Web 离开到非 Web 模式时，桥先取消
-所有 Web-owned Action，再请求全局模式；Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。
+所有 Web-owned Action：等待尚未返回的 goal response 被拒绝、Action 已终结，或取消成功提交，
+再请求全局模式。取消提交异常会重试；不等待取消确认或机械臂物理停止。
+Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。
 
 ## 输入路由 ROS 契约
 
@@ -51,6 +55,10 @@ RUNNING 分支。每个分支严格是 `InputModeGuard` → `ActivateInputMode` 
 ./rm65 bt-test mock      # 启动 /realman/mock/* 隔离 ROS 图
 ./rm65 bt-test web       # 启动 Compose 行为树调试服务
 ```
+
+`./rm65 bt control` 的 Ctrl-C（非交互运行也可向 CLI 发送 SIGINT）按本次调用的唯一 token
+通知对应容器 wrapper。wrapper 中断本次 ROS launch/executor 进程组、停止监视器、归档已产生的
+runtime snapshot 并释放锁；CLI 返回 130。其他 driver 和其他容器保持运行。
 
 mock 节点不会连接 SDK/CAN，也不会发布生产控制命令。可通过 ROS 参数注入模式、owner
 和后端健康状态；命令记录器可将 mock 输出写为 JSONL。

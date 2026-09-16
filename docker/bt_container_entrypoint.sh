@@ -25,6 +25,7 @@ set -eo pipefail
 : "${BT_STOP_ON_TERMINAL:=true}"
 : "${BT_EXIT_ON_TERMINAL:=true}"
 : "${BT_RUNTIME_ARCHIVE_ROOT:=${REALMAN_LOG_ROOT:-/opt/rm65_ws/logs}/behavior-trees}"
+: "${BT_CLIENT_TOKEN:=}"
 readonly BT_INSTANCE_LOCK=/tmp/realman-bt.lock
 
 if [[ "${BT_AUTOSTART,,}" != "true" && "${BT_AUTOSTART}" != "1" ]]; then
@@ -68,6 +69,10 @@ case "$BT_EXIT_ON_TERMINAL" in
   true|false) ;;
   *) echo "[bt-start] BT_EXIT_ON_TERMINAL must be true or false" >&2; exit 2 ;;
 esac
+if [[ -n "$BT_CLIENT_TOKEN" && ! "$BT_CLIENT_TOKEN" =~ ^[A-Za-z0-9._-]+$ ]]; then
+  echo "[bt-start] invalid BT_CLIENT_TOKEN" >&2
+  exit 2
+fi
 exec 9>"$BT_INSTANCE_LOCK"
 if ! flock -n 9; then
   echo "[bt-start] another behavior-tree run is active; wait for it to exit or stop it first" >&2
@@ -82,6 +87,7 @@ run_id="$(date +%Y%m%d_%H%M%S)_$$"
 
 server_pid=""
 executor_pid=""
+client_control=""
 archive_runtime() {
   local archive_dir="$BT_RUNTIME_ARCHIVE_ROOT/$run_id"
   if ! mkdir -p "$archive_dir"; then
@@ -107,7 +113,9 @@ cleanup() {
   local archive_status=0
   trap - EXIT INT TERM
   if [[ -n "$executor_pid" ]] && kill -0 "$executor_pid" 2>/dev/null; then
-    kill -TERM "$executor_pid" 2>/dev/null || true
+    # ros2 launch and its executor own this session. Signal both: terminating
+    # only the launcher can orphan an executor that still holds the BT lock.
+    kill -INT -- "-$executor_pid" 2>/dev/null || true
     wait "$executor_pid" 2>/dev/null || true
   fi
   if [[ -n "$server_pid" ]] && kill -0 "$server_pid" 2>/dev/null; then
@@ -116,12 +124,22 @@ cleanup() {
   fi
   archive_runtime || archive_status=$?
   rm -rf "$BT_TREE_WORKSPACE"
+  if [[ -n "$client_control" ]]; then
+    rm -f "$client_control.pid" "$client_control.stop"
+  fi
   if (( status == 0 && archive_status != 0 )); then
     status=$archive_status
   fi
   exit "$status"
 }
 trap cleanup EXIT INT TERM
+if [[ -n "$BT_CLIENT_TOKEN" ]]; then
+  client_control="/tmp/realman-bt-client.$BT_CLIENT_TOKEN"
+  printf '%s\n' "$$" > "$client_control.pid"
+  if [[ -e "$client_control.stop" ]]; then
+    exit 130
+  fi
+fi
 
 if [[ "${REALMAN_BT_DRY_RUN,,}" == "false" || "${REALMAN_BT_DRY_RUN}" == "0" ]]; then
   echo "[bt-start] REAL MOTION ENABLED: clear workspace, use low speed, keep E-stop reachable, confirm target joints" >&2
@@ -165,7 +183,7 @@ for arm_id in "${required_arms[@]}"; do
 done
 
 echo "[bt-start] starting ROS executor for arm ${REALMAN_BT_ARM_ID} (dry_run=${REALMAN_BT_DRY_RUN})"
-ros2 launch realman_bt "$BT_LAUNCH_FILE" \
+setsid ros2 launch realman_bt "$BT_LAUNCH_FILE" \
   arm_id:="$REALMAN_BT_ARM_ID" \
   dry_run:="$REALMAN_BT_DRY_RUN" \
   tree_file:="$runtime_tree_file" \

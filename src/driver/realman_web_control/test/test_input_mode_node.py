@@ -92,7 +92,7 @@ class GoalHandle:
 
 
 @pytest.fixture
-def node():
+def node(monkeypatch):
     rclpy.init()
     value = WebControlNode.__new__(WebControlNode)
     Node.__init__(value, "web_mode_boundary_test")
@@ -106,7 +106,10 @@ def node():
     value._mode_discovery_period = 0.25
     value._mode_list_future = None
     value._mode_state_subscription = None
+    value._mode_publisher_gid = bytes([1] * 24)
+    monkeypatch.setattr(value, "get_publishers_info_by_topic", lambda _: [SimpleNamespace(endpoint_gid=[1] * 24)])
     value._mode_select_futures = {}
+    value._mode_waiting_selection = None
     value.log = []
     value._mode_list_client = Service(value.log)
     value._mode_select_client = Service(value.log)
@@ -174,6 +177,52 @@ def test_direct_dispatch_is_preserved_without_catalog(node):
     assert node._mode_select_client.calls == []
 
 
+@pytest.mark.parametrize("kind", ["execute_motion", "execute_trajectory", "start_cartesian_velocity"])
+@pytest.mark.parametrize("operation", ["software_stop", "cancel_action"])
+def test_stop_or_cancel_discards_matching_queued_motion_before_late_callbacks(node, kind, operation):
+    node._input_modes.update_catalog(CATALOG)
+    node._stop_clients = {"l": Service(node.log)}
+    node._dispatch("owner", motion(kind))
+    response = node._mode_select_client.calls[-1][1]
+    action = "cartesian_velocity" if kind == "start_cartesian_velocity" else kind
+    node._commands.put(("owner", {"type": operation, "arm": "l", "action": action, "request_id": "stop-1"}))
+    node._drain_commands()
+    assert node._input_modes.pending_token is None
+    assert any(event.get("code") == "input_mode_cancelled" and event.get("request_id") == "move-1"
+               for event, _ in node._server.events)
+    if operation == "software_stop":
+        assert len(node._stop_clients["l"].calls) == 1
+    assert len(node._mode_select_client.calls) == 1
+    response.set_result(SelectInputMode.Response(accepted=True, request_id=41))
+    node._input_mode_state(state())
+    node._drain_commands()
+    assert sent(node) == []
+
+
+def test_stop_only_discards_its_arm_and_cancel_requires_queued_motion_owner(node):
+    node._input_modes.update_catalog(CATALOG)
+    node._stop_clients = {"r": Service(node.log)}
+    node._dispatch("owner", motion())
+    token = node._input_modes.pending_token
+    node._dispatch("other", {"type": "software_stop", "arm": "r", "request_id": "stop-r"})
+    node._commands.put(("other", {"type": "cancel_action", "arm": "l", "action": "execute_motion"}))
+    node._drain_commands()
+    assert node._input_modes.pending_token == token
+    assert any(event.get("code") == "not_goal_owner" for event, _ in node._server.events)
+
+
+def test_cancel_owned_active_action_preserves_other_browsers_queued_motion(node):
+    node._input_modes.update_catalog(CATALOG)
+    record = ActionRecord("l", "execute_motion", "owner", "active-motion")
+    record.goal_handle = GoalHandle(node.log, "active")
+    node._actions[("l", "execute_motion")] = record
+    node._dispatch("other", motion())
+    node._commands.put(("owner", {"type": "cancel_action", "arm": "l", "action": "execute_motion"}))
+    node._drain_commands()
+    assert record.cancel_submitted
+    assert node._input_modes.pending_token is not None
+
+
 @pytest.mark.parametrize("failure", ["timeout", "late_response", "malformed", "transport"])
 def test_unhealthy_ready_catalog_service_never_enables_direct_motion(node, failure):
     node._input_modes.update_catalog(CATALOG)
@@ -234,13 +283,14 @@ def test_select_marks_every_arm_action_before_service_and_cancels_delayed_accept
     assert node.log == [
         ("cancel", "l/execute_motion"), ("cancel", "l/execute_trajectory"), ("cancel", "l/cartesian_velocity"),
         ("cancel", "r/execute_motion"), ("cancel", "r/execute_trajectory"), ("cancel", "r/cartesian_velocity"),
-        ("service", "policy"),
     ]
     for record in pending:
         response = Future()
         response.set_result(GoalHandle(node.log, f"{record.arm}/{record.action}"))
         node._goal_response(record, response)
-    assert node.log[-3:] == [("cancel", "m/execute_motion"), ("cancel", "m/execute_trajectory"), ("cancel", "m/cartesian_velocity")]
+    node._drain_commands()
+    assert node.log[-4:] == [("cancel", "m/execute_motion"), ("cancel", "m/execute_trajectory"),
+                            ("cancel", "m/cartesian_velocity"), ("service", "policy")]
 
 
 def test_rediscovery_selection_cancels_existing_actions_before_state_replay(node, monkeypatch):
@@ -267,11 +317,12 @@ def test_rediscovery_selection_cancels_existing_actions_before_state_replay(node
 
     monkeypatch.setattr(node._mode_select_client, "call_async", select_after_cancellation)
     node._dispatch("browser", {"type": "select_input_mode", "request_id": "pick-1", "mode_id": "policy"})
-    assert node.log == [("service", "list"), ("cancel", "l/execute_motion"), ("service", "policy")]
+    assert node.log == [("service", "list"), ("cancel", "l/execute_motion")]
     response = Future()
     response.set_result(GoalHandle(node.log, "m/execute_trajectory"))
     node._goal_response(pending, response)
-    assert node.log[-1] == ("cancel", "m/execute_trajectory")
+    node._drain_commands()
+    assert node.log[-2:] == [("cancel", "m/execute_trajectory"), ("service", "policy")]
 
 
 def test_delayed_acceptance_is_cancelled_even_if_result_listener_setup_fails(node):
@@ -292,16 +343,16 @@ def test_delayed_acceptance_cancel_submission_retries_until_success(node, arm, k
     record = ActionRecord(arm, kind, "owner", "old-motion")
     node._actions[(arm, kind)] = record
     node._dispatch("browser", {"type": "select_input_mode", "request_id": "pick-1", "mode_id": "policy"})
-    assert node.log == [("service", "policy")]
+    assert node.log == []
     handle = GoalHandle(node.log, "late", broken_cancel=True)
     accepted = Future()
     accepted.set_result(handle)
     node._goal_response(record, accepted)
     assert node._actions[(arm, kind)] is record
-    assert node.log == [("service", "policy"), ("cancel", "late")]
+    assert node.log == [("cancel", "late")]
     handle.broken_cancel = False
     node._drain_commands()
-    assert node.log == [("service", "policy"), ("cancel", "late"), ("cancel", "late")]
+    assert node.log == [("cancel", "late"), ("cancel", "late"), ("service", "policy")]
     with ThreadPoolExecutor(max_workers=4) as executor:
         list(executor.map(lambda _: node._drain_commands(), range(20)))
     assert node.log.count(("cancel", "late")) == 2
@@ -355,7 +406,38 @@ def test_cancel_failure_marks_and_attempts_remaining_goals_but_does_not_select(n
     node._dispatch("browser", {"type": "select_input_mode", "request_id": "pick-1", "mode_id": "policy"})
     assert all(record.cancel_requested for record in node._actions.values())
     assert node.log == [("cancel", "l"), ("cancel", "m"), ("cancel", "r")]
-    assert any(event["type"] == "error" for event, _ in node._server.events)
+    assert any(event.get("state") == "error" and event.get("request_id") == "l"
+               and event.get("message") == "cancel transport failed" for event, _ in node._server.events)
+    node._actions[("l", "execute_motion")].goal_handle.broken_cancel = False
+    node._drain_commands()
+    assert node.log[-2:] == [("cancel", "l"), ("service", "policy")]
+
+
+@pytest.mark.parametrize("completion", ["rejected", "terminal", "superseded", "timeout"])
+def test_selection_barrier_retains_correlation_until_pending_action_releases(node, completion):
+    clock = [0.0]
+    node._input_modes = InputModeBridge(web_override_timeout_sec=5.0, clock=lambda: clock[0])
+    node._input_modes.update_catalog(CATALOG)
+    record = ActionRecord("l", "execute_motion", "owner", "old-motion")
+    node._actions[("l", "execute_motion")] = record
+    node._dispatch("browser", {"type": "select_input_mode", "request_id": "pick-1", "mode_id": "policy"})
+    assert node._mode_select_client.calls == []
+    if completion == "superseded":
+        node._dispatch("browser", motion(arm="r"))
+    if completion == "timeout":
+        clock[0] = 6.0
+    response = Future()
+    response.set_result(SimpleNamespace(accepted=False))
+    if completion == "terminal":
+        response = Future()
+        response.set_result(SimpleNamespace(status=4, result=None))
+        node._action_result(record, response)
+    else:
+        node._goal_response(record, response)
+    node._drain_commands()
+    modes = [request.mode_id for request, _ in node._mode_select_client.calls]
+    assert modes == ({"rejected": ["policy"], "terminal": ["policy"],
+                      "superseded": ["web"], "timeout": []}[completion])
 
 
 @pytest.mark.parametrize("kind,handler", [
@@ -469,6 +551,43 @@ def test_restart_accepts_new_state_and_ignores_old_subscription_callback(node):
     assert len(sent(node)) == 1
 
 
+def test_restart_with_continuously_ready_services_resets_state_and_rejects_old_callbacks(node, monkeypatch):
+    publishers = [SimpleNamespace(endpoint_gid=[1] * 24)]
+    monkeypatch.setattr(node, "get_publishers_info_by_topic", lambda _: publishers)
+    catalog = ListInputModes.Response(success=True, mode_ids=["web", "policy"],
+                                     labels=["Web", "Policy"], selectable=[False, True])
+    node._probe_input_modes()
+    node._mode_list_client.calls[-1][1].set_result(catalog)
+    old_generation = node._input_modes.generation
+    node._input_mode_state(state(), generation=old_generation)
+    node._dispatch("browser", motion())
+    old_selection = node._mode_select_client.calls[-1][1]
+    node._probe_input_modes()
+    old_catalog = node._mode_list_client.calls[-1][1]
+    publishers[:] = [SimpleNamespace(endpoint_gid=[2] * 24)]
+    node._probe_input_modes()
+    assert node._mode_list_client.ready and node._mode_select_client.ready
+    assert not node._input_modes.available
+    assert node._input_modes.pending_token is None
+    old_catalog.set_result(catalog)
+    old_selection.set_result(SelectInputMode.Response(accepted=True, request_id=41))
+    node._mode_list_client.calls[-1][1].set_result(catalog)
+    assert node._input_modes.generation > old_generation
+    assert len(node._input_modes.cached_events()) == 1
+    node._input_mode_state(state(), generation=old_generation)
+    node._input_mode_state(state(), publisher_gid=bytes([1] * 24))
+    startup = InputModeState(requested_mode="none", selected_mode="none", active_mode="none",
+                            phase=InputModeState.ACTIVE, request_id=0, epoch=0)
+    node._input_mode_state(startup, publisher_gid=bytes([2] * 24))
+    assert node._input_modes.cached_events()[1].payload["active_mode"] == "none"
+    node._dispatch("browser", motion())
+    node._mode_select_client.calls[-1][1].set_result(SelectInputMode.Response(accepted=True, request_id=1))
+    current = state(1)
+    current.epoch = 1
+    node._input_mode_state(current, publisher_gid=bytes([2] * 24))
+    assert len(sent(node)) == 1
+
+
 def test_expiry_removes_outstanding_selection_transport_and_late_response_is_harmless(node):
     clock = [0.0]
     node._input_modes = InputModeBridge(web_override_timeout_sec=5.0, clock=lambda: clock[0])
@@ -529,6 +648,7 @@ def test_real_node_discovers_services_and_transient_state_using_loaded_timing(mo
     rclpy.init(args=["--ros-args", "-p", f"web_control_config_file:={path}"])
     router = Node("mode_test_router")
     received = []
+    selection_id = 51
 
     def list_modes(request, response):
         response.success = True
@@ -541,9 +661,9 @@ def test_real_node_discovers_services_and_transient_state_using_loaded_timing(mo
 
     def select_mode(request, response):
         received.append(request.mode_id)
-        response.accepted, response.request_id = True, 51
+        response.accepted, response.request_id = True, selection_id
         publisher.publish(InputModeState(requested_mode=request.mode_id, selected_mode=request.mode_id,
-            active_mode=request.mode_id, phase=InputModeState.ACTIVE, request_id=51, epoch=3))
+            active_mode=request.mode_id, phase=InputModeState.ACTIVE, request_id=selection_id, epoch=3))
         return response
 
     router.create_service(SelectInputMode, "/realman_bt_executor/select_input_mode", select_mode)
@@ -570,6 +690,33 @@ def test_real_node_discovers_services_and_transient_state_using_loaded_timing(mo
             executor.spin_once(timeout_sec=0.02)
         assert received == ["policy"]
         assert any(event.get("executor_request_id") == 51 for event, _ in web_node._server.events)
+        # Replace the authoritative DDS writer while both services remain up.
+        # This exercises real endpoint identities and transient replay without
+        # relying on an unavailable service sample.
+        old_callback = web_node._mode_state_subscription.callback
+        old_gid = web_node._mode_publisher_gid
+        router.destroy_publisher(publisher)
+        publisher = router.create_publisher(InputModeState, "/realman_bt_executor/input_mode_state", QoSProfile(
+            depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+        publisher.publish(InputModeState(requested_mode="none", selected_mode="none", active_mode="none",
+                                        phase=InputModeState.ACTIVE, request_id=0, epoch=0))
+        deadline = time.monotonic() + 4.0
+        while time.monotonic() < deadline:
+            assert web_node._mode_services_ready()
+            executor.spin_once(timeout_sec=0.02)
+            events = web_node._input_modes.cached_events()
+            if len(events) == 2 and events[1].payload["active_mode"] == "none":
+                break
+        assert web_node._mode_publisher_gid != old_gid
+        assert web_node._input_modes.cached_events()[1].payload["request_id"] == 0
+        old_callback(state(51))
+        assert web_node._input_modes.cached_events()[1].payload["request_id"] == 0
+        selection_id = 1
+        web_node._dispatch("browser", {"type": "select_input_mode", "request_id": "pick-new", "mode_id": "policy"})
+        while time.monotonic() < deadline and web_node._input_modes.pending_token is not None:
+            executor.spin_once(timeout_sec=0.02)
+        assert web_node._input_modes.pending_token is None
+        assert web_node._input_modes.cached_events()[1].payload["request_id"] == 1
     finally:
         executor.shutdown()
         if web_node is not None:

@@ -107,4 +107,34 @@ if [[ "$RM65_DRY_RUN" == "1" ]]; then
 fi
 
 say "waiting for /${ARM_ID}/execute_motion and starting behavior tree"
-run "${exec_args[@]}"
+# Compose exec -T does not proxy terminal signals to its remote process. Give
+# this invocation an identity and signal only its registered wrapper in the
+# already-resolved container (never a process-name or shared-lock PID match).
+client_workspace="$(mktemp -d "${TMPDIR:-/tmp}/rm65-bt-client.XXXXXXXX")"
+client_token="${client_workspace##*/}"
+trap 'rmdir "$client_workspace"' EXIT
+exec_args=("${exec_args[@]:0:${#exec_args[@]}-2}" -e "BT_CLIENT_TOKEN=$client_token" "${exec_args[@]: -2}")
+forward_interrupt() {
+  local status="$1"
+  trap '' INT TERM
+  docker exec "$container_id" bash -c '
+    control="/tmp/realman-bt-client.$1"
+    # Remember interruption even if bt-start has not installed its trap yet.
+    touch "$control.stop"
+    if [[ -r "$control.pid" ]]; then
+      read -r pid < "$control.pid"
+      if [[ "$pid" =~ ^[0-9]+$ ]] &&
+          grep -zFxq "BT_CLIENT_TOKEN=$1" "/proc/$pid/environ" 2>/dev/null; then
+        kill -TERM "$pid" 2>/dev/null || true
+        while [[ -r "$control.pid" ]] && kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
+      fi
+    fi
+  ' -- "$client_token" || true
+  wait "$compose_pid" 2>/dev/null || true
+  exit "$status"
+}
+trap 'forward_interrupt 130' INT
+trap 'forward_interrupt 143' TERM
+"${exec_args[@]}" <&0 &
+compose_pid=$!
+wait "$compose_pid"

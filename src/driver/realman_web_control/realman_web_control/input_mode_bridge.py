@@ -50,6 +50,7 @@ class _PendingSelection:
     state_revision: int
     motion: dict[str, Any] | None = None
     executor_request_id: int | None = None
+    failed_state: InputModeSnapshot | None = None
 
 
 class InputModeBridge:
@@ -194,15 +195,20 @@ class InputModeBridge:
         ):
             return effects
         if previous is not None and snapshot.request_id == previous.request_id:
-            # FAILED is terminal for this request, including before its service
-            # response arrives. A late ACTIVE/SWITCHING sample cannot revive it.
-            if previous.phase == "FAILED" and snapshot.phase != "FAILED":
+            # Same-epoch samples cannot undo failure, but the executor's next
+            # fallback activation legitimately advances the epoch for this ID.
+            if (previous.phase == "FAILED" and snapshot.phase != "FAILED"
+                    and snapshot.epoch == previous.epoch):
                 return effects
             if (snapshot.epoch == previous.epoch and previous.phase == "ACTIVE"
                     and snapshot.phase == "SWITCHING"):
                 return effects
         self._snapshot = snapshot
         self._state_revision += 1
+        if snapshot.phase == "FAILED" and self._pending is not None:
+            # Preserve this request's failure even if recovery is published
+            # before the outstanding selection response reaches the bridge.
+            self._pending = replace(self._pending, failed_state=snapshot)
         if self.available:
             effects.append(InputModeEffect("send_event", None, {
                 "type": "input_mode_state", **asdict(snapshot),
@@ -215,6 +221,8 @@ class InputModeBridge:
         if (pending is None or snapshot is None or pending.executor_request_id is None
                 or self._state_revision <= pending.state_revision):
             return []
+        if pending.failed_state is not None and pending.failed_state.request_id == pending.executor_request_id:
+            return self._discard("input_mode_failed", pending.failed_state.detail or "input mode activation failed")
         if snapshot.request_id > pending.executor_request_id:
             return self._discard("input_mode_superseded", "executor selected a newer input mode request")
         if snapshot.request_id != pending.executor_request_id:
@@ -239,3 +247,16 @@ class InputModeBridge:
         if self._pending is not None and self._pending.client_id == client_id:
             return self._discard("input_mode_disconnected", "requesting Web client disconnected")
         return []
+
+    def cancel_motion(self, arm: str, *, action: str | None = None,
+                      client_id: str | None = None) -> list[InputModeEffect]:
+        pending = self._pending
+        if pending is None or pending.motion is None or pending.motion["arm"] != arm:
+            return []
+        motion_action = {"start_cartesian_velocity": "cartesian_velocity"}.get(
+            pending.motion["type"], pending.motion["type"])
+        if action is not None and action != motion_action:
+            return []
+        if client_id is not None and client_id != pending.client_id:
+            raise ProtocolError("not_goal_owner", "only the client that started this goal may cancel it")
+        return self._discard("input_mode_cancelled", "queued Web motion cancelled before activation")

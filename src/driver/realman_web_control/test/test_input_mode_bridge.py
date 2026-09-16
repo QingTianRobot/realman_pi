@@ -291,3 +291,23 @@ def test_disappearance_late_old_state_and_restart_reset_ordering(bridge):
     token = controller.intercept_motion("browser", motion())[0].token
     controller.selection_response(token, True, 1, "accepted after restart")
     assert len(forwarded(controller.update_state(state(1, epoch=1)))) == 1
+
+
+@pytest.mark.parametrize("response_first", [False, True])
+def test_failed_request_stays_failed_while_higher_epoch_recovery_and_new_none_request_succeed(bridge, response_first):
+    controller, clock = bridge
+    token = start(controller)
+    if response_first:
+        controller.selection_response(token, True, 41, "accepted")
+    failed = controller.update_state(state(41, phase="FAILED", epoch=2, detail="branch failed"))
+    recovery = controller.update_state(state(41, "none", epoch=3))
+    assert recovery[0].payload["active_mode"] == "none"
+    late = controller.selection_response(token, True, 41, "accepted")
+    assert not forwarded(failed + recovery + late)
+    assert errors(failed + late)[0].payload["code"] == "input_mode_failed"
+    next_token = controller.select_mode("browser", {"mode_id": "none", "request_id": "pick-none"})[-1].token
+    controller.selection_response(next_token, True, 41, "already active")
+    controller.update_state(state(41, "none", epoch=3))
+    assert controller.pending_token is None
+    clock.now = 16.0
+    assert controller.expire() == []

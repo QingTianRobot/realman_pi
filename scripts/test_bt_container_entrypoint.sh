@@ -41,7 +41,8 @@ grep -Fq 'BT_EXIT_ON_TERMINAL must be true or false' "$ENTRYPOINT"
 grep -Fq 'BT_READ_ONLY="$BT_READ_ONLY" BT_RUNTIME_SNAPSHOT="$BT_RUNTIME_SNAPSHOT"' "$ENTRYPOINT"
 grep -Fq 'monitor: http://<host>:${BT_SERVER_PORT}/' "$ENTRYPOINT"
 grep -Fq 'trap cleanup EXIT INT TERM' "$ENTRYPOINT"
-grep -Fq 'kill -TERM "$executor_pid"' "$ENTRYPOINT"
+# Executor process-group shutdown is exercised through the real CLI in
+# tests/test_bt_cli_interrupt.py, rather than asserting a particular signal.
 grep -Fq 'kill -TERM "$server_pid"' "$ENTRYPOINT"
 grep -Fq 'flock -n 9' "$ENTRYPOINT"
 grep -Fq 'archive_runtime' "$ENTRYPOINT"

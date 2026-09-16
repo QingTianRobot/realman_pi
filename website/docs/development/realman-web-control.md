@@ -107,7 +107,16 @@ catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返
 `get_current_pose`、`solve_ik`、`list_joint_records`、`save_joint_record`、`delete_joint_record` 与
 `apply_joint_record`）。Policy 与 Pika 目前只是 RUNNING 占位，不产生任何 robot goal。
 排查卡片缺失或停留在 SWITCHING 时，先检查 router 是否显式运行、三个 ROS 名称是否在同一 domain，
-以及 `input_mode_state.detail` 或 `input_mode_timeout`/`input_mode_failed` 事件；不要添加硬编码选项。
+以及 `input_mode_state.detail` 或 `type: "error"` 事件的 `code` 字段
+（`input_mode_timeout` / `input_mode_failed`）；这些 code 不是独立事件类型。不要添加硬编码选项。
+
+软件停止仍直接调用对应 arm 的 stop service，同时丢弃该 arm 等待 `ACTIVE/web` 的运动请求；
+Action 取消也会丢弃匹配 arm/action 且由该浏览器拥有的排队请求，返回
+`type: "error", code: "input_mode_cancelled"`，并保留原运动 `request_id`。
+这些操作不改变输入模式。迟到的模式回调不会重新发送已丢弃的运动。
+后端通过状态发布者的 ROS endpoint identity 识别路由器重启，即使两次探测之间 service
+一直显示 ready，也会清空旧目录、状态和请求关联并重新订阅。`FAILED` 后同一 request ID
+的更高 epoch 回退状态可以刷新页面，但不会恢复已失败的原运动请求。
 
 以下验证不访问输入设备或真实机械臂：
 

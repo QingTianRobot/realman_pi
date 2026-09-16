@@ -151,7 +151,9 @@ class WebControlNode(Node):
         self._mode_discovery_period = web_config.discovery_period_sec
         self._mode_list_future = None
         self._mode_state_subscription = None
+        self._mode_publisher_gid: bytes | None = None
         self._mode_select_futures: dict[int, Any] = {}
+        self._mode_waiting_selection: InputModeEffect | None = None
         self._mode_list_client = self.create_client(
             ListInputModes, "/realman_bt_executor/list_input_modes", callback_group=self._callback_group,
         )
@@ -347,6 +349,7 @@ class WebControlNode(Node):
     def _drain_commands(self) -> None:
         self._retry_web_cancellations()
         self._apply_input_mode_effects(self._input_modes.expire())
+        self._resume_mode_selection()
         for _ in range(100):
             try:
                 client_id, message = self._commands.get_nowait()
@@ -421,7 +424,23 @@ class WebControlNode(Node):
     def _mode_services_absent(self) -> bool:
         return not (self._mode_list_client.service_is_ready() or self._mode_select_client.service_is_ready())
 
+    def _refresh_mode_instance(self) -> bool:
+        publishers = self.get_publishers_info_by_topic("/realman_bt_executor/input_mode_state")
+        if len(publishers) != 1:
+            self._input_mode_unavailable(confirmed_absent=self._mode_services_absent())
+            return False
+        gid = bytes(publishers[0].endpoint_gid)
+        if gid != self._mode_publisher_gid:
+            # Service readiness can remain true across a quick restart. The
+            # authoritative state writer identifies the executor incarnation.
+            self._input_mode_unavailable()
+            self._mode_publisher_gid = gid
+        return True
+
     def _forget_mode_selection_futures(self) -> None:
+        if (self._mode_waiting_selection is not None
+                and self._mode_waiting_selection.token != self._input_modes.pending_token):
+            self._mode_waiting_selection = None
         for token, future in list(self._mode_select_futures.items()):
             if token != self._input_modes.pending_token:
                 self._mode_select_futures.pop(token)
@@ -444,6 +463,8 @@ class WebControlNode(Node):
         if not self._mode_services_ready():
             self._input_mode_unavailable(confirmed_absent=self._mode_services_absent())
             return
+        if not self._refresh_mode_instance():
+            return
         if not self._input_modes.available:
             self._apply_input_mode_effects(self._input_modes.update_catalog(None, confirmed_absent=False))
         if self._mode_list_future is not None:
@@ -463,6 +484,8 @@ class WebControlNode(Node):
     @_serialized_control
     def _input_mode_catalog_response(self, future: Any) -> None:
         if future is not self._mode_list_future:
+            return
+        if not self._refresh_mode_instance() or future is not self._mode_list_future:
             return
         self._mode_list_future = None
         if time.monotonic() >= self._mode_list_deadline:
@@ -492,6 +515,8 @@ class WebControlNode(Node):
     def _input_mode_selection_response(self, token: int, future: Any) -> None:
         if self._mode_select_futures.get(token) is not future:
             return
+        if not self._refresh_mode_instance() or self._mode_select_futures.get(token) is not future:
+            return
         self._mode_select_futures.pop(token)
         if not self._mode_services_ready():
             self._input_mode_unavailable(confirmed_absent=self._mode_services_absent())
@@ -506,18 +531,24 @@ class WebControlNode(Node):
 
     def _subscribe_input_mode_state(self) -> None:
         generation = self._input_modes.generation
+        publisher_gid = self._mode_publisher_gid
         self._mode_state_subscription = self.create_subscription(
             InputModeState, "/realman_bt_executor/input_mode_state",
-            lambda message: self._input_mode_state(message, generation=generation),
+            lambda message: self._input_mode_state(
+                message, publisher_gid=publisher_gid, generation=generation),
             QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
                        durability=DurabilityPolicy.TRANSIENT_LOCAL),
             callback_group=self._callback_group,
         )
 
     @_serialized_control
-    def _input_mode_state(self, message: InputModeState, *, generation: int | None = None) -> None:
+    def _input_mode_state(self, message: InputModeState, *, publisher_gid: bytes | None = None,
+                          generation: int | None = None) -> None:
+        if not self._refresh_mode_instance():
+            return
         if (not self._input_modes.available or
-                (generation is not None and generation != self._input_modes.generation)):
+                (generation is not None and generation != self._input_modes.generation) or
+                (publisher_gid is not None and publisher_gid != self._mode_publisher_gid)):
             return
         if self._input_modes.available and not self._mode_services_ready():
             self._input_mode_unavailable(confirmed_absent=self._mode_services_absent())
@@ -535,28 +566,35 @@ class WebControlNode(Node):
         records = list(self._actions.values())
         for record in records:
             record.cancel_requested = True
-        failures = []
         for record in records:
             if record.goal_handle is not None:
                 try:
                     self._request_cancel(record)
                 except Exception as error:
                     self.get_logger().error(f"Web input mode cancel failed for {record.arm}/{record.action}: {error}")
-                    failures.append(str(error))
-        if failures:
-            raise RuntimeError("; ".join(failures))
+                    self._server.send_event(action_event(record, "error", message=str(error)))
+
+    def _resume_mode_selection(self) -> None:
+        effect = self._mode_waiting_selection
+        if effect is not None and not any(not record.cancel_submitted for record in self._actions.values()):
+            self._mode_waiting_selection = None
+            self._apply_input_mode_effects([effect])
 
     def _apply_input_mode_effects(self, effects: list[InputModeEffect]) -> None:
         for effect in effects:
             if effect.kind == "send_event":
                 self._server.send_event(effect.payload, effect.client_id)
             elif effect.kind == "cancel_web_actions":
-                try:
-                    self._cancel_web_actions()
-                except Exception as error:
-                    self._apply_input_mode_effects(self._input_modes.selection_response(effect.token, False, 0, str(error)))
-                    return
+                self._cancel_web_actions()
             elif effect.kind == "request_mode":
+                if not self._refresh_mode_instance():
+                    continue
+                if effect.token != self._input_modes.pending_token:
+                    continue
+                if (effect.payload["mode_id"] != "web"
+                        and any(not record.cancel_submitted for record in self._actions.values())):
+                    self._mode_waiting_selection = effect
+                    continue
                 if not self._mode_services_ready():
                     self._input_mode_unavailable(confirmed_absent=self._mode_services_absent())
                     return
@@ -1487,9 +1525,20 @@ class WebControlNode(Node):
 
     def _cancel_action(self, client_id: str, arm: str, action: str) -> None:
         record = self._actions.get((arm, action))
+        try:
+            effects = self._input_modes.cancel_motion(arm, action=action, client_id=client_id)
+        except ProtocolError:
+            if record is None or record.owner != client_id:
+                raise
+            effects = []  # Another browser's queue cannot block cancellation of our Action.
+        self._apply_input_mode_effects(effects)
         if record is None:
+            if effects:
+                return
             raise ProtocolError("no_active_goal", f"{arm} {action} has no active Web goal")
         if record.owner != client_id:
+            if effects:
+                return
             raise ProtocolError("not_goal_owner", "only the client that started this goal may cancel it")
         record.cancel_requested = True
         self._server.send_event(action_event(record, "canceling"))
@@ -1574,6 +1623,7 @@ class WebControlNode(Node):
 
     def _software_stop(self, client_id: str, message: dict[str, Any]) -> None:
         arm = message["arm"]
+        self._apply_input_mode_effects(self._input_modes.cancel_motion(arm))
         client = self._stop_clients[arm]
         if not client.service_is_ready():
             raise ProtocolError("stop_unavailable", f"/{arm}/stop is not available", message["request_id"])

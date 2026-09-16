@@ -26,6 +26,13 @@ ros2() {
 }
 export -f ros2
 
+# Keep the fake ROS command available inside the launcher's real isolated
+# session; setsid itself remains real so process-group cleanup is exercised.
+setsid() {
+  command setsid bash -c '"$@"' -- "$@"
+}
+export -f setsid
+
 run_bt() {
   local name="$1"
   local port="$2"

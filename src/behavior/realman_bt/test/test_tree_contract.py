@@ -68,3 +68,12 @@ def test_runtime_snapshot_export_does_not_leak_vendor_source_include_path():
         'add_executable(realman_bt_executor', 1
     )[0]
     assert '"${BT_VENDOR_ROOT}"' not in target_block
+
+
+def test_runtime_snapshot_and_movej_expose_failure_reason_contract():
+    snapshot = (ROOT / 'src/behavior/realman_bt/src/runtime_snapshot.cpp').read_text()
+    movej = (ROOT / 'src/behavior/realman_bt/src/move_j_node.cpp').read_text()
+    node = (ROOT / 'third_party/behavior_tree_cpp/bt_core/include/bt_core/tree_node.hpp').read_text()
+    assert 'failure_reason' in snapshot
+    assert 'setFailureReason' in movej
+    assert 'failureReason()' in node

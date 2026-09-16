@@ -30,17 +30,6 @@ source /opt/ros/humble/setup.bash
 source /opt/rm65_ws/install/setup.bash
 set -u
 
-action_name="/${REALMAN_BT_ARM_ID}/execute_motion"
-deadline=$((SECONDS + BT_ACTION_TIMEOUT_SEC))
-echo "[bt-start] waiting for ${action_name} (timeout ${BT_ACTION_TIMEOUT_SEC}s)"
-until ros2 action info "$action_name" 2>/dev/null | grep -Eq 'Action servers:[[:space:]]*[1-9][0-9]*'; do
-  if (( SECONDS >= deadline )); then
-    echo "[bt-start] Action ${action_name} is not ready; behavior tree not started" >&2
-    exit 1
-  fi
-  sleep "$BT_ACTION_POLL_SEC"
-done
-
 if [[ ! -x "$BT_SERVER_BIN" ]]; then
   echo "[bt-start] bt_server not found: $BT_SERVER_BIN" >&2
   exit 1
@@ -110,6 +99,17 @@ if ! curl -fsS "http://127.0.0.1:${BT_SERVER_PORT}/api/health" >/dev/null 2>&1; 
   echo "[bt-start] bt_server did not become ready" >&2
   exit 1
 fi
+
+action_name="/${REALMAN_BT_ARM_ID}/execute_motion"
+deadline=$((SECONDS + BT_ACTION_TIMEOUT_SEC))
+echo "[bt-start] waiting for ${action_name} (timeout ${BT_ACTION_TIMEOUT_SEC}s)"
+until ros2 action info "$action_name" 2>/dev/null | grep -Eq 'Action servers:[[:space:]]*[1-9][0-9]*'; do
+  if (( SECONDS >= deadline )); then
+    echo "[bt-start] Action ${action_name} is not ready; behavior tree not started" >&2
+    exit 1
+  fi
+  sleep "$BT_ACTION_POLL_SEC"
+done
 
 echo "[bt-start] starting ROS executor for arm ${REALMAN_BT_ARM_ID} (dry_run=${REALMAN_BT_DRY_RUN})"
 ros2 launch realman_bt arm_move.launch.py \

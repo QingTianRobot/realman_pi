@@ -83,6 +83,7 @@ public:
   virtual void halt() {
     markHalted();
     setStatus(NodeStatus::IDLE);
+    failure_reason_.clear();
   }
 
   // -- 对外统一的执行入口 ---------------------------------------------------
@@ -116,6 +117,9 @@ public:
       }
     }
   }
+
+  const std::string& failureReason() const { return failure_reason_; }
+  void setFailureReason(std::string reason) { failure_reason_ = std::move(reason); }
 
   // -- 元信息 ---------------------------------------------------------------
 
@@ -185,6 +189,7 @@ private:
   NodeConfig          config_;
   NodeStatus          status_{NodeStatus::IDLE};
   bool                halt_pending_{false};
+  std::string         failure_reason_;
   uint16_t            node_id_{0};
   StatusChangeCallback status_callback_;
 };

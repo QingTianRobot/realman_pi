@@ -27,8 +27,8 @@ mock 节点不会连接 SDK/CAN，也不会发布生产控制命令。可通过 
 
 ## 网页调试
 
-参考 `behavior_tree_cpp` 的 `bt_server + bt_editor`，调试页面应加载 XML、校验、格式化、
-单拍 tick、连续 run，并显示活动节点、Action feedback、控制模式、owner、epoch 和失败原因。
+生产端使用 `behavior_tree_cpp` 的只读 `bt_server + bt_editor` 运行监视器，页面显示活动节点、
+Action 状态和失败原因，但不加载 XML、校验、格式化、单拍 tick 或连续 run。
 生产 Web 控制页面只请求模式，不绕过仲裁层发送动作。
 
 编辑器支持通过 URL 直接打开工作区树：访问 `bt_editor/?tree=arm_move.xml` 后，前端先拉取

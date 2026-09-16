@@ -58,16 +58,17 @@ ros2 launch realman_bt arm_move.launch.py \
 
     ./rm65 bt r
 
-启动器会先确认 `realman_bringup_remote` 正在运行，再在容器内等待
-`/r/execute_motion` Action Server 就绪；驱动未启动或 Action 超时都不会启动行为树。
-可视化网页由同一容器在宿主网络监听 `0.0.0.0:8080`，地址为
+启动器会先在容器内启动只读监视器网页，再等待 `/r/execute_motion` Action Server
+就绪；因此驱动尚未完成 ROS 图发现时，网页也能立即打开并显示等待状态，而执行器仍不会在
+Action 未就绪时启动。可视化网页由同一容器在宿主网络监听 `0.0.0.0:8080`，地址为
 `http://<host>:8080/`。这是运行监视器，不是行为树编辑器：页面从 `GET /api/runtime`
 读取执行器原子写入的快照，不提供加载、保存、Tick 或 Run 控件，也不会向 ROS Action
 发送请求。容器以 `BT_READ_ONLY=true` 启动 `bt_server`，所有 `/api/` 写入请求都会返回
 `405`。执行器通过 `runtime_snapshot_file=/tmp/realman-bt-workspace/runtime.json`
 发布快照；页面在快照尚不存在时显示 IDLE。
 
-监视器每 500 ms 轮询。网络中断或快照暂时损坏时，页面保留最后一次有效树并标记
+监视器每 500 ms 轮询，并使用快照序号的 `ETag`/`If-None-Match`：序号未变化时服务器返回
+`304 Not Modified`，页面保留当前数据，减少重复传输。网络中断或快照暂时损坏时，页面保留最后一次有效树并标记
 “连接中断/数据可能已过期”，恢复后自动重试；这类页面状态不会停止执行器。按 `Ctrl-C`
 只清理行为树执行器和监视器服务，驱动容器继续运行；使用 `./rm65 down` 才停止驱动。
 
@@ -84,6 +85,10 @@ ros2 launch realman_bt arm_move.launch.py \
 执行器发布根节点状态：
 
     /realman_bt_executor/bt_status  (std_msgs/msg/String)
+
+节点失败时，运行快照会记录 `failure_reason`（例如 Action 被拒绝、超时或驱动返回的错误消息）。
+在网页中点击失败节点，可在右侧“失败原因”区域查看该文本；如果底层没有提供消息，则显示
+“未提供失败原因”。
 
 并提供手动控制服务：
 

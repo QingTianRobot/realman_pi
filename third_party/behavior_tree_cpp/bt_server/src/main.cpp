@@ -131,9 +131,25 @@ int main(int argc, char** argv) {
   svr.Get("/api/nodes", [&api](const httplib::Request&, httplib::Response& res) {
     sendJson(api.nodes(), res);
   });
-  svr.Get("/api/runtime", [&runtime_api](const httplib::Request&,
+  svr.Get("/api/runtime", [&runtime_api](const httplib::Request& req,
                                         httplib::Response& res) {
-    sendJson(runtime_api.runtime(), res);
+    const auto response = runtime_api.runtime();
+    if (response.status == 200) {
+      const auto marker = response.body.find("\"sequence\":");
+      if (marker != std::string::npos) {
+        const auto begin = marker + std::string("\"sequence\":").size();
+        const auto end = response.body.find_first_of(",}", begin);
+        if (end != std::string::npos) {
+          const std::string etag = "\"" + response.body.substr(begin, end - begin) + "\"";
+          res.set_header("ETag", etag);
+          if (req.has_header("If-None-Match") && req.get_header_value("If-None-Match") == etag) {
+            res.status = 304;
+            return;
+          }
+        }
+      }
+    }
+    sendJson(response, res);
   });
   svr.Post("/api/tree/load", [&api](const httplib::Request& req,
                                     httplib::Response& res) {

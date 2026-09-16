@@ -42,7 +42,9 @@ RTSP/TCP 推流仍可通过 `./rm65 camera` 或原有 `rm65_camera_start` 单独
 `realman_bringup_remote` 容器内；启动器依赖 `/<arm_id>/execute_motion` Action Server，
 默认 `REALMAN_BT_DRY_RUN=true`。网页地址为
 `http://<host>:8080/`。监视器只读 `GET /api/runtime` 快照，不提供编辑、Tick 或 Run，
-并在连接中断时保留最后一次有效数据并提示过期状态。首次修改 Dockerfile 或前端后需执行
+网页服务先于 Action readiness 启动，所以驱动发现尚未完成时也会显示等待页；执行器仍会等待
+Action Server 后再 tick。快照轮询使用 `ETag`，序号未变化时返回 `304`，并在连接中断时保留最后一次有效数据并提示过期状态。
+点击失败节点可在详情面板查看 `failure_reason`。首次修改 Dockerfile 或前端后需执行
 `docker compose build realman_bringup_remote`。只有完成安全检查后才可用
 `REALMAN_BT_DRY_RUN=false ./rm65 bt r` 发送真实 MoveJ；按 `Ctrl-C` 只清理行为树进程，
 不会停止驱动容器。详细参数和边界见[行为树机械臂移动 Demo](./behavior-tree-motion)。

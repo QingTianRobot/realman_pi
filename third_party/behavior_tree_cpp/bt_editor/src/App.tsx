@@ -1,5 +1,5 @@
 import { useEffect, useState } from 'react';
-import { fetchRuntime } from './api/client';
+import { fetchRuntimeResponse } from './api/client';
 import { RuntimeTree } from './components/RuntimeTree';
 import { RuntimeDetails } from './components/RuntimeDetails';
 import type { RuntimeSnapshot } from './types';
@@ -16,6 +16,7 @@ export default function App() {
     let active = true;
     let pending = false;
     let controller: AbortController | undefined;
+    let etag: string | undefined;
     async function poll() {
       if (pending) return;
       pending = true;
@@ -23,10 +24,13 @@ export default function App() {
       // Bound an unreachable request; the next interval can recover automatically.
       const timeout = window.setTimeout(() => controller?.abort(), 5000);
       try {
-        const next = await fetchRuntime(controller.signal);
+        const result = await fetchRuntimeResponse(controller.signal, etag);
         if (active) {
-          setSnapshot(next);
-          setReceivedAt(Date.now());
+          if (result.snapshot) {
+            setSnapshot(result.snapshot);
+            setReceivedAt(Date.now());
+          }
+          etag = result.etag ?? etag;
           setError(null);
         }
       } catch (cause) {

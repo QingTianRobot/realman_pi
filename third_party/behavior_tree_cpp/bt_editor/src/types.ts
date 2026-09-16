@@ -63,6 +63,7 @@ export interface RuntimeNode {
   kind: string;
   path: string;
   status: RunStatus;
+  failure_reason?: string;
 }
 
 /** Missing executor snapshots contain only state, root_status and nodes. */
@@ -74,6 +75,13 @@ export interface RuntimeSnapshot {
   state?: 'IDLE';
   root_status: RunStatus;
   nodes: RuntimeNode[];
+  failure_reason?: string;
+}
+
+export interface RuntimeFetchResult {
+  snapshot: RuntimeSnapshot | null;
+  etag?: string;
+  notModified: boolean;
 }
 
 /** Optional server-owned structure, unavailable (404) in runtime-only mode. */

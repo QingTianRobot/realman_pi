@@ -68,6 +68,13 @@ void RuntimeSnapshotWriter::writeIdle(std::string tree_id) {
 
 void RuntimeSnapshotWriter::write(const bt_core::Tree& tree, std::string tree_id,
                                   std::uint64_t sequence) {
+  std::string root_failure_reason;
+  tree.visitNodes([&](const bt_core::TreeNode::Ptr& node, int) {
+    if (root_failure_reason.empty() && node->status() == bt_core::NodeStatus::FAILURE &&
+        !node->failureReason().empty()) {
+      root_failure_reason = node->failureReason();
+    }
+  });
   std::ostringstream json;
   json << "{\"schema_version\":1,";
   appendStringField(json, "tree_id", tree_id);
@@ -75,7 +82,12 @@ void RuntimeSnapshotWriter::write(const bt_core::Tree& tree, std::string tree_id
        << ",\"timestamp_ms\":" << timestampMilliseconds()
        << ",\"root_status\":\""
        << escapeJson(tree.root() ? bt_core::toStr(tree.root()->status()) : "IDLE")
-       << "\",\"nodes\":[";
+       << "\"";
+
+  if (!root_failure_reason.empty()) {
+    json << ",\"failure_reason\":\"" << escapeJson(root_failure_reason) << "\"";
+  }
+  json << ",\"nodes\":[";
 
   bool first = true;
   std::size_t node_index = 0;
@@ -106,7 +118,11 @@ void RuntimeSnapshotWriter::write(const bt_core::Tree& tree, std::string tree_id
     appendStringField(json, "registration_name", node->registrationName());
     appendStringField(json, "kind", bt_core::toStr(node->type()));
     appendStringField(json, "path", path);
-    appendStringField(json, "status", bt_core::toStr(node->status()), false);
+    appendStringField(json, "status", bt_core::toStr(node->status()),
+                      !node->failureReason().empty());
+    if (!node->failureReason().empty()) {
+      appendStringField(json, "failure_reason", node->failureReason(), false);
+    }
     json << "}";
   });
 

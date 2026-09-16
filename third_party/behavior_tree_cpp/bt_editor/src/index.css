@@ -117,3 +117,56 @@ footer { display: flex; justify-content: space-between; gap: 20px; padding: 18px
   .branch-toggle, .branch-spacer { flex-basis: 21px; width: 21px; }
   footer { padding: 18px 16px; font-size: 9px; }
 }
+
+/* Reference-compatible operator theme: Golf Course Robot uses a charcoal
+   header and light work panels for high-contrast status inspection. */
+:root {
+  color-scheme: light;
+  color: #18212b;
+  background: #eef1f4;
+  --muted: #64707c;
+  --line: #cfd6dd;
+  --panel: #ffffff;
+}
+body { background: #eef1f4; }
+.monitor-header { padding: 10px 18px; color: #f7fafc; background: #202932; border-bottom: 3px solid #3a9b68; }
+.brand-mark { width: 36px; height: 36px; color: #d6f0df; font-size: 12px; background: transparent; border: 1px solid #91a0ad; border-radius: 4px; }
+.brand h1 { font-size: 17px; }
+.connection-state { color: #b8c3cc; }
+.poll-toggle { padding: 6px 11px; border: 1px solid #687783; border-radius: 4px; color: #f7fafc; background: #303c47; }
+main { max-width: none; padding: 0; background: #eef1f4; }
+.runtime-overview { margin: 0; padding: 10px 14px; min-height: 62px; background: #f8fafb; border-bottom: 1px solid var(--line); }
+.runtime-overview h2 { font-size: 17px; }
+.runtime-overview p { margin-top: 2px; }
+.runtime-metrics { gap: 0; }
+.runtime-metrics > div { min-width: 130px; padding: 10px 14px; border-left: 1px solid var(--line); }
+.runtime-metrics dd { margin-top: 4px; font-size: 16px; }
+.monitor-workspace { grid-template-columns: minmax(0, 1fr) 300px; gap: 0; min-height: calc(100vh - 129px); }
+.runtime-tree-panel, .detail-panel { border: 0; border-radius: 0; background: #fff; }
+.runtime-tree-panel { border-right: 1px solid var(--line); }
+.panel-heading { min-height: 50px; padding: 9px 14px; border-bottom: 1px solid var(--line); }
+.panel-heading h2 { font-size: 14px; }
+.read-only { color: #34414c; background: #f7f9fa; border-color: var(--line); }
+.tree-filter { padding: 9px 14px; border-bottom: 1px solid var(--line); }
+.tree-filter input { color: #202a33; background: #fff; border-color: var(--line); }
+.tree-scroll { padding: 14px 18px 40px; }
+.runtime-node { background: #fff; border-color: #d5dbe0; border-left-width: 4px; border-radius: 4px; }
+.runtime-node:hover { background: #f7f9fa; }
+.runtime-node.selected { border-color: #202932; background: #eef2f4; }
+.node-select { color: #202a33; }
+.node-label strong { font-weight: 650; }
+.node-label small { color: var(--muted); }
+.status-badge[data-status="RUNNING"] { background: #eef7fc; color: #2474a6; }
+.status-badge[data-status="SUCCESS"] { background: #eff8f2; color: #2d7a4b; }
+.status-badge[data-status="FAILURE"] { background: #fff3f1; color: #b43b35; }
+.status-badge[data-status="IDLE"] { background: #f1f3f5; color: #64707c; }
+.runtime-sidebar { gap: 0; background: #f7f9fa; }
+.detail-panel { border-bottom: 1px solid var(--line); }
+.detail-body { padding: 14px; }
+.detail-body dl { margin-top: 18px; }
+.failure-reason { margin-top: 14px; padding: 10px; border: 1px solid #e0aaa5; border-left: 4px solid #b43b35; border-radius: 4px; background: #fff3f1; color: #7a2924; }
+.failure-reason strong { display: block; font-size: 12px; }
+.failure-reason p { margin: 5px 0 0; font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.status-count { padding: 9px 14px; }
+.observer-note { padding: 14px; }
+footer { padding: 18px 14px; background: #202932; color: #b8c3cc; border-top: 0; }

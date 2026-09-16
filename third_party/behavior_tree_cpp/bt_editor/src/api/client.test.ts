@@ -1,6 +1,6 @@
 import { afterEach, describe, expect, it, vi } from 'vitest';
 
-import { fetchRuntime, fetchStructure, openTree } from './client';
+import { fetchRuntime, fetchRuntimeResponse, fetchStructure, openTree } from './client';
 
 describe('openTree', () => {
   afterEach(() => {
@@ -44,5 +44,14 @@ describe('runtime reads', () => {
   it('reports unavailable snapshots instead of displaying them as current data', async () => {
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response('{"error":"unavailable"}', { status: 503 }));
     await expect(fetchRuntime()).rejects.toThrow('503');
+  });
+
+  it('returns ETag metadata and accepts a not-modified runtime response', async () => {
+    const fetchMock = vi.spyOn(globalThis, 'fetch')
+      .mockResolvedValueOnce(new Response('{"root_status":"RUNNING","nodes":[]}', { status: 200, headers: { ETag: '"7"' } }))
+      .mockResolvedValueOnce(new Response(null, { status: 304 }));
+    await expect(fetchRuntimeResponse(undefined)).resolves.toMatchObject({ etag: '"7"', notModified: false });
+    await expect(fetchRuntimeResponse(undefined, '"7"')).resolves.toMatchObject({ etag: '"7"', notModified: true, snapshot: null });
+    expect(fetchMock.mock.calls[1][1]).toEqual(expect.objectContaining({ headers: expect.objectContaining({ 'If-None-Match': '"7"' }) }));
   });
 });

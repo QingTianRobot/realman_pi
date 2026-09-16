@@ -29,5 +29,8 @@ grep -Fq 'monitor: http://<host>:${BT_SERVER_PORT}/' "$ENTRYPOINT"
 grep -Fq 'trap cleanup EXIT INT TERM' "$ENTRYPOINT"
 grep -Fq 'kill -TERM "$executor_pid"' "$ENTRYPOINT"
 grep -Fq 'kill -TERM "$server_pid"' "$ENTRYPOINT"
+server_line="$(grep -nF 'starting read-only runtime monitor' "$ENTRYPOINT" | head -n1 | cut -d: -f1)"
+wait_line="$(grep -nF 'waiting for ${action_name}' "$ENTRYPOINT" | head -n1 | cut -d: -f1)"
+[[ -n "$server_line" && -n "$wait_line" && "$server_line" -lt "$wait_line" ]]
 
 printf '%s\n' 'container behavior-tree entrypoint contract: PASS'

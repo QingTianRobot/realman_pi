@@ -9,7 +9,7 @@ const snapshot = {
   nodes: [
     { key: 'n0', name: 'Main sequence', registration_name: 'Sequence', kind: 'Control', path: '0', status: 'RUNNING' },
     { key: 'n1', name: 'Ready', registration_name: 'CheckReady', kind: 'Condition', path: '0/0', status: 'SUCCESS' },
-    { key: 'n2', name: 'Move arm', registration_name: 'MoveJ', kind: 'Action', path: '0/1', status: 'FAILURE' },
+    { key: 'n2', name: 'Move arm', registration_name: 'MoveJ', kind: 'Action', path: '0/1', status: 'FAILURE', failure_reason: 'MoveJ timed out after 120 seconds' },
     { key: 'n3', name: 'Wait', registration_name: 'Delay', kind: 'Decorator', path: '0/2', status: 'IDLE' },
   ],
 };
@@ -126,6 +126,19 @@ describe('read-only runtime monitor', () => {
     await click('Move arm');
     expect(container.querySelector('[aria-label="节点详情"]')?.textContent).toContain('0/1');
     expect(container.querySelector('[aria-label="节点详情"] input')).toBeNull();
+  });
+
+  it('shows the selected node failure reason in the inspector', async () => {
+    await render();
+    await click('Move arm');
+    expect(container.querySelector('[aria-label="节点详情"]')?.textContent).toContain('MoveJ timed out after 120 seconds');
+  });
+
+  it('uses the reference monitor palette and panel layout markers', async () => {
+    await render();
+    expect(container.querySelector('.monitor-header')).not.toBeNull();
+    expect(container.querySelector('.runtime-tree-panel')).not.toBeNull();
+    expect(container.querySelector('.detail-panel')).not.toBeNull();
   });
 
   it('rejects malformed successful responses without discarding the last snapshot', async () => {

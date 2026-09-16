@@ -196,7 +196,7 @@ ApiResponse RuntimeSnapshotService::runtime() const {
     return ApiResponse{200,
                        "{" + jsonKV("state", "IDLE") + "," +
                            jsonKV("root_status", "IDLE") +
-                           ",\"nodes\":[]}"};
+                           ",\"sequence\":0,\"nodes\":[]}"};
   }
 
   const bool regular = std::filesystem::is_regular_file(snapshot_path_, status_error);

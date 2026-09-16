@@ -59,9 +59,11 @@ class RuntimeHttpTest(unittest.TestCase):
             self.process.kill()
             self.process.wait()
 
-    def request(self, path, body=None):
-        request = Request(self.url + path, data=body,
-                          headers={"Content-Type": "application/json"})
+    def request(self, path, body=None, headers=None):
+        request_headers = {"Content-Type": "application/json"}
+        if headers:
+            request_headers.update(headers)
+        request = Request(self.url + path, data=body, headers=request_headers)
         try:
             response = urlopen(request, timeout=2)
         except HTTPError as error:
@@ -84,6 +86,10 @@ class RuntimeHttpTest(unittest.TestCase):
             status, _, body = self.request("/api/runtime")
             self.assertEqual(status, 200)
             self.assertEqual(json.loads(body), expected)
+            if sequence == 1:
+                status, _, unchanged = self.request("/api/runtime", headers={"If-None-Match": '"1"'})
+                self.assertEqual(status, 304)
+                self.assertEqual(unchanged, b"")
         self.snapshot.write_text("{bad json")
         status, content_type, body = self.request("/api/runtime")
         self.assertEqual(status, 503)

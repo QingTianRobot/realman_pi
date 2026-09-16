@@ -101,6 +101,7 @@ bt_core::NodeStatus MoveJNode::tick() {
   try {
     if (!initialize()) return bt_core::NodeStatus::FAILURE;
   } catch (const std::exception& error) {
+    setFailureReason(error.what());
     if (ros_node_) RCLCPP_ERROR(ros_node_->get_logger(), "[%s] invalid MoveJ goal: %s", name().c_str(), error.what());
     return bt_core::NodeStatus::FAILURE;
   }
@@ -121,7 +122,8 @@ bt_core::NodeStatus MoveJNode::tick() {
       try { (void)client_->async_cancel_goal(goal_handle_); } catch (const std::exception&) {}
     }
     failed_ = true;
-    RCLCPP_ERROR(ros_node_->get_logger(), "[%s] MoveJ timed out", name().c_str());
+    setFailureReason("MoveJ timed out after " + std::to_string(timeout_sec_) + " seconds");
+    RCLCPP_ERROR(ros_node_->get_logger(), "[%s] %s", name().c_str(), failureReason().c_str());
     return bt_core::NodeStatus::FAILURE;
   }
   if (!client_->wait_for_action_server(std::chrono::milliseconds(0))) {
@@ -140,13 +142,15 @@ bt_core::NodeStatus MoveJNode::tick() {
     goal_handle_ = goal_future_.get();
     if (!goal_handle_) {
       failed_ = true;
-      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] MoveJ goal rejected", name().c_str());
+      setFailureReason("MoveJ goal rejected by action server");
+      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] %s", name().c_str(), failureReason().c_str());
       return bt_core::NodeStatus::FAILURE;
     }
     try {
       result_future_ = client_->async_get_result(goal_handle_);
     } catch (const std::exception& error) {
       failed_ = true;
+      setFailureReason(error.what());
       RCLCPP_ERROR(ros_node_->get_logger(), "[%s] cannot get MoveJ result: %s", name().c_str(), error.what());
       return bt_core::NodeStatus::FAILURE;
     }
@@ -160,7 +164,10 @@ bt_core::NodeStatus MoveJNode::tick() {
       RCLCPP_INFO(ros_node_->get_logger(), "[%s] MoveJ completed: %s", name().c_str(), wrapped.result->message.c_str());
       return bt_core::NodeStatus::SUCCESS;
     }
-    RCLCPP_ERROR(ros_node_->get_logger(), "[%s] MoveJ failed", name().c_str());
+    setFailureReason((wrapped.result && !wrapped.result->message.empty())
+                         ? wrapped.result->message
+                         : "MoveJ action failed");
+    RCLCPP_ERROR(ros_node_->get_logger(), "[%s] MoveJ failed: %s", name().c_str(), failureReason().c_str());
     return bt_core::NodeStatus::FAILURE;
   }
   return bt_core::NodeStatus::RUNNING;
@@ -176,6 +183,7 @@ void MoveJNode::reset() {
   sent_ = false;
   completed_ = false;
   failed_ = false;
+  setFailureReason("");
   dry_run_logged_ = false;
 }
 

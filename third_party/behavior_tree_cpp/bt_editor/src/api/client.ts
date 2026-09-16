@@ -16,6 +16,7 @@ import type {
   FormatResult,
   HealthResult,
   RuntimeSnapshot,
+  RuntimeFetchResult,
   TreeStructure,
 } from '../types';
 
@@ -90,7 +91,20 @@ export async function checkHealth(): Promise<HealthResult> {
 
 /** Read the executor snapshot; bypass HTTP caches so ticks remain observable. */
 export async function fetchRuntime(signal?: AbortSignal): Promise<RuntimeSnapshot> {
-  const value = await requestJson<RuntimeSnapshot>('/api/runtime', { signal, cache: 'no-store' });
+  const result = await fetchRuntimeResponse(signal);
+  if (!result.snapshot) throw new Error('运行态快照未变化');
+  return result.snapshot;
+}
+
+export async function fetchRuntimeResponse(signal?: AbortSignal, etag?: string): Promise<RuntimeFetchResult> {
+  const resp = await fetch('/api/runtime', {
+    signal,
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json', ...(etag ? { 'If-None-Match': etag } : {}) },
+  });
+  if (resp.status === 304) return { snapshot: null, etag, notModified: true };
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} @ /api/runtime`);
+  const value = (await resp.json()) as RuntimeSnapshot;
   const statuses = ['IDLE', 'RUNNING', 'SUCCESS', 'FAILURE'];
   if (!value || !statuses.includes(value.root_status) || !Array.isArray(value.nodes) ||
       !value.nodes.every((node) => node &&
@@ -98,7 +112,7 @@ export async function fetchRuntime(signal?: AbortSignal): Promise<RuntimeSnapsho
           typeof node[key as keyof typeof node] === 'string') && statuses.includes(node.status))) {
     throw new Error('运行态快照格式无效');
   }
-  return value;
+  return { snapshot: value, etag: resp.headers.get('ETag') ?? undefined, notModified: false };
 }
 
 export async function fetchStructure(): Promise<TreeStructure> {

@@ -10,6 +10,10 @@ export function RuntimeDetails({ node, nodes }: { node: RuntimeNode | undefined;
       {node ? <div className="detail-body">
         <h3>{node.name || node.registration_name}</h3>
         <span className="status-badge" data-status={node.status}>{node.status}</span>
+        {node.status === 'FAILURE' && <div className="failure-reason" role="alert">
+          <strong>失败原因</strong>
+          <p>{node.failure_reason || '未提供失败原因'}</p>
+        </div>}
         <dl>
           <dt>节点 Key</dt><dd>{node.key}</dd>
           <dt>注册名称</dt><dd>{node.registration_name}</dd>

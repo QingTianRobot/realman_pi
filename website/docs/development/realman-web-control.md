@@ -59,6 +59,58 @@ docker compose run --rm realman_bringup_remote
 只部署在受信任、隔离的机器人局域网；它仍然经过既有 driver 的 ownership、坐标 gate、
 watchdog 和 lockout，不会直接调用 SDK。
 
+## 全局输入模式路由
+
+输入路由器是可选的独立进程：`./rm65 up` 启动长期 driver 与本服务，但**不会**启动它。要启用
+全局路由，在 driver 容器已运行后执行 `./rm65 bt control`；它加载
+[`config/behavior-trees/control_router.xml`](../../../config/behavior-trees/control_router.xml)，并在 Ctrl-C
+前保持 executor 和 :8080 只读监视器运行。Ctrl-C 不会停止 driver 或本服务，`./rm65 down` 才停止
+统一运行时。路由和本服务必须使用同一个 `ROS_DOMAIN_ID`。
+
+本服务每 `config/ros/realman_web_control.yaml` 的 `input_mode.discovery_period_sec: 1.0` 秒探测
+`/realman_bt_executor/list_input_modes` 和 `/realman_bt_executor/select_input_mode`，随后可靠、
+transient-local 订阅 `/realman_bt_executor/input_mode_state`。同一 YAML 的
+`web_override_timeout_sec: 5.0`（秒）是等待 Web override 激活的上限；服务监听配置为
+`server.bind_host: 0.0.0.0`、`port: 8765`、`allowed_origins: [same-origin]`、`max_clients: 8` 和
+`max_message_bytes: 65536`（bytes）。行为树自身的 `config/ros/behavior_tree.yaml` 使用 10.0 Hz tick、
+5000 ms 切换超时及 `safe_fallback_mode: none`。
+
+`list_input_modes`（`realman_msgs/srv/ListInputModes`）响应 `success`、`message` 和并行的
+`mode_ids`、`labels`、`selectable` 数组；`select_input_mode`（`realman_msgs/srv/SelectInputMode`）请求
+`mode_id`、`requester_id`，响应 `accepted`、`request_id`、`message`。上述 topic 使用
+`realman_msgs/msg/InputModeState`，字段为 `requested_mode`、`selected_mode`、`active_mode`、`phase`、
+`request_id`、`epoch`、`detail`。
+
+目录完全由 XML 的字面 `InputModeGuard` 项发现，浏览器不会维护模式名单。当前 picker 显示一个
+“GLOBAL INPUT / 输入模式”卡片，带一个动态 select：`none`、`policy`、`pika` 都可选；`web` 虽会由
+状态显示为 active，却保持隐藏且不可选。没有正在运行的路由器或 discovery 不健康时，卡片隐藏；
+既有直接 Action 控制继续兼容，仅在两项 router service 都确认为不可用时启用。服务只短暂失联或
+catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返回 `input_mode_unavailable`，而不是绕过仲裁。
+
+浏览器请求为 `{"type":"select_input_mode","request_id":"<non-empty up to 96 chars>","mode_id":"policy"}`；
+`mode_id` 必须为 lower-case ASCII identifier。输入模式相关服务端事件恰有三种：
+
+| 事件 | 字段 |
+| --- | --- |
+| `input_mode_list` | `available`、`modes[]`，每项为 `id`、`label`、`selectable` |
+| `input_mode_result` | `request_id`、`executor_request_id`、`accepted`、`message` |
+| `input_mode_state` | `requested_mode`、`selected_mode`、`active_mode`、`phase`（`ACTIVE`/`SWITCHING`/`FAILED`）、`request_id`、`epoch`、`detail` |
+
+对非 Web picker 选择，桥总是先取消它持有的 Web Action，再请求 router。router 先运行一 tick 的
+`none` 中性分支，下一 tick 才激活目标模式；而浏览器运动先请求 `web`，只在同一请求的
+`ACTIVE/web` 状态到达后才会转发。Policy 与 Pika 目前只是 RUNNING 占位，不产生任何 robot goal。
+排查卡片缺失或停留在 SWITCHING 时，先检查 router 是否显式运行、三个 ROS 名称是否在同一 domain，
+以及 `input_mode_state.detail` 或 `input_mode_timeout`/`input_mode_failed` 事件；不要添加硬编码选项。
+
+以下验证不访问输入设备或真实机械臂：
+
+```bash
+./rm65 bt-test all
+RM65_DRY_RUN=1 ./rm65 bt control
+```
+
+第二条仅输出持久 router 的容器执行计划；默认 `REALMAN_BT_DRY_RUN=true` 不会发送 Action goal。
+
 ## WebSocket 协议
 
 连接 `/ws` 后首先收到 `hello`，其中包含 `read_only=false`、`client_id` 和完整的 `layout`。

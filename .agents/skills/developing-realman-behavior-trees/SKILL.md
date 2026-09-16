@@ -12,6 +12,7 @@ Treat `src/behavior/realman_bt/` and `config/behavior-trees/` as a robot-motion 
 Read the existing node, executor, XML tree, and focused tests. Register a new node explicitly in `RealmanBtExecutorNode`; update the XML contract when a public node or port changes.
 
 - Read [node authoring](references/node-authoring.md) for ports, failure reasons, Action ownership, Service boundaries, dry-run, and tests.
+- Read [node authoring](references/node-authoring.md) before changing the persistent input router, its XML-discovered catalog, or a router input leaf.
 - Read [runtime diagnostics](references/runtime-diagnostics.md) when changing snapshots, executor events, `/rosout`, or the read-only monitor DTO.
 - Read [execution and deployment](references/execution-and-deployment.md) for `./rm65 bt`, three-arm stage barriers, one-shot exit, archives, repeated execution, or `UNKNOWN`/duplicate Action Server diagnosis.
 
@@ -20,6 +21,12 @@ Read the existing node, executor, XML tree, and focused tests. Register a new no
 `realman_bt` uses the vendored `third_party/behavior_tree_cpp` factory/parser, with explicit `Sequence`, `MoveJ`, and `ThreeArmMoveJ` registration. Do not assume upstream BehaviorTree.CPP node names or all task-template nodes are registered. XML lives under root `config/behavior-trees/`.
 
 `./rm65 up` owns the long-lived drivers. `./rm65 bt [l|m|r|three]` runs a one-shot executor and read-only monitor inside the existing `realman_bringup_remote` container; it does not create a second driver. A new run reuses the driver's Action Servers, not the previous executor. SDK connections belong to drivers, not BT leaves.
+
+`./rm65 bt control` is the separate persistent global input router. It loads
+`config/behavior-trees/control_router.xml`, stays alive with its read-only
+monitor until Ctrl-C, and does not make `./rm65 up` start an executor. The XML
+literal `InputModeGuard` entries are the catalog consumed by the executor and
+Web bridge; do not add a Python, ROS, or browser-side mode enum.
 
 For concurrent three-arm stages, reuse `ThreeArmMoveJ`: submit all three goals in one tick, return success only when all three results succeed, then let `Sequence` advance. This is a completion barrier, not synchronized physical arrival. The reusable zero-then-pose tree is `config/behavior-trees/three_arm_staged_move.xml`.
 

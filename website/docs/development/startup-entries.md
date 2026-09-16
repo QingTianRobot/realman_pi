@@ -27,6 +27,7 @@ rm65_project_help
 ./rm65 up desktop         # 同上，并启动远程 ROS 图 RViz
 ./rm65 up model           # 离线三臂模型 + RViz，不连接真机
 ./rm65 bt                 # 驱动容器内行为树执行器 + 只读运行监视器(:8080)
+./rm65 bt control         # 显式启动持久输入路由器；Ctrl-C 前保持运行
 ./rm65 status
 ./rm65 logs
 ./rm65 down
@@ -59,6 +60,11 @@ cancellation drain 会保留 pending response 或
 accepted handle，直到收到拒绝或成功提交 cancel；提交异常会重试，成功提交后立即释放，不等待取消确认或
 终态结果，也不重新启动树。进程退出后的机器人安全仍依赖驱动的软件停止机制和可达的急停。详细参数、失败
 细节和边界见[行为树机械臂移动 Demo](./behavior-tree-motion)。
+
+`./rm65 bt control` 不是 one-shot MoveJ：它读取 `config/behavior-trees/control_router.xml` 和
+`config/ros/behavior_tree.yaml`，强制 `stop_on_terminal=false`、`exit_on_terminal=false`，并一直运行到
+Ctrl-C。`./rm65 up` 不会替它启动 executor；Ctrl-C 也只停止 router/:8080，不停止 driver 或 :8765 Web
+服务。路由的动态 XML 目录和 Web cancellation 约定见[行为树控制权与 Mock 测试](./behavior-tree-control)。
 
 
 所有 helper 都从 `functions.zsh` 所在位置定位仓库根目录，因此可以在任意目录调用。函数加载时会读取仓库根目录 `.env` 中的简单 `KEY=value` 配置，并保留当前终端已经显式设置的非空变量。函数不会自动写入 `~/.zshrc`，也不会隐藏底层 Docker、colcon、npm、SSH 命令；遇到未覆盖的参数时，继续直接调用底层命令。

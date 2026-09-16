@@ -9,6 +9,10 @@ realman_bt 提供一个独立的 ROS 2 C++ 执行器，用于从 XML 加载行�
 third_party/behavior_tree_cpp 的 NodeFactory -> XmlParser -> Tree::tickOnce() 链路，注册
 Sequence、MoveJ 和 ThreeArmMoveJ，不替换生产 ./rm65 up 编排，也不会自动启动机械臂驱动。
 
+同一执行器还支持持久输入路由树，但不与本页的 one-shot MoveJ 生命周期混淆：`./rm65 up` 后另行执行
+`./rm65 bt control`，它持续到 Ctrl-C。其 XML 目录、Web override 和无硬件验证见
+[行为树控制权与 Mock 测试](./behavior-tree-control)。
+
 ## 数据流
 
     arm_move.launch.py
@@ -320,13 +324,14 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 | stop_on_terminal | true | SUCCESS/FAILURE 后停止 timer |
 | exit_on_terminal | true | 终态且 cancellation drain 清空后退出 executor；false 保留 Service 常驻模式 |
 
-当前实现支持单臂 MoveJ 和三臂 ThreeArmMoveJ，不支持 control_mode.xml 中的控制权节点，也不自动注册
-生产任务树里的 SelectControlMode、ControlLeaseGuard 等自定义节点。需要扩展树时，应在执行器中显式
-注册对应节点，并同步更新 XML 契约测试。节点、端口、Action/Service 接入、取消所有权或运行诊断变更时，
+当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ，以及 `control_router.xml` 的
+`SelectInputMode`、`InputModeGuard`、`ActivateInputMode` 和输入叶。新增节点仍须在执行器中显式
+注册，并同步更新 XML 契约测试。控制路由的 reactive 交接规则见
+[行为树控制权与 Mock 测试](./behavior-tree-control)。节点、端口、Action/Service 接入、取消所有权或运行诊断变更时，
 遵守项目 [行为树开发 Skill](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/developing-realman-behavior-trees/SKILL.md) 的 dry-run
 边界和验证顺序。
 
-`./rm65 bt` 只接受 `l|m|r|three`，不接受 XML 路径；选择其他树时使用上述 ROS launch 的
+`./rm65 bt` 接受 `l|m|r|three|control`，不接受 XML 路径；选择其他树时使用上述 ROS launch 的
 `tree_file:=<XML绝对路径>`，或显式配置容器 `bt-start` 的 `BT_TREE_FILE` 和 `BT_REQUIRED_ARMS`。
 直接 ROS launch 不包含容器入口提供的单实例锁、监视器和归档功能。
 

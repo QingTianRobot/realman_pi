@@ -43,6 +43,37 @@ Reuse `config/behavior-trees/three_arm_staged_move.xml`: its stateful `Sequence`
 
 When changing this behavior, exercise all-server readiness, same-tick submissions, the all-success barrier, rejection/result failure, sibling cancellation, timeout handoff, dry-run, and exact XML target values in `test_three_arm_move_j_node.cpp` and `test_tree_contract.py`.
 
+## Persistent Input Router
+
+`config/behavior-trees/control_router.xml` is the public catalog, not an
+example to duplicate in code. A selectable mode is registered by a literal
+`InputModeGuard mode`, `label`, and `selectable` attribute while XML is built;
+mode IDs are lower-case ASCII identifiers. Keep the root `ReactiveSequence`
+and `ReactiveFallback`: they re-check the selection on every tick and halt a
+previous RUNNING branch whose guard becomes false. Do not replace them with
+stateful `Sequence` or `Fallback`, or modify vendored control nodes.
+
+Keep `web` first and `selectable="false"`; it is the sticky, highest-priority
+override selected by Web motion arbitration, never a picker option. Keep
+selectable `none` as the configured safe fallback and its neutral branch. A
+mode branch is always, in this order, `InputModeGuard`, `ActivateInputMode`,
+then its input leaf. `ActivateInputMode` publishes active state synchronously
+before the leaf runs, including for a placeholder.
+
+A successful selection first selects and activates `none` for one router tick,
+then selects and activates the requested mode on the following tick. This
+neutral handoff is what makes a new mode take over a running branch without
+waiting for it to finish. Non-Web selection from the browser cancels Web-owned
+Actions before requesting the global mode. A Web motion request may supersede
+a pending non-Web request, but may be forwarded only after matching
+`ACTIVE/web` state.
+
+Policy and Pika are intentionally RUNNING placeholders: emit their
+once-per-entry diagnostic only and send no goals. Test router changes with XML
+contract and mock/dry-run coverage, including catalog order, the neutral tick,
+active-before-leaf ordering, Web priority, and cancellation-before-leaving-Web;
+do not require an input device or real robot motion.
+
 ## Dry-Run and Tests
 
 `dry_run=true` validates the goal and records a validation-complete `result` event, but creates no Action client and sends no goal. Keep it the default.

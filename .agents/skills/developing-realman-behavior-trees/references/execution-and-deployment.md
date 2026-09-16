@@ -13,6 +13,7 @@ Run commands from the repository root. Inspect `scripts/bt.sh`, `docker/bt_conta
 | Actual dry-run | `REALMAN_BT_DRY_RUN=true ./rm65 bt three`; validates via executor, sends no goals. |
 | Authorized real motion | `REALMAN_BT_DRY_RUN=false ./rm65 bt three`; uses the configured XML goals. |
 | Keep executor and monitor alive | `BT_EXIT_ON_TERMINAL=false ./rm65 bt three`. |
+| Persistent input router | `./rm65 bt control`; requires the existing driver container, uses `control_router.launch.py`, and stays up until Ctrl-C. |
 
 The CLI's only selectors are `l`, `m`, `r`, and `three`; it overwrites `BT_TREE_FILE`. For another XML, use the existing ROS launch's `tree_file:=<absolute-path>` argument or invoke the container entrypoint with an explicit `BT_TREE_FILE` and `BT_REQUIRED_ARMS`. Do not claim `./rm65 bt path.xml` works. A direct ROS launch does not provide the container lock, monitor, or archival wrapper.
 
@@ -27,6 +28,20 @@ docker compose exec -T \
 ```
 
 The CLI requires the driver container to be running. Its entrypoint starts the monitor, then waits for at least one server on each required Action, even in dry-run. It does **not** check server uniqueness; production preflight must check that separately. Default readiness timeout is 30 seconds per arm; this is separate from the XML motion timeout.
+
+`./rm65 up` starts the long-lived driver/Web runtime only; it never starts the
+router. Start `./rm65 bt control` explicitly after `up`. Unlike `l`, `m`, `r`,
+and `three`, `control` forces `stop_on_terminal=false` and
+`exit_on_terminal=false`, so its executor and :8080 read-only monitor remain
+available until Ctrl-C. Ctrl-C stops only these behavior-tree processes; the
+driver container continues. Use `./rm65 down` to stop the production runtime.
+
+While control is running, inspect the executor-owned discovery interfaces:
+`/realman_bt_executor/list_input_modes`,
+`/realman_bt_executor/select_input_mode`, and transient-local reliable
+`/realman_bt_executor/input_mode_state`. If the browser shows no selectable
+modes, first confirm the control router is running in the same `ROS_DOMAIN_ID`,
+then inspect the list service and state topic; do not add a static Web list.
 
 The staged tree's joint targets are degrees:
 

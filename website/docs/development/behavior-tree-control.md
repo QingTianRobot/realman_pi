@@ -6,12 +6,41 @@ description: RealMan 控制模式切换、工业任务树和隔离 mock 验证�
 # 行为树控制权与 Mock 测试
 
 行为树运行时位于 `realman_bt`，底层仍使用 RealMan Action 和
-`motion_coordinator`。控制权由 `none`、`web`、`policy`、`teleop` 四种模式组成；
-切换先停止当前运动、取消 Action、确认安全，再激活新 owner。每次成功切换递增
-`epoch`，旧 owner 或旧 epoch 的命令会被仲裁层拒绝。
+`motion_coordinator`。持久输入路由器的权威定义是
+[`config/behavior-trees/control_router.xml`](../../../config/behavior-trees/control_router.xml)：
+当前目录顺序为 `web`、`policy`、`pika`、`none`。其中 `policy`、`pika` 和
+`none` 可由选择器请求；`web` 是粘性且最高优先级的非可选覆盖，只有浏览器运动仲裁可请求它。
+Policy 和 Pika 都是 RUNNING 占位叶，只产生每次进入一次的诊断，绝不发送 robot goal。
 
-示例树位于 `config/behavior-trees/`：`control_mode.xml` 演示模式 Sequence，
-`pick_task.xml` 演示 SubTree、Fallback、多角度策略和有限 Retry。
+`InputModeGuard` 的 `mode`、`label`、`selectable` 字面量在 XML 构造时注册目录，
+因此新增模式只改 XML 和相应叶注册，不能在 Web 或 Python 写静态枚举。路由根节点必须保留
+`ReactiveSequence` 和 `ReactiveFallback`，使 guard 每个 10 Hz tick 都重算并 halt 离开的
+RUNNING 分支。每个分支严格是 `InputModeGuard` → `ActivateInputMode` → 输入叶：activation
+同步发布状态，故叶开始前已是 active。
+
+一次选择先进入 `SWITCHING` 并选择 `none`。下一 tick 必须激活/运行这个中性分支，下一 tick
+才选择并激活目标模式；这让 Policy/Pika 不必自行结束即可交接。Web 离开到非 Web 模式时，桥先取消
+所有 Web-owned Action，再请求全局模式；Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。
+
+## 输入路由 ROS 契约
+
+路由器运行时由 `realman_bt_executor` 提供两个 service 和一个可靠、transient-local topic：
+
+| 名称 | 类型与字段 | 用途 |
+| --- | --- | --- |
+| `/realman_bt_executor/list_input_modes` | `realman_msgs/srv/ListInputModes`：响应 `success`、`message`、并行的 `mode_ids`、`labels`、`selectable` 数组 | 以 XML 声明顺序发现目录。 |
+| `/realman_bt_executor/select_input_mode` | `realman_msgs/srv/SelectInputMode`：请求 `mode_id`、`requester_id`；响应 `accepted`、`request_id`、`message` | 请求一个已注册模式。 |
+| `/realman_bt_executor/input_mode_state` | `realman_msgs/msg/InputModeState`：`requested_mode`、`selected_mode`、`active_mode`、`phase`、`request_id`、`epoch`、`detail` | 发布 `ACTIVE`、`SWITCHING` 或 `FAILED` 的路由状态。 |
+
+配置在 [`config/ros/behavior_tree.yaml`](../../../config/ros/behavior_tree.yaml)：
+`tick_rate_hz: 10.0`（Hz）、`switch_timeout_ms: 5000`（ms），以及必须是已注册且可选模式的
+`safe_fallback_mode: none`。`none` 既是安全回退也是中性 tick，不能删除或改成 Web。
+
+## 生命周期和无硬件验证
+
+`./rm65 up` 只拥有长期 driver 和 :8765 Web 服务；它不启动行为树。先启动该运行时，再显式执行
+`./rm65 bt control`，该命令使用 `control_router.launch.py` 和 `exit_on_terminal=false`，连同 :8080
+只读监视器持续到 Ctrl-C。Ctrl-C 不停止 driver；`./rm65 down` 才停止统一运行时。
 
 ## 独立测试
 
@@ -24,6 +53,15 @@ description: RealMan 控制模式切换、工业任务树和隔离 mock 验证�
 
 mock 节点不会连接 SDK/CAN，也不会发布生产控制命令。可通过 ROS 参数注入模式、owner
 和后端健康状态；命令记录器可将 mock 输出写为 JSONL。
+
+路由器改动先执行 XML/unit/mock 检查，不接手柄且不启动真机运动：
+
+```bash
+./rm65 bt-test all
+RM65_DRY_RUN=1 ./rm65 bt control
+```
+
+后一个命令只打印容器启动计划；默认 `REALMAN_BT_DRY_RUN=true` 也不会发送 Action goal。
 
 ## 网页调试
 

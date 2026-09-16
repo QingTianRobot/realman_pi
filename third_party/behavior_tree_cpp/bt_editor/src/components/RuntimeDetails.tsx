@@ -51,7 +51,7 @@ export function RuntimeDetails({
       </div>)}
     </section>
     <section className="detail-panel tick-summary" aria-label="Tick 统计">
-      <div className="panel-heading"><div><span className="eyebrow">CUMULATIVE</span><h2>Tick 统计</h2></div><span className="muted">总 Tick {stats.total}</span></div>
+      <div className="panel-heading"><div><span className="eyebrow">CUMULATIVE</span><h2>Tick 统计</h2></div><div className="tick-metrics"><span className="muted" data-tick-running>运行中 {stats.running}</span><span className="muted">总 Tick {stats.total}</span></div></div>
       <div className="tick-outcomes">
         {([
           ['SUCCESS', stats.success],

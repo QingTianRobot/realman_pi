@@ -177,8 +177,19 @@ describe('read-only runtime monitor', () => {
     expect(chart?.textContent).toContain('FAILURE');
     expect(chart?.textContent).toContain('2');
     expect(chart?.textContent).toContain('总 Tick 10');
+    expect(chart?.querySelector('[data-tick-running]')?.textContent).toBe('运行中 1');
     expect(chart?.querySelector<HTMLElement>('[data-outcome="SUCCESS"]')?.style.width).toBe('70%');
     expect(chart?.querySelector<HTMLElement>('[data-outcome="FAILURE"]')?.style.width).toBe('20%');
+  });
+
+  it('shows zero running and total ticks without filling outcome bars', async () => {
+    response = { ...snapshot, tick_stats: { running: 0, success: 0, failure: 0, total: 0 } };
+    await render();
+    const chart = container.querySelector('[aria-label="Tick 统计"]');
+    expect(chart?.textContent).toContain('总 Tick 0');
+    expect(chart?.querySelector('[data-tick-running]')?.textContent).toBe('运行中 0');
+    expect(chart?.querySelector<HTMLElement>('[data-outcome="SUCCESS"]')?.style.width).toBe('0%');
+    expect(chart?.querySelector<HTMLElement>('[data-outcome="FAILURE"]')?.style.width).toBe('0%');
   });
 
   it('renders diagnostic records newest first with all source labels and error emphasis', async () => {

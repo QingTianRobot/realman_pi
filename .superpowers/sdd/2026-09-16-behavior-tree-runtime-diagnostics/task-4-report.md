@@ -56,3 +56,33 @@ git diff --check
   work; this scoped frontend task does not change the Web manual.
 - No ROS process, Action request, executor service call, or robot motion was
   started during frontend verification.
+
+## Fix Round 1: Running Tick Metric
+
+### Changes
+
+- Added the cumulative `running` count as an auxiliary header metric beside
+  the total tick count. SUCCESS and FAILURE remain the only primary outcome
+  bars.
+- Added monitor coverage for nonzero running counts and a zero-total snapshot,
+  including both zero-width outcome bars.
+
+### Test Evidence
+
+```text
+RED: npm test -- --run src/RuntimeMonitor.test.tsx
+# 2 failures: the required running metric was absent for both nonzero and
+# zero-total snapshots.
+
+GREEN: npm test -- --run src/RuntimeMonitor.test.tsx
+# 12 tests passed
+
+npm test
+# 6 test files and 39 tests passed
+
+npm run build
+# tsc --noEmit and Vite production build passed
+
+git diff --check
+# exit 0
+```

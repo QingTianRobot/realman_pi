@@ -52,7 +52,10 @@ logger 的 WARN/ERROR。MoveJ 仍只经 `/<arm_id>/execute_motion` Action 执行
 和 `/realman_bt_executor/stop` 仅控制 executor tick，不能替代运动接口。首次修改 Dockerfile 或前端后需执行
 `docker compose build realman_bringup_remote`。只有完成安全检查后才可用
 `REALMAN_BT_DRY_RUN=false ./rm65 bt r` 发送真实 MoveJ；按 `Ctrl-C` 只清理行为树进程，
-不会停止驱动容器。若停止时 Action 尚未终态，executor 的 cancellation drain 会保留 pending response 或
+不会停止驱动容器。默认 one-shot executor 在 `SUCCESS`/`FAILURE` 后等待 cancellation drain 清空，再让
+executor、`ros2 launch` 和只读监视器依次退出；最终快照归档到 `logs/behavior-trees/`。容器锁禁止两次
+`./rm65 bt` 并发运行，前一实例清理完即可启动下一棵树。若停止时 Action 尚未终态，executor 的
+cancellation drain 会保留 pending response 或
 accepted handle，直到收到拒绝或成功提交 cancel；提交异常会重试，成功提交后立即释放，不等待取消确认或
 终态结果，也不重新启动树。进程退出后的机器人安全仍依赖驱动的软件停止机制和可达的急停。详细参数、失败
 细节和边界见[行为树机械臂移动 Demo](./behavior-tree-motion)。

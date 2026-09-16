@@ -104,7 +104,8 @@ RUN . /opt/ros/humble/setup.sh \
 COPY --from=bt_editor_build /opt/bt_editor/dist /opt/rm65_ws/behavior_tree/editor-dist
 COPY docker/ros_entrypoint.sh /ros_entrypoint.sh
 COPY docker/bt_container_entrypoint.sh /usr/local/bin/bt-start
-RUN chmod +x /ros_entrypoint.sh /usr/local/bin/bt-start
+COPY docker/bt_runtime_result.py /usr/local/libexec/bt-runtime-result
+RUN chmod +x /ros_entrypoint.sh /usr/local/bin/bt-start /usr/local/libexec/bt-runtime-result
 
 ENTRYPOINT ["/ros_entrypoint.sh"]
 CMD ["ros2", "launch", "rm65_description", "display.launch.py"]

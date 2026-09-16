@@ -5,14 +5,15 @@
 
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
+  int exit_code = 0;
   try {
     auto node = std::make_shared<realman_bt::RealmanBtExecutorNode>();
     rclcpp::spin(node);
+    exit_code = node->exitCode();
   } catch (const std::exception& error) {
     RCLCPP_FATAL(rclcpp::get_logger("realman_bt_executor"), "startup failed: %s", error.what());
-    rclcpp::shutdown();
-    return 1;
+    exit_code = 1;
   }
-  rclcpp::shutdown();
-  return 0;
+  if (rclcpp::ok()) rclcpp::shutdown();
+  return exit_code;
 }

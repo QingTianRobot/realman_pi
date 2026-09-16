@@ -8,6 +8,7 @@
 #include "bt_core/node_factory.hpp"
 #include "bt_core/tree.hpp"
 #include "realman_bt/runtime_snapshot.hpp"
+#include "realman_bt/terminal_exit_policy.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rcl_interfaces/msg/log.hpp"
 #include "std_msgs/msg/string.hpp"
@@ -22,6 +23,8 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
   explicit RealmanBtExecutorNode(const rclcpp::NodeOptions& options = rclcpp::NodeOptions());
   ~RealmanBtExecutorNode() override;
 
+  int exitCode() const { return terminal_exit_policy_.exitCode(); }
+
  private:
   using Trigger = std_srvs::srv::Trigger;
 
@@ -31,6 +34,7 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
   void flushSnapshot();
   void enqueueCancellationDrain(std::shared_ptr<MoveJCancellationDrain> drain);
   void drainCancellationQueue();
+  void requestProcessExitIfReady();
   void handleStart(const std::shared_ptr<Trigger::Request>,
                    std::shared_ptr<Trigger::Response> response);
   void handleStop(const std::shared_ptr<Trigger::Request>,
@@ -57,6 +61,7 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
   double tick_rate_hz_{10.0};
   bool autostart_{true};
   bool stop_on_terminal_{true};
+  TerminalExitPolicy terminal_exit_policy_{false};
 };
 
 }  // namespace realman_bt

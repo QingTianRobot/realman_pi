@@ -33,6 +33,8 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   tick_rate_hz_ = declare_parameter<double>("tick_rate_hz", 20.0);
   autostart_ = declare_parameter<bool>("autostart", true);
   stop_on_terminal_ = declare_parameter<bool>("stop_on_terminal", true);
+  terminal_exit_policy_ = TerminalExitPolicy(
+      declare_parameter<bool>("exit_on_terminal", true));
   if (tree_file.empty()) throw std::invalid_argument("tree_file must be set");
   if (arm_id != "l" && arm_id != "m" && arm_id != "r") throw std::invalid_argument("arm_id must be l, m, or r");
   if (!std::isfinite(tick_rate_hz_) || tick_rate_hz_ <= 0.0) throw std::invalid_argument("tick_rate_hz must be positive");
@@ -128,9 +130,12 @@ void RealmanBtExecutorNode::onTick() {
   std_msgs::msg::String message;
   message.data = bt_core::toStr(status);
   status_pub_->publish(message);
-  if (stop_on_terminal_ && bt_core::isStatusCompleted(status)) {
+  if (bt_core::isStatusCompleted(status) &&
+      (stop_on_terminal_ || terminal_exit_policy_.enabled())) {
     RCLCPP_INFO(get_logger(), "behavior tree reached %s", message.data.c_str());
+    terminal_exit_policy_.markTerminal(status == bt_core::NodeStatus::SUCCESS);
     stop();
+    requestProcessExitIfReady();
   }
 }
 
@@ -192,6 +197,15 @@ void RealmanBtExecutorNode::drainCancellationQueue() {
     cancellation_drain_timer_->cancel();
     cancellation_drain_timer_.reset();
   }
+  requestProcessExitIfReady();
+}
+
+void RealmanBtExecutorNode::requestProcessExitIfReady() {
+  if (!terminal_exit_policy_.shouldExit(cancellation_drains_.size())) return;
+  flushSnapshot();
+  RCLCPP_INFO(get_logger(), "terminal cleanup complete; exiting behavior-tree executor");
+  get_node_base_interface()->get_context()->shutdown(
+      "behavior tree reached a terminal state");
 }
 
 void RealmanBtExecutorNode::recordEvent(std::string severity, std::string source,

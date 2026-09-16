@@ -37,10 +37,15 @@ logger 的 WARN/ERROR。详细字段、失败细节和 cancellation drain 约束
 MoveJ 使用 `/<arm_id>/execute_motion` Action 承载长时、可取消的运动；`/realman_bt_executor/start`
 和 `/realman_bt_executor/stop` 是只管理 tick timer 的短 `std_srvs/srv/Trigger` Service，不能用于替代
 运动 Action。停止或 halt 遇到尚未终态的 goal 时，executor 继续用独立 timer drain 该 goal 的取消流程，
-不会通过恢复 tree tick 来处理它。
+不会通过恢复 tree tick 来处理它。`./rm65 bt` 默认是单实例 one-shot：终态且 drain 清空后 executor 与
+launcher 正常退出，最终快照归档到 `logs/behavior-trees/`；显式设置 `exit_on_terminal:=false` 才保留
+Service 常驻模式。
 
 新增或调整行为树节点、端口、Action/Service 接入、取消或运行诊断时，使用项目
 [行为树开发 Skill](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/developing-realman-behavior-trees/SKILL.md)。
+该 skill 也覆盖三臂阶段屏障、one-shot 退出、快照归档和生产 domain 排障；调用方式见
+[在 Codex 中复用行为树 Skill](./behavior-tree-motion#在-codex-中复用行为树-skill)。重复执行时出现
+`UNKNOWN`，先按[排查步骤](./behavior-tree-motion#重复执行与-unknown-排查)核对实际 domain 中的服务器数量。
 生产 Web 控制页面只请求模式，不绕过仲裁层发送动作。
 
 编辑器支持通过 URL 直接打开工作区树：访问 `bt_editor/?tree=arm_move.xml` 后，前端先拉取

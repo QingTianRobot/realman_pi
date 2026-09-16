@@ -67,6 +67,11 @@ def generate_launch_description():
         default_value="true",
         description="Stop ticking after SUCCESS or FAILURE.",
     )
+    exit_on_terminal = DeclareLaunchArgument(
+        "exit_on_terminal",
+        default_value="true",
+        description="Exit the one-shot executor after terminal cleanup completes.",
+    )
     runtime_snapshot_file = DeclareLaunchArgument(
         "runtime_snapshot_file",
         default_value=_default_runtime_snapshot_file(),
@@ -86,6 +91,7 @@ def generate_launch_description():
                 "tick_rate_hz": LaunchConfiguration("tick_rate_hz"),
                 "autostart": LaunchConfiguration("autostart"),
                 "stop_on_terminal": LaunchConfiguration("stop_on_terminal"),
+                "exit_on_terminal": LaunchConfiguration("exit_on_terminal"),
                 "runtime_snapshot_file": LaunchConfiguration("runtime_snapshot_file"),
             }
         ],
@@ -101,6 +107,7 @@ def generate_launch_description():
             tick_rate_hz,
             autostart,
             stop_on_terminal,
+            exit_on_terminal,
             runtime_snapshot_file,
             executor,
         ]

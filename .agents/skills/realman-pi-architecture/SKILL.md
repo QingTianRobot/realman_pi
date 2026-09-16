@@ -7,7 +7,7 @@ description: Use when working on the realman_pi repository's startup flow, ROS 2
 
 ## 适用范围
 
-加载本 skill 后，先把它当作项目运行契约，再阅读具体源文件。涉及启动、部署、相机、机械臂、夹爪、Web control、标定或 ROS 图时必须遵守其中的边界；涉及 RealMan Python SDK 细节时另用 `realman-python-driver`，涉及 Changingtek Modbus RTU 事务、重连或硬件诊断时必须另用 `developing-changingtek-grippers`。
+加载本 skill 后，先把它当作项目运行契约，再阅读具体源文件。涉及启动、部署、相机、机械臂、夹爪、Web control、标定或 ROS 图时必须遵守其中的边界；涉及 RealMan Python SDK 细节时另用 `realman-python-driver`，涉及 Changingtek Modbus RTU 事务、重连或硬件诊断时必须另用 `developing-changingtek-grippers`。涉及行为树节点、三臂阶段编排、执行退出或失败诊断时使用 `developing-realman-behavior-trees`。
 
 ## 架构总览
 
@@ -21,8 +21,10 @@ Docker Compose / ROS 2 Humble
   │    ├─ /l /m /r realman_driver
   │    ├─ robot_state_publisher + world_transform
   │    ├─ camera_calibration（发布 camera_health）
-  │    └─ gripper_manager
-  │         └─ /dev/realman/gripper_{right,left,mid} -> ROS service/topic
+  │    ├─ gripper_manager
+  │    │    └─ /dev/realman/gripper_{right,left,mid} -> ROS service/topic
+  │    └─ ./rm65 bt 显式启动的 one-shot executor + 只读监视器 :8080
+  │         └─ MoveJ / ThreeArmMoveJ -> /l|m|r/execute_motion
   └─ realman_web_control（HTTP/WebSocket :8765）
        ├─ 订阅 camera_health、joint_states、TF/坐标和夹爪状态
        └─ 通过 ROS service 调用 gripper_manager，不直接访问串口
@@ -30,7 +32,7 @@ Docker Compose / ROS 2 Humble
 
 - `config/` 是权威配置源；不要在源码包或生产主机创建第二份运行配置。
 - `realman_bringup` 只做 ROS launch 编排，不拥有 URDF、TF 数值或硬件 SDK 状态机。
-- 机械臂动作使用 ROS 2 Action 和 `motion_coordinator` 生命周期状态机，不使用 BehaviorTree/行为树。
+- 机械臂底层动作使用 ROS 2 Action 和 `motion_coordinator` 状态机；行为树在其上编排 MoveJ，不直接拥有 SDK 连接，也不替代底层运动仲裁。
 - TF 树是 `world -> l/m/r -> base_link -> link_1...link_6`，与行为树无关。
 
 ## 推荐启动方式
@@ -49,6 +51,11 @@ Docker Compose / ROS 2 Humble
 `./rm65 up` 的启动顺序是：先启动宿主机 `rm65_camera_ros2 color`，成功后启动 Docker
 `realman_bringup_remote` 和 `realman_web_control`。相机失败时不启动 Docker；Docker 失败时清理相机。
 默认不启动 RViz，不需要 `DISPLAY`/`XAUTHORITY`。
+
+`./rm65 bt r` 或 `./rm65 bt three` 在已运行的 driver 容器内执行单臂/三臂树，默认 dry-run。
+三臂树由两个 ThreeArmMoveJ 阶段组成，全部成功后才进入下一阶段。终态且 cancellation drain 清空后，
+executor、launcher 和监视器退出，XML 与快照归档到 `logs/behavior-trees/`；driver 保持运行。
+`BT_EXIT_ON_TERMINAL=false` 显式保留常驻模式。详细退出码、取消所有权和重复执行约定见行为树 skill。
 
 兼容入口仍存在：`functions.zsh` 中的 `rm65_docker_*`、`rm65_camera_*` 可以用于专项调试；
 旧 RTSP/TCP 推流链路通过 `./rm65 camera`，不要与 ROS2 相机链路同时占用 USB 设备。
@@ -98,6 +105,7 @@ Docker Compose / ROS 2 Humble
 - Compose 权威文件：`config/docker/compose.yaml`；根 `docker-compose.yml` 只是 discovery adapter。
 - ROS 日志根目录：`logs/`；每次 launch 创建 `logs/YYYYMMDD_HHMMSS/`。
 - 统一入口相机状态：`logs/.rm65-camera.pid`、`logs/rm65-camera.log`。
+- ROS domain 来自根目录 `.env` 的 `ROS_DOMAIN_ID`，同一系统的 driver、Web control、相机与远程查看器必须一致；独立机器人栈应隔离 domain。更换后需重启相关进程并重建容器环境，`docker compose restart` 不会加载新环境。排查行为树 UNKNOWN 时，先在实际运行 domain 确认目标 Action 各只有一个 server。
 - 生产同步：`./rm65 sync` → 校验 `main` 和 clean worktree → 尝试 GitHub push → rsync **仅 Git 已跟踪文件**。
 - rsync 排除构建目录、安装目录、日志、缓存、网站生成物和本地虚拟环境；不要用 `--delete` 覆盖生产端未提交配置。
 - GitHub HTTPS 不可用时，SSH remote `git@github.com:QingTianRobot/realman_pi.git` 是推荐方式。

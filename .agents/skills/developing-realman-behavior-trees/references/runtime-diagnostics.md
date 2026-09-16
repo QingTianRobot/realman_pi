@@ -26,12 +26,14 @@ The four `tick_stats` counters and each diagnostic event `timestamp_ms` are non-
 
 | Source | Interface and phases |
 | --- | --- |
-| `ACTION` | `/<arm_id>/execute_motion`: `wait_server`, `send_goal`, `goal_accepted`, `goal_rejected`, `result`, `timeout`, `cancel`. |
+| `ACTION` | MoveJ uses `/<arm_id>/execute_motion`: `wait_server`, `send_goal`, `goal_accepted`, `goal_rejected`, `result`, `timeout`, `cancel`. ThreeArmMoveJ records each arm's interface separately; its timeout is retained as a failure reason and in cancellation details rather than a dedicated `timeout` event. |
 | `SERVICE` | `/realman_bt_executor/start` and `/realman_bt_executor/stop`: `request`, `response`; retain the response text in `detail`. |
 | `ROS_LOG` | Filtered WARN/ERROR `/rosout` from logger names containing `realman_bt_executor` or `rclcpp_action`; phase `rosout`. |
 | `EXECUTOR` | Executor exceptions; phase `exception`. |
 
 Flush snapshots before and after start/stop Service work, after terminal halt, and immediately after accepting a filtered `/rosout` event. A ROS Action warning can arrive after terminal ticking has stopped, so it must not depend on a later tick to become visible. The read-only monitor polls `GET /api/runtime`, uses ETag/`If-None-Match`, accepts `304`, and must provide no mutation route or control.
+
+In one-shot mode the executor spins only until terminal cleanup has completed; events arriving after process shutdown cannot be captured. Halt can reset root/node status to `IDLE` and clear node failure reasons. The wrapper determines the outcome from exactly one terminal tick and retains the event history in `logs/behavior-trees/<run-id>/runtime.json`. See [execution and deployment](execution-and-deployment.md) for lifecycle, archive validation, and DDS duplicate-server diagnosis; do not treat an archived `IDLE` as a missing terminal result.
 
 ## Diagnostics Tests
 

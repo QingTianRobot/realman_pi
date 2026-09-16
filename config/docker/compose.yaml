@@ -38,6 +38,10 @@ x-realman-common: &realman-common
     # mutations and publishes this atomically replaced runtime snapshot.
     BT_READ_ONLY: "true"
     BT_RUNTIME_SNAPSHOT: ${BT_RUNTIME_SNAPSHOT:-/tmp/realman-bt-workspace/runtime.json}
+    # CLI runs are one-shot and mutually exclusive inside the shared driver
+    # container. Final snapshots are archived through the host logs mount.
+    BT_EXIT_ON_TERMINAL: ${BT_EXIT_ON_TERMINAL:-true}
+    BT_RUNTIME_ARCHIVE_ROOT: ${BT_RUNTIME_ARCHIVE_ROOT:-/opt/rm65_ws/logs/behavior-trees}
     BT_EDITOR_DIST: /opt/rm65_ws/behavior_tree/editor-dist
     # The launch file scans this path/glob and waits when it is not present.
     REALMAN_JOY_DEVICE: ${REALMAN_JOY_DEVICE:-auto}

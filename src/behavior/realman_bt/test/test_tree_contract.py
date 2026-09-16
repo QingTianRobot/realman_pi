@@ -40,6 +40,13 @@ def test_arm_move_launch_defaults_to_twenty_hz_ticks():
     assert '"tick_rate_hz", 20.0' in executor
 
 
+def test_arm_move_launch_exposes_one_shot_terminal_exit():
+    source = LAUNCH.read_text()
+    assert 'DeclareLaunchArgument(\n        "exit_on_terminal"' in source
+    assert 'default_value="true"' in source
+    assert '"exit_on_terminal": LaunchConfiguration("exit_on_terminal")' in source
+
+
 def test_executor_writes_idle_snapshot_after_loading_tree():
     source = EXECUTOR.read_text()
     header = EXECUTOR_HEADER.read_text()
@@ -56,10 +63,10 @@ def test_executor_increments_sequence_and_writes_snapshot_for_every_tick_status(
     assert 'snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_);' in source
     tick_body = source[source.index('void RealmanBtExecutorNode::onTick()'):]
     flush_index = tick_body.index('flushSnapshot();')
+    terminal_index = tick_body.index('if (bt_core::isStatusCompleted(status)')
     # Snapshot publishing must happen before terminal handling, so all three
     # possible tick results (SUCCESS/FAILURE/RUNNING) are persisted.
-    assert 'if (stop_on_terminal_ && bt_core::isStatusCompleted(status))' in tick_body
-    assert tick_body.index('if (stop_on_terminal_ && bt_core::isStatusCompleted(status))') > flush_index
+    assert terminal_index > flush_index
 
 
 def test_runtime_snapshot_export_declares_bt_core_dependency():

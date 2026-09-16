@@ -82,6 +82,12 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_three_arm_move_j_node rclcpp rclcpp_action realman_msgs)
   add_test(NAME test_three_arm_move_j_node COMMAND test_three_arm_move_j_node)
 
+  add_executable(test_terminal_exit_policy test/test_terminal_exit_policy.cpp)
+  target_include_directories(test_terminal_exit_policy PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  target_compile_features(test_terminal_exit_policy PRIVATE cxx_std_17)
+  add_test(NAME test_terminal_exit_policy COMMAND test_terminal_exit_policy)
+
   ament_add_pytest_test(test_tree_contract test/test_tree_contract.py)
   ament_add_pytest_test(test_arm_move_tree test/test_arm_move_tree.py)
   ament_add_pytest_test(test_three_arm_move_tree test/test_three_arm_move_tree.py)

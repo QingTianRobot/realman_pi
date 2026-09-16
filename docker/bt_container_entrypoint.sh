@@ -21,6 +21,9 @@ set -eo pipefail
 : "${BT_TREE_WORKSPACE:=/tmp/realman-bt-workspace}"
 : "${BT_READ_ONLY:=true}"
 : "${BT_RUNTIME_SNAPSHOT:=$BT_TREE_WORKSPACE/runtime.json}"
+: "${BT_EXIT_ON_TERMINAL:=true}"
+: "${BT_RUNTIME_ARCHIVE_ROOT:=${REALMAN_LOG_ROOT:-/opt/rm65_ws/logs}/behavior-trees}"
+readonly BT_INSTANCE_LOCK=/tmp/realman-bt.lock
 
 if [[ "${BT_AUTOSTART,,}" != "true" && "${BT_AUTOSTART}" != "1" ]]; then
   echo "[bt-start] disabled (set BT_AUTOSTART=true to start behavior tree)" >&2
@@ -51,16 +54,47 @@ case "$BT_TREE_WORKSPACE" in
     exit 2
     ;;
 esac
+case "$BT_EXIT_ON_TERMINAL" in
+  true|false) ;;
+  *) echo "[bt-start] BT_EXIT_ON_TERMINAL must be true or false" >&2; exit 2 ;;
+esac
+exec 9>"$BT_INSTANCE_LOCK"
+if ! flock -n 9; then
+  echo "[bt-start] another behavior-tree run is active; wait for it to exit or stop it first" >&2
+  exit 73
+fi
 
 rm -rf "$BT_TREE_WORKSPACE"
 mkdir -p "$BT_TREE_WORKSPACE"
 runtime_tree_file="$BT_TREE_WORKSPACE/$(basename "$BT_TREE_FILE")"
 cp "$BT_TREE_FILE" "$runtime_tree_file"
+run_id="$(date +%Y%m%d_%H%M%S)_$$"
 
 server_pid=""
 executor_pid=""
+archive_runtime() {
+  local archive_dir="$BT_RUNTIME_ARCHIVE_ROOT/$run_id"
+  if ! mkdir -p "$archive_dir"; then
+    echo "[bt-start] cannot create runtime archive: $archive_dir" >&2
+    return 74
+  fi
+  if ! cp "$runtime_tree_file" "$archive_dir/$(basename "$runtime_tree_file")"; then
+    echo "[bt-start] cannot archive behavior-tree XML" >&2
+    return 74
+  fi
+  if [[ ! -f "$BT_RUNTIME_SNAPSHOT" ]]; then
+    echo "[bt-start] runtime snapshot was not produced: $BT_RUNTIME_SNAPSHOT" >&2
+    return 74
+  fi
+  if ! cp "$BT_RUNTIME_SNAPSHOT" "$archive_dir/runtime.json"; then
+    echo "[bt-start] cannot archive runtime snapshot" >&2
+    return 74
+  fi
+  echo "[bt-start] archived final runtime snapshot: $archive_dir/runtime.json"
+}
 cleanup() {
   local status=$?
+  local archive_status=0
   trap - EXIT INT TERM
   if [[ -n "$executor_pid" ]] && kill -0 "$executor_pid" 2>/dev/null; then
     kill -TERM "$executor_pid" 2>/dev/null || true
@@ -70,7 +104,11 @@ cleanup() {
     kill -TERM "$server_pid" 2>/dev/null || true
     wait "$server_pid" 2>/dev/null || true
   fi
+  archive_runtime || archive_status=$?
   rm -rf "$BT_TREE_WORKSPACE"
+  if (( status == 0 && archive_status != 0 )); then
+    status=$archive_status
+  fi
   exit "$status"
 }
 trap cleanup EXIT INT TERM
@@ -121,9 +159,22 @@ ros2 launch realman_bt arm_move.launch.py \
   arm_id:="$REALMAN_BT_ARM_ID" \
   dry_run:="$REALMAN_BT_DRY_RUN" \
   tree_file:="$runtime_tree_file" \
+  exit_on_terminal:="$BT_EXIT_ON_TERMINAL" \
   runtime_snapshot_file:="$BT_RUNTIME_SNAPSHOT" &
   executor_pid=$!
 
 echo "[bt-start] monitor: http://<host>:${BT_SERVER_PORT}/"
 echo "[bt-start] press Ctrl-C to stop behavior-tree processes (driver continues)"
 wait "$executor_pid"
+executor_pid=""
+
+if [[ "$BT_EXIT_ON_TERMINAL" == "true" ]]; then
+  if ! terminal_result="$(/usr/local/libexec/bt-runtime-result "$BT_RUNTIME_SNAPSHOT")"; then
+    echo "[bt-start] behavior-tree launch exited without a valid terminal result" >&2
+    exit 1
+  fi
+  if [[ "$terminal_result" == "FAILURE" ]]; then
+    echo "[bt-start] behavior tree reached FAILURE" >&2
+    exit 1
+  fi
+fi

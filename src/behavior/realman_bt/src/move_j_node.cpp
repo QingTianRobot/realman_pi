@@ -206,10 +206,10 @@ bool MoveJNode::handoffInFlightGoal() {
 }
 
 bool MoveJNode::hasInFlightGoal() const {
-  return goal_handle_ && client_ && result_future_.valid() && !completed_ &&
-         !failed_ && !cancel_requested_ &&
-         result_future_.wait_for(std::chrono::milliseconds(0)) !=
-             std::future_status::ready;
+  if (!goal_handle_ || !client_ || completed_ || cancel_requested_) return false;
+  if (!result_future_.valid()) return true;
+  return result_future_.wait_for(std::chrono::milliseconds(0)) !=
+         std::future_status::ready;
 }
 
 void MoveJNode::requestCancel(const std::string& detail) {

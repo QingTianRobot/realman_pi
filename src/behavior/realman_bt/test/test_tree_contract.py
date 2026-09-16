@@ -190,3 +190,24 @@ def test_movej_marks_cancellation_only_after_request_succeeds_and_retries_errors
     assert 'timeout_state_ = TimeoutState::kCancelPending;' in request_cancel
     assert 'catch (const std::exception& error)' in request_cancel
     assert 'kCancellationRetry' in source
+
+
+def test_async_get_result_failure_hands_accepted_goal_to_halt_drain():
+    source = (ROOT / 'src/behavior/realman_bt/src/move_j_node.cpp').read_text()
+
+    result_request = source[
+        source.index('result_future_ = client_->async_get_result(goal_handle_);'):
+        source.index('if (timeout_state_ == TimeoutState::kAwaitingGoalResponse)')
+    ]
+    assert 'catch (const std::exception& error)' in result_request
+    assert 'failed_ = true;' in result_request
+    assert 'return bt_core::NodeStatus::FAILURE;' in result_request
+    in_flight = source[
+        source.index('bool MoveJNode::hasInFlightGoal()'):
+        source.index('void MoveJNode::requestCancel')
+    ]
+    assert 'if (!result_future_.valid()) return true;' in in_flight
+    assert '!failed_' not in in_flight
+    halt_body = source[source.index('void MoveJNode::onHalted()'):]
+    assert 'if (hasInFlightGoal())' in halt_body
+    assert 'handoffInFlightGoal()' in halt_body

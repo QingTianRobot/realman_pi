@@ -117,6 +117,10 @@ cancel；`async_cancel_goal` 抛出异常时不会标记为已取消，后续 dr
 销毁会停止该 ROS timer，因此应先让 drain 完成并确认运行快照；进程退出后的机器人安全仍依赖急停和驱动的
 软件停止机制。
 
+如果 goal 已被接受但 `async_get_result` 建立结果监听时抛出异常，MoveJ 会记录 FAILURE；其已接受且没有
+终态结果的 handle 仍被视为 in-flight。随后的 halt 会将该 handle 交给同一 cancellation drain，而不会因
+无效 result future 丢弃 client 或遗漏 cancel。
+
 执行器还订阅 `/rosout`（`rcl_interfaces/msg/Log`）。仅 logger 名称包含
 `realman_bt_executor` 或 `rclcpp_action` 的 WARN/ERROR 消息会写入 `ROS_LOG` 事件；原始 `msg` 文本不作
 修改地写入 `detail`。这只用于诊断快照，不替代 ROS 2 官方日志或其节点日志文件。

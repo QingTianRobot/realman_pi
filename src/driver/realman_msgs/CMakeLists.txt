@@ -8,20 +8,18 @@ find_package(builtin_interfaces REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MotionWaypoint.msg"
-  "msg/ControlMode.msg"
-  "msg/ControlModeRequest.msg"
-  "msg/ControlModeState.msg"
+  "msg/InputModeState.msg"
   "action/CartesianVelocity.action"
   "action/ExecuteMotion.action"
   "action/ExecuteTrajectory.action"
-  "action/SwitchControlMode.action"
   "srv/SelectFrame.srv"
   "srv/VerifyCoordinates.srv"
   "srv/GetCurrentPose.srv"
   "srv/ForwardKinematics.srv"
   "srv/SolveIk.srv"
   "srv/RecoverMotion.srv"
-  "srv/RequestControlMode.srv"
+  "srv/ListInputModes.srv"
+  "srv/SelectInputMode.srv"
   "srv/CaptureCalibrationSample.srv"
   "srv/SolveCalibration.srv"
   DEPENDENCIES action_msgs builtin_interfaces

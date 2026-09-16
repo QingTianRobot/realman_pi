@@ -16,6 +16,9 @@ Log/
 !.agents/skills/document-feature-updates/**
 !.agents/skills/realman-python-driver/
 !.agents/skills/realman-python-driver/**
+# Version this project-local behavior-tree authoring skill; other local skills stay ignored.
+!.agents/skills/developing-realman-behavior-trees/
+!.agents/skills/developing-realman-behavior-trees/**
 .codex/
 src/.agents/
 src/.codex/

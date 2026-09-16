@@ -1,0 +1,38 @@
+# Runtime Diagnostics Contract
+
+## Snapshot Schema
+
+`RuntimeSnapshotWriter` writes atomic JSON through a sibling `.tmp` file and replacement. Schema version `2` includes `tree_id`, `sequence`, `timestamp_ms`, `root_status`, `nodes`, optional root/node `failure_reason`, plus:
+
+```json
+{
+  "tick_stats": {"running": 0, "success": 0, "failure": 0, "total": 0},
+  "events": [{
+    "timestamp_ms": 0,
+    "severity": "INFO",
+    "source": "ACTION",
+    "interface_name": "/r/execute_motion",
+    "phase": "send_goal",
+    "detail": "MoveJ goal sent"
+  }]
+}
+```
+
+All counters and timestamps are non-negative safe integers in the monitor DTO. `severity` is `INFO`, `WARN`, or `ERROR`; `source` is `ACTION`, `SERVICE`, `ROS_LOG`, or `EXECUTOR`; `interface_name`, `phase`, and `detail` are strings. Preserve `detail` verbatim, including ROS log text and Action result messages. Invalid optional diagnostics must be rejected by the client; legacy snapshots without them remain valid.
+
+`RuntimeDiagnostics` is mutex-protected. Record exactly one `RUNNING`, `SUCCESS`, or `FAILURE` outcome for each executor tick, then write the snapshot, including exception ticks. Retain only the newest 200 events, discarding the oldest on overflow. Calls without a recorder still emit v2 fields with zero counters and an empty event array.
+
+## Event Sources
+
+| Source | Interface and phases |
+| --- | --- |
+| `ACTION` | `/<arm_id>/execute_motion`: `wait_server`, `send_goal`, `goal_accepted`, `goal_rejected`, `result`, `timeout`, `cancel`. |
+| `SERVICE` | `/realman_bt_executor/start` and `/realman_bt_executor/stop`: `request`, `response`; retain the response text in `detail`. |
+| `ROS_LOG` | Filtered WARN/ERROR `/rosout` from logger names containing `realman_bt_executor` or `rclcpp_action`; phase `rosout`. |
+| `EXECUTOR` | Executor exceptions; phase `exception`. |
+
+Flush snapshots before and after start/stop Service work, and after terminal halt, so events do not require a later tick to become visible. The read-only monitor polls `GET /api/runtime`, uses ETag/`If-None-Match`, accepts `304`, and must provide no mutation route or control.
+
+## Diagnostics Tests
+
+Cover JSON escaping, atomic replacement, v2 fields, zero diagnostics, each tick bucket, one-record-per-tick behavior, 200-event retention, and concurrent recording. Cover Action, Service, ROS log, and executor events, including exact failure detail. In the TypeScript client, reject invalid counters, timestamps, severities, sources, or event field types while accepting a complete v2 and legacy payload. In the monitor, render events newest-first, retain selected-node failure reason, surface `ERROR` accessibly, and keep the runtime view read-only.

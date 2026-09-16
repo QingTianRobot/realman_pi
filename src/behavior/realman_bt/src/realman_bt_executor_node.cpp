@@ -92,6 +92,7 @@ void RealmanBtExecutorNode::stop() {
     timer_.reset();
   }
   if (tree_) tree_->halt();
+  flushSnapshot();
 }
 
 void RealmanBtExecutorNode::onTick() {
@@ -106,14 +107,7 @@ void RealmanBtExecutorNode::onTick() {
     tree_->halt();
   }
   diagnostics_.recordTick(status);
-  ++snapshot_sequence_;
-  if (snapshot_writer_) {
-    try {
-      snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_);
-    } catch (const std::exception& error) {
-      RCLCPP_ERROR(get_logger(), "failed to write behavior tree snapshot: %s", error.what());
-    }
-  }
+  flushSnapshot();
   std_msgs::msg::String message;
   message.data = bt_core::toStr(status);
   status_pub_->publish(message);
@@ -125,22 +119,36 @@ void RealmanBtExecutorNode::onTick() {
 
 void RealmanBtExecutorNode::handleStart(const std::shared_ptr<Trigger::Request>, std::shared_ptr<Trigger::Response> response) {
   recordEvent("INFO", "SERVICE", "/realman_bt_executor/start", "request", "");
+  flushSnapshot();
   const bool running = static_cast<bool>(timer_);
   start();
   response->success = true;
   response->message = running ? "already running" : "started";
   recordEvent("INFO", "SERVICE", "/realman_bt_executor/start", "response",
               response->message);
+  flushSnapshot();
 }
 
 void RealmanBtExecutorNode::handleStop(const std::shared_ptr<Trigger::Request>, std::shared_ptr<Trigger::Response> response) {
   recordEvent("INFO", "SERVICE", "/realman_bt_executor/stop", "request", "");
+  flushSnapshot();
   const bool running = static_cast<bool>(timer_);
   stop();
   response->success = true;
   response->message = running ? "stopped" : "already stopped";
   recordEvent("INFO", "SERVICE", "/realman_bt_executor/stop", "response",
               response->message);
+  flushSnapshot();
+}
+
+void RealmanBtExecutorNode::flushSnapshot() {
+  if (!snapshot_writer_ || !tree_) return;
+  ++snapshot_sequence_;
+  try {
+    snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_);
+  } catch (const std::exception& error) {
+    RCLCPP_ERROR(get_logger(), "failed to write behavior tree snapshot: %s", error.what());
+  }
 }
 
 void RealmanBtExecutorNode::recordEvent(std::string severity, std::string source,

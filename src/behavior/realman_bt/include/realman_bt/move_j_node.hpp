@@ -23,7 +23,7 @@ class MoveJNode final : public bt_core::ActionNode {
   using bt_core::ActionNode::ActionNode;
   using Action = realman_msgs::action::ExecuteMotion;
   using Client = rclcpp_action::Client<Action>;
-  using GoalHandle = Client::GoalHandle;
+ using GoalHandle = Client::GoalHandle;
 
   static bt_core::PortsList providedPorts();
 
@@ -31,8 +31,16 @@ class MoveJNode final : public bt_core::ActionNode {
   void onHalted() override;
 
  private:
+  enum class TimeoutState {
+    kActive,
+    kAwaitingGoalResponse,
+    kCancelPending,
+  };
+
   bool initialize();
   bool readGoal(Action::Goal* goal);
+  bool hasInFlightGoal() const;
+  void requestCancel(const std::string& detail);
   void recordActionEvent(const std::string& phase, const std::string& detail,
                          const std::string& severity = "INFO") const;
   void reset();
@@ -53,6 +61,8 @@ class MoveJNode final : public bt_core::ActionNode {
   bool failed_{false};
   bool dry_run_logged_{false};
   bool wait_server_recorded_{false};
+  bool cancel_requested_{false};
+  TimeoutState timeout_state_{TimeoutState::kActive};
 };
 
 }  // namespace realman_bt

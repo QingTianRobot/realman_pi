@@ -50,16 +50,15 @@ def test_executor_writes_idle_snapshot_after_loading_tree():
 def test_executor_increments_sequence_and_writes_snapshot_for_every_tick_status():
     source = EXECUTOR.read_text()
     assert 'status = tree_->tickOnce();' in source
+    assert 'void RealmanBtExecutorNode::flushSnapshot()' in source
     assert '++snapshot_sequence_;' in source
     assert 'snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_);' in source
     tick_body = source[source.index('void RealmanBtExecutorNode::onTick()'):]
-    write_index = tick_body.index(
-        'snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_);'
-    )
+    flush_index = tick_body.index('flushSnapshot();')
     # Snapshot publishing must happen before terminal handling, so all three
     # possible tick results (SUCCESS/FAILURE/RUNNING) are persisted.
     assert 'if (stop_on_terminal_ && bt_core::isStatusCompleted(status))' in tick_body
-    assert tick_body.index('if (stop_on_terminal_ && bt_core::isStatusCompleted(status))') > write_index
+    assert tick_body.index('if (stop_on_terminal_ && bt_core::isStatusCompleted(status))') > flush_index
 
 
 def test_runtime_snapshot_export_declares_bt_core_dependency():
@@ -116,3 +115,44 @@ def test_executor_declares_runtime_diagnostics_rosout_and_event_contract():
     assert 'recordTick(status)' in source
     assert 'recordEvent' in source
     assert 'catch (const std::exception& error)' in source
+
+
+def test_movej_timeout_waits_for_pending_goal_response_and_cancels_once():
+    header = (ROOT / 'src/behavior/realman_bt/include/realman_bt/move_j_node.hpp').read_text()
+    source = (ROOT / 'src/behavior/realman_bt/src/move_j_node.cpp').read_text()
+
+    assert 'enum class TimeoutState' in header
+    assert 'kAwaitingGoalResponse' in header
+    assert 'kCancelPending' in header
+    assert 'timeout_state_ = TimeoutState::kAwaitingGoalResponse' in source
+    assert 'timeout_state_ = TimeoutState::kCancelPending' in source
+    assert 'if (cancel_requested_) return;' in source
+    cancel_body = source[
+        source.index('void MoveJNode::requestCancel'):
+        source.index('bt_core::NodeStatus MoveJNode::tick')
+    ]
+    assert 'result_future_.wait_for(std::chrono::milliseconds(0))' in cancel_body
+    assert 'std::future_status::ready' in cancel_body
+    halt_body = source[source.index('void MoveJNode::onHalted()'):]
+    assert 'if (hasInFlightGoal())' in halt_body
+
+
+def test_executor_flushes_diagnostics_for_service_events_and_terminal_halts():
+    source = EXECUTOR.read_text()
+
+    assert 'void flushSnapshot();' in EXECUTOR_HEADER.read_text()
+    assert 'void RealmanBtExecutorNode::flushSnapshot()' in source
+    assert source.count('flushSnapshot();') >= 5
+    start_body = source[
+        source.index('void RealmanBtExecutorNode::handleStart'):
+        source.index('void RealmanBtExecutorNode::handleStop')
+    ]
+    stop_body = source[
+        source.index('void RealmanBtExecutorNode::handleStop'):
+        source.index('void RealmanBtExecutorNode::flushSnapshot')
+    ]
+    assert start_body.index('flushSnapshot();') < start_body.index('const bool running')
+    assert 'response->message = running ? "already running" : "started";' in start_body
+    assert start_body.rindex('flushSnapshot();') > start_body.index('response->message')
+    assert stop_body.index('flushSnapshot();') < stop_body.index('const bool running')
+    assert stop_body.rindex('flushSnapshot();') > stop_body.index('response->message')

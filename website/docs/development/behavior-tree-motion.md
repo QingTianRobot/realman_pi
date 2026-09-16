@@ -104,6 +104,12 @@ RUNNING、SUCCESS 或 FAILURE 计数，再写出快照。`/realman_bt_executor/s
 优先使用 Action 返回消息，否则记录 ROS Action 结果码。dry-run 只写入验证完成的 `result` 事件，绝不
 创建或发送 Action goal。
 
+超时不会在已发送 goal 仍等待响应时直接把树标记为 FAILURE：执行器保持 MoveJ 为 RUNNING，直到收到
+拒绝响应，或在延迟接受后立即发出一次 cancel 并等待该 Action 的终态结果。这样不会在机械臂仍可能执行
+已接受目标时失去跟踪。halt 只对尚未收到终态结果的已接受 goal 发出一次 cancel；成功、失败、或已请求
+超时取消的 Action 不会重复取消。服务的 `request` 和 `response` 事件、以及终态树 halt 后的事件，都会
+立即写出新的运行快照序号，无需等待下一次 tick。
+
 执行器还订阅 `/rosout`（`rcl_interfaces/msg/Log`）。仅 logger 名称包含
 `realman_bt_executor` 或 `rclcpp_action` 的 WARN/ERROR 消息会写入 `ROS_LOG` 事件；原始 `msg` 文本不作
 修改地写入 `detail`。这只用于诊断快照，不替代 ROS 2 官方日志或其节点日志文件。

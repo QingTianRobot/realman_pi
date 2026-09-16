@@ -134,6 +134,31 @@ void MoveJNode::recordActionEvent(const std::string& phase,
                             phase, detail});
 }
 
+bool MoveJNode::hasInFlightGoal() const {
+  return goal_handle_ && client_ && result_future_.valid() && !completed_ &&
+         !failed_ && !cancel_requested_ &&
+         result_future_.wait_for(std::chrono::milliseconds(0)) !=
+             std::future_status::ready;
+}
+
+void MoveJNode::requestCancel(const std::string& detail) {
+  if (cancel_requested_) return;
+  if (!goal_handle_ || !client_) return;
+  if (result_future_.valid() &&
+      result_future_.wait_for(std::chrono::milliseconds(0)) ==
+          std::future_status::ready) {
+    return;
+  }
+  cancel_requested_ = true;
+  timeout_state_ = TimeoutState::kCancelPending;
+  try {
+    (void)client_->async_cancel_goal(goal_handle_);
+    recordActionEvent("cancel", detail, "WARN");
+  } catch (const std::exception& error) {
+    recordActionEvent("cancel", error.what(), "ERROR");
+  }
+}
+
 bt_core::NodeStatus MoveJNode::tick() {
   try {
     if (!initialize()) return bt_core::NodeStatus::FAILURE;
@@ -155,21 +180,112 @@ bt_core::NodeStatus MoveJNode::tick() {
   }
 
   const auto now = std::chrono::steady_clock::now();
-  if (std::chrono::duration<double>(now - started_at_).count() > timeout_sec_) {
-    recordActionEvent("timeout", "MoveJ action timed out", "ERROR");
-    if (goal_handle_ && client_) {
-      try {
-        (void)client_->async_cancel_goal(goal_handle_);
-        recordActionEvent("cancel", "cancel requested after timeout", "WARN");
-      } catch (const std::exception& error) {
-        recordActionEvent("cancel", error.what(), "ERROR");
-      }
+  const bool deadline_expired =
+      std::chrono::duration<double>(now - started_at_).count() > timeout_sec_;
+
+  if (sent_ && !goal_handle_ &&
+      goal_future_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+    try {
+      goal_handle_ = goal_future_.get();
+    } catch (const std::exception& error) {
+      failed_ = true;
+      setFailureReason(error.what());
+      recordActionEvent("goal_rejected", failureReason(), "ERROR");
+      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] cannot receive MoveJ goal response: %s",
+                   name().c_str(), failureReason().c_str());
+      return bt_core::NodeStatus::FAILURE;
     }
-    failed_ = true;
-    setFailureReason("MoveJ timed out after " + std::to_string(timeout_sec_) + " seconds");
-    RCLCPP_ERROR(ros_node_->get_logger(), "[%s] %s", name().c_str(), failureReason().c_str());
+    if (!goal_handle_) {
+      failed_ = true;
+      setFailureReason("MoveJ goal rejected by action server");
+      recordActionEvent("goal_rejected", failureReason(), "ERROR");
+      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] %s", name().c_str(),
+                   failureReason().c_str());
+      return bt_core::NodeStatus::FAILURE;
+    }
+    recordActionEvent("goal_accepted", "MoveJ goal accepted");
+    try {
+      result_future_ = client_->async_get_result(goal_handle_);
+    } catch (const std::exception& error) {
+      failed_ = true;
+      setFailureReason(error.what());
+      recordActionEvent("result", failureReason(), "ERROR");
+      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] cannot get MoveJ result: %s",
+                   name().c_str(), error.what());
+      return bt_core::NodeStatus::FAILURE;
+    }
+    if (timeout_state_ == TimeoutState::kAwaitingGoalResponse &&
+        hasInFlightGoal()) {
+      requestCancel("cancel requested after delayed goal acceptance");
+      return bt_core::NodeStatus::RUNNING;
+    }
+  }
+
+  if (goal_handle_ && result_future_.valid() &&
+      result_future_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
+    Client::WrappedResult wrapped;
+    try {
+      wrapped = result_future_.get();
+    } catch (const std::exception& error) {
+      failed_ = true;
+      setFailureReason(error.what());
+      recordActionEvent("result", failureReason(), "ERROR");
+      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] cannot receive MoveJ result: %s",
+                   name().c_str(), failureReason().c_str());
+      return bt_core::NodeStatus::FAILURE;
+    }
+    const std::string result_detail =
+        (wrapped.result && !wrapped.result->message.empty())
+            ? wrapped.result->message
+            : actionResultCode(wrapped.code);
+    recordActionEvent("result", result_detail,
+                      wrapped.code == rclcpp_action::ResultCode::SUCCEEDED &&
+                              wrapped.result && wrapped.result->success &&
+                              timeout_state_ == TimeoutState::kActive
+                          ? "INFO"
+                          : "ERROR");
+    completed_ = timeout_state_ == TimeoutState::kActive &&
+                 wrapped.code == rclcpp_action::ResultCode::SUCCEEDED &&
+                 wrapped.result && wrapped.result->success;
+    failed_ = !completed_;
+    if (completed_) {
+      RCLCPP_INFO(ros_node_->get_logger(), "[%s] MoveJ completed: %s",
+                  name().c_str(), wrapped.result->message.c_str());
+      return bt_core::NodeStatus::SUCCESS;
+    }
+    if (failureReason().empty()) {
+      setFailureReason((wrapped.result && !wrapped.result->message.empty())
+                           ? wrapped.result->message
+                           : "MoveJ action " + actionResultCode(wrapped.code));
+    }
+    RCLCPP_ERROR(ros_node_->get_logger(), "[%s] MoveJ failed: %s", name().c_str(),
+                 failureReason().c_str());
     return bt_core::NodeStatus::FAILURE;
   }
+
+  if (deadline_expired && timeout_state_ == TimeoutState::kActive) {
+    recordActionEvent("timeout", "MoveJ action timed out", "ERROR");
+    setFailureReason("MoveJ timed out after " + std::to_string(timeout_sec_) +
+                     " seconds");
+    if (!sent_) {
+      failed_ = true;
+      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] %s", name().c_str(),
+                   failureReason().c_str());
+      return bt_core::NodeStatus::FAILURE;
+    }
+    if (!goal_handle_) {
+      timeout_state_ = TimeoutState::kAwaitingGoalResponse;
+      return bt_core::NodeStatus::RUNNING;
+    }
+    requestCancel("cancel requested after timeout");
+    return bt_core::NodeStatus::RUNNING;
+  }
+
+  if (timeout_state_ == TimeoutState::kAwaitingGoalResponse ||
+      timeout_state_ == TimeoutState::kCancelPending) {
+    return bt_core::NodeStatus::RUNNING;
+  }
+
   if (!client_->wait_for_action_server(std::chrono::milliseconds(0))) {
     if (!wait_server_recorded_) {
       recordActionEvent("wait_server", "waiting for action server");
@@ -193,72 +309,6 @@ bt_core::NodeStatus MoveJNode::tick() {
     RCLCPP_INFO(ros_node_->get_logger(), "[%s] sent MoveJ goal to %s", name().c_str(), action_name_.c_str());
     return bt_core::NodeStatus::RUNNING;
   }
-  if (!goal_handle_) {
-    if (goal_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
-      return bt_core::NodeStatus::RUNNING;
-    }
-    try {
-      goal_handle_ = goal_future_.get();
-    } catch (const std::exception& error) {
-      failed_ = true;
-      setFailureReason(error.what());
-      recordActionEvent("goal_rejected", failureReason(), "ERROR");
-      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] cannot receive MoveJ goal response: %s",
-                   name().c_str(), failureReason().c_str());
-      return bt_core::NodeStatus::FAILURE;
-    }
-    if (!goal_handle_) {
-      failed_ = true;
-      setFailureReason("MoveJ goal rejected by action server");
-      recordActionEvent("goal_rejected", failureReason(), "ERROR");
-      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] %s", name().c_str(), failureReason().c_str());
-      return bt_core::NodeStatus::FAILURE;
-    }
-    recordActionEvent("goal_accepted", "MoveJ goal accepted");
-    try {
-      result_future_ = client_->async_get_result(goal_handle_);
-    } catch (const std::exception& error) {
-      failed_ = true;
-      setFailureReason(error.what());
-      recordActionEvent("result", failureReason(), "ERROR");
-      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] cannot get MoveJ result: %s", name().c_str(), error.what());
-      return bt_core::NodeStatus::FAILURE;
-    }
-    return bt_core::NodeStatus::RUNNING;
-  }
-  if (result_future_.valid() && result_future_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
-    Client::WrappedResult wrapped;
-    try {
-      wrapped = result_future_.get();
-    } catch (const std::exception& error) {
-      failed_ = true;
-      setFailureReason(error.what());
-      recordActionEvent("result", failureReason(), "ERROR");
-      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] cannot receive MoveJ result: %s",
-                   name().c_str(), failureReason().c_str());
-      return bt_core::NodeStatus::FAILURE;
-    }
-    const std::string result_detail =
-        (wrapped.result && !wrapped.result->message.empty())
-            ? wrapped.result->message
-            : actionResultCode(wrapped.code);
-    recordActionEvent("result", result_detail,
-                      wrapped.code == rclcpp_action::ResultCode::SUCCEEDED &&
-                              wrapped.result && wrapped.result->success
-                          ? "INFO"
-                          : "ERROR");
-    completed_ = wrapped.code == rclcpp_action::ResultCode::SUCCEEDED && wrapped.result && wrapped.result->success;
-    failed_ = !completed_;
-    if (completed_) {
-      RCLCPP_INFO(ros_node_->get_logger(), "[%s] MoveJ completed: %s", name().c_str(), wrapped.result->message.c_str());
-      return bt_core::NodeStatus::SUCCESS;
-    }
-    setFailureReason((wrapped.result && !wrapped.result->message.empty())
-                         ? wrapped.result->message
-                         : "MoveJ action " + actionResultCode(wrapped.code));
-    RCLCPP_ERROR(ros_node_->get_logger(), "[%s] MoveJ failed: %s", name().c_str(), failureReason().c_str());
-    return bt_core::NodeStatus::FAILURE;
-  }
   return bt_core::NodeStatus::RUNNING;
 }
 
@@ -275,17 +325,12 @@ void MoveJNode::reset() {
   setFailureReason("");
   dry_run_logged_ = false;
   wait_server_recorded_ = false;
+  cancel_requested_ = false;
+  timeout_state_ = TimeoutState::kActive;
 }
 
 void MoveJNode::onHalted() {
-  if (goal_handle_ && client_) {
-    try {
-      (void)client_->async_cancel_goal(goal_handle_);
-      recordActionEvent("cancel", "cancel requested while halting", "WARN");
-    } catch (const std::exception& error) {
-      recordActionEvent("cancel", error.what(), "ERROR");
-    }
-  }
+  if (hasInFlightGoal()) requestCancel("cancel requested while halting");
   reset();
 }
 

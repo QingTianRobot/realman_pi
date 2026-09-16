@@ -25,6 +25,7 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
   void start();
   void stop();
   void onTick();
+  void flushSnapshot();
   void handleStart(const std::shared_ptr<Trigger::Request>,
                    std::shared_ptr<Trigger::Response> response);
   void handleStop(const std::shared_ptr<Trigger::Request>,

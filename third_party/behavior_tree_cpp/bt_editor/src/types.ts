@@ -78,7 +78,7 @@ export interface TickStats {
 export interface RuntimeEvent {
   timestamp_ms: number;
   severity: 'INFO' | 'WARN' | 'ERROR';
-  source: 'ACTION' | 'SERVICE' | 'ROS_LOG';
+  source: 'ACTION' | 'SERVICE' | 'ROS_LOG' | 'EXECUTOR';
   interface_name: string;
   phase: string;
   detail: string;

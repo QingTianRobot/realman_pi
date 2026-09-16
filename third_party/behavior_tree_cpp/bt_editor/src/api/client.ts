@@ -98,25 +98,25 @@ export async function fetchRuntime(signal?: AbortSignal): Promise<RuntimeSnapsho
 
 const RUN_STATUSES = ['IDLE', 'RUNNING', 'SUCCESS', 'FAILURE'] as const;
 const EVENT_SEVERITIES = ['INFO', 'WARN', 'ERROR'] as const;
-const EVENT_SOURCES = ['ACTION', 'SERVICE', 'ROS_LOG'] as const;
+const EVENT_SOURCES = ['ACTION', 'SERVICE', 'ROS_LOG', 'EXECUTOR'] as const;
 
 function isRecord(value: unknown): value is Record<string, unknown> {
   return typeof value === 'object' && value !== null;
 }
 
-function isFiniteNumber(value: unknown): value is number {
-  return typeof value === 'number' && Number.isFinite(value);
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
 }
 
 function isTickStats(value: unknown): boolean {
   return isRecord(value) && ['running', 'success', 'failure', 'total'].every(
-    (field) => isFiniteNumber(value[field]),
+    (field) => isNonNegativeSafeInteger(value[field]),
   );
 }
 
 function isRuntimeEvent(value: unknown): boolean {
   return isRecord(value) &&
-    isFiniteNumber(value.timestamp_ms) &&
+    isNonNegativeSafeInteger(value.timestamp_ms) &&
     typeof value.severity === 'string' && EVENT_SEVERITIES.includes(value.severity as typeof EVENT_SEVERITIES[number]) &&
     typeof value.source === 'string' && EVENT_SOURCES.includes(value.source as typeof EVENT_SOURCES[number]) &&
     ['interface_name', 'phase', 'detail'].every((field) => typeof value[field] === 'string');

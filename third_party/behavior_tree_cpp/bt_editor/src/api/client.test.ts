@@ -64,10 +64,10 @@ describe('runtime reads', () => {
       events: [{
         timestamp_ms: 1726473600000,
         severity: 'ERROR',
-        source: 'ACTION',
-        interface_name: '/r/execute_motion',
-        phase: 'result',
-        detail: 'target rejected',
+        source: 'EXECUTOR',
+        interface_name: 'realman_bt_executor',
+        phase: 'exception',
+        detail: 'tick failed',
       }],
     };
     vi.spyOn(globalThis, 'fetch').mockResolvedValue(new Response(JSON.stringify(snapshot)));
@@ -80,6 +80,16 @@ describe('runtime reads', () => {
       root_status: 'RUNNING',
       nodes: [],
       tick_stats: { running: 1, success: 0, failure: 0, total: '1' },
+    }],
+    ['negative tick statistics', {
+      root_status: 'RUNNING',
+      nodes: [],
+      tick_stats: { running: -1, success: 0, failure: 0, total: 0 },
+    }],
+    ['fractional tick statistics', {
+      root_status: 'RUNNING',
+      nodes: [],
+      tick_stats: { running: 1.5, success: 0, failure: 0, total: 2 },
     }],
     ['an unknown event severity', {
       root_status: 'RUNNING',
@@ -98,6 +108,30 @@ describe('runtime reads', () => {
       nodes: [],
       events: [{
         timestamp_ms: 1726473600000,
+        severity: 'INFO',
+        source: 'UNKNOWN',
+        interface_name: 'realman_bt_executor',
+        phase: 'tick',
+        detail: 'ignored',
+      }],
+    }],
+    ['a negative event timestamp', {
+      root_status: 'RUNNING',
+      nodes: [],
+      events: [{
+        timestamp_ms: -1,
+        severity: 'INFO',
+        source: 'EXECUTOR',
+        interface_name: 'realman_bt_executor',
+        phase: 'tick',
+        detail: 'ignored',
+      }],
+    }],
+    ['a fractional event timestamp', {
+      root_status: 'RUNNING',
+      nodes: [],
+      events: [{
+        timestamp_ms: 1726473600000.5,
         severity: 'INFO',
         source: 'EXECUTOR',
         interface_name: 'realman_bt_executor',

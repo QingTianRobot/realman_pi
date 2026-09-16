@@ -1211,7 +1211,14 @@ function connect() {
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   socket = new WebSocket(`${protocol}://${location.host}/ws`);
   socket.addEventListener("open", () => setConnection(true));
-  socket.addEventListener("close", () => { setConnection(false); updateButtons(); window.setTimeout(connect, 2000); });
+  socket.addEventListener("close", () => {
+    setConnection(false);
+    activeInputModeRequest = "";
+    activeInputModeExecutorRequest = undefined;
+    pendingInputModeId = "";
+    updateButtons();
+    window.setTimeout(connect, 2000);
+  });
   socket.addEventListener("message", (event) => { try { handleMessage(JSON.parse(event.data)); } catch { result.textContent = "收到无法解析的服务器消息"; } });
 }
 

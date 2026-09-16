@@ -515,6 +515,52 @@ test("renders the server-discovered global input mode and sends selections", asy
   await expect(page.locator("#input-mode-card")).toBeHidden();
 });
 
+test("unlocks input mode selection when reconnect loses its result", async ({ page }) => {
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list",
+    available: true,
+    modes: [
+      { id: "web", label: "Web", selectable: false },
+      { id: "policy", label: "Policy", selectable: true },
+      { id: "pika", label: "Pika", selectable: true },
+    ],
+  });
+  await page.locator("#input-mode-select").selectOption("pika");
+  await expect(page.locator("#input-mode-select")).toBeDisabled();
+
+  await page.evaluate(() => {
+    (window as any).__closedWebSocket = (window as any).__webSocket;
+    (window as any).__webSocket.readyState = 3;
+    (window as any).__webSocket.emit("close", {});
+  });
+  await expect.poll(() => page.evaluate(() =>
+    (window as any).__webSocket !== (window as any).__closedWebSocket,
+  )).toBe(true);
+
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list",
+    available: true,
+    modes: [
+      { id: "web", label: "Web", selectable: false },
+      { id: "policy", label: "Policy", selectable: true },
+      { id: "pika", label: "Pika", selectable: true },
+    ],
+  });
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state",
+    requested_mode: "policy",
+    selected_mode: "policy",
+    active_mode: "policy",
+    phase: "ACTIVE",
+    request_id: 77,
+    epoch: 12,
+    detail: "Policy 已启用",
+  });
+  await expect(page.locator("#input-mode-select")).toBeEnabled();
+  await expect(page.locator("#input-mode-select")).toHaveValue("policy");
+});
+
 test("clears MOVEL waiting feedback placeholder when the action is rejected", async ({ page }) => {
   await page.goto("/");
   await page.locator("button[data-motion-command=\"1\"]").click();

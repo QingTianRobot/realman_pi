@@ -2,6 +2,7 @@
 
 #include <array>
 #include <chrono>
+#include <functional>
 #include <future>
 #include <memory>
 #include <string>
@@ -18,12 +19,44 @@ inline constexpr char kRuntimeDiagnosticsBlackboardKey[] =
 
 class RuntimeDiagnostics;
 
+class MoveJCancellationDrain {
+ public:
+  using Action = realman_msgs::action::ExecuteMotion;
+  using Client = rclcpp_action::Client<Action>;
+  using GoalHandle = Client::GoalHandle;
+
+  MoveJCancellationDrain(Client::SharedPtr client,
+                         std::shared_future<GoalHandle::SharedPtr> goal_future,
+                         std::string action_name, RuntimeDiagnostics* diagnostics);
+  MoveJCancellationDrain(Client::SharedPtr client, GoalHandle::SharedPtr goal_handle,
+                         std::string action_name, RuntimeDiagnostics* diagnostics);
+
+  // Returns true only after the pending response is rejected or its accepted
+  // goal has received a cancellation request.
+  bool drainOnce();
+
+ private:
+  void recordEvent(const std::string& phase, const std::string& detail,
+                   const std::string& severity) const;
+
+  Client::SharedPtr client_;
+  std::shared_future<GoalHandle::SharedPtr> goal_future_;
+  GoalHandle::SharedPtr goal_handle_;
+  std::string action_name_;
+  RuntimeDiagnostics* diagnostics_{nullptr};
+};
+
+using MoveJCancellationDrainSink =
+    std::function<void(std::shared_ptr<MoveJCancellationDrain>)>;
+inline constexpr char kMoveJCancellationDrainSinkBlackboardKey[] =
+    "__realman_bt_movej_cancellation_drain_sink__";
+
 class MoveJNode final : public bt_core::ActionNode {
  public:
   using bt_core::ActionNode::ActionNode;
   using Action = realman_msgs::action::ExecuteMotion;
   using Client = rclcpp_action::Client<Action>;
- using GoalHandle = Client::GoalHandle;
+  using GoalHandle = Client::GoalHandle;
 
   static bt_core::PortsList providedPorts();
 
@@ -34,11 +67,14 @@ class MoveJNode final : public bt_core::ActionNode {
   enum class TimeoutState {
     kActive,
     kAwaitingGoalResponse,
+    kCancellationRetry,
     kCancelPending,
   };
 
   bool initialize();
   bool readGoal(Action::Goal* goal);
+  bool handoffPendingGoalResponse();
+  bool handoffInFlightGoal();
   bool hasInFlightGoal() const;
   void requestCancel(const std::string& detail);
   void recordActionEvent(const std::string& phase, const std::string& detail,

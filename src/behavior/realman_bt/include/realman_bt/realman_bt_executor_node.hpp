@@ -3,6 +3,7 @@
 #include <memory>
 #include <cstdint>
 #include <string>
+#include <vector>
 
 #include "bt_core/node_factory.hpp"
 #include "bt_core/tree.hpp"
@@ -13,6 +14,8 @@
 #include "std_srvs/srv/trigger.hpp"
 
 namespace realman_bt {
+
+class MoveJCancellationDrain;
 
 class RealmanBtExecutorNode final : public rclcpp::Node {
  public:
@@ -26,6 +29,8 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
   void stop();
   void onTick();
   void flushSnapshot();
+  void enqueueCancellationDrain(std::shared_ptr<MoveJCancellationDrain> drain);
+  void drainCancellationQueue();
   void handleStart(const std::shared_ptr<Trigger::Request>,
                    std::shared_ptr<Trigger::Response> response);
   void handleStop(const std::shared_ptr<Trigger::Request>,
@@ -47,6 +52,8 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
   rclcpp::Service<Trigger>::SharedPtr start_service_;
   rclcpp::Service<Trigger>::SharedPtr stop_service_;
   rclcpp::Subscription<rcl_interfaces::msg::Log>::SharedPtr rosout_sub_;
+  rclcpp::TimerBase::SharedPtr cancellation_drain_timer_;
+  std::vector<std::shared_ptr<MoveJCancellationDrain>> cancellation_drains_;
   double tick_rate_hz_{10.0};
   bool autostart_{true};
   bool stop_on_terminal_{true};

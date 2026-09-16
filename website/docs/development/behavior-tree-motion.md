@@ -110,6 +110,13 @@ RUNNING、SUCCESS 或 FAILURE 计数，再写出快照。`/realman_bt_executor/s
 超时取消的 Action 不会重复取消。服务的 `request` 和 `response` 事件、以及终态树 halt 后的事件，都会
 立即写出新的运行快照序号，无需等待下一次 tick。
 
+`/stop` 或树 halt 恰好发生在 `send_goal` 与 goal 响应之间时，MoveJ 会把 Action client 和 pending
+response 转交给执行器拥有的取消 drain。该 drain 由独立 50 ms ROS timer 驱动，不会重新 tick 已停止的树，
+并在收到延迟接受响应后发送 cancel 才释放 client。已经接受但尚未终态的 goal 也通过同一 drain 重试
+cancel；`async_cancel_goal` 抛出异常时不会标记为已取消，后续 drain/tick 会保留 Action 并重试。节点进程
+销毁会停止该 ROS timer，因此应先让 drain 完成并确认运行快照；进程退出后的机器人安全仍依赖急停和驱动的
+软件停止机制。
+
 执行器还订阅 `/rosout`（`rcl_interfaces/msg/Log`）。仅 logger 名称包含
 `realman_bt_executor` 或 `rclcpp_action` 的 WARN/ERROR 消息会写入 `ROS_LOG` 事件；原始 `msg` 文本不作
 修改地写入 `detail`。这只用于诊断快照，不替代 ROS 2 官方日志或其节点日志文件。

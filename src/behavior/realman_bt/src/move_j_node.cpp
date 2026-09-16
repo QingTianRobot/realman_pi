@@ -4,6 +4,7 @@
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
+#include <utility>
 
 #include "realman_bt/realman_bt_executor_node.hpp"
 #include "realman_bt/runtime_snapshot.hpp"
@@ -67,6 +68,56 @@ std::string actionResultCode(rclcpp_action::ResultCode code) {
 }
 
 }  // namespace
+
+MoveJCancellationDrain::MoveJCancellationDrain(
+    Client::SharedPtr client, std::shared_future<GoalHandle::SharedPtr> goal_future,
+    std::string action_name, RuntimeDiagnostics* diagnostics)
+    : client_(std::move(client)), goal_future_(std::move(goal_future)),
+      action_name_(std::move(action_name)), diagnostics_(diagnostics) {}
+
+MoveJCancellationDrain::MoveJCancellationDrain(
+    Client::SharedPtr client, GoalHandle::SharedPtr goal_handle,
+    std::string action_name, RuntimeDiagnostics* diagnostics)
+    : client_(std::move(client)), goal_handle_(std::move(goal_handle)),
+      action_name_(std::move(action_name)), diagnostics_(diagnostics) {}
+
+void MoveJCancellationDrain::recordEvent(const std::string& phase,
+                                         const std::string& detail,
+                                         const std::string& severity) const {
+  if (!diagnostics_) return;
+  diagnostics_->recordEvent({timestampMilliseconds(), severity, "ACTION", action_name_,
+                             phase, detail});
+}
+
+bool MoveJCancellationDrain::drainOnce() {
+  if (!client_) return true;
+  if (!goal_handle_) {
+    if (!goal_future_.valid()) return true;
+    if (goal_future_.wait_for(std::chrono::milliseconds(0)) !=
+        std::future_status::ready) {
+      return false;
+    }
+    try {
+      goal_handle_ = goal_future_.get();
+    } catch (const std::exception& error) {
+      recordEvent("goal_rejected", error.what(), "ERROR");
+      return true;
+    }
+    if (!goal_handle_) {
+      recordEvent("goal_rejected", "MoveJ goal rejected by action server", "ERROR");
+      return true;
+    }
+    recordEvent("goal_accepted", "MoveJ goal accepted after halt", "WARN");
+  }
+  try {
+    (void)client_->async_cancel_goal(goal_handle_);
+    recordEvent("cancel", "cancel requested after halt", "WARN");
+    return true;
+  } catch (const std::exception& error) {
+    recordEvent("cancel", error.what(), "ERROR");
+    return false;
+  }
+}
 
 bt_core::PortsList MoveJNode::providedPorts() {
   return bt_core::makePorts(
@@ -134,6 +185,26 @@ void MoveJNode::recordActionEvent(const std::string& phase,
                             phase, detail});
 }
 
+bool MoveJNode::handoffPendingGoalResponse() {
+  const auto sink = blackboard()->get<MoveJCancellationDrainSink>(
+      kMoveJCancellationDrainSinkBlackboardKey);
+  if (!sink.has_value() || !sink.value()) return false;
+  sink.value()(std::make_shared<MoveJCancellationDrain>(
+      std::move(client_), std::move(goal_future_), action_name_,
+      getDiagnostics(blackboard())));
+  return true;
+}
+
+bool MoveJNode::handoffInFlightGoal() {
+  const auto sink = blackboard()->get<MoveJCancellationDrainSink>(
+      kMoveJCancellationDrainSinkBlackboardKey);
+  if (!sink.has_value() || !sink.value()) return false;
+  sink.value()(std::make_shared<MoveJCancellationDrain>(
+      std::move(client_), std::move(goal_handle_), action_name_,
+      getDiagnostics(blackboard())));
+  return true;
+}
+
 bool MoveJNode::hasInFlightGoal() const {
   return goal_handle_ && client_ && result_future_.valid() && !completed_ &&
          !failed_ && !cancel_requested_ &&
@@ -149,10 +220,10 @@ void MoveJNode::requestCancel(const std::string& detail) {
           std::future_status::ready) {
     return;
   }
-  cancel_requested_ = true;
-  timeout_state_ = TimeoutState::kCancelPending;
   try {
     (void)client_->async_cancel_goal(goal_handle_);
+    cancel_requested_ = true;
+    timeout_state_ = TimeoutState::kCancelPending;
     recordActionEvent("cancel", detail, "WARN");
   } catch (const std::exception& error) {
     recordActionEvent("cancel", error.what(), "ERROR");
@@ -214,8 +285,10 @@ bt_core::NodeStatus MoveJNode::tick() {
                    name().c_str(), error.what());
       return bt_core::NodeStatus::FAILURE;
     }
-    if (timeout_state_ == TimeoutState::kAwaitingGoalResponse &&
-        hasInFlightGoal()) {
+    if (timeout_state_ == TimeoutState::kAwaitingGoalResponse) {
+      timeout_state_ = TimeoutState::kCancellationRetry;
+    }
+    if (timeout_state_ == TimeoutState::kCancellationRetry && hasInFlightGoal()) {
       requestCancel("cancel requested after delayed goal acceptance");
       return bt_core::NodeStatus::RUNNING;
     }
@@ -277,14 +350,19 @@ bt_core::NodeStatus MoveJNode::tick() {
       timeout_state_ = TimeoutState::kAwaitingGoalResponse;
       return bt_core::NodeStatus::RUNNING;
     }
+    timeout_state_ = TimeoutState::kCancellationRetry;
     requestCancel("cancel requested after timeout");
     return bt_core::NodeStatus::RUNNING;
   }
 
-  if (timeout_state_ == TimeoutState::kAwaitingGoalResponse ||
-      timeout_state_ == TimeoutState::kCancelPending) {
+  if (timeout_state_ == TimeoutState::kAwaitingGoalResponse) {
     return bt_core::NodeStatus::RUNNING;
   }
+  if (timeout_state_ == TimeoutState::kCancellationRetry) {
+    if (hasInFlightGoal()) requestCancel("retrying MoveJ cancellation after timeout");
+    return bt_core::NodeStatus::RUNNING;
+  }
+  if (timeout_state_ == TimeoutState::kCancelPending) return bt_core::NodeStatus::RUNNING;
 
   if (!client_->wait_for_action_server(std::chrono::milliseconds(0))) {
     if (!wait_server_recorded_) {
@@ -330,7 +408,26 @@ void MoveJNode::reset() {
 }
 
 void MoveJNode::onHalted() {
-  if (hasInFlightGoal()) requestCancel("cancel requested while halting");
+  if (sent_ && !goal_handle_ && goal_future_.valid()) {
+    if (handoffPendingGoalResponse()) {
+      reset();
+      return;
+    }
+    RCLCPP_ERROR(ros_node_->get_logger(),
+                 "[%s] cannot hand off pending MoveJ goal response during halt",
+                 name().c_str());
+    return;
+  }
+  if (hasInFlightGoal()) {
+    if (handoffInFlightGoal()) {
+      reset();
+      return;
+    }
+    RCLCPP_ERROR(ros_node_->get_logger(),
+                 "[%s] cannot hand off in-flight MoveJ goal during halt",
+                 name().c_str());
+    return;
+  }
   reset();
 }
 

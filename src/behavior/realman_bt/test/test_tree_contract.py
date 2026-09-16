@@ -156,3 +156,37 @@ def test_executor_flushes_diagnostics_for_service_events_and_terminal_halts():
     assert start_body.rindex('flushSnapshot();') > start_body.index('response->message')
     assert stop_body.index('flushSnapshot();') < stop_body.index('const bool running')
     assert stop_body.rindex('flushSnapshot();') > stop_body.index('response->message')
+
+
+def test_halted_pending_goal_is_drained_by_executor_owned_async_state():
+    header = (ROOT / 'src/behavior/realman_bt/include/realman_bt/move_j_node.hpp').read_text()
+    movej = (ROOT / 'src/behavior/realman_bt/src/move_j_node.cpp').read_text()
+    executor_header = EXECUTOR_HEADER.read_text()
+    executor = EXECUTOR.read_text()
+
+    assert 'class MoveJCancellationDrain' in header
+    assert 'kMoveJCancellationDrainSinkBlackboardKey' in header
+    assert 'handoffPendingGoalResponse' in movej
+    assert 'handoffInFlightGoal' in movej
+    assert 'std::move(client_)' in movej
+    assert 'std::move(goal_future_)' in movej
+    assert 'enqueueCancellationDrain' in executor_header
+    assert 'drainCancellationQueue' in executor_header
+    assert 'cancellation_drains_' in executor_header
+    assert 'create_wall_timer' in executor
+    assert 'drainCancellationQueue' in executor
+    assert 'if (remaining != current)' in executor
+
+
+def test_movej_marks_cancellation_only_after_request_succeeds_and_retries_errors():
+    source = (ROOT / 'src/behavior/realman_bt/src/move_j_node.cpp').read_text()
+    request_cancel = source[
+        source.index('void MoveJNode::requestCancel'):
+        source.index('bt_core::NodeStatus MoveJNode::tick')
+    ]
+
+    assert request_cancel.index('(void)client_->async_cancel_goal(goal_handle_);') < \
+        request_cancel.index('cancel_requested_ = true;')
+    assert 'timeout_state_ = TimeoutState::kCancelPending;' in request_cancel
+    assert 'catch (const std::exception& error)' in request_cancel
+    assert 'kCancellationRetry' in source

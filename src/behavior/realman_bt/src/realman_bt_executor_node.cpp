@@ -42,6 +42,11 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   blackboard_->set<rclcpp::Node*>(kRosNodeBlackboardKey, this);
   blackboard_->set<RuntimeDiagnostics*>(kRuntimeDiagnosticsBlackboardKey,
                                         &diagnostics_);
+  blackboard_->set<MoveJCancellationDrainSink>(
+      kMoveJCancellationDrainSinkBlackboardKey,
+      [this](std::shared_ptr<MoveJCancellationDrain> drain) {
+        enqueueCancellationDrain(std::move(drain));
+      });
   factory_.registerNodeType<bt_nodes::SequenceNode>("Sequence");
   factory_.registerNodeType<MoveJNode>("MoveJ");
   bt_core::XmlParser parser(factory_);
@@ -77,7 +82,17 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   if (autostart_) start();
 }
 
-RealmanBtExecutorNode::~RealmanBtExecutorNode() { stop(); }
+RealmanBtExecutorNode::~RealmanBtExecutorNode() {
+  stop();
+  if (cancellation_drain_timer_) cancellation_drain_timer_->cancel();
+  cancellation_drain_timer_.reset();
+  if (!cancellation_drains_.empty()) {
+    RCLCPP_WARN(get_logger(),
+                "releasing %zu pending MoveJ cancellation drain(s) during shutdown",
+                cancellation_drains_.size());
+  }
+  cancellation_drains_.clear();
+}
 
 void RealmanBtExecutorNode::start() {
   if (timer_) return;
@@ -148,6 +163,32 @@ void RealmanBtExecutorNode::flushSnapshot() {
     snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_);
   } catch (const std::exception& error) {
     RCLCPP_ERROR(get_logger(), "failed to write behavior tree snapshot: %s", error.what());
+  }
+}
+
+void RealmanBtExecutorNode::enqueueCancellationDrain(
+    std::shared_ptr<MoveJCancellationDrain> drain) {
+  if (!drain) return;
+  cancellation_drains_.push_back(std::move(drain));
+  if (cancellation_drain_timer_) return;
+  cancellation_drain_timer_ = create_wall_timer(
+      std::chrono::milliseconds(50), [this]() { drainCancellationQueue(); });
+}
+
+void RealmanBtExecutorNode::drainCancellationQueue() {
+  auto remaining = cancellation_drains_.begin();
+  for (auto current = cancellation_drains_.begin();
+       current != cancellation_drains_.end(); ++current) {
+    if (!(*current)->drainOnce()) {
+      if (remaining != current) *remaining = std::move(*current);
+      ++remaining;
+    }
+  }
+  cancellation_drains_.erase(remaining, cancellation_drains_.end());
+  flushSnapshot();
+  if (cancellation_drains_.empty() && cancellation_drain_timer_) {
+    cancellation_drain_timer_->cancel();
+    cancellation_drain_timer_.reset();
   }
 }
 

@@ -18,7 +18,7 @@
 }
 ```
 
-All counters and timestamps are non-negative safe integers in the monitor DTO. `severity` is `INFO`, `WARN`, or `ERROR`; `source` is `ACTION`, `SERVICE`, `ROS_LOG`, or `EXECUTOR`; `interface_name`, `phase`, and `detail` are strings. Preserve `detail` verbatim, including ROS log text and Action result messages. Invalid optional diagnostics must be rejected by the client; legacy snapshots without them remain valid.
+The four `tick_stats` counters and each diagnostic event `timestamp_ms` are non-negative safe integers in the monitor DTO. Top-level snapshot `sequence` and `timestamp_ms` are not validated by this client contract. `severity` is `INFO`, `WARN`, or `ERROR`; `source` is `ACTION`, `SERVICE`, `ROS_LOG`, or `EXECUTOR`; `interface_name`, `phase`, and `detail` are strings. Preserve `detail` verbatim, including ROS log text and Action result messages. Invalid optional diagnostics must be rejected by the client; legacy snapshots without them remain valid.
 
 `RuntimeDiagnostics` is mutex-protected. Record exactly one `RUNNING`, `SUCCESS`, or `FAILURE` outcome for each executor tick, then write the snapshot, including exception ticks. Retain only the newest 200 events, discarding the oldest on overflow. Calls without a recorder still emit v2 fields with zero counters and an empty event array.
 

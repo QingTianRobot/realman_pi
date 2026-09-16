@@ -3,10 +3,13 @@
 from __future__ import annotations
 
 import json
+from functools import wraps
 import math
 import os
 from pathlib import Path
 import queue
+import threading
+import time
 from typing import Any
 from urllib.parse import quote
 
@@ -20,14 +23,17 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from realman_msgs.action import CartesianVelocity, ExecuteMotion, ExecuteTrajectory
-from realman_msgs.msg import MotionWaypoint
+from realman_msgs.msg import InputModeState, MotionWaypoint
 from realman_msgs.srv import (
     CaptureCalibrationSample,
     ForwardKinematics,
     GetCurrentPose,
+    ListInputModes,
     RecoverMotion,
+    SelectInputMode,
     SolveCalibration,
     SolveIk,
 )
@@ -38,6 +44,7 @@ from gripper_ros2_msgs.srv import GripperPercentage
 from tf2_ros import Buffer, TransformListener
 
 from .action_bridge import ActionRecord, action_event, assign_fields, message_to_json
+from .input_mode_bridge import InputModeBridge, InputModeEffect, InputModeOption, InputModeSnapshot, MOTION_TYPES
 from .joint_records import JointRecordStore
 from .model_manifest import build_manifest
 from .protocol import ProtocolError
@@ -46,6 +53,19 @@ from .web_server import WebControlServer, load_server_config
 
 
 ARMS = ("l", "m", "r")
+
+
+def _serialized_control(method):
+    """Serialize controller effects and Action ownership, including Future tasks.
+
+    rclpy Future done callbacks may execute outside a client's callback group.
+    The lock therefore covers both command dispatch and response callbacks.
+    """
+    @wraps(method)
+    def call(self, *args, **kwargs):
+        with self._control_lock:
+            return method(self, *args, **kwargs)
+    return call
 
 
 class WebControlNode(Node):
@@ -113,6 +133,7 @@ class WebControlNode(Node):
         )
         self._robots = {robot["id"]: robot for robot in self._manifest["robots"]}
         self._commands: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue(maxsize=2048)
+        self._control_lock = threading.RLock()
         self._actions: dict[tuple[str, str], ActionRecord] = {}
         self._coordinate_state: dict[str, dict[str, Any]] = {}
         self._camera_health: dict[str, Any] = {"type": "camera_health", "inputs": []}
@@ -124,7 +145,24 @@ class WebControlNode(Node):
         self._has_nonzero_joint_state: set[str] = set()
         self._joint_records = JointRecordStore(joint_record_dir)
         self._callback_group = ReentrantCallbackGroup()
-        self._subscriptions = []
+        # Node owns its own _subscriptions collection; never append to it twice.
+        self._web_subscriptions = []
+        self._input_modes = InputModeBridge(web_override_timeout_sec=web_config.web_override_timeout_sec)
+        self._mode_discovery_period = web_config.discovery_period_sec
+        self._mode_list_future = None
+        self._mode_select_futures: dict[int, Any] = {}
+        self._mode_list_client = self.create_client(
+            ListInputModes, "/realman_bt_executor/list_input_modes", callback_group=self._callback_group,
+        )
+        self._mode_select_client = self.create_client(
+            SelectInputMode, "/realman_bt_executor/select_input_mode", callback_group=self._callback_group,
+        )
+        self._web_subscriptions.append(self.create_subscription(
+            InputModeState, "/realman_bt_executor/input_mode_state", self._input_mode_state,
+            QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE,
+                       durability=DurabilityPolicy.TRANSIENT_LOCAL),
+            callback_group=self._callback_group,
+        ))
         self._grippers = {}
         self._gripper_clients = {}
         self._gripper_states = {}
@@ -143,7 +181,7 @@ class WebControlNode(Node):
                         "percentage": self.create_client(GripperPercentage, f"/{name}/percentage", callback_group=self._callback_group),
                     }
                     self._gripper_states[name] = {"name": name, "connected": False, "position": 0.0, "speed": 0, "current": 0, "torque_reached": False, "alarm": 0}
-                    self._subscriptions.extend([
+                    self._web_subscriptions.extend([
                         self.create_subscription(Bool, f"/{name}/connected", lambda msg, n=name: self._gripper_state(n, "connected", bool(msg.data)), 10, callback_group=self._callback_group),
                         self.create_subscription(Float64, f"/{name}/position", lambda msg, n=name: self._gripper_state(n, "position", float(msg.data)), 10, callback_group=self._callback_group),
                         self.create_subscription(Int32, f"/{name}/speed", lambda msg, n=name: self._gripper_state(n, "speed", int(msg.data)), 10, callback_group=self._callback_group),
@@ -227,7 +265,7 @@ class WebControlNode(Node):
             "/camera_calibration/solve",
             callback_group=self._callback_group,
         )
-        self._subscriptions.append(
+        self._web_subscriptions.append(
             self.create_subscription(
                 String,
                 "/camera_calibration/camera_health",
@@ -237,7 +275,7 @@ class WebControlNode(Node):
             )
         )
         for arm in ARMS:
-            self._subscriptions.append(
+            self._web_subscriptions.append(
                 self.create_subscription(
                     JointState,
                     f"/{arm}/joint_states",
@@ -246,7 +284,7 @@ class WebControlNode(Node):
                     callback_group=self._callback_group,
                 )
             )
-            self._subscriptions.append(
+            self._web_subscriptions.append(
                 self.create_subscription(
                     String,
                     f"/{arm}/coordinates/state",
@@ -255,7 +293,7 @@ class WebControlNode(Node):
                     callback_group=self._callback_group,
                 )
             )
-            self._subscriptions.append(
+            self._web_subscriptions.append(
                 self.create_subscription(
                     Bool,
                     f"/{arm}/connected",
@@ -273,10 +311,13 @@ class WebControlNode(Node):
             calibration_config_file=calibration_config_file,
             calibration_log_root=calibration_log_root,
             on_command=self._enqueue_command,
-            on_client_connected=self._send_cached_state,
+            on_client_connected=lambda client_id: self._enqueue_command(client_id, {"type": "client_connected"}),
             logger=self.get_logger(),
         )
         self._server.start()
+        self._mode_discovery_timer = self.create_timer(
+            web_config.discovery_period_sec, self._probe_input_modes, callback_group=self._callback_group,
+        )
         self._tf_timer = self.create_timer(
             0.5,
             self._publish_tf_frames,
@@ -307,7 +348,9 @@ class WebControlNode(Node):
                 client_id,
             )
 
+    @_serialized_control
     def _drain_commands(self) -> None:
+        self._apply_input_mode_effects(self._input_modes.expire())
         for _ in range(100):
             try:
                 client_id, message = self._commands.get_nowait()
@@ -326,9 +369,12 @@ class WebControlNode(Node):
                     client_id,
                 )
 
+    @_serialized_control
     def _dispatch(self, client_id: str, message: dict[str, Any]) -> None:
         message_type = message["type"]
-        if message_type == "client_disconnected":
+        if message_type == "client_connected":
+            self._send_cached_state(client_id)
+        elif message_type == "client_disconnected":
             self._client_disconnected(client_id)
         elif message_type == "list_joint_records":
             self._list_joint_records(client_id, message)
@@ -344,12 +390,10 @@ class WebControlNode(Node):
             self._solve_ik(client_id, message)
         elif message_type == "gripper_command":
             self._gripper_command(client_id, message)
-        elif message_type == "execute_motion":
-            self._execute_motion(client_id, message)
-        elif message_type == "execute_trajectory":
-            self._execute_trajectory(client_id, message)
-        elif message_type == "start_cartesian_velocity":
-            self._start_velocity(client_id, message)
+        elif message_type == "select_input_mode":
+            self._apply_input_mode_effects(self._input_modes.select_mode(client_id, message))
+        elif message_type in MOTION_TYPES:
+            self._apply_input_mode_effects(self._input_modes.intercept_motion(client_id, message))
         elif message_type == "velocity_command":
             self._velocity_command(client_id, message)
         elif message_type == "cancel_action":
@@ -364,6 +408,160 @@ class WebControlNode(Node):
             self._solve_calibration(client_id, message)
         else:
             raise ProtocolError("unsupported_type", f"unsupported message type: {message_type}")
+
+    def _dispatch_direct_motion(self, client_id: str, message: dict[str, Any]) -> None:
+        handlers = {"execute_motion": self._execute_motion,
+                    "execute_trajectory": self._execute_trajectory,
+                    "start_cartesian_velocity": self._start_velocity}
+        handlers[message["type"]](client_id, message)
+
+    def _mode_services_ready(self) -> bool:
+        return self._mode_list_client.service_is_ready() and self._mode_select_client.service_is_ready()
+
+    def _forget_mode_selection_futures(self) -> None:
+        for token, future in list(self._mode_select_futures.items()):
+            if token != self._input_modes.pending_token:
+                self._mode_select_futures.pop(token)
+                self._mode_select_client.remove_pending_request(future)
+
+    def _input_mode_unavailable(self) -> None:
+        if self._mode_list_future is not None:
+            future, self._mode_list_future = self._mode_list_future, None
+            self._mode_list_client.remove_pending_request(future)
+        # Before first discovery a transient state may arrive before services do.
+        # Preserve it until the first catalog, and publish disappearance once.
+        if self._input_modes.available or self._input_modes.pending_token is not None:
+            self._apply_input_mode_effects(self._input_modes.update_catalog(None))
+        else:
+            self._forget_mode_selection_futures()
+
+    @_serialized_control
+    def _probe_input_modes(self) -> None:
+        self._apply_input_mode_effects(self._input_modes.expire())
+        if not self._mode_services_ready():
+            self._input_mode_unavailable()
+            return
+        if self._mode_list_future is not None:
+            if time.monotonic() >= self._mode_list_deadline:
+                self.get_logger().warning("Input mode catalog probe timed out")
+                self._input_mode_unavailable()
+            return
+        try:
+            future = self._mode_list_client.call_async(ListInputModes.Request())
+            self._mode_list_future = future
+            self._mode_list_deadline = time.monotonic() + self._mode_discovery_period
+            future.add_done_callback(self._input_mode_catalog_response)
+        except Exception as error:
+            self.get_logger().warning(f"Input mode catalog probe failed: {error}")
+            self._input_mode_unavailable()
+
+    @_serialized_control
+    def _input_mode_catalog_response(self, future: Any) -> None:
+        if future is not self._mode_list_future:
+            return
+        self._mode_list_future = None
+        if time.monotonic() >= self._mode_list_deadline:
+            self.get_logger().warning("Input mode catalog response arrived after its deadline")
+            self._input_mode_unavailable()
+            return
+        if not self._mode_services_ready():
+            self._input_mode_unavailable()
+            return
+        try:
+            response = future.result()
+            if not response.success:
+                raise ValueError(response.message)
+            if not len(response.mode_ids) == len(response.labels) == len(response.selectable):
+                raise ValueError("input mode catalog arrays have different lengths")
+            options = tuple(InputModeOption(mode_id, label, selectable)
+                            for mode_id, label, selectable in zip(response.mode_ids, response.labels, response.selectable))
+            self._apply_input_mode_effects(self._input_modes.update_catalog(options))
+        except Exception as error:
+            self.get_logger().warning(f"Input mode catalog response failed: {error}")
+            self._input_mode_unavailable()
+
+    @_serialized_control
+    def _input_mode_selection_response(self, token: int, future: Any) -> None:
+        if self._mode_select_futures.get(token) is not future:
+            return
+        self._mode_select_futures.pop(token)
+        if not self._mode_services_ready():
+            self._input_mode_unavailable()
+            return
+        try:
+            response = future.result()
+            effects = self._input_modes.selection_response(token, bool(response.accepted), int(response.request_id), response.message)
+        except Exception as error:
+            self.get_logger().warning(f"Input mode selection failed: {error}")
+            effects = self._input_modes.selection_response(token, False, 0, str(error))
+        self._apply_input_mode_effects(effects)
+
+    @_serialized_control
+    def _input_mode_state(self, message: InputModeState) -> None:
+        if self._input_modes.available and not self._mode_services_ready():
+            self._input_mode_unavailable()
+            return
+        phases = {InputModeState.ACTIVE: "ACTIVE", InputModeState.SWITCHING: "SWITCHING", InputModeState.FAILED: "FAILED"}
+        phase = phases.get(message.phase)
+        if phase is None:
+            self.get_logger().warning(f"Ignoring unknown input mode phase: {message.phase}")
+            return
+        snapshot = InputModeSnapshot(message.requested_mode, message.selected_mode, message.active_mode,
+                                     phase, int(message.request_id), int(message.epoch), message.detail)
+        self._apply_input_mode_effects(self._input_modes.update_state(snapshot))
+
+    def _cancel_web_actions(self) -> None:
+        records = list(self._actions.values())
+        for record in records:
+            record.cancel_requested = True
+        failures = []
+        for record in records:
+            if record.goal_handle is not None:
+                try:
+                    self._request_cancel(record)
+                except Exception as error:
+                    self.get_logger().error(f"Web input mode cancel failed for {record.arm}/{record.action}: {error}")
+                    failures.append(str(error))
+        if failures:
+            raise RuntimeError("; ".join(failures))
+
+    def _apply_input_mode_effects(self, effects: list[InputModeEffect]) -> None:
+        for effect in effects:
+            if effect.kind == "send_event":
+                self._server.send_event(effect.payload, effect.client_id)
+            elif effect.kind == "cancel_web_actions":
+                try:
+                    self._cancel_web_actions()
+                except Exception as error:
+                    self._apply_input_mode_effects(self._input_modes.selection_response(effect.token, False, 0, str(error)))
+                    return
+            elif effect.kind == "request_mode":
+                if not self._mode_services_ready():
+                    self._input_mode_unavailable()
+                    return
+                self._forget_mode_selection_futures()
+                request = SelectInputMode.Request()
+                request.mode_id = effect.payload["mode_id"]
+                request.requester_id = f"web:{effect.client_id}:{effect.token}"
+                try:
+                    future = self._mode_select_client.call_async(request)
+                    self._mode_select_futures[effect.token] = future
+                    future.add_done_callback(lambda completed, token=effect.token: self._input_mode_selection_response(token, completed))
+                except Exception as error:
+                    self.get_logger().warning(f"Input mode selection submission failed: {error}")
+                    self._apply_input_mode_effects(self._input_modes.selection_response(effect.token, False, 0, str(error)))
+            elif effect.kind == "forward_motion":
+                try:
+                    if self._input_modes.available and not self._mode_services_ready():
+                        self._input_mode_unavailable()
+                        raise ProtocolError("input_mode_unavailable", "input mode router is unavailable", effect.payload["request_id"])
+                    self._dispatch_direct_motion(effect.client_id, effect.payload)
+                except ProtocolError as error:
+                    self._server.send_event(error.event(), effect.client_id)
+                except Exception as error:
+                    self.get_logger().error(f"Web motion dispatch failed: {error}")
+                    self._server.send_event(ProtocolError("internal_error", str(error), effect.payload["request_id"]).event(), effect.client_id)
+        self._forget_mode_selection_futures()
 
     def _gripper_state(self, name: str, field: str, value: Any) -> None:
         state = self._gripper_states.get(name)
@@ -963,6 +1161,7 @@ class WebControlNode(Node):
         self._server.send_event(payload)
 
     def _send_cached_state(self, client_id: str) -> None:
+        self._apply_input_mode_effects(self._input_modes.cached_events(client_id))
         self._server.send_event(self._camera_health, client_id)
         self._server.send_event({"type": "gripper_list", "grippers": list(self._grippers.values())}, client_id)
         for state in self._gripper_states.values():
@@ -1192,6 +1391,7 @@ class WebControlNode(Node):
         )
         future.add_done_callback(lambda completed: self._goal_response(record, completed))
 
+    @_serialized_control
     def _goal_response(self, record: ActionRecord, future: Any) -> None:
         key = (record.arm, record.action)
         if self._actions.get(key) is not record:
@@ -1211,10 +1411,18 @@ class WebControlNode(Node):
             return
         record.goal_handle = goal_handle
         self._server.send_event(action_event(record, "accepted"))
-        result_future = goal_handle.get_result_async()
-        result_future.add_done_callback(lambda completed: self._action_result(record, completed))
         if record.cancel_requested:
-            self._request_cancel(record)
+            try:
+                self._request_cancel(record)
+            except Exception as error:
+                self.get_logger().error(f"Web delayed goal cancel failed: {error}")
+                self._server.send_event(action_event(record, "error", message=str(error)))
+        try:
+            result_future = goal_handle.get_result_async()
+            result_future.add_done_callback(lambda completed: self._action_result(record, completed))
+        except Exception as error:
+            self.get_logger().error(f"Web result listener failed for {record.arm}/{record.action}: {error}")
+            self._server.send_event(action_event(record, "error", message=str(error)))
 
     def _action_feedback(self, record: ActionRecord, feedback_message: Any) -> None:
         if self._actions.get((record.arm, record.action)) is not record:
@@ -1229,6 +1437,7 @@ class WebControlNode(Node):
             }
         )
 
+    @_serialized_control
     def _action_result(self, record: ActionRecord, future: Any) -> None:
         key = (record.arm, record.action)
         if self._actions.get(key) is not record:
@@ -1412,6 +1621,7 @@ class WebControlNode(Node):
         self._server.send_event(event, client_id)
 
     def _client_disconnected(self, client_id: str) -> None:
+        self._apply_input_mode_effects(self._input_modes.client_disconnected(client_id))
         for record in list(self._actions.values()):
             if record.owner != client_id:
                 continue

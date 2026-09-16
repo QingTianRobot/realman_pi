@@ -3,9 +3,36 @@ import json
 from pathlib import Path
 
 import pytest
+import yaml
 from aiohttp import web
 
-from realman_web_control.web_server import WebControlServer, WebServerConfig
+from realman_web_control.web_server import WebControlServer, WebServerConfig, load_server_config
+
+
+def test_input_mode_timing_is_loaded_from_root_config_without_runtime_defaults(tmp_path):
+    config_file = Path(__file__).resolve().parents[4] / "config/ros/realman_web_control.yaml"
+    document = yaml.safe_load(config_file.read_text())
+    document["input_mode"] = {"discovery_period_sec": 0.75, "web_override_timeout_sec": 2.5}
+    path = tmp_path / "web.yaml"
+    path.write_text(yaml.safe_dump(document))
+    config = load_server_config(path)
+    assert config.discovery_period_sec == 0.75
+    assert config.web_override_timeout_sec == 2.5
+
+
+@pytest.mark.parametrize("field", ["discovery_period_sec", "web_override_timeout_sec"])
+@pytest.mark.parametrize("value", [None, 0, -1, float("nan"), float("inf"), True, "1.0"])
+def test_input_mode_timing_rejects_missing_nonfinite_and_nonpositive_values(tmp_path, field, value):
+    document = {"server": {"bind_host": "127.0.0.1", "allowed_origins": ["same-origin"]},
+                "input_mode": {"discovery_period_sec": 1.0, "web_override_timeout_sec": 5.0}}
+    if value is None:
+        del document["input_mode"][field]
+    else:
+        document["input_mode"][field] = value
+    path = tmp_path / "web.yaml"
+    path.write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError, match=field):
+        load_server_config(path)
 
 
 class FakeLogger:
@@ -26,6 +53,8 @@ def _server(static_root: Path) -> WebControlServer:
         allowed_origins=("same-origin",),
         max_clients=8,
         max_message_bytes=65536,
+        discovery_period_sec=1.0,
+        web_override_timeout_sec=5.0,
     )
     return WebControlServer(
         config=config,

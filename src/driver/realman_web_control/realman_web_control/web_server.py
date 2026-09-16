@@ -6,6 +6,7 @@ import asyncio
 from dataclasses import dataclass
 from datetime import datetime, timezone
 import json
+import math
 from pathlib import Path
 import re
 import shutil
@@ -27,6 +28,8 @@ class WebServerConfig:
     allowed_origins: tuple[str, ...]
     max_clients: int
     max_message_bytes: int
+    discovery_period_sec: float
+    web_override_timeout_sec: float
 
 
 def load_server_config(path: str | Path) -> WebServerConfig:
@@ -35,6 +38,16 @@ def load_server_config(path: str | Path) -> WebServerConfig:
     if not isinstance(document, dict) or not isinstance(document.get("server"), dict):
         raise ValueError("web control config must contain a server mapping")
     server = document["server"]
+    input_mode = document.get("input_mode")
+    if not isinstance(input_mode, dict):
+        raise ValueError("web control config must contain an input_mode mapping")
+    timing = {}
+    for field in ("discovery_period_sec", "web_override_timeout_sec"):
+        value = input_mode.get(field)
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value <= 0):
+            raise ValueError(f"input_mode.{field} must be finite and positive")
+        timing[field] = float(value)
     bind_host = server.get("bind_host")
     origins = server.get("allowed_origins")
     if not isinstance(bind_host, str) or not bind_host:
@@ -49,6 +62,7 @@ def load_server_config(path: str | Path) -> WebServerConfig:
         allowed_origins=tuple(origins),
         max_clients=int(server.get("max_clients", 8)),
         max_message_bytes=int(server.get("max_message_bytes", 65536)),
+        **timing,
     )
     if not 1 <= config.port <= 65535:
         raise ValueError("server.port must be from 1 through 65535")

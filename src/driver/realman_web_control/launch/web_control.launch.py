@@ -18,7 +18,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "web_control_config_file",
                 default_value=str(config_root / "ros" / "realman_web_control.yaml"),
-                description="Annotated browser bridge settings under root config/ros.",
+                description="Root Web settings, including input-mode discovery and override timing.",
             ),
             DeclareLaunchArgument(
                 "layout_config_file",
@@ -57,6 +57,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
+                        # WebServerConfig loads input_mode timing from this file once.
                         "web_control_config_file": LaunchConfiguration("web_control_config_file"),
                         "layout_config_file": LaunchConfiguration("layout_config_file"),
                         "motion_config_file": LaunchConfiguration("motion_config_file"),

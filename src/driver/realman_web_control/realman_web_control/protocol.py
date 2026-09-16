@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Any
 
 
@@ -114,6 +115,13 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
     message_type = _string(message.get("type"), "type", maximum=48)
     if message_type == "ping":
         return {"type": "ping"}
+
+    if message_type == "select_input_mode":
+        request_id = _request_id(message)
+        mode_id = _string(message.get("mode_id"), "mode_id")
+        if re.fullmatch(r"[a-z][a-z0-9]*", mode_id) is None:
+            raise ProtocolError("invalid_field", "mode_id must be a lower-case ASCII identifier", request_id)
+        return {"type": message_type, "request_id": request_id, "mode_id": mode_id}
 
     if message_type == "capture_calibration_sample":
         request_id = _request_id(message)

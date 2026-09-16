@@ -7,7 +7,10 @@
 #include <utility>
 
 #include "bt_core/xml_parser.hpp"
+#include "bt_nodes/control/reactive_fallback_node.hpp"
+#include "bt_nodes/control/reactive_sequence_node.hpp"
 #include "bt_nodes/control/sequence_node.hpp"
+#include "realman_bt/input_mode_nodes.hpp"
 #include "realman_bt/move_j_node.hpp"
 #include "realman_bt/three_arm_move_j_node.hpp"
 
@@ -35,11 +38,24 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   stop_on_terminal_ = declare_parameter<bool>("stop_on_terminal", true);
   terminal_exit_policy_ = TerminalExitPolicy(
       declare_parameter<bool>("exit_on_terminal", true));
+  const auto switch_timeout_ms = declare_parameter<std::int64_t>("switch_timeout_ms", 5000);
+  const auto safe_fallback_mode = declare_parameter<std::string>("safe_fallback_mode", "none");
   if (tree_file.empty()) throw std::invalid_argument("tree_file must be set");
   if (arm_id != "l" && arm_id != "m" && arm_id != "r") throw std::invalid_argument("arm_id must be l, m, or r");
   if (!std::isfinite(tick_rate_hz_) || tick_rate_hz_ <= 0.0) throw std::invalid_argument("tick_rate_hz must be positive");
   if (runtime_snapshot_file.empty()) throw std::invalid_argument("runtime_snapshot_file must be set");
+  if (switch_timeout_ms <= 0) throw std::invalid_argument("switch_timeout_ms must be positive");
 
+  // Guards populate the registry while XML is constructed. The observer runs
+  // inline in ActivateInputMode, before the following input subtree can tick.
+  input_mode_coordinator_ = std::make_unique<InputModeCoordinator>(
+      input_mode_registry_, std::chrono::milliseconds(switch_timeout_ms),
+      safe_fallback_mode,
+      [this](const InputModeSnapshot&) { publishInputModeState(); });
+  blackboard_->set<InputModeRegistry*>(kInputModeRegistryBlackboardKey,
+                                      &input_mode_registry_);
+  blackboard_->set<InputModeCoordinator*>(kInputModeCoordinatorBlackboardKey,
+                                         input_mode_coordinator_.get());
   blackboard_->set<std::string>("arm_id", arm_id);
   blackboard_->set<bool>("dry_run", dry_run);
   blackboard_->set<rclcpp::Node*>(kRosNodeBlackboardKey, this);
@@ -51,11 +67,27 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
         enqueueCancellationDrain(std::move(drain));
       });
   factory_.registerNodeType<bt_nodes::SequenceNode>("Sequence");
+  factory_.registerNodeType<bt_nodes::ReactiveSequenceNode>("ReactiveSequence");
+  factory_.registerNodeType<bt_nodes::ReactiveFallbackNode>("ReactiveFallback");
+  factory_.registerNodeType<SelectInputModeNode>("SelectInputMode");
+  factory_.registerNodeType<InputModeGuardNode>("InputModeGuard");
+  factory_.registerNodeType<ActivateInputModeNode>("ActivateInputMode");
+  factory_.registerNodeType<WebInputStubNode>("WebInputStub");
+  factory_.registerNodeType<PolicyInputStubNode>("PolicyInputStub");
+  factory_.registerNodeType<PikaInputStubNode>("PikaInputStub");
+  factory_.registerNodeType<IdleInputNode>("IdleInput");
   factory_.registerNodeType<MoveJNode>("MoveJ");
   factory_.registerNodeType<ThreeArmMoveJNode>("ThreeArmMoveJ");
   bt_core::XmlParser parser(factory_);
   auto tree = parser.loadFromFile(tree_file, blackboard_);
   tree_ = std::make_unique<bt_core::Tree>(std::move(tree));
+  const bool has_input_modes = !input_mode_registry_.definitions().empty();
+  if (has_input_modes) {
+    input_mode_registry_.validate();
+    // Validate fallback against the completed catalog without consuming a
+    // request ID or advancing the initial ACTIVE/none state.
+    (void)input_mode_coordinator_->selectForTick(InputModeCoordinator::Clock::now());
+  }
   tree_id_ = std::filesystem::path(tree_file).stem().string();
   if (tree_id_.empty()) tree_id_ = tree_file;
   snapshot_writer_ = std::make_unique<RuntimeSnapshotWriter>(runtime_snapshot_file);
@@ -63,6 +95,23 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
     snapshot_writer_->writeIdle(tree_id_, &diagnostics_);
   } catch (const std::exception& error) {
     RCLCPP_ERROR(get_logger(), "failed to write idle behavior tree snapshot: %s", error.what());
+  }
+  if (has_input_modes) {
+    input_mode_state_pub_ = create_publisher<InputModeState>(
+        "~/input_mode_state", rclcpp::QoS(1).reliable().transient_local());
+    publishInputModeState();
+    list_input_modes_service_ = create_service<ListInputModes>(
+        "~/list_input_modes",
+        [this](std::shared_ptr<ListInputModes::Request> request,
+               std::shared_ptr<ListInputModes::Response> response) {
+          handleListInputModes(request, response);
+        });
+    select_input_mode_service_ = create_service<SelectInputMode>(
+        "~/select_input_mode",
+        [this](std::shared_ptr<SelectInputMode::Request> request,
+               std::shared_ptr<SelectInputMode::Response> response) {
+          handleSelectInputMode(request, response);
+        });
   }
   status_pub_ = create_publisher<std_msgs::msg::String>("~/bt_status", 10);
   rosout_sub_ = create_subscription<rcl_interfaces::msg::Log>(
@@ -123,6 +172,10 @@ void RealmanBtExecutorNode::onTick() {
     RCLCPP_ERROR(get_logger(), "behavior tree tick failed: %s", error.what());
     recordEvent("ERROR", "EXECUTOR", "realman_bt_executor", "exception",
                 error.what());
+    flushSnapshot();
+    if (input_mode_state_pub_) {
+      input_mode_coordinator_->fail(error.what(), InputModeCoordinator::Clock::now());
+    }
     tree_->halt();
   }
   diagnostics_.recordTick(status);
@@ -136,6 +189,101 @@ void RealmanBtExecutorNode::onTick() {
     terminal_exit_policy_.markTerminal(status == bt_core::NodeStatus::SUCCESS);
     stop();
     requestProcessExitIfReady();
+  }
+}
+
+void RealmanBtExecutorNode::publishInputModeState() {
+  if (!input_mode_state_pub_) return;
+  const auto& state = input_mode_coordinator_->snapshot();
+  InputModeState message;
+  message.requested_mode = state.requested_mode;
+  message.selected_mode = state.selected_mode;
+  message.active_mode = state.active_mode;
+  switch (state.phase) {
+    case InputModePhase::kActive: message.phase = InputModeState::ACTIVE; break;
+    case InputModePhase::kSwitching: message.phase = InputModeState::SWITCHING; break;
+    case InputModePhase::kFailed: message.phase = InputModeState::FAILED; break;
+  }
+  message.request_id = state.request_id;
+  message.epoch = state.epoch;
+  message.detail = state.detail;
+  input_mode_state_pub_->publish(message);
+
+  const auto transition = [this, &state](const char* phase, bool failed = false) {
+    recordEvent(failed ? "ERROR" : "INFO", "EXECUTOR",
+                input_mode_state_pub_->get_topic_name(), phase, state.detail);
+    flushSnapshot();
+    if (failed) {
+      RCLCPP_ERROR(get_logger(), "input mode %s: %s", phase, state.detail.c_str());
+    } else {
+      RCLCPP_INFO(get_logger(),
+                  "input mode %s: requested=%s selected=%s active=%s: %s",
+                  phase, state.requested_mode.c_str(), state.selected_mode.c_str(),
+                  state.active_mode.c_str(), state.detail.c_str());
+    }
+  };
+  if (state.phase == InputModePhase::kFailed &&
+      (!last_published_input_mode_ || last_published_input_mode_->phase != state.phase ||
+       last_published_input_mode_->detail != state.detail)) {
+    transition("failed", true);
+  }
+  if (last_published_input_mode_ &&
+      (last_published_input_mode_->selected_mode != state.selected_mode ||
+       last_published_input_mode_->requested_mode != state.requested_mode ||
+       (state.phase == InputModePhase::kSwitching &&
+        last_published_input_mode_->phase != state.phase))) {
+    transition("selected");
+  }
+  if (!last_published_input_mode_ ||
+      last_published_input_mode_->active_mode != state.active_mode ||
+      (state.phase == InputModePhase::kActive &&
+       last_published_input_mode_->phase != state.phase)) {
+    transition("active");
+  }
+  last_published_input_mode_ = state;
+}
+
+void RealmanBtExecutorNode::handleListInputModes(
+    const std::shared_ptr<ListInputModes::Request>,
+    std::shared_ptr<ListInputModes::Response> response) {
+  const auto interface_name = list_input_modes_service_->get_service_name();
+  recordEvent("INFO", "SERVICE", interface_name, "request", "");
+  flushSnapshot();
+  RCLCPP_INFO(get_logger(), "input mode catalog requested");
+  for (const auto& definition : input_mode_registry_.definitions()) {
+    response->mode_ids.push_back(definition.id);
+    response->labels.push_back(definition.label);
+    response->selectable.push_back(definition.selectable);
+  }
+  response->success = true;
+  response->message = "input modes listed";
+  recordEvent("INFO", "SERVICE", interface_name, "response", response->message);
+  flushSnapshot();
+  RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
+}
+
+void RealmanBtExecutorNode::handleSelectInputMode(
+    const std::shared_ptr<SelectInputMode::Request> request,
+    std::shared_ptr<SelectInputMode::Response> response) {
+  const auto interface_name = select_input_mode_service_->get_service_name();
+  const auto request_detail = "mode_id=" + request->mode_id +
+                              ", requester_id=" + request->requester_id;
+  recordEvent("INFO", "SERVICE", interface_name, "request", request_detail);
+  flushSnapshot();
+  RCLCPP_INFO(get_logger(), "input mode selection requested: %s", request_detail.c_str());
+  const auto result = input_mode_coordinator_->request(
+      request->mode_id, request->requester_id, InputModeCoordinator::Clock::now());
+  response->accepted = result.accepted;
+  response->request_id = result.request_id;
+  response->message = result.message;
+  publishInputModeState();
+  recordEvent(result.accepted ? "INFO" : "WARN", "SERVICE", interface_name,
+              "response", response->message);
+  flushSnapshot();
+  if (result.accepted) {
+    RCLCPP_INFO(get_logger(), "%s", response->message.c_str());
+  } else {
+    RCLCPP_WARN(get_logger(), "%s", response->message.c_str());
   }
 }
 

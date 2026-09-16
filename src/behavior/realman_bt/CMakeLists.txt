@@ -60,6 +60,7 @@ target_compile_features(realman_bt_executor PRIVATE cxx_std_17)
 target_link_libraries(realman_bt_executor bt::core)
 target_link_libraries(realman_bt_executor runtime_snapshot)
 target_link_libraries(realman_bt_executor move_j_nodes)
+target_link_libraries(realman_bt_executor input_mode_nodes)
 ament_target_dependencies(realman_bt_executor
   rclcpp rclcpp_action rcl_interfaces realman_msgs std_msgs std_srvs)
 install(TARGETS realman_bt_executor DESTINATION lib/${PROJECT_NAME})
@@ -76,6 +77,20 @@ install(FILES
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
+  add_executable(test_input_mode_executor
+    test/test_input_mode_executor.cpp
+    src/realman_bt_executor_node.cpp)
+  target_include_directories(test_input_mode_executor PRIVATE
+    "${BT_VENDOR_ROOT}" "${BT_VENDOR_ROOT}/bt_nodes")
+  target_compile_features(test_input_mode_executor PRIVATE cxx_std_17)
+  target_compile_definitions(test_input_mode_executor PRIVATE
+    BT_TEST_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees")
+  target_link_libraries(test_input_mode_executor move_j_nodes input_mode_nodes)
+  ament_target_dependencies(test_input_mode_executor
+    rclcpp rclcpp_action rcl_interfaces realman_msgs std_msgs std_srvs)
+  add_test(NAME test_input_mode_executor COMMAND test_input_mode_executor)
+  set_tests_properties(test_input_mode_executor PROPERTIES TIMEOUT 45)
+
   add_executable(test_input_mode test/test_input_mode.cpp)
   target_link_libraries(test_input_mode PRIVATE input_mode)
   add_test(NAME test_input_mode COMMAND test_input_mode)

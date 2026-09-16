@@ -243,6 +243,37 @@ def test_select_marks_every_arm_action_before_service_and_cancels_delayed_accept
     assert node.log[-3:] == [("cancel", "m/execute_motion"), ("cancel", "m/execute_trajectory"), ("cancel", "m/cartesian_velocity")]
 
 
+def test_rediscovery_selection_cancels_existing_actions_before_state_replay(node, monkeypatch):
+    node._input_modes.update_catalog(CATALOG)
+    node._input_mode_state(state())
+    accepted = ActionRecord("l", "execute_motion", "owner-a", "old-accepted")
+    accepted.goal_handle = GoalHandle(node.log, "l/execute_motion")
+    pending = ActionRecord("m", "execute_trajectory", "owner-b", "old-pending")
+    node._actions[("l", "execute_motion")] = accepted
+    node._actions[("m", "execute_trajectory")] = pending
+    node._mode_list_client.ready = node._mode_select_client.ready = False
+    node._probe_input_modes()
+    node._mode_list_client.ready = node._mode_select_client.ready = True
+    node._probe_input_modes()
+    node._mode_list_client.calls[-1][1].set_result(ListInputModes.Response(
+        success=True, mode_ids=["web", "policy"], labels=["Web", "Policy"], selectable=[False, True]))
+    assert [effect.payload["type"] for effect in node._input_modes.cached_events()] == ["input_mode_list"]
+    call_async = node._mode_select_client.call_async
+
+    def select_after_cancellation(request):
+        assert accepted.cancel_requested and accepted.cancel_submitted
+        assert pending.cancel_requested
+        return call_async(request)
+
+    monkeypatch.setattr(node._mode_select_client, "call_async", select_after_cancellation)
+    node._dispatch("browser", {"type": "select_input_mode", "request_id": "pick-1", "mode_id": "policy"})
+    assert node.log == [("service", "list"), ("cancel", "l/execute_motion"), ("service", "policy")]
+    response = Future()
+    response.set_result(GoalHandle(node.log, "m/execute_trajectory"))
+    node._goal_response(pending, response)
+    assert node.log[-1] == ("cancel", "m/execute_trajectory")
+
+
 def test_delayed_acceptance_is_cancelled_even_if_result_listener_setup_fails(node):
     record = ActionRecord("l", "execute_motion", "owner", "request", cancel_requested=True)
     node._actions[("l", "execute_motion")] = record

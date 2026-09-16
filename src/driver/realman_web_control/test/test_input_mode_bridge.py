@@ -193,6 +193,19 @@ def test_leaving_active_web_cancels_before_requesting_mode(bridge):
     assert not forwarded(controller.update_state(state(42, "policy")))
 
 
+@pytest.mark.parametrize("mode", ["policy", "pika", "none"])
+def test_rediscovered_catalog_selection_cancels_without_waiting_for_state(bridge, mode):
+    controller, _ = bridge
+    controller.update_catalog(CATALOG)
+    controller.update_state(state())
+    controller.update_catalog(None)
+    controller.update_catalog(CATALOG)
+    assert [effect.payload["type"] for effect in controller.cached_events()] == ["input_mode_list"]
+    effects = controller.select_mode("browser", {"request_id": "pick-1", "mode_id": mode})
+    assert kinds(effects) == ["cancel_web_actions", "request_mode"]
+    assert effects[-1].payload["mode_id"] == mode
+
+
 @pytest.mark.parametrize("mode,available,code", [
     ("web", True, "input_mode_not_selectable"),
     ("unknown", True, "input_mode_unknown"),

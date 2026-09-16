@@ -155,7 +155,10 @@ class InputModeBridge:
             self._next_token, client_id, request_id, mode_id,
             self._clock() + self._timeout, self._state_revision, motion,
         )
-        if mode_id != "web" and self._snapshot is not None and self._snapshot.active_mode == "web":
+        # Web-owned Actions can outlive discovery/state replay. Cancellation is
+        # idempotent and must precede every valid non-Web selection, even before
+        # this discovery generation has delivered its first state sample.
+        if mode_id != "web":
             effects.append(InputModeEffect("cancel_web_actions", client_id, {}, self._next_token))
         effects.append(InputModeEffect("request_mode", client_id, {
             "mode_id": mode_id, "request_id": request_id,

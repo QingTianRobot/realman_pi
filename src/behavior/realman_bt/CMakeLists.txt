@@ -89,7 +89,9 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_input_mode_executor
     rclcpp rclcpp_action rcl_interfaces realman_msgs std_msgs std_srvs)
   add_test(NAME test_input_mode_executor COMMAND test_input_mode_executor)
-  set_tests_properties(test_input_mode_executor PROPERTIES TIMEOUT 45)
+  set_tests_properties(test_input_mode_executor PROPERTIES
+    TIMEOUT 45
+    ENVIRONMENT "ROS_DOMAIN_ID=217")
 
   add_executable(test_input_mode test/test_input_mode.cpp)
   target_link_libraries(test_input_mode PRIVATE input_mode)

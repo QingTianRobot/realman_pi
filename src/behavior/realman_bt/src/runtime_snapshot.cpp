@@ -52,22 +52,84 @@ void appendStringField(std::ostringstream& json, const char* name,
   if (trailing_comma) json << ",";
 }
 
+void appendDiagnostics(std::ostringstream& json,
+                       const RuntimeDiagnostics* diagnostics) {
+  const RuntimeDiagnosticsSnapshot snapshot =
+      diagnostics ? diagnostics->snapshot() : RuntimeDiagnosticsSnapshot{};
+  json << ",\"tick_stats\":{\"running\":" << snapshot.tick_stats.running
+       << ",\"success\":" << snapshot.tick_stats.success
+       << ",\"failure\":" << snapshot.tick_stats.failure
+       << ",\"total\":" << snapshot.tick_stats.total << "},\"events\":[";
+  bool first = true;
+  for (const RuntimeEvent& event : snapshot.events) {
+    if (!first) json << ",";
+    first = false;
+    json << "{\"timestamp_ms\":" << event.timestamp_ms << ",";
+    appendStringField(json, "severity", event.severity);
+    appendStringField(json, "source", event.source);
+    appendStringField(json, "interface_name", event.interface_name);
+    appendStringField(json, "phase", event.phase);
+    appendStringField(json, "detail", event.detail, false);
+    json << "}";
+  }
+  json << "]";
+}
+
 }  // namespace
+
+void RuntimeDiagnostics::recordTick(bt_core::NodeStatus status) {
+  ++tick_stats_.total;
+  switch (status) {
+    case bt_core::NodeStatus::RUNNING:
+      ++tick_stats_.running;
+      break;
+    case bt_core::NodeStatus::SUCCESS:
+      ++tick_stats_.success;
+      break;
+    case bt_core::NodeStatus::FAILURE:
+      ++tick_stats_.failure;
+      break;
+    case bt_core::NodeStatus::IDLE:
+      break;
+  }
+}
+
+void RuntimeDiagnostics::recordEvent(RuntimeEvent event) {
+  events_.push_back(std::move(event));
+  if (events_.size() > kMaxEvents) events_.pop_front();
+}
+
+RuntimeDiagnosticsSnapshot RuntimeDiagnostics::snapshot() const {
+  return {tick_stats_, {events_.begin(), events_.end()}};
+}
 
 RuntimeSnapshotWriter::RuntimeSnapshotWriter(std::filesystem::path output_path)
     : output_path_(std::move(output_path)) {}
 
 void RuntimeSnapshotWriter::writeIdle(std::string tree_id) {
+  writeIdle(std::move(tree_id), nullptr);
+}
+
+void RuntimeSnapshotWriter::writeIdle(std::string tree_id,
+                                      const RuntimeDiagnostics* diagnostics) {
   std::ostringstream json;
-  json << "{\"schema_version\":1,";
+  json << "{\"schema_version\":2,";
   appendStringField(json, "tree_id", tree_id);
   json << "\"sequence\":0,\"timestamp_ms\":" << timestampMilliseconds()
-       << ",\"root_status\":\"IDLE\",\"nodes\":[]}";
+       << ",\"root_status\":\"IDLE\"";
+  appendDiagnostics(json, diagnostics);
+  json << ",\"nodes\":[]}";
   writeAtomically(json.str());
 }
 
 void RuntimeSnapshotWriter::write(const bt_core::Tree& tree, std::string tree_id,
                                   std::uint64_t sequence) {
+  write(tree, std::move(tree_id), sequence, nullptr);
+}
+
+void RuntimeSnapshotWriter::write(const bt_core::Tree& tree, std::string tree_id,
+                                  std::uint64_t sequence,
+                                  const RuntimeDiagnostics* diagnostics) {
   std::string root_failure_reason;
   tree.visitNodes([&](const bt_core::TreeNode::Ptr& node, int) {
     if (root_failure_reason.empty() && node->status() == bt_core::NodeStatus::FAILURE &&
@@ -76,7 +138,7 @@ void RuntimeSnapshotWriter::write(const bt_core::Tree& tree, std::string tree_id
     }
   });
   std::ostringstream json;
-  json << "{\"schema_version\":1,";
+  json << "{\"schema_version\":2,";
   appendStringField(json, "tree_id", tree_id);
   json << "\"sequence\":" << sequence
        << ",\"timestamp_ms\":" << timestampMilliseconds()
@@ -87,6 +149,7 @@ void RuntimeSnapshotWriter::write(const bt_core::Tree& tree, std::string tree_id
   if (!root_failure_reason.empty()) {
     json << ",\"failure_reason\":\"" << escapeJson(root_failure_reason) << "\"";
   }
+  appendDiagnostics(json, diagnostics);
   json << ",\"nodes\":[";
 
   bool first = true;

@@ -90,6 +90,12 @@ Action 未就绪时启动。可视化网页由同一容器在宿主网络监听 
 在网页中点击失败节点，可在右侧“失败原因”区域查看该文本；如果底层没有提供消息，则显示
 “未提供失败原因”。
 
+运行快照使用 JSON `schema_version: 2`。除树节点状态外，它还包含 `tick_stats`（`running`、
+`success`、`failure`、`total`）和 `events`。执行器可将事件写入
+`timestamp_ms`、`severity`、`source`、`interface_name`、`phase`、`detail` 字段；事件历史最多保留
+最近 200 条，新的事件会淘汰最旧条目。未接入诊断记录器的现有调用仍会产生 v2 快照，其中统计值为
+零且事件为空；快照仍通过同目录 `.tmp` 文件原子替换，读取方不会看到半写入 JSON。
+
 并提供手动控制服务：
 
     ros2 service call /realman_bt_executor/start std_srvs/srv/Trigger '{}'

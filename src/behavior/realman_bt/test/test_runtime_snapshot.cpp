@@ -37,14 +37,58 @@ void testIdleSnapshot() {
   std::filesystem::remove(path.string() + ".tmp", error);
 
   realman_bt::RuntimeSnapshotWriter writer(path);
-  writer.writeIdle("idle-tree");
+  realman_bt::RuntimeDiagnostics diagnostics;
+  diagnostics.recordTick(bt_core::NodeStatus::RUNNING);
+  diagnostics.recordTick(bt_core::NodeStatus::SUCCESS);
+  diagnostics.recordTick(bt_core::NodeStatus::FAILURE);
+  diagnostics.recordTick(bt_core::NodeStatus::IDLE);
+  writer.writeIdle("idle-tree", &diagnostics);
 
   const std::string json = readFile(path);
-  assertContains(json, R"("schema_version":1)");
+  assertContains(json, R"("schema_version":2)");
   assertContains(json, R"("tree_id":"idle-tree")");
   assertContains(json, R"("sequence":0)");
   assertContains(json, R"("root_status":"IDLE")");
+  assertContains(json, R"("tick_stats":{"running":1,"success":1,"failure":1,"total":4})");
+  assertContains(json, R"("events":[])");
   assertContains(json, R"("nodes":[])");
+  assert(!std::filesystem::exists(path.string() + ".tmp"));
+  std::filesystem::remove(path, error);
+}
+
+void testDiagnosticsRetainsTheMostRecentTwoHundredEvents() {
+  realman_bt::RuntimeDiagnostics diagnostics;
+  for (std::uint64_t index = 0; index <= 200; ++index) {
+    diagnostics.recordEvent({index, "INFO", "executor", "motion", "tick",
+                             "event-" + std::to_string(index)});
+  }
+
+  const auto snapshot = diagnostics.snapshot();
+  assert(snapshot.events.size() == 200);
+  assert(snapshot.events.front().detail == "event-1");
+  assert(snapshot.events.back().detail == "event-200");
+}
+
+void testEventsAreSerializedWithEscapedText() {
+  const auto path = std::filesystem::temp_directory_path() /
+                    "realman-bt-runtime-snapshot-events.json";
+  std::error_code error;
+  std::filesystem::remove(path, error);
+  std::filesystem::remove(path.string() + ".tmp", error);
+
+  realman_bt::RuntimeDiagnostics diagnostics;
+  diagnostics.recordEvent({123, "WARN\"\\\n", "executor\t", "motion\r",
+                           "tick\b", "detail\f"});
+  realman_bt::RuntimeSnapshotWriter writer(path);
+  writer.writeIdle("idle-tree", &diagnostics);
+
+  const std::string json = readFile(path);
+  assertContains(json, R"("timestamp_ms":123)");
+  assertContains(json, R"("severity":"WARN\"\\\n")");
+  assertContains(json, R"("source":"executor\t")");
+  assertContains(json, R"("interface_name":"motion\r")");
+  assertContains(json, R"("phase":"tick\b")");
+  assertContains(json, R"("detail":"detail\f")");
   assert(!std::filesystem::exists(path.string() + ".tmp"));
   std::filesystem::remove(path, error);
 }
@@ -73,7 +117,7 @@ void testTreeSnapshotUsesStableDfsKeysAndStatuses() {
   writer.write(tree, "arm\\r", 42);
 
   const std::string json = readFile(path);
-  assertContains(json, R"("schema_version":1)");
+  assertContains(json, R"("schema_version":2)");
   assertContains(json, R"("tree_id":"arm\\r")");
   assertContains(json, R"("sequence":42)");
   assertContains(json, R"("root_status":"RUNNING")");
@@ -122,6 +166,8 @@ void testJsonEscapingAndAtomicReplacement() {
 
 int main() {
   testIdleSnapshot();
+  testDiagnosticsRetainsTheMostRecentTwoHundredEvents();
+  testEventsAreSerializedWithEscapedText();
   testTreeSnapshotUsesStableDfsKeysAndStatuses();
   testJsonEscapingAndAtomicReplacement();
   return 0;

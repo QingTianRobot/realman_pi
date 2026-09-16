@@ -44,16 +44,18 @@ def test_executor_writes_idle_snapshot_after_loading_tree():
     header = EXECUTOR_HEADER.read_text()
     assert '#include "realman_bt/runtime_snapshot.hpp"' in header
     assert 'RuntimeSnapshotWriter' in header
-    assert 'snapshot_writer_->writeIdle(tree_id_);' in source
+    assert 'snapshot_writer_->writeIdle(tree_id_, &diagnostics_);' in source
 
 
 def test_executor_increments_sequence_and_writes_snapshot_for_every_tick_status():
     source = EXECUTOR.read_text()
     assert 'status = tree_->tickOnce();' in source
     assert '++snapshot_sequence_;' in source
-    assert 'snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_);' in source
+    assert 'snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_);' in source
     tick_body = source[source.index('void RealmanBtExecutorNode::onTick()'):]
-    write_index = tick_body.index('snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_);')
+    write_index = tick_body.index(
+        'snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_);'
+    )
     # Snapshot publishing must happen before terminal handling, so all three
     # possible tick results (SUCCESS/FAILURE/RUNNING) are persisted.
     assert 'if (stop_on_terminal_ && bt_core::isStatusCompleted(status))' in tick_body
@@ -84,3 +86,33 @@ def test_runtime_snapshot_and_movej_expose_failure_reason_contract():
     assert 'failure_reason' in snapshot
     assert 'setFailureReason' in movej
     assert 'failureReason()' in node
+
+
+def test_executor_declares_runtime_diagnostics_rosout_and_event_contract():
+    source = EXECUTOR.read_text()
+    header = EXECUTOR_HEADER.read_text()
+    cmake = CMAKE.read_text()
+    package = (ROOT / 'src/behavior/realman_bt/package.xml').read_text()
+    movej = (ROOT / 'src/behavior/realman_bt/src/move_j_node.cpp').read_text()
+
+    assert 'RuntimeDiagnostics diagnostics_' in header
+    assert 'rcl_interfaces/msg/log.hpp' in header
+    assert 'create_subscription<rcl_interfaces::msg::Log>' in source
+    assert '"/rosout"' in source
+    assert 'ROS_LOG' in source
+    assert 'rcl_interfaces' in cmake
+    assert '<depend>rcl_interfaces</depend>' in package
+    assert 'source = "SERVICE"' in source or '"SERVICE"' in source
+    assert '"ACTION"' in movej
+    assert '"/realman_bt_executor/start"' in source
+    assert '"/realman_bt_executor/stop"' in source
+    assert 'wait_server' in movej
+    assert 'send_goal' in movej
+    assert 'goal_accepted' in movej
+    assert 'goal_rejected' in movej
+    assert '"result"' in movej
+    assert '"timeout"' in movej
+    assert '"cancel"' in movej
+    assert 'recordTick(status)' in source
+    assert 'recordEvent' in source
+    assert 'catch (const std::exception& error)' in source

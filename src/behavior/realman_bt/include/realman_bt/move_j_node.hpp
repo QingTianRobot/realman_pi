@@ -13,6 +13,10 @@
 namespace realman_bt {
 
 inline constexpr char kRosNodeBlackboardKey[] = "__realman_bt_ros_node__";
+inline constexpr char kRuntimeDiagnosticsBlackboardKey[] =
+    "__realman_bt_runtime_diagnostics__";
+
+class RuntimeDiagnostics;
 
 class MoveJNode final : public bt_core::ActionNode {
  public:
@@ -29,6 +33,8 @@ class MoveJNode final : public bt_core::ActionNode {
  private:
   bool initialize();
   bool readGoal(Action::Goal* goal);
+  void recordActionEvent(const std::string& phase, const std::string& detail,
+                         const std::string& severity = "INFO") const;
   void reset();
 
   rclcpp::Node* ros_node_{nullptr};
@@ -46,6 +52,7 @@ class MoveJNode final : public bt_core::ActionNode {
   bool completed_{false};
   bool failed_{false};
   bool dry_run_logged_{false};
+  bool wait_server_recorded_{false};
 };
 
 }  // namespace realman_bt

@@ -1,11 +1,12 @@
 #include "realman_bt/move_j_node.hpp"
 
+#include <cstdint>
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
 
-
 #include "realman_bt/realman_bt_executor_node.hpp"
+#include "realman_bt/runtime_snapshot.hpp"
 namespace realman_bt {
 namespace {
 
@@ -36,6 +37,33 @@ rclcpp::Node* getNode(const bt_core::Blackboard::Ptr& blackboard) {
     throw std::runtime_error("behavior tree ROS node handle is missing from blackboard");
   }
   return value.value();
+}
+
+RuntimeDiagnostics* getDiagnostics(const bt_core::Blackboard::Ptr& blackboard) {
+  const auto value = blackboard->get<RuntimeDiagnostics*>(
+      kRuntimeDiagnosticsBlackboardKey);
+  return value.value_or(nullptr);
+}
+
+std::uint64_t timestampMilliseconds() {
+  const auto now = std::chrono::system_clock::now();
+  const auto milliseconds =
+      std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
+  return static_cast<std::uint64_t>(milliseconds.count());
+}
+
+std::string actionResultCode(rclcpp_action::ResultCode code) {
+  switch (code) {
+    case rclcpp_action::ResultCode::SUCCEEDED:
+      return "SUCCEEDED";
+    case rclcpp_action::ResultCode::ABORTED:
+      return "ABORTED";
+    case rclcpp_action::ResultCode::CANCELED:
+      return "CANCELED";
+    case rclcpp_action::ResultCode::UNKNOWN:
+      return "UNKNOWN";
+  }
+  return "UNKNOWN";
 }
 
 }  // namespace
@@ -97,6 +125,15 @@ bool MoveJNode::initialize() {
   return true;
 }
 
+void MoveJNode::recordActionEvent(const std::string& phase,
+                                  const std::string& detail,
+                                  const std::string& severity) const {
+  RuntimeDiagnostics* diagnostics = getDiagnostics(blackboard());
+  if (!diagnostics) return;
+  diagnostics->recordEvent({timestampMilliseconds(), severity, "ACTION", action_name_,
+                            phase, detail});
+}
+
 bt_core::NodeStatus MoveJNode::tick() {
   try {
     if (!initialize()) return bt_core::NodeStatus::FAILURE;
@@ -112,14 +149,21 @@ bt_core::NodeStatus MoveJNode::tick() {
       RCLCPP_INFO(ros_node_->get_logger(), "[%s] dry-run validated MoveJ for %s; no goal sent", name().c_str(), action_name_.c_str());
       dry_run_logged_ = true;
     }
+    recordActionEvent("result", "dry-run validation completed; no goal sent");
     completed_ = true;
     return bt_core::NodeStatus::SUCCESS;
   }
 
   const auto now = std::chrono::steady_clock::now();
   if (std::chrono::duration<double>(now - started_at_).count() > timeout_sec_) {
+    recordActionEvent("timeout", "MoveJ action timed out", "ERROR");
     if (goal_handle_ && client_) {
-      try { (void)client_->async_cancel_goal(goal_handle_); } catch (const std::exception&) {}
+      try {
+        (void)client_->async_cancel_goal(goal_handle_);
+        recordActionEvent("cancel", "cancel requested after timeout", "WARN");
+      } catch (const std::exception& error) {
+        recordActionEvent("cancel", error.what(), "ERROR");
+      }
     }
     failed_ = true;
     setFailureReason("MoveJ timed out after " + std::to_string(timeout_sec_) + " seconds");
@@ -127,11 +171,25 @@ bt_core::NodeStatus MoveJNode::tick() {
     return bt_core::NodeStatus::FAILURE;
   }
   if (!client_->wait_for_action_server(std::chrono::milliseconds(0))) {
+    if (!wait_server_recorded_) {
+      recordActionEvent("wait_server", "waiting for action server");
+      wait_server_recorded_ = true;
+    }
     return bt_core::NodeStatus::RUNNING;
   }
   if (!sent_) {
-    goal_future_ = client_->async_send_goal(goal_);
+    try {
+      goal_future_ = client_->async_send_goal(goal_);
+    } catch (const std::exception& error) {
+      failed_ = true;
+      setFailureReason(error.what());
+      recordActionEvent("send_goal", failureReason(), "ERROR");
+      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] cannot send MoveJ goal: %s",
+                   name().c_str(), failureReason().c_str());
+      return bt_core::NodeStatus::FAILURE;
+    }
     sent_ = true;
+    recordActionEvent("send_goal", "MoveJ goal sent");
     RCLCPP_INFO(ros_node_->get_logger(), "[%s] sent MoveJ goal to %s", name().c_str(), action_name_.c_str());
     return bt_core::NodeStatus::RUNNING;
   }
@@ -139,25 +197,56 @@ bt_core::NodeStatus MoveJNode::tick() {
     if (goal_future_.wait_for(std::chrono::milliseconds(0)) != std::future_status::ready) {
       return bt_core::NodeStatus::RUNNING;
     }
-    goal_handle_ = goal_future_.get();
+    try {
+      goal_handle_ = goal_future_.get();
+    } catch (const std::exception& error) {
+      failed_ = true;
+      setFailureReason(error.what());
+      recordActionEvent("goal_rejected", failureReason(), "ERROR");
+      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] cannot receive MoveJ goal response: %s",
+                   name().c_str(), failureReason().c_str());
+      return bt_core::NodeStatus::FAILURE;
+    }
     if (!goal_handle_) {
       failed_ = true;
       setFailureReason("MoveJ goal rejected by action server");
+      recordActionEvent("goal_rejected", failureReason(), "ERROR");
       RCLCPP_ERROR(ros_node_->get_logger(), "[%s] %s", name().c_str(), failureReason().c_str());
       return bt_core::NodeStatus::FAILURE;
     }
+    recordActionEvent("goal_accepted", "MoveJ goal accepted");
     try {
       result_future_ = client_->async_get_result(goal_handle_);
     } catch (const std::exception& error) {
       failed_ = true;
       setFailureReason(error.what());
+      recordActionEvent("result", failureReason(), "ERROR");
       RCLCPP_ERROR(ros_node_->get_logger(), "[%s] cannot get MoveJ result: %s", name().c_str(), error.what());
       return bt_core::NodeStatus::FAILURE;
     }
     return bt_core::NodeStatus::RUNNING;
   }
   if (result_future_.valid() && result_future_.wait_for(std::chrono::milliseconds(0)) == std::future_status::ready) {
-    const auto wrapped = result_future_.get();
+    Client::WrappedResult wrapped;
+    try {
+      wrapped = result_future_.get();
+    } catch (const std::exception& error) {
+      failed_ = true;
+      setFailureReason(error.what());
+      recordActionEvent("result", failureReason(), "ERROR");
+      RCLCPP_ERROR(ros_node_->get_logger(), "[%s] cannot receive MoveJ result: %s",
+                   name().c_str(), failureReason().c_str());
+      return bt_core::NodeStatus::FAILURE;
+    }
+    const std::string result_detail =
+        (wrapped.result && !wrapped.result->message.empty())
+            ? wrapped.result->message
+            : actionResultCode(wrapped.code);
+    recordActionEvent("result", result_detail,
+                      wrapped.code == rclcpp_action::ResultCode::SUCCEEDED &&
+                              wrapped.result && wrapped.result->success
+                          ? "INFO"
+                          : "ERROR");
     completed_ = wrapped.code == rclcpp_action::ResultCode::SUCCEEDED && wrapped.result && wrapped.result->success;
     failed_ = !completed_;
     if (completed_) {
@@ -166,7 +255,7 @@ bt_core::NodeStatus MoveJNode::tick() {
     }
     setFailureReason((wrapped.result && !wrapped.result->message.empty())
                          ? wrapped.result->message
-                         : "MoveJ action failed");
+                         : "MoveJ action " + actionResultCode(wrapped.code));
     RCLCPP_ERROR(ros_node_->get_logger(), "[%s] MoveJ failed: %s", name().c_str(), failureReason().c_str());
     return bt_core::NodeStatus::FAILURE;
   }
@@ -185,11 +274,17 @@ void MoveJNode::reset() {
   failed_ = false;
   setFailureReason("");
   dry_run_logged_ = false;
+  wait_server_recorded_ = false;
 }
 
 void MoveJNode::onHalted() {
   if (goal_handle_ && client_) {
-    try { (void)client_->async_cancel_goal(goal_handle_); } catch (const std::exception&) {}
+    try {
+      (void)client_->async_cancel_goal(goal_handle_);
+      recordActionEvent("cancel", "cancel requested while halting", "WARN");
+    } catch (const std::exception& error) {
+      recordActionEvent("cancel", error.what(), "ERROR");
+    }
   }
   reset();
 }

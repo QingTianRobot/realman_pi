@@ -96,6 +96,18 @@ Action 未就绪时启动。可视化网页由同一容器在宿主网络监听 
 最近 200 条，新的事件会淘汰最旧条目。未接入诊断记录器的现有调用仍会产生 v2 快照，其中统计值为
 零且事件为空；快照仍通过同目录 `.tmp` 文件原子替换，读取方不会看到半写入 JSON。
 
+执行器本身拥有诊断记录器，因此每次 tick（包括抛出异常后停止树的 tick）都会先计入唯一的
+RUNNING、SUCCESS 或 FAILURE 计数，再写出快照。`/realman_bt_executor/start` 和
+`/realman_bt_executor/stop` 分别写入 `SERVICE` 的 `request`、`response` 事件，响应消息原样放入
+`detail`。MoveJ 写入 `ACTION` 事件，接口名为 `/<arm_id>/execute_motion`，阶段包括
+`wait_server`、`send_goal`、`goal_accepted`、`goal_rejected`、`result`、`timeout` 和 `cancel`；失败原因
+优先使用 Action 返回消息，否则记录 ROS Action 结果码。dry-run 只写入验证完成的 `result` 事件，绝不
+创建或发送 Action goal。
+
+执行器还订阅 `/rosout`（`rcl_interfaces/msg/Log`）。仅 logger 名称包含
+`realman_bt_executor` 或 `rclcpp_action` 的 WARN/ERROR 消息会写入 `ROS_LOG` 事件；原始 `msg` 文本不作
+修改地写入 `detail`。这只用于诊断快照，不替代 ROS 2 官方日志或其节点日志文件。
+
 并提供手动控制服务：
 
     ros2 service call /realman_bt_executor/start std_srvs/srv/Trigger '{}'

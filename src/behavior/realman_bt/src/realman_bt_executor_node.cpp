@@ -4,12 +4,23 @@
 #include <cmath>
 #include <filesystem>
 #include <stdexcept>
+#include <utility>
 
 #include "bt_core/xml_parser.hpp"
 #include "bt_nodes/control/sequence_node.hpp"
 #include "realman_bt/move_j_node.hpp"
 
 namespace realman_bt {
+namespace {
+
+std::uint64_t timestampMilliseconds() {
+  const auto now = std::chrono::system_clock::now();
+  const auto milliseconds =
+      std::chrono::duration_cast<std::chrono::milliseconds>(now.time_since_epoch());
+  return static_cast<std::uint64_t>(milliseconds.count());
+}
+
+}  // namespace
 
 RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
     : rclcpp::Node("realman_bt_executor", options), blackboard_(bt_core::Blackboard::create()) {
@@ -29,6 +40,8 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   blackboard_->set<std::string>("arm_id", arm_id);
   blackboard_->set<bool>("dry_run", dry_run);
   blackboard_->set<rclcpp::Node*>(kRosNodeBlackboardKey, this);
+  blackboard_->set<RuntimeDiagnostics*>(kRuntimeDiagnosticsBlackboardKey,
+                                        &diagnostics_);
   factory_.registerNodeType<bt_nodes::SequenceNode>("Sequence");
   factory_.registerNodeType<MoveJNode>("MoveJ");
   bt_core::XmlParser parser(factory_);
@@ -38,11 +51,16 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   if (tree_id_.empty()) tree_id_ = tree_file;
   snapshot_writer_ = std::make_unique<RuntimeSnapshotWriter>(runtime_snapshot_file);
   try {
-    snapshot_writer_->writeIdle(tree_id_);
+    snapshot_writer_->writeIdle(tree_id_, &diagnostics_);
   } catch (const std::exception& error) {
     RCLCPP_ERROR(get_logger(), "failed to write idle behavior tree snapshot: %s", error.what());
   }
   status_pub_ = create_publisher<std_msgs::msg::String>("~/bt_status", 10);
+  rosout_sub_ = create_subscription<rcl_interfaces::msg::Log>(
+      "/rosout", rclcpp::QoS(100),
+      [this](const rcl_interfaces::msg::Log::SharedPtr message) {
+        handleRosout(message);
+      });
   start_service_ = create_service<Trigger>(
       "~/start",
       [this](std::shared_ptr<Trigger::Request> request,
@@ -83,12 +101,15 @@ void RealmanBtExecutorNode::onTick() {
     status = tree_->tickOnce();
   } catch (const std::exception& error) {
     RCLCPP_ERROR(get_logger(), "behavior tree tick failed: %s", error.what());
+    recordEvent("ERROR", "EXECUTOR", "realman_bt_executor", "exception",
+                error.what());
     tree_->halt();
   }
+  diagnostics_.recordTick(status);
   ++snapshot_sequence_;
   if (snapshot_writer_) {
     try {
-      snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_);
+      snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_);
     } catch (const std::exception& error) {
       RCLCPP_ERROR(get_logger(), "failed to write behavior tree snapshot: %s", error.what());
     }
@@ -103,17 +124,45 @@ void RealmanBtExecutorNode::onTick() {
 }
 
 void RealmanBtExecutorNode::handleStart(const std::shared_ptr<Trigger::Request>, std::shared_ptr<Trigger::Response> response) {
+  recordEvent("INFO", "SERVICE", "/realman_bt_executor/start", "request", "");
   const bool running = static_cast<bool>(timer_);
   start();
   response->success = true;
   response->message = running ? "already running" : "started";
+  recordEvent("INFO", "SERVICE", "/realman_bt_executor/start", "response",
+              response->message);
 }
 
 void RealmanBtExecutorNode::handleStop(const std::shared_ptr<Trigger::Request>, std::shared_ptr<Trigger::Response> response) {
+  recordEvent("INFO", "SERVICE", "/realman_bt_executor/stop", "request", "");
   const bool running = static_cast<bool>(timer_);
   stop();
   response->success = true;
   response->message = running ? "stopped" : "already stopped";
+  recordEvent("INFO", "SERVICE", "/realman_bt_executor/stop", "response",
+              response->message);
+}
+
+void RealmanBtExecutorNode::recordEvent(std::string severity, std::string source,
+                                        std::string interface_name,
+                                        std::string phase, std::string detail) {
+  diagnostics_.recordEvent({timestampMilliseconds(), std::move(severity),
+                            std::move(source), std::move(interface_name),
+                            std::move(phase), std::move(detail)});
+}
+
+void RealmanBtExecutorNode::handleRosout(
+    const rcl_interfaces::msg::Log::SharedPtr message) {
+  if (!message || (message->level != rcl_interfaces::msg::Log::WARN &&
+                   message->level != rcl_interfaces::msg::Log::ERROR)) {
+    return;
+  }
+  if (message->name.find("realman_bt_executor") == std::string::npos &&
+      message->name.find("rclcpp_action") == std::string::npos) {
+    return;
+  }
+  recordEvent(message->level == rcl_interfaces::msg::Log::ERROR ? "ERROR" : "WARN",
+              "ROS_LOG", message->name, "rosout", message->msg);
 }
 
 }  // namespace realman_bt

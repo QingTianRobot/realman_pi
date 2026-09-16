@@ -88,6 +88,14 @@ if(BUILD_TESTING)
   target_compile_features(test_terminal_exit_policy PRIVATE cxx_std_17)
   add_test(NAME test_terminal_exit_policy COMMAND test_terminal_exit_policy)
 
+  add_executable(test_reactive_control_nodes test/test_reactive_control_nodes.cpp)
+  target_include_directories(test_reactive_control_nodes PRIVATE
+    "${BT_VENDOR_ROOT}"
+    "${BT_VENDOR_ROOT}/bt_nodes")
+  target_compile_features(test_reactive_control_nodes PRIVATE cxx_std_17)
+  target_link_libraries(test_reactive_control_nodes PRIVATE bt::core)
+  add_test(NAME test_reactive_control_nodes COMMAND test_reactive_control_nodes)
+
   ament_add_pytest_test(test_tree_contract test/test_tree_contract.py)
   ament_add_pytest_test(test_arm_move_tree test/test_arm_move_tree.py)
   ament_add_pytest_test(test_three_arm_move_tree test/test_three_arm_move_tree.py)

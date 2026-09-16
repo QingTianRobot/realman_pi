@@ -15,6 +15,12 @@ async function canvasChecksum(page: any) {
   });
 }
 
+async function emitWebSocketEvent(page: any, message: Record<string, unknown>) {
+  await page.evaluate((event: Record<string, unknown>) => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify(event) });
+  }, message);
+}
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     class FakeWebSocket {
@@ -35,9 +41,9 @@ test.beforeEach(async ({ page }) => {
             motion_allowed: true,
             preferred_reference_type: 1,
             preferred_reference_name: "cell",
-            preferred_reference: { type: 1, name: "cell", frame_id: "l/cell" },
-            tool: { type: 2, name: "tcpgrip", frame_id: "l/tool", controller_name: "tcpgrip", xyz_m: [0, 0, 0.12], quaternion_wxyz: [1, 0, 0, 0], payload_kg: 0.8, center_of_mass_m: [0, 0, 0.06] },
-            work: { type: 1, name: "cell", frame_id: "l/work", controller_name: "cell", xyz_m: [0.4, 0.5, 0.6], quaternion_wxyz: [1, 0, 0, 0] },
+            preferred_reference: { type: 1, name: "cell", frame_id: "l/work/cell" },
+            tool: { type: 2, name: "tcpgrip", frame_id: "l/tool/tcpgrip", controller_name: "tcpgrip", xyz_m: [0, 0, 0.12], quaternion_wxyz: [1, 0, 0, 0], payload_kg: 0.8, center_of_mass_m: [0, 0, 0.06] },
+            work: { type: 1, name: "cell", frame_id: "l/work/cell", controller_name: "cell", xyz_m: [0.4, 0.5, 0.6], quaternion_wxyz: [1, 0, 0, 0] },
             current_tool: "tcpgrip",
             current_work: "cell",
             expected_tool: "tcpgrip",
@@ -56,9 +62,9 @@ test.beforeEach(async ({ page }) => {
             motion_allowed: true,
             preferred_reference_type: 1,
             preferred_reference_name: "cell",
-            preferred_reference: { type: 1, name: "cell", frame_id: "m/cell" },
-            tool: { type: 2, name: "tcpgrip", frame_id: "m/tool", controller_name: "tcpgrip", xyz_m: [0, 0, 0.12], quaternion_wxyz: [1, 0, 0, 0], payload_kg: 0.8, center_of_mass_m: [0, 0, 0.06] },
-            work: { type: 1, name: "cell", frame_id: "m/work", controller_name: "cell", xyz_m: [0.4, 0.5, 0.6], quaternion_wxyz: [1, 0, 0, 0] },
+            preferred_reference: { type: 1, name: "cell", frame_id: "m/work/cell" },
+            tool: { type: 2, name: "tcpgrip", frame_id: "m/tool/tcpgrip", controller_name: "tcpgrip", xyz_m: [0, 0, 0.12], quaternion_wxyz: [1, 0, 0, 0], payload_kg: 0.8, center_of_mass_m: [0, 0, 0.06] },
+            work: { type: 1, name: "cell", frame_id: "m/work/cell", controller_name: "cell", xyz_m: [0.4, 0.5, 0.6], quaternion_wxyz: [1, 0, 0, 0] },
             current_tool: "tcpgrip",
             current_work: "cell",
             expected_tool: "tcpgrip",
@@ -77,9 +83,9 @@ test.beforeEach(async ({ page }) => {
             motion_allowed: true,
             preferred_reference_type: 1,
             preferred_reference_name: "cell",
-            preferred_reference: { type: 1, name: "cell", frame_id: "r/cell" },
-            tool: { type: 2, name: "tcpgrip", frame_id: "r/tool", controller_name: "tcpgrip", xyz_m: [0, 0, 0.12], quaternion_wxyz: [1, 0, 0, 0], payload_kg: 0.8, center_of_mass_m: [0, 0, 0.06] },
-            work: { type: 1, name: "cell", frame_id: "r/work", controller_name: "cell", xyz_m: [0.4, 0.5, 0.6], quaternion_wxyz: [1, 0, 0, 0] },
+            preferred_reference: { type: 1, name: "cell", frame_id: "r/work/cell" },
+            tool: { type: 2, name: "tcpgrip", frame_id: "r/tool/tcpgrip", controller_name: "tcpgrip", xyz_m: [0, 0, 0.12], quaternion_wxyz: [1, 0, 0, 0], payload_kg: 0.8, center_of_mass_m: [0, 0, 0.06] },
+            work: { type: 1, name: "cell", frame_id: "r/work/cell", controller_name: "cell", xyz_m: [0.4, 0.5, 0.6], quaternion_wxyz: [1, 0, 0, 0] },
             current_tool: "tcpgrip",
             current_work: "cell",
             expected_tool: "tcpgrip",
@@ -188,7 +194,7 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator("#viewer")).toHaveAttribute("data-live-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/, { timeout: 30_000 });
   await expect(page.locator("#viewer")).toHaveAttribute("data-shadow-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/);
   await expect(page.locator("#viewer")).toHaveAttribute("data-visualization-reference-arm", "m");
-  const liveCanvasBeforeFeedback = await page.locator("#canvas").screenshot();
+  const liveCanvasBeforeFeedback = await canvasChecksum(page);
   await page.evaluate(() => {
     (window as any).__webSocket.emit("message", { data: JSON.stringify({
       type: "action_feedback",
@@ -198,7 +204,7 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
     }) });
   });
   await page.waitForTimeout(100);
-  expect(await page.locator("#canvas").screenshot()).toEqual(liveCanvasBeforeFeedback);
+  expect(await canvasChecksum(page)).toEqual(liveCanvasBeforeFeedback);
   await expect(page.locator("#connection")).toContainText("ROS ONLINE");
   await expect(page.locator("#coordinate-state")).toContainText("READY");
   await expect(page.locator("#coordinate-summary")).toContainText("WORK / cell");
@@ -425,6 +431,88 @@ test("keeps the last live pose when a duplicate publisher emits an all-zero samp
     }) });
   });
   await expect(page.locator("#joint-stamp")).toContainText("100");
+});
+
+test("renders the server-discovered global input mode and sends selections", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#input-mode-card")).toHaveCount(1);
+  await expect(page.locator("#input-mode-card")).toBeHidden();
+
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list",
+    available: true,
+    modes: [
+      { id: "web", label: "Web", selectable: false },
+      { id: "policy", label: "Policy", selectable: true },
+      { id: "pika", label: "Pika", selectable: true },
+      { id: "none", label: "无输入", selectable: true },
+    ],
+  });
+  await expect(page.locator("#input-mode-card")).toBeVisible();
+  await expect(page.locator("#input-mode-select option")).toHaveText(["Policy", "Pika", "无输入"]);
+  await expect(page.locator("#input-mode-select option[value=web]")).toHaveCount(0);
+
+  await page.locator("#input-mode-select").selectOption("pika");
+  const selection = await page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map((value) => JSON.parse(value))
+      .findLast((message) => message.type === "select_input_mode"),
+  );
+  expect(selection).toMatchObject({ type: "select_input_mode", mode_id: "pika" });
+  expect(selection.request_id).toEqual(expect.any(String));
+  expect(selection.request_id).not.toBe("");
+  await expect(page.locator("#input-mode-select")).toBeDisabled();
+
+  await emitWebSocketEvent(page, {
+    type: "input_mode_result",
+    request_id: selection.request_id,
+    executor_request_id: 42,
+    accepted: true,
+    message: "selection accepted",
+  });
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state",
+    requested_mode: "pika",
+    selected_mode: "pika",
+    active_mode: "web",
+    phase: "SWITCHING",
+    request_id: 42,
+    epoch: 7,
+    detail: "Pika 正在切换",
+  });
+  await expect(page.locator("#input-mode-select")).toBeDisabled();
+  await expect(page.locator("#input-mode-active")).toContainText("Web");
+  await expect(page.locator("#input-mode-detail")).toHaveText("Pika 正在切换");
+
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state",
+    requested_mode: "web",
+    selected_mode: "web",
+    active_mode: "web",
+    phase: "ACTIVE",
+    request_id: 42,
+    epoch: 8,
+    detail: "Web 控制已启用",
+  });
+  await expect(page.locator("#input-mode-select")).toBeEnabled();
+  await expect(page.locator("#input-mode-active")).toContainText("Web");
+  await expect(page.locator("#input-mode-detail")).toHaveText("Web 控制已启用");
+
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state",
+    requested_mode: "pika",
+    selected_mode: "pika",
+    active_mode: "web",
+    phase: "FAILED",
+    request_id: 43,
+    epoch: 9,
+    detail: "Pika 启动失败",
+  });
+  await expect(page.locator("#input-mode-active")).toContainText("FAILED");
+  await expect(page.locator("#input-mode-detail")).toHaveText("Pika 启动失败");
+
+  await emitWebSocketEvent(page, { type: "input_mode_list", available: false, modes: [] });
+  await expect(page.locator("#input-mode-card")).toBeHidden();
 });
 
 test("clears MOVEL waiting feedback placeholder when the action is rejected", async ({ page }) => {

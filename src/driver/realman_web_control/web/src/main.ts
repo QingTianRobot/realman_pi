@@ -59,6 +59,22 @@ type JointRecord = {
   updated_at: string;
   joint_degrees: number[];
 };
+type InputModeOption = { id: string; label: string; selectable: boolean };
+type InputModeState = {
+  requested_mode: string;
+  selected_mode: string;
+  active_mode: string;
+  phase: string;
+  request_id: number;
+  epoch: number;
+  detail: string;
+};
+type InputModeResult = {
+  request_id: string;
+  executor_request_id: number;
+  accepted: boolean;
+  message: string;
+};
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -85,6 +101,10 @@ app.innerHTML = `
       </div>
     </section>
     <aside class="controls">
+      <section id="input-mode-card" class="panel panel-section input-mode-card" hidden>
+        <div class="panel-heading compact"><div><span class="eyebrow">GLOBAL INPUT</span><h2>输入模式</h2></div><span id="input-mode-active" class="mini-state">WAIT</span></div>
+        <div class="input-mode-body"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div></div>
+      </section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><span id="coordinate-state" class="mini-state">WAIT</span></div><div id="coordinate-summary" class="coordinate-summary"></div></section>
       <section class="panel panel-section motion-panel">
         <div class="panel-heading compact"><div><span class="eyebrow">MOTION TARGET</span><h2>一次性运动</h2></div><div class="panel-actions"><span id="selected-arm-label" class="mini-state">L</span><button id="reset-preview" class="text-button" type="button">重置目标</button></div></div>
@@ -168,6 +188,10 @@ const canvas = $("#canvas") as HTMLCanvasElement;
 const viewer = $("#viewer");
 const fleetStrip = $("#fleet-strip");
 const selectedArmLabel = $("#selected-arm-label");
+const inputModeCard = $("#input-mode-card") as HTMLElement;
+const inputModeSelect = $("#input-mode-select") as HTMLSelectElement;
+const inputModeActive = $("#input-mode-active");
+const inputModeDetail = $("#input-mode-detail");
 const motionMode = $("#motion-mode");
 const jointTarget = $("#joint-target") as HTMLElement;
 const poseTarget = $("#pose-target") as HTMLElement;
@@ -206,6 +230,12 @@ let socket: WebSocket | undefined;
 const gripperStates: Record<string, any> = {};
 let selectedGripper = "";
 let readOnly = false;
+let inputModeCatalog: InputModeOption[] | undefined;
+let inputModeState: InputModeState | undefined;
+let inputModeResultDetail = "";
+let activeInputModeRequest = "";
+let activeInputModeExecutorRequest: number | undefined;
+let pendingInputModeId = "";
 let activeMotionRequest = "";
 let motionFeedbackTimer = 0;
 let activeVelocityRequest = "";
@@ -248,6 +278,45 @@ function robotConfig(arm: ArmId) {
 }
 function requestId(prefix: string) { return `${prefix}-${Date.now()}-${Math.random().toString(16).slice(2, 8)}`; }
 function canWrite() { return !readOnly && socket?.readyState === WebSocket.OPEN; }
+function inputModeLabel(modeId: string) {
+  return inputModeCatalog?.find((option) => option.id === modeId)?.label ?? modeId;
+}
+function updateInputModeSelectionDisabled() {
+  inputModeSelect.disabled = !canWrite() || Boolean(activeInputModeRequest) || inputModeState?.phase === "SWITCHING" ||
+    !(inputModeCatalog?.some((option) => option.id !== "web" && option.selectable));
+}
+function renderInputModeCard() {
+  inputModeCard.hidden = !inputModeCatalog;
+  if (!inputModeCatalog) return;
+  const selectedMode = inputModeState?.selected_mode ?? pendingInputModeId;
+  inputModeSelect.replaceChildren(...inputModeCatalog
+    .filter((option) => option.id !== "web")
+    .map((option) => {
+      const element = document.createElement("option");
+      element.value = option.id;
+      element.textContent = option.label;
+      element.disabled = !option.selectable;
+      return element;
+    }));
+  if (selectedMode && Array.from(inputModeSelect.options).some((option) => option.value === selectedMode)) {
+    inputModeSelect.value = selectedMode;
+  } else {
+    inputModeSelect.selectedIndex = -1;
+  }
+  const state = inputModeState;
+  inputModeActive.textContent = state ? `${inputModeLabel(state.active_mode)} / ${state.phase}` : "WAIT";
+  inputModeActive.className = `mini-state ${state?.phase.toLowerCase() ?? ""}`;
+  inputModeDetail.textContent = state?.detail || inputModeResultDetail || "等待输入模式状态";
+  updateInputModeSelectionDisabled();
+}
+function finishInputModeRequestIfTerminal() {
+  if (!activeInputModeRequest || activeInputModeExecutorRequest === undefined || !inputModeState ||
+      inputModeState.request_id !== activeInputModeExecutorRequest ||
+      !["ACTIVE", "FAILED"].includes(inputModeState.phase)) return;
+  activeInputModeRequest = "";
+  activeInputModeExecutorRequest = undefined;
+  pendingInputModeId = "";
+}
 function displayNumber(value: number, digits = 2) {
   return Number.isFinite(value) ? value.toFixed(digits) : "";
 }
@@ -843,6 +912,54 @@ function handleMessage(message: Message) {
     mode.textContent = readOnly ? "READ ONLY" : "CONTROL READY";
     mode.classList.toggle("ready", !readOnly);
     if (message.layout) loadManifest(message.layout);
+  } else if (message.type === "input_mode_list") {
+    if (message.available) {
+      inputModeCatalog = Array.isArray(message.modes) ? message.modes.reduce<InputModeOption[]>((modes, option) => {
+        if (typeof option?.id === "string" && typeof option?.label === "string" && typeof option?.selectable === "boolean") {
+          modes.push({ id: option.id, label: option.label, selectable: option.selectable });
+        }
+        return modes;
+      }, []) : [];
+    } else {
+      inputModeCatalog = undefined;
+      inputModeState = undefined;
+      inputModeResultDetail = "";
+      activeInputModeRequest = "";
+      activeInputModeExecutorRequest = undefined;
+      pendingInputModeId = "";
+    }
+    renderInputModeCard();
+  } else if (message.type === "input_mode_result") {
+    const modeResult: InputModeResult = {
+      request_id: String(message.request_id ?? ""),
+      executor_request_id: Number(message.executor_request_id),
+      accepted: Boolean(message.accepted),
+      message: String(message.message ?? ""),
+    };
+    if (modeResult.request_id === activeInputModeRequest) {
+      inputModeResultDetail = modeResult.message;
+      if (modeResult.accepted && Number.isFinite(modeResult.executor_request_id)) {
+        activeInputModeExecutorRequest = modeResult.executor_request_id;
+        finishInputModeRequestIfTerminal();
+      } else {
+        activeInputModeRequest = "";
+        activeInputModeExecutorRequest = undefined;
+        pendingInputModeId = "";
+      }
+      renderInputModeCard();
+    }
+  } else if (message.type === "input_mode_state") {
+    inputModeState = {
+      requested_mode: String(message.requested_mode ?? ""),
+      selected_mode: String(message.selected_mode ?? ""),
+      active_mode: String(message.active_mode ?? ""),
+      phase: String(message.phase ?? ""),
+      request_id: Number(message.request_id),
+      epoch: Number(message.epoch),
+      detail: String(message.detail ?? ""),
+    };
+    finishInputModeRequestIfTerminal();
+    renderInputModeCard();
   } else if (message.type === "gripper_list") {
     updateGripperList(Array.isArray(message.grippers) ? message.grippers : []);
   } else if (message.type === "gripper_state") {
@@ -1056,6 +1173,13 @@ function handleMessage(message: Message) {
     updateButtons();
   } else if (message.type === "error") {
     result.textContent = `${message.code}: ${message.message}`;
+    if (message.request_id === activeInputModeRequest) {
+      inputModeResultDetail = `${message.code}: ${message.message}`;
+      activeInputModeRequest = "";
+      activeInputModeExecutorRequest = undefined;
+      pendingInputModeId = "";
+      renderInputModeCard();
+    }
     if (activeMotionRequest && message.request_id === activeMotionRequest) {
       window.clearTimeout(motionFeedbackTimer);
       motionFeedbackTimer = 0;
@@ -1107,6 +1231,7 @@ function updateButtons() {
   saveRecordButton.disabled = !writable || activeRecordRequest || recordNameInput.value.trim() === "" || (currentJointsByArm[selectedArm]?.length ?? 0) !== 6;
   applyRecordButton.disabled = !writable || activeRecordRequest || !recordSelect.value;
   deleteRecordButton.disabled = !writable || selectedMotionCommand !== 0 || activeRecordRequest || !recordSelect.value;
+  updateInputModeSelectionDisabled();
 }
 
 function loadManifest(next: Manifest) {
@@ -1158,6 +1283,16 @@ armSelect.addEventListener("change", () => {
   updateSelectedArmFromState();
   const config = robotConfig(selectedArm);
   $("#model-label").textContent = `${config.model} / ${selectedArm.toUpperCase()} + 3 arms`;
+});
+inputModeSelect.addEventListener("change", () => {
+  const selected = inputModeCatalog?.find((option) => option.id === inputModeSelect.value);
+  if (!selected || !selected.selectable || selected.id === "web" || !canWrite()) return;
+  activeInputModeRequest = requestId("input-mode");
+  activeInputModeExecutorRequest = undefined;
+  pendingInputModeId = selected.id;
+  inputModeResultDetail = `请求切换到 ${selected.label}…`;
+  renderInputModeCard();
+  send({ type: "select_input_mode", request_id: activeInputModeRequest, mode_id: selected.id });
 });
 motionMode.querySelectorAll<HTMLButtonElement>("button[data-motion-command]").forEach((button) => {
   button.addEventListener("click", () => {

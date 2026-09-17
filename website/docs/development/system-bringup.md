@@ -17,8 +17,34 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 | RealMan 状态回读 | Include `three_realman_drivers.launch.py` | `config/ros/realman_driver.yaml` |
 | Xbox 设备读取 | 创建 `joy/game_controller_node` | `config/ros/xbox_controller.yaml` |
 | 按键边沿处理 | 创建 `xbox_controller_node` | `xbox_controller_driver` |
+| 持久输入路由 | 不随 Bringup 自动创建；由 `./rm65 bt control` 显式启动 | `config/behavior-trees/control_router.xml`、`config/ros/behavior_tree.yaml` |
 | RViz 2 | 透传 `use_rviz` 给三臂 launch | `config/rviz/three_robots.rviz` |
 | 运行日志 | 创建时间目录并设置 ROS 2 环境变量 | `REALMAN_LOG_ROOT`、`ROS_LOG_DIR` |
+
+## 统一生产入口
+
+推荐从仓库根目录执行 `./rm65 up`。该命令先在宿主机启动三路 ROS 2 彩色相机，再启动 Docker
+中的 `realman_bringup_remote`（三臂真实驱动、headless、`restart: unless-stopped`），因此标定和
+机械臂节点加入同一个 ROS 2 图。相机启动失败时不会启动 Docker；Docker 启动失败会自动停止相机，
+避免半启动状态。
+
+```bash
+./rm65 up                 # 生产默认，无 RViz
+./rm65 up desktop         # 生产图 + 本机 RViz
+./rm65 up model           # 离线模型查看
+./rm65 bt control         # 在已有 driver 容器内启动持久全局输入路由器
+./rm65 down
+./rm65 status
+./rm65 logs
+```
+
+相机后台进程 PID 保存在 `logs/.rm65-camera.pid`，其标准输出写入 `logs/rm65-camera.log`；ROS 2
+节点仍按官方机制写入 `logs/YYYYMMDD_HHMMSS/`。
+
+`bt control` 必须在 `up` 后单独运行：它加入同一 ROS domain，保持 :8080 只读监视器和
+`realman_bt_executor` 到 Ctrl-C，而 `up` 继续拥有长期 driver 与 :8765 Web control。停止 router 不会
+停止这些服务；使用 `./rm65 down` 才终止统一运行时。当前 XML registry 提供可选的 `none`、`policy`、
+`pika` 和粘性、非可选的 Web override；详见[行为树控制权与 Mock 测试](./behavior-tree-control)。
 
 ## 启动入口
 
@@ -43,7 +69,7 @@ ros2 launch realman_bringup system.launch.py \
 | `driver_config_file` | `config/ros/realman_driver.yaml` | 指定根目录下的真实或 mock 驱动配置 |
 | `coordinates_config_file` | `config/ros/realman_coordinates.yaml` | 指定 BASE/WORK/TOOL 坐标配置 |
 | `motion_config_file` | `config/ros/realman_motion.yaml` | 指定运动速度、加速度和 watchdog 限制 |
-| `start_web_control` | `false` | 启动认证 WebSocket、Action 和 URDF 控制桥 |
+| `start_web_control` | `false` | 启动浏览器 WebSocket、Action 和 URDF 控制桥 |
 | `start_camera_calibration` | `false` | 启动 ChArUco 三臂采样/手眼求解 service |
 | `camera_calibration_config_file` | `config/ros/camera_calibration.yaml` | 指定标定板、相机话题、TF 和求解阈值 |
 | `web_control_config_file` | `config/ros/realman_web_control.yaml` | 指定浏览器控制桥配置 |

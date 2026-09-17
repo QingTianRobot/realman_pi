@@ -416,7 +416,9 @@ _rm65_source_camera_ros2() {
   emulate -L zsh
   local ros_setup
   local orbbec_setup
+  local realsense_setup
   local -a orbbec_candidates
+  local -a realsense_candidates
 
   # A stale AMENT prefix makes the production Humble setup script fail early.
   unset AMENT_CURRENT_PREFIX AMENT_SHELL
@@ -440,6 +442,19 @@ _rm65_source_camera_ros2() {
   for orbbec_setup in "${orbbec_candidates[@]}"; do
     if [[ -n "$orbbec_setup" && -r "$orbbec_setup" ]]; then
       source "$orbbec_setup"
+      break
+    fi
+  done
+
+  # The RealSense D435 driver lives in the src/sensor/realsense submodules and is
+  # optional; rm65_camera_ros2 degrades to use_realsense:=false when it is absent.
+  realsense_candidates=(
+    "${REALMAN_REALSENSE_ROS2_SETUP:-}"
+    "$RM65_PROJECT_ROOT/src/sensor/realsense/realsense_ws/install/setup.sh"
+  )
+  for realsense_setup in "${realsense_candidates[@]}"; do
+    if [[ -n "$realsense_setup" && -r "$realsense_setup" ]]; then
+      source "$realsense_setup"
       break
     fi
   done
@@ -535,6 +550,11 @@ rm65_camera_ros2() {
     launch_args+=("enable_color:=false" "enable_depth:=true")
   fi
   [[ "$use_rviz" == true ]] && launch_args+=("use_rviz:=true")
+  if ! command ros2 pkg prefix realsense2_camera >/dev/null 2>&1; then
+    print -u2 -r -- "rm65: realsense2_camera is not in the sourced ROS 2 environment; starting Orbbec only"
+    print -u2 -r -- "rm65: build src/sensor/realsense/realsense_ws or set REALMAN_REALSENSE_ROS2_SETUP to its install/setup.sh"
+    launch_args+=("use_realsense:=false")
+  fi
   command ros2 launch sensor_bringup cameras_ros2.launch.py "${launch_args[@]}"
 }
 
@@ -542,6 +562,7 @@ rm65_camera_ros2_stop() {
   emulate -L zsh
   local launch_pattern='^([^ ]*python3 )?[^ ]*/ros2 launch sensor_bringup cameras_ros2.launch.py( |$)'
   local component_pattern='^[^ ]*/component_container .*__ns:=/camera_(left|middle|right)( |$)'
+  local realsense_pattern='realsense2_camera_node'
   if (( $# > 0 )); then
     print -u2 -r -- "usage: rm65_camera_ros2_stop"
     return 2
@@ -549,13 +570,14 @@ rm65_camera_ros2_stop() {
   if command -v pkill >/dev/null 2>&1; then
     command pkill -TERM -f "$launch_pattern" 2>/dev/null || true
     command pkill -TERM -f "$component_pattern" 2>/dev/null || true
+    command pkill -TERM -f "$realsense_pattern" 2>/dev/null || true
   fi
   print -r -- "rm65: ROS2 camera processes stopped"
 }
 
 rm65_camera_ros2_status() {
   emulate -L zsh
-  local process_pattern='^([^ ]*python3 )?[^ ]*/ros2 launch sensor_bringup cameras_ros2.launch.py( |$)|^[^ ]*/component_container .*__ns:=/camera_(left|middle|right)( |$)'
+  local process_pattern='^([^ ]*python3 )?[^ ]*/ros2 launch sensor_bringup cameras_ros2.launch.py( |$)|^[^ ]*/component_container .*__ns:=/camera_(left|middle|right)( |$)|realsense2_camera_node'
   local process
   local process_output=""
 
@@ -760,7 +782,6 @@ rm65_deploy_sync() {
   local branch
   local tree_status
   local quoted_remote_dir
-  local -a excludes
 
   if [[ "$host" == -* || "$host" == *$'\n'* || "$remote_dir" == *$'\n'* ]]; then
     print -u2 -r -- "rm65: invalid production host or directory"
@@ -784,28 +805,20 @@ rm65_deploy_sync() {
     return 1
   fi
 
-  quoted_remote_dir="${(q)remote_dir}"
-  excludes=(
-    --exclude ".git/"
-    --exclude ".claude/"
-    --exclude ".worktrees/"
-    --exclude "build/"
-    --exclude "install/"
-    --exclude "log/"
-    --exclude "logs/"
-    --exclude "website/node_modules/"
-    --exclude "website/docs/.vitepress/dist/"
-    --exclude "website/test-results/"
-    --exclude "__pycache__/"
-    --exclude "*.pyc"
-    --exclude ".pytest_cache/"
-    --exclude ".venv*/"
-  )
+  print -r -- "rm65: pushing main to origin before production sync"
+  if ! command git -C "$RM65_PROJECT_ROOT" push origin main; then
+    print -u2 -r -- "rm65: warning: GitHub push failed; continuing with direct rsync"
+  fi
 
+  quoted_remote_dir="${(q)remote_dir}"
   command ssh "$host" "mkdir -p -- ${quoted_remote_dir}" || return
-  command rsync -avz --progress "${excludes[@]}" \
-    "$RM65_PROJECT_ROOT/" "${host}:${remote_dir}/"
+  # Sync only files tracked by Git; generated builds, logs, caches, and local
+  # production artifacts must never be copied by the deployment shortcut.
+  command git -C "$RM65_PROJECT_ROOT" ls-files -z | \
+    command rsync -az --from0 --files-from=- --relative \
+      "$RM65_PROJECT_ROOT/" "${host}:${remote_dir}/"
 }
+
 
 rm65_deploy_update() {
   emulate -L zsh
@@ -827,6 +840,12 @@ rm65_deploy_update() {
 
 rm65_project_help() {
   print -r -- "realman_pi Zsh functions"
+  print -r -- "推荐统一入口: ./rm65 up | down | status | logs | sync"
+  print -r -- "  ./rm65 up                 一键启动 ROS2 彩色相机和 headless 三臂真机"
+  print -r -- "  ./rm65 up desktop         一键启动生产图并显示 RViz"
+  print -r -- "  ./rm65 up model           只显示离线三臂模型"
+  print -r -- "  ./rm65 bt [l|m|r|three]   单次运行行为树；终态后执行器和 :8080 监视器自动退出"
+  print -r -- "  ./rm65 bt control         常驻运行全局输入路由；按 Ctrl-C 后执行器和 :8080 监视器退出"
   print -r -- "启动入口索引: website/docs/development/startup-entries.md"
   print -r -- "每次修改 helper、Compose 服务或 launch 参数时，同步更新网站索引。"
   print -r -- ""

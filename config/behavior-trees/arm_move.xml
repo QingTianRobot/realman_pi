@@ -1,0 +1,9 @@
+<?xml version="1.0"?>
+<!-- joint_degrees are RealMan degrees. The executor defaults to dry_run=true. -->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="arm_move_demo">
+      <MoveJ name="move_demo_target" arm_id="{arm_id}" dry_run="{dry_run}" joint_degrees="0,0,0,0,0,0" velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

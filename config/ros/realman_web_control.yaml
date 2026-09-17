@@ -12,3 +12,8 @@ server:
   max_clients: 8
   # Reject oversized WebSocket frames before parsing JSON.
   max_message_bytes: 65536
+
+# Optional running input router is discovered over ROS; its XML owns the catalog.
+input_mode:
+  discovery_period_sec: 1.0  # Seconds between bounded router service probes.
+  web_override_timeout_sec: 5.0  # No Web Action is sent after this wait expires.

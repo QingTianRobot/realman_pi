@@ -1,0 +1,101 @@
+#pragma once
+
+#include <array>
+#include <chrono>
+#include <functional>
+#include <future>
+#include <memory>
+#include <string>
+
+#include "bt_core/leaf_node.hpp"
+#include "rclcpp_action/rclcpp_action.hpp"
+#include "realman_bt/runtime_snapshot.hpp"
+#include "realman_msgs/action/execute_motion.hpp"
+
+namespace realman_bt {
+
+inline constexpr char kRosNodeBlackboardKey[] = "__realman_bt_ros_node__";
+
+class MoveJCancellationDrain {
+ public:
+  using Action = realman_msgs::action::ExecuteMotion;
+  using Client = rclcpp_action::Client<Action>;
+  using GoalHandle = Client::GoalHandle;
+
+  MoveJCancellationDrain(Client::SharedPtr client,
+                         std::shared_future<GoalHandle::SharedPtr> goal_future,
+                         std::string action_name, RuntimeDiagnostics* diagnostics);
+  MoveJCancellationDrain(Client::SharedPtr client, GoalHandle::SharedPtr goal_handle,
+                         std::string action_name, RuntimeDiagnostics* diagnostics);
+
+  // Returns true only after the pending response is rejected or its accepted
+  // goal has received a cancellation request.
+  bool drainOnce();
+
+ private:
+  void recordEvent(const std::string& phase, const std::string& detail,
+                   const std::string& severity) const;
+
+  Client::SharedPtr client_;
+  std::shared_future<GoalHandle::SharedPtr> goal_future_;
+  GoalHandle::SharedPtr goal_handle_;
+  std::string action_name_;
+  RuntimeDiagnostics* diagnostics_{nullptr};
+};
+
+using MoveJCancellationDrainSink =
+    std::function<void(std::shared_ptr<MoveJCancellationDrain>)>;
+inline constexpr char kMoveJCancellationDrainSinkBlackboardKey[] =
+    "__realman_bt_movej_cancellation_drain_sink__";
+
+class MoveJNode final : public bt_core::ActionNode {
+ public:
+  using bt_core::ActionNode::ActionNode;
+  using Action = realman_msgs::action::ExecuteMotion;
+  using Client = rclcpp_action::Client<Action>;
+  using GoalHandle = Client::GoalHandle;
+
+  static bt_core::PortsList providedPorts();
+
+  bt_core::NodeStatus tick() override;
+  void onHalted() override;
+
+ private:
+  enum class TimeoutState {
+    kActive,
+    kAwaitingGoalResponse,
+    kCancellationRetry,
+    kCancelPending,
+  };
+
+  bool initialize();
+  bool readGoal(Action::Goal* goal);
+  bool handoffPendingGoalResponse();
+  bool handoffInFlightGoal();
+  bool hasInFlightGoal() const;
+  void requestCancel(const std::string& detail);
+  void recordActionEvent(const std::string& phase, const std::string& detail,
+                         const std::string& severity = "INFO") const;
+  void reset();
+
+  rclcpp::Node* ros_node_{nullptr};
+  Client::SharedPtr client_;
+  Action::Goal goal_{};
+  GoalHandle::SharedPtr goal_handle_;
+  std::shared_future<GoalHandle::SharedPtr> goal_future_;
+  std::shared_future<Client::WrappedResult> result_future_;
+  std::chrono::steady_clock::time_point started_at_{};
+  std::string action_name_;
+  double timeout_sec_{30.0};
+  bool initialized_{false};
+  bool dry_run_{true};
+  bool sent_{false};
+  bool completed_{false};
+  bool failed_{false};
+  bool dry_run_logged_{false};
+  bool wait_server_recorded_{false};
+  bool cancel_requested_{false};
+  TimeoutState timeout_state_{TimeoutState::kActive};
+};
+
+}  // namespace realman_bt

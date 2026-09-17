@@ -1,0 +1,21 @@
+body {
+  --bt-accent: #2f5d50;
+  --bt-ink: #18211f;
+  --bt-warm: #f5efe2;
+}
+
+div.body h1,
+div.body h2,
+div.body h3 {
+  color: var(--bt-ink);
+}
+
+div.admonition,
+div.note {
+  border-color: var(--bt-accent);
+}
+
+.wy-table-responsive table td,
+.wy-table-responsive table th {
+  white-space: normal;
+}

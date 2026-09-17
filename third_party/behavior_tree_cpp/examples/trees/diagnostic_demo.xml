@@ -1,0 +1,56 @@
+<?xml version="1.0"?>
+<!--
+  诊断/时间/黑板节点演示树。
+  场景：机器人巡检——先记录电量读数与目标缓存，用标量阈值判断电量是否偏低并埋点日志，
+        随后等待一小段延时（演示 RUNNING 异步语义），最后清理目标缓存并确认其已不存在。
+  用途：演示 LogEvent / ScalarThreshold / Delay / WaitUntilElapsed /
+        BlackboardExists / ClearBlackboard 六个新节点与既有节点的组合。
+  注：所有 delay/duration 都设得很小，example_load_xml 用 tickWhileRunning 会跑到收敛。
+-->
+<root main_tree_to_execute="DiagnosticDemo">
+  <BehaviorTree ID="DiagnosticDemo">
+    <Sequence name="diagnostic_pipeline">
+      <LogEvent name="log_start"
+                message="巡检诊断开始"
+                level="info"/>
+
+      <!-- 写入一个偏低电量读数到黑板 -->
+      <SetBlackboard name="cache_battery"
+                     value="0.15"
+                     output_key="battery_level"/>
+
+      <!-- 缓存一个目标，稍后清理，演示存在性 -->
+      <SetBlackboard name="cache_target"
+                     value="dock_station"
+                     output_key="target_pose"/>
+
+      <!-- 标量阈值：电量 < 0.2 判定为低电量 -->
+      <ScalarThreshold name="battery_is_low"
+                       key="battery_level"
+                       op="&lt;"
+                       value="0.2"/>
+
+      <LogEvent name="log_low_battery"
+                message="电量偏低，进入短暂等待"
+                level="warn"/>
+
+      <!-- 异步延时：演示 RUNNING 语义，20ms 后 SUCCESS -->
+      <Delay name="settle_delay" delay_ms="20"/>
+
+      <!-- 一次性到时：duration_ms=0 表示宽限期已满，首拍即 SUCCESS。
+           （非零时长的 WaitUntilElapsed 需跨多拍评估，语义由单测覆盖；
+           在单趟 Sequence 里用 0 演示“已到时”分支，保证整树收敛为 SUCCESS。） -->
+      <WaitUntilElapsed name="grace_elapsed" duration_ms="0"/>
+
+      <!-- 目标缓存此刻应存在 -->
+      <BlackboardExists name="target_present" key="target_pose"/>
+
+      <!-- 清理目标缓存 -->
+      <ClearBlackboard name="drop_target" key="target_pose"/>
+
+      <LogEvent name="log_done"
+                message="诊断流程完成，目标缓存已清理"
+                level="info"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

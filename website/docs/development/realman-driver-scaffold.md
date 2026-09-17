@@ -127,7 +127,9 @@ ros2 action send_goal /l/execute_motion realman_msgs/action/ExecuteMotion \
 
 RealMan RM65 控制器的 `rm_get_current_tool_frame()` 回读中，`rm_frame_t.x/y/z` 质心字段使用毫米；驱动适配器在 SDK 边界将其转换为米后再交给坐标管理器。工具配置、`rm_set_manual_tool_frame()`/`rm_update_tool_frame()` 写入以及项目内部接口统一使用米。不要为了适配该回读值把 `config/ros/realman_coordinates.yaml` 中的质心改成毫米。
 
-默认 `policy.on_start=verify`：每次连接只读取控制器当前工具/工作坐标并逐字段比较，不写入控制器。API2 读取失败或任一字段不匹配都会关闭该臂 motion gate；该 gate 拦截依赖控制器工具/工作坐标的 `MOVEL`、`MOVEJ_P` 和速度 session。关节空间 `MOVEJ` 只使用六轴关节角，不依赖当前工具/工作坐标，因此仍可用于低速回零、离开安全位置或后续重新校准。四个 Service 与普通运动共享单臂 ownership：
+每次连接都会先读取控制器当前工具/工作坐标并逐字段比较。读取成功但任一字段不匹配时，驱动自动将 `config/ros/realman_coordinates.yaml` 中的默认工具/工作坐标写入控制器、选择对应名称并回读确认；`policy.on_start` 保留用于兼容旧配置，不再允许跳过失配修复。API2 读取或写入失败、或写后回读仍不匹配，都会关闭该臂 motion gate；该 gate 拦截依赖控制器工具/工作坐标的 `MOVEL`、`MOVEJ_P` 和速度 session。关节空间 `MOVEJ` 只使用六轴关节角，不依赖当前工具/工作坐标，因此仍可用于低速回零、离开安全位置或后续重新校准。四个 Service 与普通运动共享单臂 ownership：
+
+事件通道恢复和自动重连也会重复执行同一套坐标 verify/reconcile 流程；恢复期间由恢复流程持有的单臂 ownership 会传递给坐标操作，避免释放后竞态。任何恢复后的坐标读取或写入失败都会继续保持 motion gate 关闭。
 
 | Service | 行为 |
 | --- | --- |
@@ -379,7 +381,7 @@ mock 普通运动会依次报告 active、inactive 和成功完成事件，因�
 2. 核对工业交换机侧网卡路由和三臂映射：左臂 `192.168.30.123`、中臂 `192.168.30.125`、右臂 `192.168.30.124`，端口均为 `8080`。无线远程链路不能替代工控机到机械臂局域网的有线可达性。
 3. 逐臂运行“单臂 SDK 最小探针”，只创建句柄并读取关节；确认返回型号、六轴角度和资源释放，不启动 ROS 运动接口。
 4. 使用 `realman_driver_rviz` 只观察 `/l|m|r/joint_states`、连接状态、TF 和 RViz 姿态；核对厂商度数到 ROS 弧度的转换及左/中/右模型对应关系。
-5. 对每臂调用 `coordinates/verify`，只读比对当前工具/工作坐标。发生 mismatch 时先核对标定和配置；未经复核不得用 `coordinates/apply` 覆盖控制器。
+5. 对每臂调用 `coordinates/verify`，只读比对当前工具/工作坐标。启动连接时若可读但 mismatch，驱动会自动执行与 `coordinates/apply` 相同的写入、选择和回读流程；请先核对 `realman_coordinates.yaml` 中工具 payload、质心和位姿参数，再允许真机启动。
 6. 清空工作区、限制负载、确认碰撞设置，安排一名人员保持可触达现场急停。一次只允许一个 arm namespace 取得 ownership，先以低 `velocity_percent` 执行经人工确认可达的小幅 MOVEJ。
 7. 检查 Action 的 VALIDATING/SUBMITTING/EXECUTING 反馈、当前关节角、API2 状态以及最终 active-to-inactive 证据；随后单独验证 cancel 和 `/stop` 的最快受控停止，并在 cancel 结果后调用一次 `recover_motion`。这些接口都不是断电急停。
 8. MOVEL/MOVEJ_P 从已知安全位姿开始，先核对 `reference_type`、控制器 `reference_name`、位置单位 m 和四元数 `wxyz`，再使用低速度执行；不要在奇异位形、软件限位或共享工作区边界附近测试。

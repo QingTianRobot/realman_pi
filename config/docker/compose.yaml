@@ -27,6 +27,22 @@ x-realman-common: &realman-common
     FASTDDS_BUILTIN_TRANSPORTS: ${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
+    # `./rm65 bt` opts in through docker compose exec. Keep normal production
+    # bringup free of behavior-tree processes and any real-motion side effect.
+    BT_AUTOSTART: ${BT_AUTOSTART:-false}
+    REALMAN_BT_ARM_ID: ${REALMAN_BT_ARM_ID:-r}
+    REALMAN_BT_DRY_RUN: ${REALMAN_BT_DRY_RUN:-true}
+    BT_SERVER_HOST: ${BT_SERVER_HOST:-0.0.0.0}
+    BT_SERVER_PORT: ${BT_SERVER_PORT:-8080}
+    # Production monitor endpoints are read-only; the executor owns all tree
+    # mutations and publishes this atomically replaced runtime snapshot.
+    BT_READ_ONLY: "true"
+    BT_RUNTIME_SNAPSHOT: ${BT_RUNTIME_SNAPSHOT:-/tmp/realman-bt-workspace/runtime.json}
+    # CLI runs are one-shot and mutually exclusive inside the shared driver
+    # container. Final snapshots are archived through the host logs mount.
+    BT_EXIT_ON_TERMINAL: ${BT_EXIT_ON_TERMINAL:-true}
+    BT_RUNTIME_ARCHIVE_ROOT: ${BT_RUNTIME_ARCHIVE_ROOT:-/opt/rm65_ws/logs/behavior-trees}
+    BT_EDITOR_DIST: /opt/rm65_ws/behavior_tree/editor-dist
     # The launch file scans this path/glob and waits when it is not present.
     REALMAN_JOY_DEVICE: ${REALMAN_JOY_DEVICE:-auto}
   volumes:
@@ -178,6 +194,12 @@ services:
   # host on the same ROS_DOMAIN_ID to exercise the controller node without USB.
   realman_bringup_remote:
     <<: *realman-common
+    devices:
+      # Stable udev aliases prevent ttyUSB numbering changes after reconnect/reboot.
+      # Environment overrides are useful on development hosts without these aliases.
+      - ${REALMAN_GRIPPER_RIGHT_DEVICE:-/dev/realman/gripper_right}:/dev/realman/gripper_right
+      - ${REALMAN_GRIPPER_LEFT_DEVICE:-/dev/realman/gripper_left}:/dev/realman/gripper_left
+      - ${REALMAN_GRIPPER_MID_DEVICE:-/dev/realman/gripper_mid}:/dev/realman/gripper_mid
     volumes:
       # REALMAN_START_WEB_CONTROL=true runs the browser bridge in this service;
       # it needs write access only to confirmed joint record files.
@@ -195,10 +217,19 @@ services:
       - realman_bringup
       - system.launch.py
       - start_joy_driver:=false
+      # Keep the production driver YAML as the default while allowing an
+      # explicit mock config for safe end-to-end launch validation. `./rm65`
+      # forces grippers off for that mock; direct Compose callers must pass
+      # REALMAN_START_GRIPPER=false as shown in the verification workflow.
+      - driver_config_file:=${REALMAN_DRIVER_CONFIG_FILE:-/opt/rm65_ws/config/ros/realman_driver.yaml}
+      - start_gripper:=${REALMAN_START_GRIPPER:-true}
+      - gripper_config_file:=${REALMAN_GRIPPER_CONFIG_FILE:-/opt/rm65_ws/config/ros/gripper.yaml}
       - use_gui:=false
       - use_rviz:=false
       - start_web_control:=${REALMAN_START_WEB_CONTROL:-false}
-      - start_camera_calibration:=${REALMAN_START_CAMERA_CALIBRATION:-false}
+      # Keep the camera-health publisher present so the Web calibration page
+      # can show all three ROS 2 image inputs during normal production bringup.
+      - start_camera_calibration:=true
       - update_layout_after_calibration:=${REALMAN_UPDATE_LAYOUT_AFTER_CALIBRATION:-true}
       - joint_record_dir:=${REALMAN_JOINT_RECORD_DIR:-/opt/rm65_ws/config/web-control/joint-records}
 
@@ -285,3 +316,12 @@ services:
       - realman_robot_driver
       - three_realman_drivers.launch.py
       - config_file:=/opt/rm65_ws/config/ros/realman_driver_mock.yaml
+
+  # Isolated behavior-tree debug service; it never starts real drivers.
+  realman_bt_web:
+    <<: *realman-common
+    command:
+      - ros2
+      - launch
+      - realman_bt_mock
+      - behavior_tree_mock.launch.py

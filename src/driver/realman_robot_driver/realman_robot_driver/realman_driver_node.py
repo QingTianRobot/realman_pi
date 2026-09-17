@@ -878,6 +878,7 @@ class RealManDriverNode(Node):
                         self.arm_ownership,
                         self.arm_id,
                         publish_result=self._update_active_references,
+                        ownership_already_acquired=event_recovery,
                     )
                     if verification.api2_status != 0:
                         self.get_logger().error(

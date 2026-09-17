@@ -1,0 +1,10 @@
+uint8 ACTIVE=0
+uint8 SWITCHING=1
+uint8 FAILED=2
+string requested_mode
+string selected_mode
+string active_mode
+uint8 phase
+uint64 request_id
+uint64 epoch
+string detail

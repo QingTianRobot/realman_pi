@@ -1,0 +1,11 @@
+@PACKAGE_INIT@
+
+# ============================================================================
+#  bt_coreConfig.cmake.in —— find_package(bt_core) 的配置模板
+#  说明：安装后下游项目(如 bt_ros2)可用 find_package(bt_core REQUIRED)
+#        然后 link bt::core，无需 add_subdirectory。
+# ============================================================================
+
+include("${CMAKE_CURRENT_LIST_DIR}/bt_coreTargets.cmake")
+
+check_required_components(bt_core)

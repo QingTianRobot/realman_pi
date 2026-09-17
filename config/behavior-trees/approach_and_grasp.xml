@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Fallback name="grasp_strategies">
+      <Sequence name="top_view">
+        <SetBlackboard key="viewpoint" value="top"/>
+        <ExecuteMotion name="move_to_top_view"/>
+        <DetectObject/>
+        <ExecuteGrasp/>
+        <VerifyGrasp/>
+      </Sequence>
+      <Sequence name="side_view">
+        <SetBlackboard key="viewpoint" value="side"/>
+        <ExecuteMotion name="move_to_side_view"/>
+        <DetectObject/>
+        <ExecuteGrasp/>
+        <VerifyGrasp/>
+      </Sequence>
+    </Fallback>
+  </BehaviorTree>
+</root>

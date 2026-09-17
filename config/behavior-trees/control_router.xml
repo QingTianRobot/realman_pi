@@ -1,0 +1,34 @@
+<?xml version="1.0"?>
+<root main_tree_to_execute="InputControl">
+  <BehaviorTree ID="InputControl">
+    <ReactiveSequence name="input_control">
+      <SelectInputMode selected_mode="{selected_mode}"/>
+      <ReactiveFallback name="input_router">
+        <ReactiveSequence name="web_branch">
+          <InputModeGuard mode="web" label="Web" selectable="false"
+                          selected_mode="{selected_mode}"/>
+          <ActivateInputMode mode="web"/>
+          <WebInputStub/>
+        </ReactiveSequence>
+        <ReactiveSequence name="policy_branch">
+          <InputModeGuard mode="policy" label="Policy" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <ActivateInputMode mode="policy"/>
+          <PolicyInputStub/>
+        </ReactiveSequence>
+        <ReactiveSequence name="pika_branch">
+          <InputModeGuard mode="pika" label="Pika" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <ActivateInputMode mode="pika"/>
+          <PikaInputStub/>
+        </ReactiveSequence>
+        <ReactiveSequence name="none_branch">
+          <InputModeGuard mode="none" label="无输入" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <ActivateInputMode mode="none"/>
+          <IdleInput/>
+        </ReactiveSequence>
+      </ReactiveFallback>
+    </ReactiveSequence>
+  </BehaviorTree>
+</root>

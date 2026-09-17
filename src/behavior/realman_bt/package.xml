@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<package format="3">
+  <name>realman_bt</name>
+  <version>0.1.0</version>
+  <description>Behavior-tree control ownership and industrial task orchestration for RealMan arms.</description>
+  <maintainer email="maintainer@example.com">RealMan maintainers</maintainer>
+  <license>BSD-3-Clause</license>
+  <buildtool_depend>ament_cmake</buildtool_depend>
+  <depend>rclcpp</depend>
+  <depend>rclcpp_action</depend>
+  <depend>rcl_interfaces</depend>
+  <depend>realman_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
+  <test_depend>ament_cmake_pytest</test_depend>
+  <test_depend>python3-pytest</test_depend>
+  <export><build_type>ament_cmake</build_type></export>
+</package>

@@ -1,0 +1,6 @@
+---
+bool success
+string message
+string[] mode_ids
+string[] labels
+bool[] selectable

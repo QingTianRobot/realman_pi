@@ -18,7 +18,7 @@ def generate_launch_description():
             DeclareLaunchArgument(
                 "web_control_config_file",
                 default_value=str(config_root / "ros" / "realman_web_control.yaml"),
-                description="Annotated browser bridge settings under root config/ros.",
+                description="Root Web settings, including input-mode discovery and override timing.",
             ),
             DeclareLaunchArgument(
                 "layout_config_file",
@@ -41,6 +41,11 @@ def generate_launch_description():
                 description="Writable Web control joint target records under root config/.",
             ),
             DeclareLaunchArgument(
+                "gripper_config_file",
+                default_value=str(config_root / "ros" / "gripper.yaml"),
+                description="Changingtek gripper topology under root config/ros.",
+            ),
+            DeclareLaunchArgument(
                 "calibration_config_file",
                 default_value=str(config_root / "ros" / "camera_calibration.yaml"),
                 description="ChArUco calibration service configuration.",
@@ -52,6 +57,7 @@ def generate_launch_description():
                 output="screen",
                 parameters=[
                     {
+                        # WebServerConfig loads input_mode timing from this file once.
                         "web_control_config_file": LaunchConfiguration("web_control_config_file"),
                         "layout_config_file": LaunchConfiguration("layout_config_file"),
                         "motion_config_file": LaunchConfiguration("motion_config_file"),
@@ -60,6 +66,7 @@ def generate_launch_description():
                         "description_root": str(description_share),
                         "static_root": str(package_share / "static"),
                         "calibration_config_file": LaunchConfiguration("calibration_config_file"),
+                        "gripper_config_file": LaunchConfiguration("gripper_config_file"),
                     }
                 ],
             ),

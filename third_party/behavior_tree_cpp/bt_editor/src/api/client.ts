@@ -1,0 +1,154 @@
+/**
+ * API 客户端
+ *
+ * 封装与 bt_server 的所有 HTTP 交互。开发期由 Vite proxy 把 /api 代理到
+ * http://localhost:8080，因此这里统一使用相对路径 /api/xxx。
+ */
+
+import type {
+  NodeManifest,
+  LoadResult,
+  ExportResult,
+  OpenTreeResult,
+  TickResult,
+  RunResult,
+  ValidateResult,
+  FormatResult,
+  HealthResult,
+  RuntimeSnapshot,
+  RuntimeFetchResult,
+  TreeStructure,
+} from '../types';
+
+/** 统一的 JSON 请求封装：检查 HTTP 状态码并解析 JSON */
+async function requestJson<T>(url: string, init?: RequestInit): Promise<T> {
+  const resp = await fetch(url, {
+    headers: { 'Content-Type': 'application/json' },
+    ...init,
+  });
+  if (!resp.ok) {
+    // 非 2xx 直接抛错，交由调用方捕获并提示
+    throw new Error(`HTTP ${resp.status} ${resp.statusText} @ ${url}`);
+  }
+  return (await resp.json()) as T;
+}
+
+/** GET /api/nodes —— 拉取所有已注册节点的 manifest */
+export async function fetchNodes(): Promise<NodeManifest[]> {
+  return requestJson<NodeManifest[]>('/api/nodes');
+}
+
+/** POST /api/tree/load —— 把 XML 发给后端构建树 */
+export async function loadTree(xml: string): Promise<LoadResult> {
+  return requestJson<LoadResult>('/api/tree/load', {
+    method: 'POST',
+    body: JSON.stringify({ xml }),
+  });
+}
+
+/** POST /api/tree/validate —— 只校验 XML，不替换后端当前树 */
+export async function validateTree(xml: string): Promise<ValidateResult> {
+  return requestJson<ValidateResult>('/api/tree/validate', {
+    method: 'POST',
+    body: JSON.stringify({ xml }),
+  });
+}
+
+/** POST /api/tree/format —— 只格式化 XML，不替换后端当前树 */
+export async function formatTree(xml: string): Promise<FormatResult> {
+  return requestJson<FormatResult>('/api/tree/format', {
+    method: 'POST',
+    body: JSON.stringify({ xml }),
+  });
+}
+
+/** GET /api/tree/export —— 从后端取当前树的 XML */
+export async function exportTree(): Promise<ExportResult> {
+  return requestJson<ExportResult>('/api/tree/export');
+}
+
+/** GET /api/tree/open —— 从工作区打开指定树文件 */
+export async function openTree(name: string): Promise<OpenTreeResult> {
+  return requestJson<OpenTreeResult>(
+    `/api/tree/open?name=${encodeURIComponent(name)}`,
+  );
+}
+
+/** POST /api/tree/tick —— 执行一拍并取回每个节点的运行态 */
+export async function tickTree(): Promise<TickResult> {
+  return requestJson<TickResult>('/api/tree/tick', { method: 'POST' });
+}
+
+/** POST /api/tree/run —— 跑到终态并返回状态变化序列 */
+export async function runTree(): Promise<RunResult> {
+  return requestJson<RunResult>('/api/tree/run', { method: 'POST' });
+}
+
+/** GET /api/health —— 健康检查，返回后端版本 */
+export async function checkHealth(): Promise<HealthResult> {
+  return requestJson<HealthResult>('/api/health');
+}
+
+/** Read the executor snapshot; bypass HTTP caches so ticks remain observable. */
+export async function fetchRuntime(signal?: AbortSignal): Promise<RuntimeSnapshot> {
+  const result = await fetchRuntimeResponse(signal);
+  if (!result.snapshot) throw new Error('运行态快照未变化');
+  return result.snapshot;
+}
+
+const RUN_STATUSES = ['IDLE', 'RUNNING', 'SUCCESS', 'FAILURE'] as const;
+const EVENT_SEVERITIES = ['INFO', 'WARN', 'ERROR'] as const;
+const EVENT_SOURCES = ['ACTION', 'SERVICE', 'ROS_LOG', 'EXECUTOR'] as const;
+
+function isRecord(value: unknown): value is Record<string, unknown> {
+  return typeof value === 'object' && value !== null;
+}
+
+function isNonNegativeSafeInteger(value: unknown): value is number {
+  return typeof value === 'number' && Number.isSafeInteger(value) && value >= 0;
+}
+
+function isTickStats(value: unknown): boolean {
+  return isRecord(value) && ['running', 'success', 'failure', 'total'].every(
+    (field) => isNonNegativeSafeInteger(value[field]),
+  );
+}
+
+function isRuntimeEvent(value: unknown): boolean {
+  return isRecord(value) &&
+    isNonNegativeSafeInteger(value.timestamp_ms) &&
+    typeof value.severity === 'string' && EVENT_SEVERITIES.includes(value.severity as typeof EVENT_SEVERITIES[number]) &&
+    typeof value.source === 'string' && EVENT_SOURCES.includes(value.source as typeof EVENT_SOURCES[number]) &&
+    ['interface_name', 'phase', 'detail'].every((field) => typeof value[field] === 'string');
+}
+
+function isRuntimeSnapshot(value: unknown): value is RuntimeSnapshot {
+  return isRecord(value) &&
+    typeof value.root_status === 'string' && RUN_STATUSES.includes(value.root_status as typeof RUN_STATUSES[number]) &&
+    Array.isArray(value.nodes) &&
+    value.nodes.every((node) => isRecord(node) &&
+      ['key', 'name', 'registration_name', 'kind', 'path'].every((field) =>
+        typeof node[field] === 'string') &&
+      typeof node.status === 'string' && RUN_STATUSES.includes(node.status as typeof RUN_STATUSES[number])) &&
+    (value.tick_stats === undefined || isTickStats(value.tick_stats)) &&
+    (value.events === undefined || (Array.isArray(value.events) && value.events.every(isRuntimeEvent)));
+}
+
+export async function fetchRuntimeResponse(signal?: AbortSignal, etag?: string): Promise<RuntimeFetchResult> {
+  const resp = await fetch('/api/runtime', {
+    signal,
+    cache: 'no-store',
+    headers: { 'Content-Type': 'application/json', ...(etag ? { 'If-None-Match': etag } : {}) },
+  });
+  if (resp.status === 304) return { snapshot: null, etag, notModified: true };
+  if (!resp.ok) throw new Error(`HTTP ${resp.status} ${resp.statusText} @ /api/runtime`);
+  const value: unknown = await resp.json();
+  if (!isRuntimeSnapshot(value)) {
+    throw new Error('运行态快照格式无效');
+  }
+  return { snapshot: value, etag: resp.headers.get('ETag') ?? undefined, notModified: false };
+}
+
+export async function fetchStructure(): Promise<TreeStructure> {
+  return requestJson<TreeStructure>('/api/tree/structure');
+}

@@ -1,0 +1,6 @@
+string mode_id
+string requester_id
+---
+bool accepted
+uint64 request_id
+string message

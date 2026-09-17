@@ -7,6 +7,7 @@ import { expect, test } from "@playwright/test";
 const execFileAsync = promisify(execFile);
 const functionsZshPath = fileURLToPath(new URL("../../functions.zsh", import.meta.url));
 const deployWorkflowPath = fileURLToPath(new URL("../../.github/workflows/deploy-pages.yml", import.meta.url));
+const unifiedEntryPath = fileURLToPath(new URL("../../rm65", import.meta.url));
 
 async function publicHelperNames() {
   const source = await readFile(functionsZshPath, "utf8");
@@ -20,6 +21,7 @@ test("startup entries page renders the current helper index", async ({ page }) =
   await expect(page.getByText("rm65_docker_bringup_model")).toBeVisible();
   await expect(page.getByText("rm65_docker_web_control_start")).toBeVisible();
   await expect(page.getByText("rm65_deploy_sync")).toBeVisible();
+  await expect(page.getByText("./rm65 up", { exact: false }).first()).toBeVisible();
 });
 
 test("startup entries page documents every public helper", async ({ page }) => {
@@ -77,4 +79,14 @@ test("Pages workflow rebuilds when startup helper sources change", async () => {
 
   expect(workflow).toContain('"functions.zsh"');
   expect(workflow).toContain('"config/docker/**"');
+});
+
+
+test("unified rm65 entry documents the production defaults", async () => {
+  const source = await readFile(unifiedEntryPath, "utf8");
+
+  expect(source).toContain('up [desktop|model]');
+  expect(source).toContain('rm65_camera_ros2 color');
+  expect(source).toContain('realman_bringup_remote');
+  expect(source).toContain('rm65_deploy_sync');
 });

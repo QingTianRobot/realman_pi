@@ -1,0 +1,3 @@
+# Changingtek Modbus RTU/RS-485 driver dependencies.
+minimalmodbus
+pyserial

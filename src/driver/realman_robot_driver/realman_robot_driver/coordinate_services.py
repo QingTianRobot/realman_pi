@@ -40,6 +40,7 @@ def run_coordinate_operation(
     name: str = "",
     *,
     publish_result: Callable[[CoordinateOperationResult], None] | None = None,
+    ownership_already_acquired: bool = False,
 ) -> CoordinateOperationResult:
     """Run one coordinate operation without allowing controller access while busy."""
     try:
@@ -52,18 +53,21 @@ def run_coordinate_operation(
             publish_result(_operation_result(selected_operation, verification))
 
     if selected_operation is CoordinateOperation.VERIFY:
-        try:
-            acquired = ownership.acquire(arm)
-        except Exception as error:
-            return _operation_result(
-                selected_operation,
-                manager.fail_closed(arm, f"arm {arm} ownership acquire failed: {error}"),
-            )
-        if not acquired:
-            return _operation_result(
-                selected_operation,
-                manager.fail_closed(arm, f"arm {arm} is busy; coordinate operation refused"),
-            )
+        if ownership_already_acquired:
+            acquired = True
+        else:
+            try:
+                acquired = ownership.acquire(arm)
+            except Exception as error:
+                return _operation_result(
+                    selected_operation,
+                    manager.fail_closed(arm, f"arm {arm} ownership acquire failed: {error}"),
+                )
+            if not acquired:
+                return _operation_result(
+                    selected_operation,
+                    manager.fail_closed(arm, f"arm {arm} is busy; coordinate operation refused"),
+                )
         try:
             verification = manager.verify(
                 adapter,
@@ -74,17 +78,19 @@ def run_coordinate_operation(
             verification = manager.fail_closed(
                 arm, f"coordinate verification failed: {error}"
             )
-        try:
-            ownership.release(arm)
-        except Exception as error:
-            verification = manager.fail_closed(
-                arm, f"arm {arm} ownership release failed: {error}"
-            )
+        if not ownership_already_acquired:
+            try:
+                ownership.release(arm)
+            except Exception as error:
+                verification = manager.fail_closed(
+                    arm, f"arm {arm} ownership release failed: {error}"
+                )
     elif selected_operation is CoordinateOperation.APPLY:
         verification = manager.apply(
             adapter,
             arm,
             verified_result_callback=publish_verification,
+            ownership_already_acquired=ownership_already_acquired,
         )
     elif selected_operation is CoordinateOperation.SELECT_TOOL:
         verification = manager.select_tool(
@@ -111,8 +117,16 @@ def run_startup_coordinate_policy(
     arm: str,
     *,
     publish_result: Callable[[CoordinateOperationResult], None] | None = None,
+    ownership_already_acquired: bool = False,
 ) -> CoordinateOperationResult:
-    """Always verify after connect, then apply only under explicit config policy."""
+    """Verify after connect and reconcile any safe coordinate mismatch.
+
+    The configured profile is authoritative for motion. A successful readback
+    that differs from the profile is reconciled immediately by writing and
+    selecting the configured tool/work frames, regardless of the legacy
+    ``policy.on_start`` value. Read failures remain fail-closed and are never
+    followed by blind writes.
+    """
     verification = run_coordinate_operation(
         manager,
         adapter,
@@ -120,19 +134,19 @@ def run_startup_coordinate_policy(
         arm,
         CoordinateOperation.VERIFY,
         publish_result=publish_result,
+        ownership_already_acquired=ownership_already_acquired,
     )
     if verification.api2_status != 0 or verification.matched:
         return verification
-    if manager.policy.on_start == "apply":
-        return run_coordinate_operation(
-            manager,
-            adapter,
-            ownership,
-            arm,
-            CoordinateOperation.APPLY,
-            publish_result=publish_result,
-        )
-    return verification
+    return run_coordinate_operation(
+        manager,
+        adapter,
+        ownership,
+        arm,
+        CoordinateOperation.APPLY,
+        publish_result=publish_result,
+        ownership_already_acquired=ownership_already_acquired,
+    )
 
 
 def _operation_result(

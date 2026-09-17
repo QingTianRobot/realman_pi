@@ -5,6 +5,33 @@ import pytest
 from realman_web_control.protocol import ProtocolError, parse_message
 
 
+def test_select_input_mode_is_global_and_validates_syntax_only():
+    assert parse_message(
+        '{"type":"select_input_mode","request_id":"mode-1","mode_id":"policy"}'
+    ) == {"type": "select_input_mode", "request_id": "mode-1", "mode_id": "policy"}
+    for mode in ("web", "futuremode2"):
+        assert parse_message(json.dumps({
+            "type": "select_input_mode", "request_id": "mode-2", "mode_id": mode,
+        }))["mode_id"] == mode
+
+
+@pytest.mark.parametrize("mode", ["", "Policy", "pika!", "a-b", "a_b", "2policy", "策略", "a" * 97])
+def test_select_input_mode_rejects_invalid_identifiers(mode):
+    with pytest.raises(ProtocolError, match="mode_id"):
+        parse_message(json.dumps({
+            "type": "select_input_mode", "request_id": "mode-1", "mode_id": mode,
+        }))
+
+
+@pytest.mark.parametrize("browser_id", [None, "", "x" * 97])
+def test_select_input_mode_requires_bounded_browser_request_id(browser_id):
+    message = {"type": "select_input_mode", "mode_id": "policy"}
+    if browser_id is not None:
+        message["request_id"] = browser_id
+    with pytest.raises(ProtocolError, match="request_id"):
+        parse_message(json.dumps(message))
+
+
 def valid_motion():
     return {
         "type": "execute_motion",

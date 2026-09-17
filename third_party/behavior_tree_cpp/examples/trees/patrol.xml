@@ -1,0 +1,23 @@
+<?xml version="1.0"?>
+<!--
+  示例行为树：巡逻机器人决策
+  配合 examples/02_load_from_xml.cpp 使用，节点来自 bt_nodes 插件。
+
+  结构：
+    Fallback(root)
+    ├── Sequence(patrol)        电量足则巡逻
+    │   ├── AlwaysSuccess        (示意"电量检查通过")
+    │   └── PrintMessage         打印"正在巡逻"
+    └── PrintMessage             否则打印"返回充电"
+-->
+<root main_tree_to_execute="PatrolTree">
+  <BehaviorTree ID="PatrolTree">
+    <Fallback name="root">
+      <Sequence name="patrol">
+        <AlwaysSuccess/>
+        <PrintMessage message="正在巡逻"/>
+      </Sequence>
+      <PrintMessage message="返回充电桩"/>
+    </Fallback>
+  </BehaviorTree>
+</root>

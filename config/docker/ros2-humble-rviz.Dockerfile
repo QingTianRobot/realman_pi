@@ -1,6 +1,20 @@
 # Compose defaults this to a DaoCloud Docker Hub proxy for faster pulls in
 # mainland China. Override ROS_BASE_IMAGE=ros:humble-ros-base to use Docker Hub.
 ARG ROS_BASE_IMAGE=docker.m.daocloud.io/library/ros:humble-ros-base
+
+# Node is confined to this stage. The runtime image receives only the static
+# editor files, keeping the driver container free of npm and dev-server state.
+FROM node:22-bookworm AS bt_editor_build
+WORKDIR /opt/bt_editor
+COPY third_party/behavior_tree_cpp/bt_editor/package.json third_party/behavior_tree_cpp/bt_editor/package-lock.json ./
+RUN npm ci
+COPY third_party/behavior_tree_cpp/bt_editor ./
+# vite.config.ts imports this shared repository-root setting. The Node build
+# stage has its own filesystem, so provide the exact /config path resolved by
+# ../../../config/behavior-tree/frontend from /opt/bt_editor.
+COPY config/behavior-tree /config/behavior-tree
+RUN npm run build
+
 FROM ${ROS_BASE_IMAGE}
 
 # These build arguments intentionally remain replaceable for private mirrors or
@@ -34,6 +48,8 @@ RUN find -L /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
         python3-opencv \
         python3-yaml \
         ffmpeg \
+        cmake \
+        curl \
         ros-humble-ament-cmake-gtest \
         ros-humble-ament-cmake-pytest \
         ros-humble-diagnostic-msgs \
@@ -51,6 +67,20 @@ WORKDIR /opt/rm65_ws
 # directory. Keep this path aligned with ROOT_CONFIG_DIR in CMakeLists.txt.
 COPY config /opt/rm65_ws/config
 COPY src /opt/rm65_ws/src
+# Keep the behavior-tree runtime reproducible inside the image. The source is
+# copied from the repository snapshot rather than a developer's Downloads path.
+COPY third_party/behavior_tree_cpp /opt/rm65_ws/src/behavior_tree_cpp
+RUN mkdir -p /opt/rm65_ws/third_party && ln -s /opt/rm65_ws/src/behavior_tree_cpp /opt/rm65_ws/third_party/behavior_tree_cpp
+
+# Build the preview-only HTTP server independently of ROS packages. Its editor
+# files are copied from the Node build stage below and served from one origin.
+RUN cmake -S /opt/rm65_ws/src/behavior_tree_cpp -B /opt/rm65_ws/behavior_tree/build \
+        -DBT_BUILD_NODES=OFF \
+        -DBT_BUILD_SERVER=ON \
+        -DBT_BUILD_TESTS=OFF \
+        -DBT_BUILD_EXAMPLES=OFF \
+    && cmake --build /opt/rm65_ws/behavior_tree/build --target bt_server \
+    && install -D -m 0755 /opt/rm65_ws/behavior_tree/build/bin/bt_server /opt/rm65_ws/behavior_tree/bin/bt_server
 
 # Install the pinned vendor API used by the real driver. Mock tests still avoid
 # importing it, while production launches can read real controller state.
@@ -61,13 +91,23 @@ RUN python3 -m pip install --no-cache-dir \
         --requirement /opt/rm65_ws/config/python/realman-sdk-requirements.txt \
         --requirement /opt/rm65_ws/config/python/recording-requirements.txt
 
+RUN python3 -m pip install --no-cache-dir \
+        --index-url "${PYPI_INDEX_URL}" \
+        --retries 5 \
+        --timeout 60 \
+        --requirement /opt/rm65_ws/config/python/gripper-requirements.txt
+
 RUN . /opt/ros/humble/setup.sh \
     && colcon build --symlink-install \
-        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration realman_recording realman_recording_msgs \
-    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration realman_recording realman_recording_msgs \
+        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock realman_recording realman_recording_msgs \
+    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock realman_recording realman_recording_msgs \
     && colcon test-result --verbose
 
+COPY --from=bt_editor_build /opt/bt_editor/dist /opt/rm65_ws/behavior_tree/editor-dist
 COPY docker/ros_entrypoint.sh /ros_entrypoint.sh
+COPY docker/bt_container_entrypoint.sh /usr/local/bin/bt-start
+COPY docker/bt_runtime_result.py /usr/local/libexec/bt-runtime-result
+RUN chmod +x /ros_entrypoint.sh /usr/local/bin/bt-start /usr/local/libexec/bt-runtime-result
 
 ENTRYPOINT ["/ros_entrypoint.sh"]
 CMD ["ros2", "launch", "rm65_description", "display.launch.py"]

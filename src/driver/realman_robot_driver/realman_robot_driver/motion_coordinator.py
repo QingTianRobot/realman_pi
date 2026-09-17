@@ -158,6 +158,9 @@ class MotionCoordinator:
         self._generation = 0
         self._accept_events = False
         self._event: tuple[int, bool] | None = None
+        self._submission_generation: int | None = None
+        self._submission_event: tuple[int, bool] | None = None
+        self._submission_accepts_early_event = False
         self._submitted_generation: int | None = None
         self._confirmed_event_generation: int | None = None
         self._event_channel_quarantined = False
@@ -303,7 +306,16 @@ class MotionCoordinator:
         event_generation, trajectory_state = parsed
         with self._lock:
             generation = self._active_generation
-            if generation is None or not self._accept_events:
+            if generation is None:
+                return
+            if not self._accept_events:
+                if (
+                    self._submission_generation == generation
+                    and self._submission_accepts_early_event
+                    and event_generation is None
+                ):
+                    self._submission_event = (generation, trajectory_state)
+                    self._condition.notify_all()
                 return
             if event_generation is not None and event_generation != generation:
                 return
@@ -363,6 +375,7 @@ class MotionCoordinator:
         current_joints: tuple[float, ...] = ()
         initial_joints: tuple[float, ...] = ()
         submitted = False
+        submission_event_received = False
         try:
             if goal.command == CommandType.MOVEJ:
                 state_status, observed_joints, state_connected = self._read_state()
@@ -406,12 +419,20 @@ class MotionCoordinator:
                 0,
                 "submitting non-blocking motion",
             )
-            # The SDK event payload has no generation; ignore callbacks until
-            # this submission has returned success to avoid stale completion.
+            # The SDK event payload has no generation.  Events arriving while
+            # this submission is in flight are buffered for this generation;
+            # unrelated callbacks remain ignored.
+            with self._lock:
+                self._submission_accepts_early_event = goal.command != CommandType.MOVEJ
             submit_status, interrupted_terminal = self._submit_if_permitted(
                 goal_handle, generation, goal
             )
             if interrupted_terminal is not None:
+                with self._lock:
+                    if self._submission_generation == generation:
+                        self._submission_generation = None
+                        self._submission_event = None
+                    self._submission_accepts_early_event = False
                 terminal_state, api2_status, reason = interrupted_terminal
                 return self._finish(
                     goal_handle,
@@ -423,6 +444,11 @@ class MotionCoordinator:
                 )
             assert submit_status is not None
             if submit_status != 0:
+                with self._lock:
+                    if self._submission_generation == generation:
+                        self._submission_generation = None
+                        self._submission_event = None
+                    self._submission_accepts_early_event = False
                 return self._finish(
                     goal_handle,
                     generation,
@@ -436,6 +462,12 @@ class MotionCoordinator:
                 if self._active_generation == generation:
                     self._accept_events = True
                     self._submitted_generation = generation
+                    if self._submission_event is not None:
+                        self._event = self._submission_event
+                        submission_event_received = True
+                    self._submission_generation = None
+                    self._submission_event = None
+                    self._submission_accepts_early_event = False
 
             self._publish_feedback(
                 goal_handle,
@@ -447,7 +479,7 @@ class MotionCoordinator:
                 "motion executing",
             )
             deadline = self._monotonic() + goal.timeout_sec
-            observed_active_trajectory = False
+            observed_active_trajectory = submission_event_received
             while True:
                 if self._fast_stop_requested(generation):
                     return self._finish_after_requested_fast_stop(
@@ -677,6 +709,7 @@ class MotionCoordinator:
 
         current_joints: tuple[float, ...] = ()
         submitted = False
+        submission_event_received = False
         try:
             state_status, observed_joints, state_connected = self._read_state()
             if state_status != 0:
@@ -715,6 +748,11 @@ class MotionCoordinator:
                 self._submit_trajectory_if_permitted(goal_handle, generation, goal)
             )
             if interrupted_terminal is not None:
+                with self._lock:
+                    if self._submission_generation == generation:
+                        self._submission_generation = None
+                        self._submission_event = None
+                    self._submission_accepts_early_event = False
                 terminal_state, api2_status, reason = interrupted_terminal
                 if submitted_count > 0:
                     submitted = True
@@ -746,6 +784,11 @@ class MotionCoordinator:
                 )
             assert submit_status is not None
             if submit_status != 0:
+                with self._lock:
+                    if self._submission_generation == generation:
+                        self._submission_generation = None
+                        self._submission_event = None
+                    self._submission_accepts_early_event = False
                 if submitted_count > 0:
                     submitted = True
                     with self._lock:
@@ -784,6 +827,12 @@ class MotionCoordinator:
                 if self._active_generation == generation:
                     self._accept_events = True
                     self._submitted_generation = generation
+                    if self._submission_event is not None:
+                        self._event = self._submission_event
+                        submission_event_received = True
+                    self._submission_generation = None
+                    self._submission_event = None
+                    self._submission_accepts_early_event = False
 
             self._publish_feedback(
                 goal_handle,
@@ -798,7 +847,7 @@ class MotionCoordinator:
                 submitted_waypoints=len(goal.waypoints),
             )
             deadline = self._monotonic() + goal.timeout_sec
-            observed_active_trajectory = False
+            observed_active_trajectory = submission_event_received
             while True:
                 if self._fast_stop_requested(generation):
                     return self._finish_after_requested_fast_stop(
@@ -1159,6 +1208,9 @@ class MotionCoordinator:
             self._active_generation = generation
             self._accept_events = False
             self._event = None
+            self._submission_generation = None
+            self._submission_event = None
+            self._submission_accepts_early_event = False
             self._submitted_generation = None
             self._confirmed_event_generation = None
             self._terminal_generation = None
@@ -1188,6 +1240,7 @@ class MotionCoordinator:
             if interruption is not None:
                 return None, interruption
             try:
+                self._submission_generation = generation
                 submit_status = self._submit(goal)
             except Exception as error:
                 submit_status = _nonzero_status(
@@ -1312,6 +1365,13 @@ class MotionCoordinator:
     ) -> tuple[int | None, tuple[TerminalState, int, str] | None, int]:
         """Submit connected points, admitting stop checks between SDK calls."""
         submitted_count = 0
+        with self._lock:
+            if self._active_generation == generation:
+                self._submission_generation = generation
+                self._submission_accepts_early_event = any(
+                    waypoint.command != CommandType.MOVEJ
+                    for waypoint in goal.waypoints
+                )
         for index, waypoint in enumerate(goal.waypoints):
             with self._condition:
                 interruption = self._submission_interruption_locked(
@@ -2179,6 +2239,9 @@ class MotionCoordinator:
                 self._active_generation = None
                 self._accept_events = False
                 self._event = None
+                self._submission_generation = None
+                self._submission_event = None
+                self._submission_accepts_early_event = False
                 self._submitted_generation = None
                 self._confirmed_event_generation = None
                 self._fast_stop_generation = None

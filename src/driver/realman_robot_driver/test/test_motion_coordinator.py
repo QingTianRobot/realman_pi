@@ -877,6 +877,43 @@ def test_pose_commands_submit_wxyz_pose_but_fail_closed_without_frame_proof(
     assert adapter.calls.count(("slow_stop",)) == 0
 
 
+def test_movel_completion_event_emitted_during_submission_is_not_lost():
+    """A very short async MOVEL may finish before rm_movel returns."""
+    adapter = FakeAdapter()
+    coordinator, adapter, _, ownership = make_coordinator(adapter=adapter)
+
+    def finish_during_submission(
+        pose: list[float],
+        velocity_percent: int,
+        blend_radius_percent: int,
+        *,
+        connect: bool,
+    ) -> int:
+        adapter.calls.append(
+            ("movel", list(pose), velocity_percent, blend_radius_percent, connect)
+        )
+        adapter.stopped = True
+        coordinator.handle_event(
+            SimpleNamespace(
+                event_type=1,
+                trajectory_state=True,
+                trajectory_connect=0,
+                device=0,
+            )
+        )
+        return 0
+
+    adapter.movel = finish_during_submission
+    handle = FakeGoalHandle(pose_goal(CommandType.MOVEL))
+
+    result = coordinator.execute(handle)
+
+    assert result.terminal_state == FakeResult.SUCCEEDED
+    assert result.success is True
+    assert adapter.calls.count(("slow_stop",)) == 0
+    assert ownership.is_busy("l") is False
+
+
 def test_vendor_submission_error_aborts_and_preserves_api2_status():
     adapter = FakeAdapter()
     adapter.move_status = 37

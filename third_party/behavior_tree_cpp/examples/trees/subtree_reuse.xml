@@ -1,0 +1,30 @@
+<?xml version="1.0"?>
+<!--
+  SubTree 复用示例：MainTree 引用 StartupChecks 和 NotifyOperator 两个子树。
+  用途：演示复杂脚本如何用多个 BehaviorTree ID 拆分，避免一个 XML 里无限嵌套。
+-->
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="mission_root">
+      <SubTree ID="StartupChecks"/>
+      <PrintMessage name="run_mission" message="mission running"/>
+      <SubTree ID="NotifyOperator"/>
+    </Sequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="StartupChecks">
+    <Sequence name="startup_checks">
+      <SetBool name="set_system_ready" key="system_ready" value="true"/>
+      <CheckBool name="system_ready" key="system_ready" expected="true"/>
+    </Sequence>
+  </BehaviorTree>
+
+  <BehaviorTree ID="NotifyOperator">
+    <Sequence name="notify_operator">
+      <SetBlackboard name="cache_operator_message"
+                     value="mission complete"
+                     output_key="operator_message"/>
+      <PrintMessage name="print_operator_message" message="{operator_message}"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

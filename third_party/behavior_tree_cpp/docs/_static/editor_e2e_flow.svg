@@ -1,0 +1,31 @@
+<svg xmlns="http://www.w3.org/2000/svg" width="1080" height="330" viewBox="0 0 1080 330" role="img" aria-labelledby="title desc">
+  <title id="title">Playwright editor flow</title>
+  <desc id="desc">Playwright opens the editor, mocks APIs, loads sample tree, and verifies tick feedback.</desc>
+  <defs>
+    <marker id="arrow" markerWidth="10" markerHeight="10" refX="8" refY="3" orient="auto">
+      <path d="M0,0 L0,6 L9,3 z" fill="#2f5d50"/>
+    </marker>
+  </defs>
+  <rect width="1080" height="330" fill="#fbf4e6" rx="22"/>
+  <g font-family="Arial, sans-serif" font-size="15" fill="#18211f">
+    <rect x="52" y="118" width="170" height="88" rx="14" fill="#fff" stroke="#2f5d50" stroke-width="2"/>
+    <text x="82" y="153" font-weight="700">Playwright</text>
+    <text x="82" y="179" font-size="13">Chromium test</text>
+
+    <rect x="282" y="118" width="176" height="88" rx="14" fill="#fff" stroke="#2f5d50" stroke-width="2"/>
+    <text x="312" y="153" font-weight="700">Vite preview</text>
+    <text x="312" y="179" font-size="13">served editor app</text>
+
+    <rect x="518" y="118" width="180" height="88" rx="14" fill="#fff" stroke="#2f5d50" stroke-width="2"/>
+    <text x="548" y="153" font-weight="700">Mock /api</text>
+    <text x="548" y="179" font-size="13">health/nodes/load/tick</text>
+
+    <rect x="758" y="118" width="270" height="88" rx="14" fill="#2f5d50" stroke="#23463c" stroke-width="2"/>
+    <text x="788" y="153" font-weight="700" fill="#fff">Assertions</text>
+    <text x="788" y="179" font-size="13" fill="#fff">sample tree, server load, tick toast</text>
+
+    <line x1="222" y1="162" x2="274" y2="162" stroke="#2f5d50" stroke-width="3" marker-end="url(#arrow)"/>
+    <line x1="458" y1="162" x2="510" y2="162" stroke="#2f5d50" stroke-width="3" marker-end="url(#arrow)"/>
+    <line x1="698" y1="162" x2="750" y2="162" stroke="#2f5d50" stroke-width="3" marker-end="url(#arrow)"/>
+  </g>
+</svg>

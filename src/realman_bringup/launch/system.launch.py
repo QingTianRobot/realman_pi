@@ -40,6 +40,7 @@ def generate_launch_description():
     driver_share = Path(get_package_share_directory("realman_robot_driver"))
     web_control_share = Path(get_package_share_directory("realman_web_control"))
     calibration_share = Path(get_package_share_directory("realman_camera_calibration"))
+    gripper_share = Path(get_package_share_directory("gripper_ros2"))
     three_drivers_launch = driver_share / "launch" / "three_realman_drivers.launch.py"
     # Docker mounts the repository configuration at REALMAN_CONFIG_ROOT so edits
     # are picked up on restart. Installed config remains the local build fallback.
@@ -74,6 +75,8 @@ def generate_launch_description():
     update_layout_after_calibration = LaunchConfiguration("update_layout_after_calibration")
     web_control_config_file = LaunchConfiguration("web_control_config_file")
     joint_record_dir = LaunchConfiguration("joint_record_dir")
+    gripper_config_file = LaunchConfiguration("gripper_config_file")
+    start_gripper = LaunchConfiguration("start_gripper")
     wait_for_joy_device = LaunchConfiguration("wait_for_joy_device")
     joy_device_path = LaunchConfiguration("joy_device_path")
     joy_poll_interval = LaunchConfiguration("joy_poll_interval")
@@ -169,6 +172,16 @@ def generate_launch_description():
                 description="RealMan motion safety limits under root config/ros.",
             ),
             DeclareLaunchArgument(
+                "start_gripper",
+                default_value="false",
+                description="Start the multi-bus Changingtek gripper manager.",
+            ),
+            DeclareLaunchArgument(
+                "gripper_config_file",
+                default_value=str(config_root / "ros" / "gripper.yaml"),
+                description="Changingtek gripper topology under root config/ros.",
+            ),
+            DeclareLaunchArgument(
                 "start_web_control",
                 default_value="false",
                 description="Start the authenticated browser WebSocket/action bridge.",
@@ -243,6 +256,14 @@ def generate_launch_description():
                     "update_layout_after_solve": update_layout_after_calibration,
                 }.items(),
             ),
+            Node(
+                package="gripper_ros2",
+                executable="gripper_manager",
+                name="gripper_manager",
+                output="screen",
+                condition=IfCondition(start_gripper),
+                parameters=[{"config_file": gripper_config_file}],
+            ),
             IncludeLaunchDescription(
                 PythonLaunchDescriptionSource(
                     str(web_control_share / "launch" / "web_control.launch.py")
@@ -255,6 +276,7 @@ def generate_launch_description():
                     "coordinates_config_file": coordinates_config_file,
                     "joint_record_dir": joint_record_dir,
                     "calibration_config_file": camera_calibration_config_file,
+                    "gripper_config_file": gripper_config_file,
                 }.items(),
             ),
             Node(

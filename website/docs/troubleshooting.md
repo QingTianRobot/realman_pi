@@ -100,6 +100,17 @@ ROS_DOMAIN_ID=0 docker compose run --rm rm65_rviz
 ros2 run tf2_ros tf2_echo world link_6
 ```
 
+## 行为树重复执行失败或 Action 返回 UNKNOWN
+
+先确认是行为树失败还是入口拒绝：`./rm65 bt` 返回 `73` 表示同一容器已有实例运行或清理中；正常结束
+后可以再次运行。最终快照在 `logs/behavior-trees/<run-id>/runtime.json`，halt 后 `root_status` 可能为
+`IDLE`，应结合 `tick_stats` 和 `events` 判断本次结果。
+
+客户端收到 `UNKNOWN`、driver 却报告 `SUCCEEDED` 时，在实际 driver 容器中检查
+`/l|m|r/execute_motion` 的 Action Server 数量。同一 ROS domain 中存在多套同名 driver 会干扰结果路由，
+需要隔离运行图；仅释放叶节点 client 或将 UNKNOWN 当作成功无法解决问题。检查命令、其他可能原因和
+`.env` 域切换流程见[行为树诊断](./development/behavior-tree-motion#重复执行与-unknown-排查)。
+
 ## 网格无法加载
 
 URDF 中的 `package://rm65_description/...` 路径依赖 ament 索引。进行本地构建后必须 source 当前工作空间：

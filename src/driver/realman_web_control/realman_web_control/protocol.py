@@ -4,6 +4,7 @@ from __future__ import annotations
 
 import json
 import math
+import re
 from typing import Any
 
 
@@ -115,6 +116,13 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
     if message_type == "ping":
         return {"type": "ping"}
 
+    if message_type == "select_input_mode":
+        request_id = _request_id(message)
+        mode_id = _string(message.get("mode_id"), "mode_id")
+        if re.fullmatch(r"[a-z][a-z0-9]*", mode_id) is None:
+            raise ProtocolError("invalid_field", "mode_id must be a lower-case ASCII identifier", request_id)
+        return {"type": message_type, "request_id": request_id, "mode_id": mode_id}
+
     if message_type == "capture_calibration_sample":
         request_id = _request_id(message)
         session_id = _string(message.get("session_id", ""), "session_id", maximum=128, allow_empty=True)
@@ -138,6 +146,19 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
             "request_id": _request_id(message),
             "session_id": _string(message.get("session_id", ""), "session_id", maximum=128, allow_empty=True),
         }
+
+    if message_type == "gripper_command":
+        request_id = _request_id(message)
+        name = _string(message.get("name"), "name", maximum=96)
+        command = message.get("command")
+        if command not in {"open", "close", "reset", "enable", "disable", "percentage", "grasp_check"}:
+            raise ProtocolError("invalid_command", "unsupported gripper command", request_id)
+        normalized = {"type": message_type, "request_id": request_id, "name": name, "command": command}
+        if command == "percentage":
+            normalized["percentage"] = _number(message.get("percentage"), "percentage")
+            if not 0.0 <= normalized["percentage"] <= 1.0:
+                raise ProtocolError("invalid_field", "percentage must be from 0.0 through 1.0", request_id)
+        return normalized
 
     arm = _arm(message)
     if message_type == "get_current_pose":

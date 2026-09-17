@@ -321,11 +321,12 @@ Action goal accepted
 
 ## 坐标与 motion gate
 
-`config/ros/realman_coordinates.yaml` 只描述期望状态，`CoordinateManager` 在连接后
-按 `policy.on_start` 回读控制器。默认 `verify` 不写入控制器；工具、工作坐标任何字段
-不匹配都会关闭 motion gate。该 gate 只拦截依赖控制器工具/工作坐标的 `MOVEL`、
-`MOVEJ_P` 和速度 session；关节空间 `MOVEJ` 不读取位姿参考系，仍可在坐标 mismatch
-时提交。
+`config/ros/realman_coordinates.yaml` 描述运动所需的权威坐标状态。连接后驱动先回读
+控制器；读取成功但工具、工作坐标任一字段不匹配时，自动写入并选择配置中的默认坐标，
+随后回读确认。`policy.on_start` 仅为旧配置保留，不能跳过失配修复。API2 读取或写入失败、
+或写后回读仍不一致，都会关闭 motion gate。该 gate 只拦截依赖控制器工具/工作坐标的
+`MOVEL`、`MOVEJ_P` 和速度 session；关节空间 `MOVEJ` 不读取位姿参考系，仍可在坐标
+mismatch 时提交。
 
 开发者新增一个坐标相关字段时必须同时更新：
 
@@ -333,10 +334,13 @@ Action goal accepted
 2. 控制器回读比较和四元数容差；
 3. `VerifyCoordinates`/`SelectFrame` 的结果消息；
 4. Action 目标校验中的 active frame 检查；
-5. mismatch、apply、select、写后回读失败测试。
+5. mismatch 自动 apply、显式 apply/select、写后回读失败测试。
 
-坐标写入是 mutation，只有显式 `coordinates/apply` 或 `select_*` 才能触发；任何 Action
-goal 都不能隐式写入工具或工作坐标。
+坐标写入是 mutation，只能由启动失配修复或显式 `coordinates/apply`/`select_*` 触发；
+任何 Action goal 都不能隐式写入工具或工作坐标。所有写入都必须取得单臂 ownership。
+
+事件通道恢复和自动重连不会绕过坐标策略；恢复流程在保持单臂 ownership 的情况下重新
+verify，并在可读失配时自动 apply/select 后回读。恢复坐标失败时继续关闭 motion gate。
 
 ## 扩展一个新 Action
 

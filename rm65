@@ -1,0 +1,167 @@
+#!/usr/bin/env bash
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+LOG_ROOT="${REALMAN_LOG_ROOT:-$ROOT/logs}"
+STATE_FILE="$LOG_ROOT/.rm65-camera.pid"
+DRY_RUN="${RM65_DRY_RUN:-0}"
+
+run() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '+ '
+    printf '%q ' "$@"
+    printf '\n'
+    return 0
+  fi
+  "$@"
+}
+
+camera_start() {
+  mkdir -p "$LOG_ROOT"
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '+ camera_ros2 color (background)\n'
+    return 0
+  fi
+  if [[ -s "$STATE_FILE" ]] && kill -0 "$(<"$STATE_FILE")" 2>/dev/null; then
+    printf 'rm65: ROS 2 camera stream already running (pid %s)\n' "$(<"$STATE_FILE")" >&2
+    return 0
+  fi
+  rm -f "$STATE_FILE"
+  local camera_log="$LOG_ROOT/rm65-camera.log"
+  zsh -lc 'source "$1/functions.zsh" && rm65_camera_ros2 color' _ "$ROOT" >"$camera_log" 2>&1 &
+  local pid=$!
+  printf '%s\n' "$pid" >"$STATE_FILE"
+  sleep 1
+  if ! kill -0 "$pid" 2>/dev/null; then
+    printf 'rm65: camera startup failed; see %s\n' "$camera_log" >&2
+    rm -f "$STATE_FILE"
+    return 1
+  fi
+  printf 'rm65: ROS 2 color cameras started (pid %s)\n' "$pid"
+}
+
+camera_stop() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '+ camera_ros2_stop\n'
+    return 0
+  fi
+  if [[ -s "$STATE_FILE" ]]; then
+    local pid
+    pid="$(<"$STATE_FILE")"
+    if kill -0 "$pid" 2>/dev/null; then
+      kill "$pid" 2>/dev/null || true
+      for _ in {1..20}; do
+        kill -0 "$pid" 2>/dev/null || break
+        sleep 0.25
+      done
+    fi
+    rm -f "$STATE_FILE"
+  fi
+  zsh -lc 'source "$1/functions.zsh" && rm65_camera_ros2_stop' _ "$ROOT" >/dev/null 2>&1 || true
+}
+
+compose() {
+  case "${REALMAN_DRIVER_CONFIG_FILE:-}" in
+    */realman_driver_mock.yaml)
+      # Mock robot drivers must remain isolated from independently managed
+      # gripper serial devices, even if a caller inherited the production default.
+      run env REALMAN_START_GRIPPER=false \
+        docker compose -f "$ROOT/docker-compose.yml" "$@"
+      ;;
+    *) run docker compose -f "$ROOT/docker-compose.yml" "$@" ;;
+  esac
+}
+
+up() {
+  local profile="${1:-production}"
+  case "$profile" in
+    production)
+      camera_start
+      if ! compose up -d realman_bringup_remote realman_web_control; then
+        camera_stop
+        return 1
+      fi
+      ;;
+    desktop)
+      camera_start
+      if ! compose up -d realman_bringup_remote realman_web_control realman_remote_rviz; then
+        camera_stop
+        return 1
+      fi
+      ;;
+    model)
+      compose run --rm rm65_three_rviz
+      ;;
+    *)
+      printf 'usage: rm65 up [desktop|model]\n' >&2
+      return 2
+      ;;
+  esac
+}
+
+down() {
+  compose stop realman_bringup_remote realman_web_control realman_remote_rviz || true
+  camera_stop
+}
+
+status() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '+ status camera + realman_bringup_remote + realman_web_control\n'
+    return 0
+  fi
+  if [[ -s "$STATE_FILE" ]] && kill -0 "$(<"$STATE_FILE")" 2>/dev/null; then
+    printf 'camera: running (pid %s)\n' "$(<"$STATE_FILE")"
+  else
+    printf 'camera: stopped\n'
+  fi
+  compose ps realman_bringup_remote realman_web_control realman_remote_rviz
+}
+
+logs() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '+ logs camera + realman_bringup_remote + realman_web_control\n'
+    return 0
+  fi
+  [[ -f "$LOG_ROOT/rm65-camera.log" ]] && tail -n 100 "$LOG_ROOT/rm65-camera.log" || true
+  compose logs --tail=100 realman_bringup_remote realman_web_control
+}
+
+sync_repo() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '+ rm65_deploy_sync\n'
+    return 0
+  fi
+  zsh -lc 'source "$1/functions.zsh" && rm65_deploy_sync' _ "$ROOT"
+}
+
+usage() {
+  cat <<'EOF'
+Usage: ./rm65 <command> [profile]
+
+Commands:
+  up [desktop|model]  Start production runtime, desktop RViz, or offline model viewer.
+  down                Stop unified runtime and ROS 2 cameras.
+  status              Show camera and Docker service state.
+  logs                Show recent camera and bringup logs.
+  camera              Run the legacy RTSP/TCP camera helper.
+  bt-test build|mock|web|all  Build, run, or validate isolated behavior-tree scenarios.
+  bt [l|m|r|three]    Run a one-shot behavior tree; executor and :8080 monitor exit at terminal state.
+  bt control          Run the persistent input router and :8080 monitor until Ctrl-C.
+  sync                Synchronize the clean main branch to production.
+EOF
+}
+
+command_name="${1:-help}"
+shift || true
+case "$command_name" in
+  up) up "$@" ;;
+  down) down "$@" ;;
+  status) status "$@" ;;
+  logs) logs "$@" ;;
+  bt-test) exec "$ROOT/scripts/bt-test.sh" "$@" ;;
+  bt) exec "$ROOT/scripts/bt.sh" "$@" ;;
+  camera) exec zsh -lc 'source "$1/functions.zsh" && rm65_camera_start' _ "$ROOT" ;;
+  sync) sync_repo "$@" ;;
+  help|-h|--help) usage ;;
+  *) printf 'rm65: unknown command: %s\n' "$command_name" >&2; usage >&2; exit 2 ;;
+esac

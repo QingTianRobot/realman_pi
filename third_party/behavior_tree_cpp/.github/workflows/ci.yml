@@ -1,0 +1,71 @@
+name: ci
+
+on:
+  push:
+    branches: [main]
+  pull_request:
+  workflow_dispatch:
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  non-ros-validation:
+    name: non-ROS validation (${{ matrix.os }})
+    runs-on: ${{ matrix.os }}
+    timeout-minutes: 30
+    strategy:
+      fail-fast: false
+      matrix:
+        os: [ubuntu-latest, macos-latest]
+
+    steps:
+      - name: Checkout
+        uses: actions/checkout@v4
+
+      - name: Set up Node.js
+        uses: actions/setup-node@v4
+        with:
+          node-version: '20'
+          cache: npm
+          cache-dependency-path: bt_editor/package-lock.json
+
+      - name: Set up Python
+        uses: actions/setup-python@v5
+        with:
+          python-version: '3.x'
+
+      - name: Install documentation dependencies
+        run: python -m pip install -r docs/requirements.txt
+
+      - name: Install frontend dependencies
+        working-directory: bt_editor
+        run: npm ci
+
+      - name: Install Playwright Chromium on Linux
+        if: runner.os == 'Linux'
+        working-directory: bt_editor
+        run: npx playwright install --with-deps chromium
+
+      - name: Install Playwright Chromium on macOS
+        if: runner.os == 'macOS'
+        working-directory: bt_editor
+        run: npx playwright install chromium
+
+      - name: Run full non-ROS validation
+        run: ./scripts/test.sh
+
+      - name: Upload Playwright diagnostics
+        if: always()
+        uses: actions/upload-artifact@v4
+        with:
+          name: playwright-${{ matrix.os }}-${{ github.run_attempt }}
+          path: |
+            bt_editor/test-results/
+            bt_editor/playwright-report/
+          if-no-files-found: warn
+          retention-days: 14

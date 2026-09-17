@@ -59,6 +59,74 @@ docker compose run --rm realman_bringup_remote
 只部署在受信任、隔离的机器人局域网；它仍然经过既有 driver 的 ownership、坐标 gate、
 watchdog 和 lockout，不会直接调用 SDK。
 
+## 全局输入模式路由
+
+输入路由器是可选的独立进程：`./rm65 up` 启动长期 driver 与本服务，但**不会**启动它。要启用
+全局路由，在 driver 容器已运行后执行 `./rm65 bt control`；它加载
+[`config/behavior-trees/control_router.xml`](../../../config/behavior-trees/control_router.xml)，并在 Ctrl-C
+前保持 executor 和 :8080 只读监视器运行。Ctrl-C 不会停止 driver 或本服务，`./rm65 down` 才停止
+统一运行时。路由和本服务必须使用同一个 `ROS_DOMAIN_ID`。
+
+本服务每 `config/ros/realman_web_control.yaml` 的 `input_mode.discovery_period_sec: 1.0` 秒探测
+`/realman_bt_executor/list_input_modes` 和 `/realman_bt_executor/select_input_mode`，随后可靠、
+transient-local 订阅 `/realman_bt_executor/input_mode_state`。同一 YAML 的
+`web_override_timeout_sec: 5.0`（秒）是等待 Web override 激活的上限；服务监听配置为
+`server.bind_host: 0.0.0.0`、`port: 8765`、`allowed_origins: [same-origin]`、`max_clients: 8` 和
+`max_message_bytes: 65536`（bytes）。行为树自身的 `config/ros/behavior_tree.yaml` 使用 10.0 Hz tick、
+5000 ms 切换超时及 `safe_fallback_mode: none`。
+
+`list_input_modes`（`realman_msgs/srv/ListInputModes`）响应 `success`、`message` 和并行的
+`mode_ids`、`labels`、`selectable` 数组；`select_input_mode`（`realman_msgs/srv/SelectInputMode`）请求
+`mode_id`、`requester_id`，响应 `accepted`、`request_id`、`message`。上述 topic 使用
+`realman_msgs/msg/InputModeState`，字段为 `requested_mode`、`selected_mode`、`active_mode`、`phase`、
+`request_id`、`epoch`、`detail`。
+
+目录完全由 XML 的字面 `InputModeGuard` 项发现，浏览器不会维护模式名单。当前 picker 显示一个
+“GLOBAL INPUT / 输入模式”卡片，带一个动态 select：`none`、`policy`、`pika` 都可选；`web` 虽会由
+状态显示为 active，却保持隐藏且不可选。没有正在运行的路由器或 discovery 不健康时，卡片隐藏；
+既有直接 Action 控制继续兼容，仅在两项 router service 都确认为不可用时启用。服务只短暂失联或
+catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返回 `input_mode_unavailable`，而不是绕过仲裁。
+若 service 在等待 Web override 的已排队运动期间消失，该命令失败并被永久丢弃；即使之后确认 router
+不存在，也只有一个后续、独立的新请求才可走 direct control。
+
+浏览器请求为 `{"type":"select_input_mode","request_id":"<non-empty up to 96 chars>","mode_id":"policy"}`；
+`mode_id` 必须为 lower-case ASCII identifier。输入模式相关服务端事件恰有三种：
+
+| 事件 | 字段 |
+| --- | --- |
+| `input_mode_list` | `available`、`modes[]`，每项为 `id`、`label`、`selectable` |
+| `input_mode_result` | `request_id`、`executor_request_id`、`accepted`、`message` |
+| `input_mode_state` | `requested_mode`、`selected_mode`、`active_mode`、`phase`（`ACTIVE`/`SWITCHING`/`FAILED`）、`request_id`、`epoch`、`detail` |
+
+对非 Web picker 选择，桥总是先取消它持有的 Web Action，再请求 router。切换到不同模式时，router
+先运行一 tick 的 `none` 中性分支，下一 tick 才激活目标模式；重选 active 模式直接返回已有 request ID，
+没有中性 tick，`epoch` 不变。路由仅拦截 `execute_motion`、`execute_trajectory` 和
+`start_cartesian_velocity`：这些浏览器运动先请求 `web`，只在同一请求的 `ACTIVE/web` 状态到达后才会转发。
+`software_stop` 绕过路由；夹爪、恢复、标定、运动学、位姿和记录操作均是 mode-neutral（包括
+`gripper_command`、`recover_motion`、`capture_calibration_sample`、`solve_calibration`、
+`get_current_pose`、`solve_ik`、`list_joint_records`、`save_joint_record`、`delete_joint_record` 与
+`apply_joint_record`）。Policy 与 Pika 目前只是 RUNNING 占位，不产生任何 robot goal。
+排查卡片缺失或停留在 SWITCHING 时，先检查 router 是否显式运行、三个 ROS 名称是否在同一 domain，
+以及 `input_mode_state.detail` 或 `type: "error"` 事件的 `code` 字段
+（`input_mode_timeout` / `input_mode_failed`）；这些 code 不是独立事件类型。不要添加硬编码选项。
+
+软件停止仍直接调用对应 arm 的 stop service，同时丢弃该 arm 等待 `ACTIVE/web` 的运动请求；
+Action 取消也会丢弃匹配 arm/action 且由该浏览器拥有的排队请求，返回
+`type: "error", code: "input_mode_cancelled"`，并保留原运动 `request_id`。
+这些操作不改变输入模式。迟到的模式回调不会重新发送已丢弃的运动。
+后端通过状态发布者的 ROS endpoint identity 识别路由器重启，即使两次探测之间 service
+一直显示 ready，也会清空旧目录、状态和请求关联并重新订阅。`FAILED` 后同一 request ID
+的更高 epoch 回退状态可以刷新页面，但不会恢复已失败的原运动请求。
+
+以下验证不访问输入设备或真实机械臂：
+
+```bash
+./rm65 bt-test all
+RM65_DRY_RUN=1 ./rm65 bt control
+```
+
+第二条仅输出持久 router 的容器执行计划；默认 `REALMAN_BT_DRY_RUN=true` 不会发送 Action goal。
+
 ## WebSocket 协议
 
 连接 `/ws` 后首先收到 `hello`，其中包含 `read_only=false`、`client_id` 和完整的 `layout`。
@@ -103,6 +171,16 @@ MOVEJ 目标关节使用 degree；Web 后端会从 URDF limit 再检查一次。
 实时状态只会原位更新三块卡片的文本和选中状态，不会替换按钮节点；三台驱动高频发布
 `joint_state` 时，点击切换仍保持可用。Action feedback 只用于显示阶段、进度与结果，不能覆盖实体
 URDF；Action 的 validating 阶段没有可用关节读数，序列化为零值会造成模型瞬间跳动。
+Web 控制桥和浏览器都会校验 `joint_state` 的六轴有限数值及单调递增的 `stamp_ns`。检测到
+驱动已经提供过非零姿态后，来自重复/假发布者的全零样本会被丢弃，实体 URDF 和关节面板保留
+最后一个有效姿态；收到更新的真实样本后会自动继续更新。该保护只作用于可视化数据链路，不能
+推断或锁定机械臂真实位置。生产 `start_driver:=true` 启动时必须禁用 `joint_state_publisher`，
+否则应先检查 `ros2 topic info /<arm>/joint_states --verbose` 并停止重复发布源。
+发送 MOVEL 后如果驱动返回 rejected/error，反馈区会立即显示错误并清零进度，不会继续显示“等待
+feedback”。如果 8 秒内没有收到任何该请求的 Action feedback，页面会提示“运行状态未知”，但仍
+保持发送按钮禁用、保留取消/软件停止路径；这不会自动重发命令。此时应检查 `/{arm}/execute_motion`
+Action 服务和驱动日志，确认轨迹是否仍在控制器中运行。
+驱动对非阻塞 MOVEL/MOVEJ_P 会保留“提交调用返回前就到达”的成功事件；因此极短位姿运动不会因回调竞态被误判为超时。MOVEJ 仍要求提交返回后再接受事件，以避免复用旧轨迹回调。
 在没有人工改动目标之前，右侧滑条会跟随该 arm 的实时 `joint_state`；一旦人工拖动滑条，该 arm
 的目标值就会保持用户输入，直到再次切换或重置。
 
@@ -128,7 +206,7 @@ Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条�
 影子须等待“计算逆解”成功才更新；MOVEP 当前不提供逆解或影子预览，修改后会明确提示影子不会跟随
 滑轨，但仍可直接发送 `MOVEJ_P` Action。
 
-对于配置的 WORK/TOOL，驱动仍要求 `reference_type`/`reference_name` 与已验证的激活坐标
+对于配置的 WORK/TOOL，驱动会在连接时自动将可读的激活坐标失配修复为配置值，并仍要求 `reference_type`/`reference_name` 与已验证的激活坐标
 完全一致。对于任意 TF frame，Web 节点先把位姿转换到 `/{arm}/base_link`，再以
 `BASE/base` 调用驱动；它不会把任意 TF 名称伪装成 RealMan controller 的 WORK/TOOL。
 TF 查询失败、坐标验证失败、控制器状态不可读、目标不可达、SDK API2 非零或结果超限都会

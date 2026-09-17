@@ -23,6 +23,8 @@ setup(
         (f"share/{package_name}/static/assets", static_asset_files),
     ],
     install_requires=["setuptools"],
+    # colcon selects its pytest runner from setuptools' required test adapter.
+    tests_require=["pytest"],
     zip_safe=True,
     maintainer="RealMan maintainers",
     maintainer_email="maintainer@example.com",

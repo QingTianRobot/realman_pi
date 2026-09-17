@@ -1,0 +1,18 @@
+<?xml version="1.0"?>
+<root main_tree_to_execute="MainTree">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="pick_task">
+      <CheckSafetyState/>
+      <Retry num_attempts="3">
+        <SubTree ID="ApproachAndGrasp"/>
+      </Retry>
+      <RecordTaskFailure stage="pick"/>
+    </Sequence>
+  </BehaviorTree>
+  <BehaviorTree ID="ApproachAndGrasp">
+    <Fallback name="grasp_strategies">
+      <Sequence name="top_view"><SetBlackboard key="viewpoint" value="top"/><ExecuteGrasp/><VerifyGrasp/></Sequence>
+      <Sequence name="side_view"><SetBlackboard key="viewpoint" value="side"/><ExecuteGrasp/><VerifyGrasp/></Sequence>
+    </Fallback>
+  </BehaviorTree>
+</root>

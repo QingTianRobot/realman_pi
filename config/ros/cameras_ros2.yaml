@@ -50,3 +50,42 @@ sync:
   enable_frame_sync: false
   trigger_out_enabled: false
   software_trigger_enabled: false
+
+# Global RealSense D435, published through the native realsense2_camera node so
+# the ROS 2 image topics stay the single source of truth for calibration/RViz.
+# The driver lives in the src/sensor/realsense submodules; when they are not
+# built, rm65_camera_ros2 auto-degrades to use_realsense:=false and the three
+# Orbbec streams still start.
+global_camera:
+  enabled: true
+  device_type: d435
+  # Production D435 serial; keep aligned with camera_stream/realsense.yaml.
+  serial_no: "346222072431"
+  namespace: camera_global
+  camera_name: d435
+  color:
+    # USB2 topology limit; raise to 1280x720x30 after moving to a USB3 port.
+    width: 424
+    height: 240
+    fps: 15
+  depth:
+    # D435 cannot stream depth alongside three Orbbec devices on USB2 today.
+    enable: false
+    width: 480
+    height: 270
+    fps: 15
+  align_depth: false
+  pointcloud: false
+  # Mount pose of the D435 in the shared `world` frame. Placeholder identity
+  # until the global-camera extrinsic is measured; edit after installation.
+  # The static TF connects world -> <child_frame> so the D435 joins the same
+  # tree as the Orbbec optical frames.
+  tf:
+    parent_frame: world
+    child_frame: d435_link
+    x: 0.0
+    y: 0.0
+    z: 0.0
+    roll: 0.0
+    pitch: 0.0
+    yaw: 0.0

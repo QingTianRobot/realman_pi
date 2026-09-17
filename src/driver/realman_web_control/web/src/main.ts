@@ -105,7 +105,7 @@ app.innerHTML = `
         <div class="panel-heading compact"><div><span class="eyebrow">GLOBAL INPUT</span><h2>输入模式</h2></div><span id="input-mode-active" class="mini-state">WAIT</span></div>
         <div class="input-mode-body"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div></div>
       </section>
-      <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><span id="coordinate-state" class="mini-state">WAIT</span></div><div id="coordinate-summary" class="coordinate-summary"></div></section>
+      <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><div class="coordinate-actions"><button id="copy-current-joints" class="button ghost" type="button" disabled>复制当前角度</button><span id="coordinate-state" class="mini-state">WAIT</span></div></div><div id="coordinate-summary" class="coordinate-summary"></div><div id="joint-copy-status" class="joint-copy-status" aria-live="polite">等待有效 joint_states</div></section>
       <section class="panel panel-section motion-panel">
         <div class="panel-heading compact"><div><span class="eyebrow">MOTION TARGET</span><h2>一次性运动</h2></div><div class="panel-actions"><span id="selected-arm-label" class="mini-state">L</span><button id="reset-preview" class="text-button" type="button">重置目标</button></div></div>
         <div id="motion-mode" class="segmented-control" aria-label="运动类型">
@@ -113,7 +113,10 @@ app.innerHTML = `
           <button type="button" data-motion-command="1" aria-pressed="false">MOVEL</button>
           <button type="button" data-motion-command="2" aria-pressed="false">MOVEP</button>
         </div>
-        <div id="joint-target"><div id="joint-controls" class="joint-controls"></div></div>
+        <div id="joint-target">
+          <div class="joint-toolbar"><span class="target-field-label">关节目标 (degree)</span></div>
+          <div id="joint-controls" class="joint-controls"></div>
+        </div>
         <div id="pose-target" class="pose-target" hidden>
           <div class="target-field-label">位置 (m)</div>
           <div class="pose-inputs position-inputs">
@@ -205,6 +208,8 @@ const resetPreviewButton = $("#reset-preview") as HTMLButtonElement;
 const motionReference = $("#motion-reference");
 const motionVelocityInput = $("#motion-velocity") as HTMLInputElement;
 const motionTimeoutInput = $("#motion-timeout") as HTMLInputElement;
+const copyCurrentJointsButton = $("#copy-current-joints") as HTMLButtonElement;
+const jointCopyStatus = $("#joint-copy-status");
 const recordNameInput = $("#record-name") as HTMLInputElement;
 const saveRecordButton = $("#save-record") as HTMLButtonElement;
 const recordSelect = $("#record-select") as HTMLSelectElement;
@@ -324,6 +329,25 @@ function displayValue(value: unknown, digits = 2) {
   const number = Number(value);
   return Number.isFinite(number) ? number.toFixed(digits) : String(value ?? "");
 }
+function formatJointDegrees(values: number[]) {
+  return `[${values.map((value) => (value * 180 / Math.PI).toFixed(3)).join(", ")}]`;
+}
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const fallback = document.createElement("textarea");
+  fallback.value = value;
+  fallback.setAttribute("readonly", "");
+  fallback.style.position = "fixed";
+  fallback.style.opacity = "0";
+  document.body.append(fallback);
+  fallback.select();
+  const copied = document.execCommand("copy");
+  fallback.remove();
+  if (!copied) throw new Error("clipboard copy failed");
+}
 function referenceLabel(frame?: FrameState | null) {
   if (!frame) return "BASE / base";
   const prefix = frame.type === 1 ? "WORK" : frame.type === 2 ? "TOOL" : frame.type === 3 ? "TF" : "BASE";
@@ -362,6 +386,7 @@ function updateSelectedArmFromState() {
   kinematicsStatus.textContent = kinematicsStatusByArm[selectedArm] ?? "MOVEL 逆解仅更新影子预览";
   configureVelocity();
   renderFleetStrip();
+  jointCopyStatus.textContent = lastJointStampByArm[selectedArm] === undefined ? "等待有效 joint_states" : "可复制当前关节角";
   setSelectedConnection();
   updateButtons();
 }
@@ -1010,6 +1035,7 @@ function handleMessage(message: Message) {
     if (arm === selectedArm) {
       currentJoints = positions;
       $("#joint-stamp").textContent = `joint_states / ${stamp}`;
+      jointCopyStatus.textContent = "可复制当前关节角";
     }
     renderFleetStrip();
   } else if (message.type === "joint_records") {
@@ -1235,6 +1261,7 @@ function updateButtons() {
   fillCurrentPoseButton.disabled = !writable || selectedMotionCommand === 0;
   solveIkButton.disabled = !writable || selectedMotionCommand !== 1 || activeKinematicsRequest || !Boolean(readPoseGoal());
   const activeRecordRequest = Boolean(activeRecordRequestByArm[selectedArm]);
+  copyCurrentJointsButton.disabled = !writable || lastJointStampByArm[selectedArm] === undefined;
   saveRecordButton.disabled = !writable || activeRecordRequest || recordNameInput.value.trim() === "" || (currentJointsByArm[selectedArm]?.length ?? 0) !== 6;
   applyRecordButton.disabled = !writable || activeRecordRequest || !recordSelect.value;
   deleteRecordButton.disabled = !writable || selectedMotionCommand !== 0 || activeRecordRequest || !recordSelect.value;
@@ -1328,6 +1355,16 @@ poseInputElements().forEach((input) => {
 });
 recordNameInput.addEventListener("input", updateButtons);
 recordSelect.addEventListener("change", updateButtons);
+copyCurrentJointsButton.addEventListener("click", async () => {
+  const values = currentJointsByArm[selectedArm];
+  if (!values || values.length !== 6 || lastJointStampByArm[selectedArm] === undefined) return;
+  try {
+    await copyText(formatJointDegrees(values));
+    jointCopyStatus.textContent = "已复制当前关节角";
+  } catch {
+    jointCopyStatus.textContent = "复制失败，请检查浏览器剪贴板权限";
+  }
+});
 saveRecordButton.addEventListener("click", () => {
   if (!canWrite()) return;
   const label = recordNameInput.value.trim();

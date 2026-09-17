@@ -48,7 +48,8 @@ canvas { display: block; width: 100%; height: 100%; }
 .legend { position: absolute; left: 16px; bottom: 14px; display: flex; align-items: center; gap: 7px; color: #a7b9b8; font-size: 10px; }
 .legend-live, .legend-shadow { display: inline-block; width: 12px; height: 3px; background: #43c4b5; }
 .legend-shadow { margin-left: 8px; background: #e08a52; opacity: .8; }
-.viewer-footer { display: flex; justify-content: space-between; padding: 10px 16px; border-top: 1px solid #263b40; }
+.viewer-footer { display: grid; grid-template-columns: minmax(0, 1fr) 100px; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid #263b40; }
+.viewer-footer #root-frame { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
 .controls { display: flex; flex-direction: column; gap: 16px; }
 .panel-section { padding: 16px; }
 .input-mode-card[hidden] { display: none; }
@@ -59,6 +60,10 @@ canvas { display: block; width: 100%; height: 100%; }
 .mini-state.switching { color: #e4b16f; border-color: #896b45; }
 .mini-state.failed { color: #e37f68; border-color: #963d36; }
 .text-button { background: none; border: 0; padding: 4px 0; text-decoration: underline; }
+.joint-toolbar { display: flex; justify-content: space-between; align-items: center; gap: 10px; margin-bottom: 6px; }
+.joint-toolbar .target-field-label { margin: 0; }
+.joint-toolbar .button { padding: 6px 9px; }
+.joint-copy-status { min-height: 18px; color: #82999d; font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
 .joint-controls { display: grid; gap: 11px; margin-bottom: 16px; }
 .joint-row span { display: flex; justify-content: space-between; color: #c8d8d5; font-size: 11px; }
 .joint-row output { color: #78d4c6; font-variant-numeric: tabular-nums; }
@@ -95,6 +100,8 @@ input[type="range"] { display: block; width: 100%; accent-color: #4dbbb0; }
 .motion-parameters output { min-height: 32px; display: flex; align-items: center; border: 1px solid #385158; border-radius: 3px; background: #101c20; color: #8ee1d2; padding: 7px 9px; font-size: 11px; font-weight: 700; }
 .full { width: 100%; }
 .coordinate-summary { display: grid; gap: 6px; margin-bottom: 16px; }
+.coordinate-actions { display: flex; align-items: center; gap: 8px; }
+.coordinate-actions .button { padding: 6px 9px; }
 .coordinate-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; color: #c8d8d5; font-size: 11px; }
 .coordinate-row strong { color: #e7efec; font-size: 11px; font-weight: 700; text-align: right; }
 .coordinate-meta, .coordinate-empty { color: #82999d; font-size: 10px; line-height: 1.45; }

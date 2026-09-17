@@ -415,6 +415,29 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await page.screenshot({ path: test.info().outputPath("web-control.png"), fullPage: true });
 });
 
+test("copies the selected arm current joint angles as degree array", async ({ page }) => {
+  await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: "http://127.0.0.1:4174" });
+  await page.goto("/");
+  await page.locator('.fleet-chip[data-arm="m"]').click();
+  await page.locator("#copy-current-joints").click();
+
+  await expect(page.locator("#joint-copy-status")).toHaveText("已复制当前关节角");
+  await expect.poll(() => page.evaluate(() => navigator.clipboard.readText())).toBe(
+    "[5.730, 11.459, 17.189, 22.918, 28.648, 34.377]",
+  );
+});
+
+test("copies current angles through the legacy clipboard fallback", async ({ page }) => {
+  await page.addInitScript(() => {
+    Object.defineProperty(navigator, "clipboard", { configurable: true, value: undefined });
+    document.execCommand = () => true;
+  });
+  await page.goto("/");
+  await page.locator('.fleet-chip[data-arm="m"]').click();
+  await page.locator("#copy-current-joints").click();
+  await expect(page.locator("#joint-copy-status")).toHaveText("已复制当前关节角");
+});
+
 test("keeps the last live pose when a duplicate publisher emits an all-zero sample", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");

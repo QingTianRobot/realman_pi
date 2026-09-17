@@ -4,7 +4,7 @@
 # 用法: bash start_sensors.sh [ros2 launch 参数, 例如 enable_depth:=true use_rviz:=true]
 # 说明: 推荐用 functions.zsh 里的 rm65_camera_ros2 [color|depth] [rviz]，本脚本是不依赖
 #       zsh 的等价 bash 入口。
-set -u
+set -eu
 
 WS_MAIN="$(cd "$(dirname "$0")" && pwd)"
 WS_RS="$WS_MAIN/src/sensor/realsense/realsense_ws"
@@ -16,11 +16,18 @@ if [ -x "$STOP_STREAMING" ]; then
   bash "$STOP_STREAMING" >/dev/null 2>&1 || true
 fi
 
-# 依次 source：ROS → Orbbec overlay → RealSense overlay(可选) → 主工作区。
+# 依次 source：ROS → Orbbec overlay → RealSense overlay → 主工作区。
 source /opt/ros/humble/setup.bash
 [ -r "$WS_OB/install/setup.bash" ] && source "$WS_OB/install/setup.bash"
-# realsense_ws 是 git 子模块；未初始化/未构建时跳过，下面会自动降级 use_realsense:=false。
-[ -r "$WS_RS/install/setup.bash" ] && source "$WS_RS/install/setup.bash"
+# realsense_ws 是 git 子模块；./rm65 up 要求全局 D435 通道必须可用，未初始化/未构建时直接失败。
+REALSENSE_SETUP="${REALMAN_REALSENSE_ROS2_SETUP:-$WS_RS/install/setup.bash}"
+if [ -r "$REALSENSE_SETUP" ]; then
+  source "$REALSENSE_SETUP"
+else
+  echo "[start_sensors] 缺少 realsense_ws overlay: $REALSENSE_SETUP" >&2
+  echo "[start_sensors] 请先构建 src/sensor/realsense/realsense_ws，或通过 REALMAN_REALSENSE_ROS2_SETUP 指定 install/setup.bash" >&2
+  exit 1
+fi
 [ -r "$WS_MAIN/install/setup.bash" ] && source "$WS_MAIN/install/setup.bash"
 
 export ROS_DOMAIN_ID="${ROS_DOMAIN_ID:-0}"
@@ -29,10 +36,11 @@ export ROS_LOCALHOST_ONLY="${ROS_LOCALHOST_ONLY:-0}"
 # 强制 UDP 保证 Image 数据互通。
 export FASTDDS_BUILTIN_TRANSPORTS="${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}"
 
-# 缺少 realsense2_camera（子模块未构建）时降级为仅 Orbbec，避免整个 launch 失败。
+# 禁止降级为仅 Orbbec：全局 D435 通道缺失时直接失败，让 ./rm65 up 中止。
 if ! ros2 pkg prefix realsense2_camera >/dev/null 2>&1; then
-  echo "[start_sensors] realsense2_camera 未构建，降级 use_realsense:=false（仅三路 Orbbec）" >&2
-  set -- "$@" use_realsense:=false
+  echo "[start_sensors] realsense2_camera 未构建，拒绝跳过全局 D435 通道" >&2
+  echo "[start_sensors] 请先构建 src/sensor/realsense/realsense_ws，或通过 REALMAN_REALSENSE_ROS2_SETUP 指定 install/setup.bash" >&2
+  exit 1
 fi
 
 echo "=== 启动 ROS2 相机节点 (Orbbec x3 + RealSense D435) ==="

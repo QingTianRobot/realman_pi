@@ -6,9 +6,11 @@ the three Orbbec streams in ``cameras_ros2.launch.py``.
 
 This file only maps a small, curated set of selectors onto the upstream
 ``rs_launch.py`` and pins a namespace/camera name so the D435 never collides with
-the Orbbec ``/camera_left|middle|right`` topics. When ``realsense2_camera`` is
-absent (the librealsense/realsense-ros submodules are not built), the parent
-launch degrades gracefully via ``use_realsense:=false`` and never reaches here.
+the Orbbec ``/camera_left|middle|right`` topics. ``./rm65 up`` requires the
+global D435 channel to be available: when ``realsense2_camera`` is absent (the
+librealsense/realsense-ros sources are not built), ``rm65_camera_ros2`` and
+``start_sensors.sh`` abort before reaching this launch file instead of silently
+degrading to Orbbec only.
 """
 
 from launch import LaunchDescription

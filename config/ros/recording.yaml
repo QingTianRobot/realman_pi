@@ -1,0 +1,70 @@
+# Recording-first deployment configuration. The recorder subscribes to ROS outputs
+# only; it must never create a RealMan SDK client or publish motion commands.
+/recording_recorder:
+  ros__parameters:
+    # Runtime data volume. Override with REALMAN_RECORDING_ROOT / launch argument in Docker.
+    recording_root: /data/realman-recordings
+    # A full queue records a drop metric instead of blocking driver subscription callbacks.
+    max_state_queue: 10000
+    arm_namespaces: [l, m, r]
+    # Controller-side Cartesian command streams. They are observations only; the recorder
+    # never publishes to them. Configure each external teleoperation source explicitly.
+    arm_action_topics: [/l/cartesian_velocity/command, /m/cartesian_velocity/command, /r/cartesian_velocity/command]
+    # Keep raw gripper topics intact; recorder assigns ROS 2 SYSTEM_TIME receipt timestamps.
+    gripper_position_topics: [/gripper_left/position, /gripper_mid/position, /gripper_right/position]
+    gripper_torque_topics: [/gripper_left/torque_reached, /gripper_mid/torque_reached, /gripper_right/torque_reached]
+    gripper_alarm_topics: [/gripper_left/alarm, /gripper_mid/alarm, /gripper_right/alarm]
+    # PREPARE gates only these task-critical observations. Do not add optional
+    # torque/alarm/action streams here unless the selected task truly needs them.
+    preflight_required_topics: [/l/joint_states, /m/joint_states, /r/joint_states, /gripper_left/position, /gripper_mid/position, /gripper_right/position]
+    # Subscribe directly to the camera image_raw ROS topics. This removes the
+    # RTSP relay buffer and keeps camera receipt timestamps in the ROS 2 SYSTEM_TIME
+    # domain used by the state archive. Topic names must be confirmed with `ros2 topic list`.
+    camera_ids: [orbbec-left, orbbec-middle, orbbec-right]
+    camera_image_topics: [/camera_left/color/image_raw, /camera_middle/color/image_raw, /camera_right/color/image_raw]
+    # Retained empty for one release so old launch overrides parse; recorder never uses RTSP.
+    camera_rtsp_urls: ['']
+    max_camera_image_queue: 64
+    export_target_fps: 10.0
+    # Frames with a state/action/camera gap larger than this are rejected during export.
+    export_max_gap_sec: 0.5
+    # PREPARE requires each required ROS input to have a receipt no older than this.
+    preflight_max_age_sec: 2.0
+    # Fresh sensors exceeding this receipt-time span remain recordable, but PREPARE
+    # marks the finalized session as requiring asynchronous alignment.
+    preflight_alignment_trigger_sec: 0.2
+    # Disable the eventual alignment job; PREPARE still records its skew diagnosis.
+    alignment_enabled: true
+    # A successful PREPARE authorizes an immediate START for this many seconds. A
+    # scheduled START may be further out; the recorder automatically re-runs PREPARE
+    # at its requested wall-time before it opens any durable writer.
+    preflight_valid_sec: 10.0
+    # PREPARE rejects capture before a session exists when free storage is below this.
+    min_free_space_bytes: 5000000000
+
+/recording_web_bridge:
+  ros__parameters:
+    # Bind loopback until an authenticated/reverse-proxy deployment is implemented.
+    bind_host: 127.0.0.1
+    port: 8770
+    # This is a browser snapshot cap, not a data-recording rate.
+    web_state_hz: 10.0
+    # Optional Rerun output uses this bridge's already-coalesced state cache; it cannot
+    # block recording even if the viewer disconnects. The SDK remains Docker-installed.
+    rerun_enabled: false
+    rerun_hz: 10.0
+    rerun_spawn: false
+    rerun_application_id: realman_recording
+    # Preview receives the same raw image_topics and recompresses on its own
+    # one-slot worker. It is never a prerequisite for durable capture.
+    preview_enabled: false
+    preview_width: 640
+    preview_height: 360
+    preview_fps: 5.0
+    camera_ids: [orbbec-left, orbbec-middle, orbbec-right]
+    camera_image_topics: [/camera_left/color/image_raw, /camera_middle/color/image_raw, /camera_right/color/image_raw]
+    camera_rtsp_urls: ['']
+    arm_namespaces: [l, m, r]
+    gripper_position_topics: [/gripper_left/position, /gripper_mid/position, /gripper_right/position]
+    gripper_torque_topics: [/gripper_left/torque_reached, /gripper_mid/torque_reached, /gripper_right/torque_reached]
+    gripper_alarm_topics: [/gripper_left/alarm, /gripper_mid/alarm, /gripper_right/alarm]

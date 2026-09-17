@@ -33,6 +33,7 @@ RUN find -L /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
         python3-numpy \
         python3-opencv \
         python3-yaml \
+        ffmpeg \
         ros-humble-ament-cmake-gtest \
         ros-humble-ament-cmake-pytest \
         ros-humble-diagnostic-msgs \
@@ -57,12 +58,13 @@ RUN python3 -m pip install --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
         --retries 5 \
         --timeout 60 \
-        --requirement /opt/rm65_ws/config/python/realman-sdk-requirements.txt
+        --requirement /opt/rm65_ws/config/python/realman-sdk-requirements.txt \
+        --requirement /opt/rm65_ws/config/python/recording-requirements.txt
 
 RUN . /opt/ros/humble/setup.sh \
     && colcon build --symlink-install \
-        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration \
-    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration \
+        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration realman_recording realman_recording_msgs \
+    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration realman_recording realman_recording_msgs \
     && colcon test-result --verbose
 
 COPY docker/ros_entrypoint.sh /ros_entrypoint.sh

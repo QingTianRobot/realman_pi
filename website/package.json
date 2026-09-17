@@ -8,6 +8,8 @@
     "build": "npm run sync-assets && vitepress build docs",
     "dev:web-control": "vite --config ../config/web-control/vite.config.mjs",
     "build:web-control": "vite build --config ../config/web-control/vite.config.mjs",
+    "dev:recording": "vite --config ../config/recording/vite.config.mjs",
+    "build:recording": "vite build --config ../config/recording/vite.config.mjs",
     "preview": "vitepress preview docs",
     "test:e2e": "playwright test --config ../config/website/playwright.config.mjs",
     "test:web-control": "playwright test --config ../config/web-control/playwright.config.mjs"

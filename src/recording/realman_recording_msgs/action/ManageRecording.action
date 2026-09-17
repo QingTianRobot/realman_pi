@@ -1,0 +1,32 @@
+# The Web bridge is an Action client. Only the recording node owns session state.
+# Command START creates a session; PAUSE/RESUME freeze/unfreeze its countdown; STOP
+# finalizes early. duration_sec=0 means an operator must send STOP.
+uint8 START=0
+uint8 PAUSE=1
+uint8 RESUME=2
+uint8 STOP=3
+uint8 PREPARE=4
+
+uint8 command
+string profile
+string task
+uint32 duration_sec
+bool record_cameras
+# Zero starts immediately. A positive value is a ROS 2 SYSTEM_TIME epoch timestamp.
+uint64 start_at_walltime_ns
+---
+bool success
+string session_id
+uint8 state
+string message
+string diagnostics_json
+---
+string session_id
+uint8 state
+float64 elapsed_sec
+float64 remaining_sec
+uint64 accepted_samples
+uint64 dropped_samples
+string detail
+string diagnostics_json
+uint64 scheduled_start_walltime_ns

@@ -71,6 +71,7 @@ export default defineConfig({
           { text: "睿尔曼 Python 驱动查询", link: "/development/realman-python-driver" },
           { text: "睿尔曼三臂驱动与运动控制", link: "/development/realman-driver-scaffold" },
           { text: "睿尔曼 Action 开发与测试", link: "/development/realman-action-development" },
+          { text: "独立数据录制骨架", link: "/development/recording-platform" },
           { text: "三臂配置驱动可视化", link: "/development/three-arm-visualization" },
           { text: "Xbox 手柄输入", link: "/development/xbox-controller" },
           { text: "系统 Bringup", link: "/development/system-bringup" },

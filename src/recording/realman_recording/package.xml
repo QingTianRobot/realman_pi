@@ -1,0 +1,24 @@
+<?xml version="1.0"?>
+<!-- Runtime package: recording data is written only to recording_root, never config/. -->
+<?xml-model href="http://download.ros.org/schema/package_format3.xsd" schematypens="http://www.w3.org/2001/XMLSchema"?>
+<package format="3">
+  <name>realman_recording</name>
+  <version>0.1.0</version>
+  <description>Isolated, recording-first ROS 2 data recorder for the RealMan platform.</description>
+  <maintainer email="maintainer@example.com">RealMan maintainers</maintainer>
+  <license>BSD-3-Clause</license>
+  <buildtool_depend>ament_python</buildtool_depend>
+  <depend>rclpy</depend>
+  <depend>ament_index_python</depend>
+  <depend>sensor_msgs</depend>
+  <depend>geometry_msgs</depend>
+  <depend>std_msgs</depend>
+  <depend>tf2_msgs</depend>
+  <depend>realman_recording_msgs</depend>
+  <exec_depend>rosbag2_py</exec_depend>
+  <exec_depend>python3-aiohttp</exec_depend>
+  <exec_depend>python3-yaml</exec_depend>
+  <exec_depend>rm65_description</exec_depend>
+  <test_depend>python3-pytest</test_depend>
+  <export><build_type>ament_python</build_type></export>
+</package>

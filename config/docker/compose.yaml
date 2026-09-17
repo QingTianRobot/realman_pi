@@ -34,6 +34,9 @@ x-realman-common: &realman-common
     - ./config:/opt/rm65_ws/config:ro
     # Keep ROS 2's timestamped run directories and node log files on the host.
     - ./logs:/opt/rm65_ws/logs
+    # Session data is runtime data, deliberately outside read-only config/.
+    # The collector owns only this mounted directory and never writes driver config.
+    - ./recordings:/data/realman-recordings
   stdin_open: true
   tty: true
 
@@ -215,6 +218,19 @@ services:
       - realman_web_control
       - web_control.launch.py
       - joint_record_dir:=${REALMAN_JOINT_RECORD_DIR:-/opt/rm65_ws/config/web-control/joint-records}
+
+  # Independent data collector: it joins an existing ROS graph, subscribes to
+  # driver outputs, and exposes only recording controls on loopback port 8770.
+  # It intentionally does not start drivers, motion control, or camera streaming.
+  realman_recording:
+    <<: *realman-common
+    command:
+      - ros2
+      - launch
+      - realman_recording
+      - recording.launch.py
+      - recording_root:=${REALMAN_RECORDING_ROOT:-/data/realman-recordings}
+      - start_web_bridge:=${REALMAN_START_RECORDING_WEB:-true}
 
   # RViz-only viewer for a remote realman_bringup_remote ROS graph. It does not
   # start a local driver, robot_state_publisher, or fake joint-state publisher.

@@ -17,6 +17,7 @@ description: realman_pi 功能契约、实现边界、配置来源和验证方�
 | [睿尔曼三臂驱动与运动控制](./realman-driver-scaffold) | 三臂关节回读、可取消运动、坐标系、末端速度、RViz 和 mock 验证 | `config/ros/realman_driver.yaml`、`config/ros/realman_coordinates.yaml`、`config/ros/realman_motion.yaml` |
 | [睿尔曼 Action 开发与测试](./realman-action-development) | Action IDL、生命周期、安全状态机、速度 session、扩展步骤和测试矩阵 | `src/driver/realman_msgs/action/`、`config/ros/realman_motion.yaml` |
 | [WebSocket 浏览器控制与 URDF 影子](./realman-web-control) | WebSocket 直连控制、坐标状态、关节记录、Action feedback/result、滑轨影子和软件停止 | `config/ros/realman_web_control.yaml`、`config/web-control/joint-records/`、`src/driver/realman_web_control/` |
+| [独立数据录制骨架](./recording-platform) | 订阅式 session 录制、隔离网页展示、倒计时、媒体分段和 LeRobot 导出边界 | `config/ros/recording.yaml`、`src/recording/` |
 | [相机 SDK 推流](./startup-entries#camera-streaming) | 宿主机 USB 相机读取、RTSP 彩色流、TCP 深度流和快捷生命周期入口 | `src/camera_stream/config/`、`src/camera_stream/scripts/` |
 | [三臂 ChArUco 手眼标定](./camera-calibration) | ROS service 原子采样、三套手眼求解、相对位姿和独立网页页面 | `config/ros/camera_calibration.yaml`、`src/sensor/realman_camera_calibration/` |
 | [三臂配置驱动可视化](./three-arm-visualization) | ROS 2 三臂命名空间、完整 TF、RViz 2 和 Web 三维场景的数据流 | `config/ros/three_robots.yaml` |

@@ -12,7 +12,6 @@ No policy service, robot, or motion is involved.
 
 from __future__ import annotations
 
-import json
 from pathlib import Path
 
 import numpy as np
@@ -39,19 +38,24 @@ class RecordingPub:
 
 
 class MockTransport:
-    """Stands in for the WebSocket transport: returns a fixed action chunk."""
+    """Stands in for the OpenPI dict-level transport: returns a fixed chunk.
+
+    Mirrors ``WebsocketClientPolicy.infer(obs: dict) -> dict`` (msgpack on the
+    real wire); no JSON is involved, matching the production contract.
+    """
 
     def __init__(self, chunk: np.ndarray) -> None:
         self._chunk = chunk
         self.calls = 0
+        self.last_obs = None
 
-    def request(self, payload: str) -> str:
+    def infer(self, obs: dict) -> dict:
         self.calls += 1
-        # payload must be valid JSON carrying the fixed obs contract
-        decoded = json.loads(payload)
-        assert len(decoded["state"]) == 7
-        assert "prompt" in decoded
-        return json.dumps({"actions": self._chunk.tolist()})
+        self.last_obs = obs
+        # obs must carry the fixed contract: float32 state[7] + prompt (+ images)
+        assert np.asarray(obs["state"]).shape == (7,)
+        assert "prompt" in obs
+        return {"actions": self._chunk}
 
 
 @pytest.fixture()
@@ -74,6 +78,12 @@ def bridge():
 def _install_mock_ws(node, chunk):
     node._ws._transport = MockTransport(chunk)
     return node._ws._transport
+
+
+def _cut_ws(node):
+    """Deterministically stop refills without a real reconnect attempt."""
+    node._ws._autoconnect = False
+    node._ws._transport = None
 
 
 def _feed_observation(node):
@@ -121,7 +131,7 @@ def test_end_to_end_mock_ws_velocity_publish(bridge):
 
     # Cut the transport so the rolling-horizon re-trigger cannot refill the
     # queue: one chunk maps to exactly steps_per_inference publishes.
-    node._ws._transport = None
+    _cut_ws(node)
     for _ in range(_STEPS_PER_INFERENCE - 1):
         node._publish_loop()
     assert len(node._velocity_rec["left"].msgs) == _STEPS_PER_INFERENCE
@@ -137,7 +147,7 @@ def test_queue_empty_stops_publishing(bridge):
     node._mode.update("policy", 0)
     node.force_infer()
     # Prevent refill so the queue truly drains to empty.
-    node._ws._transport = None
+    _cut_ws(node)
     for _ in range(_STEPS_PER_INFERENCE):
         node._publish_loop()
     assert node._buffer.remaining == 0

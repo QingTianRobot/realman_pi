@@ -44,7 +44,7 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 `bt control` 必须在 `up` 后单独运行：它加入同一 ROS domain，保持 :8080 只读监视器和
 `realman_bt_executor` 到 Ctrl-C，而 `up` 继续拥有长期 driver 与 :8765 Web control。停止 router 不会
 停止这些服务；使用 `./rm65 down` 才终止统一运行时。当前 XML registry 提供可选的 `none`、`policy`、
-`pika` 和粘性、非可选的 Web override；详见[行为树控制权与 Mock 测试](./behavior-tree-control)。
+`pikaposition`/`pikavelocity` 和粘性、非可选的 Web override；详见[行为树控制权与 Mock 测试](./behavior-tree-control)。
 
 ## 启动入口
 

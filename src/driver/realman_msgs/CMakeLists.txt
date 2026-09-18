@@ -10,6 +10,7 @@ rosidl_generate_interfaces(${PROJECT_NAME}
   "msg/MotionWaypoint.msg"
   "msg/InputModeState.msg"
   "action/CartesianVelocity.action"
+  "action/CartesianPose.action"
   "action/ExecuteMotion.action"
   "action/ExecuteTrajectory.action"
   "srv/SelectFrame.srv"

@@ -17,8 +17,8 @@ from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
-from geometry_msgs.msg import TwistStamped
-from realman_msgs.action import CartesianVelocity, ExecuteMotion, ExecuteTrajectory
+from geometry_msgs.msg import PoseStamped, TwistStamped
+from realman_msgs.action import CartesianPose, CartesianVelocity, ExecuteMotion, ExecuteTrajectory
 from realman_msgs.srv import (
     ForwardKinematics,
     GetCurrentPose,
@@ -39,6 +39,7 @@ from .coordinate_services import (
     run_startup_coordinate_policy,
 )
 from .cartesian_velocity_session import CartesianVelocitySession
+from .cartesian_pose_session import CartesianPoseSession
 from .motion_coordinator import ArmOwnership, MotionCoordinator
 from .motion_types import MotionSettings, ReferenceState, ReferenceType
 from .pose_math import (
@@ -205,6 +206,16 @@ class RealManDriverNode(Node):
             action_type=CartesianVelocity,
             ros_time_now_ns=lambda: self.get_clock().now().nanoseconds,
         )
+        self.pose_session = CartesianPoseSession(
+            arm_id=self.arm_id,
+            adapter=self.adapter,
+            ownership=self.arm_ownership,
+            settings=self.motion_settings,
+            active_frame={ReferenceType.BASE: ("base", f"{self.arm_id}/base_link")},
+            coordinate_manager=self.coordinate_manager,
+            logger=self.get_logger(),
+            ros_time_now_ns=lambda: self.get_clock().now().nanoseconds,
+        )
         self._coordinate_state_publisher = self.create_publisher(
             String,
             f"/{self.arm_id}/coordinates/state",
@@ -241,10 +252,34 @@ class RealManDriverNode(Node):
             handle_accepted_callback=self.velocity_session.accepted_callback,
             callback_group=self.motion_callback_group,
         )
+        self.cartesian_pose_action_server = ActionServer(
+            self,
+            CartesianPose,
+            "cartesian_pose",
+            execute_callback=self.pose_session.execute,
+            goal_callback=self.pose_session.goal_callback,
+            cancel_callback=self.pose_session.cancel_callback,
+            handle_accepted_callback=self.pose_session.accepted_callback,
+            callback_group=self.motion_callback_group,
+        )
         self.cartesian_velocity_command_subscription = self.create_subscription(
             TwistStamped,
             "cartesian_velocity/command",
             self._velocity_command,
+            QoSProfile(
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=1,
+                durability=QoSDurabilityPolicy.VOLATILE,
+                lifespan=Duration(
+                    nanoseconds=self.motion_settings.velocity_watchdog_ms * 1_000_000
+                ),
+            ),
+            callback_group=self.velocity_command_callback_group,
+        )
+        self.cartesian_pose_command_subscription = self.create_subscription(
+            PoseStamped,
+            "cartesian_pose/command",
+            self._pose_command,
             QoSProfile(
                 history=QoSHistoryPolicy.KEEP_LAST,
                 depth=1,
@@ -324,22 +359,33 @@ class RealManDriverNode(Node):
     def _disconnect(
         self, _request: Trigger.Request, response: Trigger.Response
     ) -> Trigger.Response:
+        pose_session = getattr(self, "pose_session", None)
+        pose_shutdown_status = pose_session.shutdown() if pose_session is not None else 0
         velocity_shutdown_status = self.velocity_session.shutdown()
         motion_shutdown_status = self.motion_coordinator.shutdown()
         code = self.adapter.disconnect()
+        pose_clear_ok = True
         velocity_clear_ok = True
         if code == 0:
             velocity_clear_ok = (
                 self.velocity_session.clear_lockout_after_disconnect()
             )
             self.motion_coordinator.clear_lockout_after_disconnect()
+            pose_clear_ok = (
+                pose_session.clear_lockout_after_disconnect()
+                if pose_session is not None
+                else True
+            )
         response.success = (
             velocity_shutdown_status == 0
             and motion_shutdown_status == 0
             and code == 0
             and velocity_clear_ok
         )
+        response.success = response.success and pose_shutdown_status == 0 and pose_clear_ok
         failures = []
+        if pose_shutdown_status != 0:
+            failures.append(f"pose shutdown failed with status {pose_shutdown_status}")
         if velocity_shutdown_status != 0:
             failures.append(
                 f"velocity shutdown failed with status {velocity_shutdown_status}"
@@ -352,6 +398,8 @@ class RealManDriverNode(Node):
             failures.append(f"disconnect failed with status {code}")
         if not velocity_clear_ok:
             failures.append("velocity lockout cleanup failed after disconnect")
+        if not pose_clear_ok:
+            failures.append("pose lockout cleanup failed after disconnect")
         if failures:
             response.message = "; ".join(failures)
             self.get_logger().error(response.message)
@@ -360,11 +408,12 @@ class RealManDriverNode(Node):
         return response
 
     def _stop(self, _request: Trigger.Request, response: Trigger.Response) -> Trigger.Response:
+        pose_status = self.pose_session.fast_stop_if_owned()
         velocity_status = self.velocity_session.fast_stop_if_owned()
         code = (
             self.motion_coordinator.fast_stop()
-            if velocity_status is None
-            else velocity_status
+            if pose_status is None and velocity_status is None
+            else (pose_status if pose_status is not None else velocity_status)
         )
         response.success = code == 0
         response.message = "stop requested" if code == 0 else f"stop failed with status {code}"
@@ -825,6 +874,15 @@ class RealManDriverNode(Node):
         except (RuntimeError, ValueError) as error:
             self.get_logger().debug(f"Cartesian velocity command rejected: {error}")
 
+    def _pose_command(self, command: PoseStamped) -> None:
+        try:
+            stamp = getattr(getattr(command, "header", None), "stamp", None)
+            if stamp is None or (stamp.sec == 0 and stamp.nanosec == 0):
+                raise ValueError("PoseStamped header.stamp must be set")
+            self.pose_session.accept_command(command)
+        except (RuntimeError, ValueError) as error:
+            self.get_logger().debug(f"Cartesian pose command rejected: {error}")
+
     @staticmethod
     def _fill_verify_response(
         response: VerifyCoordinates.Response,
@@ -1036,6 +1094,11 @@ class RealManDriverNode(Node):
             self.get_logger().info("RealMan state stream recovered")
 
     def destroy_node(self) -> bool:
+        pose_status = self.pose_session.shutdown()
+        if pose_status != 0:
+            self.get_logger().error(
+                f"RealMan Cartesian pose shutdown failed with status {pose_status}"
+            )
         velocity_status = self.velocity_session.shutdown()
         if velocity_status != 0:
             self.get_logger().error(
@@ -1053,14 +1116,21 @@ class RealManDriverNode(Node):
             self.execute_trajectory_action_server.destroy()
         if self.cartesian_velocity_action_server is not None:
             self.cartesian_velocity_action_server.destroy()
+        if self.cartesian_pose_action_server is not None:
+            self.cartesian_pose_action_server.destroy()
         if self.adapter.disconnect() == 0:
             velocity_clear_ok = (
                 self.velocity_session.clear_lockout_after_disconnect()
             )
             self.motion_coordinator.clear_lockout_after_disconnect()
+            pose_clear_ok = self.pose_session.clear_lockout_after_disconnect()
             if not velocity_clear_ok:
                 self.get_logger().error(
                     "RealMan velocity lockout cleanup failed after disconnect"
+                )
+            if not pose_clear_ok:
+                self.get_logger().error(
+                    "RealMan pose lockout cleanup failed after disconnect"
                 )
         return super().destroy_node()
 
@@ -1077,6 +1147,7 @@ def main(args: Any = None) -> None:
             node.get_logger().info("RealMan driver shutdown requested")
     finally:
         try:
+            node.pose_session.shutdown()
             node.velocity_session.shutdown()
             node.motion_coordinator.shutdown()
             executor.shutdown()

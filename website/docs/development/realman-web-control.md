@@ -82,7 +82,8 @@ transient-local 订阅 `/realman_bt_executor/input_mode_state`。同一 YAML 的
 `request_id`、`epoch`、`detail`。
 
 目录完全由 XML 的字面 `InputModeGuard` 项发现，浏览器不会维护模式名单。当前 picker 显示一个
-“GLOBAL INPUT / 输入模式”卡片，带一个动态 select：`none`、`policy`、`pika` 都可选；`web` 虽会由
+“GLOBAL INPUT / 输入模式”卡片，带一个动态 select：`none`、`policy`、`pikaposition`、`pikavelocity`
+都可选；`web` 虽会由
 状态显示为 active，却保持隐藏且不可选。没有正在运行的路由器或 discovery 不健康时，卡片隐藏；
 既有直接 Action 控制继续兼容，仅在两项 router service 都确认为不可用时启用。服务只短暂失联或
 catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返回 `input_mode_unavailable`，而不是绕过仲裁。

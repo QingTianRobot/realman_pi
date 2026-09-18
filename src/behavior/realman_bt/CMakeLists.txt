@@ -8,6 +8,7 @@ find_package(rcl_interfaces REQUIRED)
 find_package(realman_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 set(BT_VENDOR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/behavior_tree_cpp")
 if(NOT TARGET bt::core)
@@ -64,6 +65,9 @@ target_link_libraries(realman_bt_executor input_mode_nodes)
 ament_target_dependencies(realman_bt_executor
   rclcpp rclcpp_action rcl_interfaces realman_msgs std_msgs std_srvs)
 install(TARGETS realman_bt_executor DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/pika_control_router.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME pika_control_router)
 install(TARGETS move_j_nodes
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -132,6 +136,7 @@ if(BUILD_TESTING)
 
   ament_add_pytest_test(test_tree_contract test/test_tree_contract.py)
   ament_add_pytest_test(test_control_router_tree test/test_control_router_tree.py)
+  ament_add_pytest_test(test_pika_control_router test/test_pika_control_router.py)
   ament_add_pytest_test(test_arm_move_tree test/test_arm_move_tree.py)
   ament_add_pytest_test(test_three_arm_move_tree test/test_three_arm_move_tree.py)
 endif()

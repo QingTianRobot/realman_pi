@@ -79,6 +79,14 @@ def generate_launch_description():
         ],
     )
 
+    pika_router = Node(
+        package="realman_bt",
+        executable="pika_control_router",
+        name="pika_control_router",
+        output="screen",
+        parameters=[{"dry_run": LaunchConfiguration("dry_run")}],
+    )
+
     return LaunchDescription(
         [
             SetEnvironmentVariable("RCUTILS_COLORIZED_OUTPUT", "1"),
@@ -90,5 +98,6 @@ def generate_launch_description():
             exit_on_terminal,
             runtime_snapshot_file,
             executor,
+            pika_router,
         ]
     )

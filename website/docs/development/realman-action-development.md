@@ -66,6 +66,8 @@ motion_coordinator.py                 cartesian_velocity_session.py
 | `/l/execute_trajectory` | `realman_msgs/action/ExecuteTrajectory` | 一次提交并监督整条连接轨迹 |
 | `/l/cartesian_velocity` | `realman_msgs/action/CartesianVelocity` | 建立并监督六轴速度 session |
 | `/l/cartesian_velocity/command` | `geometry_msgs/msg/TwistStamped` | 更新活动速度 session 的最新命令 |
+| `/l/cartesian_pose` | `realman_msgs/action/CartesianPose` | 建立并监督绝对笛卡尔位姿 session |
+| `/l/cartesian_pose/command` | `geometry_msgs/msg/PoseStamped` | 更新活动位姿 session 的最新基座位姿 |
 | `/l/stop` | `std_srvs/srv/Trigger` | 抢占当前 arm 并执行最快受控停止 |
 | `/l/recover_motion` | `realman_msgs/srv/RecoverMotion` | 取消后显式重建被隔离的 SDK 事件通道 |
 | `/l/coordinates/verify` | `realman_msgs/srv/VerifyCoordinates` | 只读回查工具/工作坐标 |
@@ -74,8 +76,8 @@ motion_coordinator.py                 cartesian_velocity_session.py
 | `/l/coordinates/select_work` | `realman_msgs/srv/SelectFrame` | 选择配置内工作坐标并回读 |
 
 Action 名称没有 `l/realman_driver` 前缀，因为节点已经运行在 `/l` namespace 下。发布
-`ros2 action list` 时应看到九个 Action：每个 arm 各一个 `execute_motion`、
-`execute_trajectory` 和 `cartesian_velocity`。
+`ros2 action list` 时应看到十二个 Action：每个 arm 各一个 `execute_motion`、
+`execute_trajectory`、`cartesian_velocity` 和 `cartesian_pose`。
 
 ## ExecuteMotion 契约
 
@@ -319,6 +321,33 @@ Action goal accepted
 后续若加入新的连续控制 Action，必须复用这个 ownership 和停止顺序，不能为每个接口
 单独建立“看起来空闲”的布尔变量。
 
+## CartesianPose 契约
+
+位姿控制与速度控制一样是两阶段 session。先建立 `CartesianPose` Action，再以固定周期发布
+`PoseStamped`：
+
+```text
+Action goal accepted
+        │  claim ArmOwnership, validate base frame and limits
+        ▼
+/l/cartesian_pose/command  --latest target--> control worker --rm_movep_canfd-->
+        │                                               │
+        └── no fresh target ---------------------- watchdog -> slow-stop
+```
+
+Pika 使用 `/pika/l/cartesian_pose` 和 `/pika/r/cartesian_pose`；Web 选择
+`Pika / 位置控制` 后由 `pika_control_router` 转发到上面的 driver topic。`m` 不创建 Pika
+session。
+
+`PoseStamped.header.frame_id` 必须是对应基座 frame（例如 `l/base_link`），位置单位是米，
+姿态是 ROS 四元数（驱动内部使用 WXYZ 语义）。时间戳必须非零、不早于 session epoch、严格
+递增且不超过 watchdog。驱动会归一化四元数，并按配置的线速度、角速度上限限制每个周期的
+位姿变化；无效消息不会进入 SDK。
+
+默认周期和 watchdog 与速度 session 相同（20 ms / 100 ms），位姿 Action 的 `follow=true`
+使用 `rm_movep_canfd` 进行连续透传。取消、切换模式、显式 `/stop`、断开和关闭都会停止
+session 并释放 arm ownership。
+
 ## 坐标与 motion gate
 
 `config/ros/realman_coordinates.yaml` 描述运动所需的权威坐标状态。连接后驱动先回读
@@ -390,7 +419,7 @@ verify，并在可读失配时自动 apply/select 后回读。恢复坐标失败
 | 坐标安全 | `test_coordinate_manager.py` | 读取匹配、mismatch gate、apply/select、写后回读、ownership 和四元数容差 |
 | SDK 适配器 | `test_realman_sdk_adapter.py` | vendor 参数、原始 status、回调指针、句柄/断线、stop 和 mock 事件 |
 | ROS node/launch | `test_realman_driver_node.py` | ActionServer 注册、topic/QoS、配置透传、停止顺序、服务响应和 shutdown |
-| mock graph | `test_system_launch.py` 及驱动测试 | 三臂 namespaces、9 Action、坐标/恢复 services、3 command topics、TF 数据链路 |
+| mock graph | `test_system_launch.py` 及驱动测试 | 三臂 namespaces、12 Action、坐标/恢复 services、4 command topics、TF 数据链路 |
 | 真机验收 | 现场清单 | SDK 版本、网络、verify、低速目标、cancel、watchdog、断线和急停 |
 
 ### 推荐的最小回归集

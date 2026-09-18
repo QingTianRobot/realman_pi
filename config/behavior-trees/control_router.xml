@@ -16,11 +16,17 @@
           <ActivateInputMode mode="policy"/>
           <PolicyInputStub/>
         </ReactiveSequence>
-        <ReactiveSequence name="pika_branch">
-          <InputModeGuard mode="pika" label="Pika" selectable="true"
+        <ReactiveSequence name="pikaposition_branch">
+          <InputModeGuard mode="pikaposition" label="Pika / 位置控制" selectable="true"
                           selected_mode="{selected_mode}"/>
-          <ActivateInputMode mode="pika"/>
-          <PikaInputStub/>
+          <ActivateInputMode mode="pikaposition"/>
+          <PikaPositionInput/>
+        </ReactiveSequence>
+        <ReactiveSequence name="pikavelocity_branch">
+          <InputModeGuard mode="pikavelocity" label="Pika / 速度控制" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <ActivateInputMode mode="pikavelocity"/>
+          <PikaVelocityInput/>
         </ReactiveSequence>
         <ReactiveSequence name="none_branch">
           <InputModeGuard mode="none" label="无输入" selectable="true"

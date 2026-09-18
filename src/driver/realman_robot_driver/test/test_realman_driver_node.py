@@ -650,8 +650,8 @@ def test_node_source_registers_connected_trajectory_and_recovery_interfaces():
 def test_node_source_registers_cartesian_velocity_action_and_command_topic():
     source = NODE_PATH.read_text(encoding="utf-8")
 
-    assert "from realman_msgs.action import CartesianVelocity" in source
-    assert "from geometry_msgs.msg import TwistStamped" in source
+    assert "from realman_msgs.action import CartesianPose, CartesianVelocity" in source
+    assert "from geometry_msgs.msg import PoseStamped, TwistStamped" in source
     assert '"cartesian_velocity"' in source
     assert "execute_callback=self.velocity_session.execute" in source
     assert "goal_callback=self.velocity_session.goal_callback" in source
@@ -659,6 +659,17 @@ def test_node_source_registers_cartesian_velocity_action_and_command_topic():
     assert "handle_accepted_callback=self.velocity_session.accepted_callback" in source
     assert '"cartesian_velocity/command"' in source
     assert "self.velocity_session.accept_command" in source
+
+
+def test_node_source_registers_cartesian_pose_action_and_command_topic():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert "from realman_msgs.action import CartesianPose" in source
+    assert '"cartesian_pose"' in source
+    assert "execute_callback=self.pose_session.execute" in source
+    assert "goal_callback=self.pose_session.goal_callback" in source
+    assert '"cartesian_pose/command"' in source
+    assert "self.pose_session.accept_command" in source
 
 
 def test_velocity_command_uses_dedicated_serial_qos_and_freshness_boundary():
@@ -1069,6 +1080,10 @@ def test_mock_node_constructs_and_exposes_services():
         assert (
             "/l/cartesian_velocity",
             ["realman_msgs/action/CartesianVelocity"],
+        ) in actions
+        assert (
+            "/l/cartesian_pose",
+            ["realman_msgs/action/CartesianPose"],
         ) in actions
     finally:
         _destroy_ros_nodes_and_shutdown(node)

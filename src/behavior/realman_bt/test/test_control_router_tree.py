@@ -29,7 +29,8 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
     expected = [
         ("web", "Web", "false", "WebInputStub"),
         ("policy", "Policy", "true", "PolicyInputStub"),
-        ("pika", "Pika", "true", "PikaInputStub"),
+        ("pikaposition", "Pika / 位置控制", "true", "PikaPositionInput"),
+        ("pikavelocity", "Pika / 速度控制", "true", "PikaVelocityInput"),
         ("none", "无输入", "true", "IdleInput"),
     ]
     assert len(list(router)) == len(expected)
@@ -56,7 +57,7 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
         for attribute, value in node.attrib.items()
         if value.startswith("{") or value.endswith("}")
     ]
-    assert remapped == [("selected_mode", "{selected_mode}")] * 5
+    assert remapped == [("selected_mode", "{selected_mode}")] * 6
 
 
 def test_control_router_is_installed_with_the_package():

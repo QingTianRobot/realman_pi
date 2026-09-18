@@ -8,11 +8,16 @@ description: RealMan 控制模式切换、工业任务树和隔离 mock 验证�
 行为树运行时位于 `realman_bt`，底层仍使用 RealMan Action 和
 `motion_coordinator`。持久输入路由器的权威定义是
 [`config/behavior-trees/control_router.xml`](../../../config/behavior-trees/control_router.xml)：
-当前目录顺序为 `web`、`policy`、`pika`、`none`。其中 `policy`、`pika` 和
+当前目录顺序为 `web`、`policy`、`pikaposition`、`pikavelocity`、`none`。其中 `policy`、`pikaposition`、`pikavelocity` 和
 `none` 可由浏览器选择器请求；`web` 是粘性且最高优先级的覆盖，不出现在浏览器选择器中。
 ROS selection service 接受任何已注册模式（包括 `web`），只要求调用者提供非空 `requester_id`；
 该字段用于请求关联，并非 service 层的身份验证或授权。
-Policy 和 Pika 都是 RUNNING 占位叶，只产生每次进入一次的诊断，绝不发送 robot goal。
+Policy 和 Pika 的两个输入叶只产生每次进入一次的诊断；实际 Pika topic 转发由同一 launch 中的
+`pika_control_router` 完成，并且只为 l/r 建立 session，绝不为 m 建立 goal。
+
+选择器显示 `Pika / 位置控制`（模式 ID `pikaposition`）和 `Pika / 速度控制`（模式 ID
+`pikavelocity`）两个独立选项。Pika 生产 topic 为 `/pika/l|r/cartesian_pose`（`PoseStamped`）
+和 `/pika/l|r/cartesian_velocity`（`TwistStamped`）；位置数据是基座坐标系下的米和四元数。
 
 `InputModeGuard` 的 `mode`、`label`、`selectable` 字面量在 XML 构造时注册目录，
 因此新增模式只改 XML 和相应叶注册，不能在 Web 或 Python 写静态枚举。路由根节点必须保留
@@ -40,6 +45,10 @@ Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。
 配置在 [`config/ros/behavior_tree.yaml`](../../../config/ros/behavior_tree.yaml)：
 `tick_rate_hz: 10.0`（Hz）、`switch_timeout_ms: 5000`（ms），以及必须是已注册且可选模式的
 `safe_fallback_mode: none`。`none` 既是安全回退也是中性 tick，不能删除或改成 Web。
+
+同一 launch 还启动 `pika_control_router`。它接收 executor 的 active mode，并只为 l/r 管理 Pika
+Action session；`dry_run=true`（默认）时只验证模式和 topic，不提交任何机器人 goal。需要真实
+Pika 运动时必须显式设置 `REALMAN_BT_DRY_RUN=false`，并完成低速、急停和工作区检查。
 
 ## 生命周期和无硬件验证
 

@@ -26,6 +26,7 @@ description: realman_pi 功能契约、实现边界、配置来源和验证方�
 | [Xbox 手柄输入](./xbox-controller) | SDL event 设备、`/input/joy`、C++ 按键边沿和输入测试 | `config/ros/xbox_controller.yaml` |
 | [系统 Bringup](./system-bringup) | 三臂、RViz、输入节点、远程运行和日志的启动编排 | `config/docker/compose.yaml` |
 | [Changingtek 夹爪控制](./gripper-control) | 多串口并行驱动、ROS 2 service/topic 和 Web control | `config/ros/gripper.yaml` |
+| [VLA 策略桥接节点](./policy-bridge) | 策略服务 WebSocket ↔ ROS 2 纯协议转换、滚动时域推理、模式门控发布与看门狗约定 | `config/ros/policy_bridge.yaml`、`config/docker/compose.yaml`、`src/policy_bridge/` |
 
 ROS 节点日志统一遵守项目 skill [`ros2-logging-conventions`](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/ros2-logging-conventions/SKILL.md)：官方 ROS 2 打印接口、彩色 rcutils 输出、时间目录和节点日志文件。
 

@@ -169,6 +169,7 @@ class PolicyBridgeNode(Node):
     # --- teardown -------------------------------------------------------
     def destroy_node(self) -> bool:  # noqa: D102 - rclpy override
         self._scheduler.shutdown()
+        self._ws.close()
         return super().destroy_node()
 
 

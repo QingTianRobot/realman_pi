@@ -14,11 +14,13 @@
 arm_names: [l, r]
 
 network:
-  # 策略服务地址。生产环境用 POLICY_WS_HOST/POLICY_WS_PORT 覆盖，避免写死。
+  # 策略服务地址。生产环境用 POLICY_WS_HOST 覆盖，避免写死。
+  # 传输为 OpenPI WebsocketPolicyServer 协议：msgpack 承载 numpy 原始字节
+  # （见 policy_bridge/inference/openpi_client），非 JSON。
   server_host: "${POLICY_WS_HOST:-127.0.0.1}"
-  server_port: 8766
-  connect_timeout_s: 3.0        # WebSocket 连接超时
-  infer_timeout_s: 1.5          # 单次推理超时；超时丢弃本次，不覆盖旧队列
+  server_port: 18000              # OpenPI policy server 默认端口
+  connect_timeout_s: 3.0        # WebSocket 连接超时（open_timeout）
+  infer_timeout_s: 1.5          # 单次推理 recv 超时；超时丢弃本次，不覆盖旧队列
   reconnect_backoff:            # 断开后指数退避重连
     initial_s: 0.5
     max_s: 8.0

@@ -1,0 +1,117 @@
+# policy_bridge_node 权威配置（VLA 策略服务 <-> ROS 2 协议桥接）。
+#
+# 设计依据: docs/superpowers/specs/2026-09-18-policy-bridge-node-design.md
+# 本节点是纯协议转换层：只按此处配置的 topic 名读取观测、发布动作，
+# 不读机械臂状态做闭环、不积分、不管理 Action session、不直连夹爪串口。
+#
+# 约定:
+# - 所有 topic 名均为字符串配置；驱动缺少对应生产者/消费者时改配置即可，不改代码。
+# - 支持 ${ENV:-default} 环境变量展开（由 config_loader 处理），敏感值不写死在此。
+# - active_mode 映射的字面量必须先在 config/behavior-trees/control_router.xml 的
+#   InputModeGuard 中注册，否则视为未知模式并按 mode.default_when_unknown 处理。
+
+# 一期臂列表。下行 topic、frame_ids、夹爪左右均按此展开；二期加 m 只改这一处。
+arm_names: [l, r]
+
+network:
+  # 策略服务地址。生产环境用 POLICY_WS_HOST/POLICY_WS_PORT 覆盖，避免写死。
+  server_host: "${POLICY_WS_HOST:-127.0.0.1}"
+  server_port: 8766
+  connect_timeout_s: 3.0        # WebSocket 连接超时
+  infer_timeout_s: 1.5          # 单次推理超时；超时丢弃本次，不覆盖旧队列
+  reconnect_backoff:            # 断开后指数退避重连
+    initial_s: 0.5
+    max_s: 8.0
+    factor: 2.0
+  inference_threads: 2          # 推理线程池大小，避免阻塞发布定时器
+
+observation:
+  # 上行图像源。至少一路 enabled=true，否则启动校验失败。
+  image_topics:
+    - name: wrist_image
+      topic: /camera_left/color/image_raw
+      encoding: rgb8
+      resize: [480, 640]        # [H, W]；留空表示不缩放
+      enabled: true
+    - name: global_image
+      # 全局相机是独立的 RealSense D435（namespace=camera_global, name=d435），
+      # 与三路 Orbbec 臂相机 /camera_left|middle|right 区分。
+      topic: /camera_global/d435/color/image_raw
+      encoding: rgb8
+      resize: [480, 640]
+      enabled: true
+  image_sync:
+    mode: approximate           # approximate / latest / exact
+    slop_s: 0.05                # ApproximateTimeSynchronizer 容差
+  state:
+    # 一期占位：state[0:6] 取每臂 joint_states 的前 6 个关节位置。
+    # 笛卡尔 state 待驱动补 topic 后二期切换（风险 R2）。
+    joint_state_topics:
+      left: /l/joint_states
+      right: /r/joint_states
+    # state[6] 夹爪开合 0~1。来源为 gripper_manager 发布的 Float64 设备单位，
+    # 用 gripper_config 的 open/close_position 换算（0=close, 1=open）。
+    gripper_position_topics:
+      left: /gripper_left/position
+      right: /gripper_right/position
+    gripper_config: /opt/rm65_ws/config/ros/gripper.yaml
+  state_expected_dim: 7
+
+prompt:
+  initial: "pick the red block"
+  topic: /policy/prompt          # std_msgs/String，运行时更新入口
+  on_change_clear_queue: true    # prompt 变更时清空动作队列，防旧任务污染
+
+action:
+  action_horizon: 16            # 服务端返回 chunk 的步数
+  action_dim: 7                 # 6 维笛卡尔 + 1 维夹爪
+  steps_per_inference: 4        # 每块只取前 N 步入队（滚动时域）
+  inference_lead_steps: 2       # 队列剩余 <= 此值时提前触发推理
+  action_clip: [-1.0, 1.0]      # 归一化动作限幅范围
+
+downlink:
+  command_namespace: /pi05_policy   # 必须以 / 开头；与 /pika 平级
+  publish_rate_hz: 50.0             # 必须快于驱动 velocity_watchdog_ms(100ms)
+  smoothing_alpha: 0.6              # 一阶低通 a=α*new+(1-α)*last，∈(0,1]
+  velocity:
+    twist_scale:                    # 归一化 -> SI 单位
+      linear: 0.2                   # m/s
+      angular: 0.6                  # rad/s
+    frame_ids:                      # 各臂基座坐标系，须与 TF 树一致
+      left: l_base_link
+      right: r_base_link
+  position:                         # 一期不启用（mode.position_modes 为空）
+    pose_format: xyz_euler          # xyz_euler / xyz_quat_xyzw
+    position_unit: m                # m / mm
+    angle_unit: rad                 # rad / deg
+    frame_ids:
+      left: l_base_link
+      right: r_base_link
+  gripper:
+    topic_left: /pi05_policy/l/gripper_percentage
+    topic_right: /pi05_policy/r/gripper_percentage
+    clamp: [0.0, 1.0]               # 0=闭合, 1=张开
+    smoothing_alpha: 0.3            # 夹爪独立平滑，更保守
+
+mode:
+  # 订阅既有 InputModeState；phase 为 uint8(ACTIVE=0/SWITCHING=1/FAILED=2)。
+  topic: /realman_bt_executor/input_mode_state
+  mapping:
+    # 字面量必须来自 control_router.xml 的 InputModeGuard。
+    velocity_modes: [policy]        # 一期只有 policy 可用
+    position_modes: []              # 位置模式二期启用
+    inactive_modes: [web, pika, none]
+  default_when_unknown: inactive    # 未知模式保守为 inactive
+
+lifecycle:
+  services:
+    activate: /policy/activate
+    deactivate: /policy/deactivate
+    emergency_stop: /policy/emergency_stop
+    set_prompt: /policy/set_prompt
+    force_infer: /policy/force_infer
+
+stats:
+  topic: /policy/stats              # diagnostic_msgs/DiagnosticArray
+  publish_period_s: 1.0
+  failure_pause_threshold: 5        # 连续失败 >= N 暂停，需显式 activate 恢复

@@ -24,6 +24,7 @@ setup(
     entry_points={
         "console_scripts": [
             "policy_bridge_node = policy_bridge.policy_bridge_node:main",
+            "mock_policy_server = policy_bridge.tools.mock_policy_server:main",
         ],
     },
 )

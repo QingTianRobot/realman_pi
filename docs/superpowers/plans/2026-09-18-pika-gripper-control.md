@@ -30,25 +30,25 @@
 - Consumes `std_msgs.msg.Float32` on `/<name>/percentage/command`.
 - Produces a non-blocking `move_to` request using the configured `percentage_to_position` conversion.
 
-- [ ] **Step 1: Write the failing manager callback test**
+- [x] **Step 1: Write the failing manager callback test**
 
   Add a unit fixture for a fake manager/device and assert that a valid `Float32(data=0.25)` calls `move_to` with the configured converted position, while invalid values (`nan`, `-0.1`, `1.1`) do not call it.
 
-- [ ] **Step 2: Run the focused test to verify it fails**
+- [x] **Step 2: Run the focused test to verify it fails**
 
   Run `pytest -q src/gripper/gripper_ros2/test/test_gripper_manager_node.py`.
   Expected: FAIL because the manager node does not yet create or handle the command topic.
 
-- [ ] **Step 3: Implement the non-blocking topic**
+- [x] **Step 3: Implement the non-blocking topic**
 
   Create a `Float32` subscription at `/{name}/percentage/command`. Validate finite range, call `_ready`, convert with `percentage_to_position`, and call `device.move_to(target)` without `wait_until_pos_or_torque` or feedback polling. Log rejected/offline commands with the existing ROS logger.
 
-- [ ] **Step 4: Run focused gripper tests**
+- [x] **Step 4: Run focused gripper tests**
 
   Run `pytest -q src/gripper/gripper_ros2/test/test_gripper_manager_node.py src/gripper/gripper_ros2/test/test_gripper_config.py src/gripper/gripper_ros2/test/test_gripper_driver.py`.
   Expected: PASS.
 
-- [ ] **Step 5: Commit the manager slice**
+- [x] **Step 5: Commit the manager slice**
 
   Commit with `git add src/gripper/gripper_ros2 src/gripper/gripper_ros2_msgs && git commit -m "feat: add nonblocking gripper command topic"`.
 
@@ -64,25 +64,25 @@
 - Consumes `/pika/l/gripper_percentage` and `/pika/r/gripper_percentage` as `std_msgs/msg/Float32`.
 - Produces `/gripper_left/percentage/command` and `/gripper_right/percentage/command` as `std_msgs/msg/Float32`.
 
-- [ ] **Step 1: Extend the router source-contract tests**
+- [x] **Step 1: Extend the router source-contract tests**
 
   Assert the two Pika topic templates, the left/right manager mapping, `Float32`, the shared active-mode gate, dry-run suppression, and absence of `/pika/m/gripper_percentage`.
 
-- [ ] **Step 2: Run the router tests to verify the new assertions fail**
+- [x] **Step 2: Run the router tests to verify the new assertions fail**
 
   Run `pytest -q src/behavior/realman_bt/test/test_pika_control_router.py`.
   Expected: FAIL because the router has no gripper subscribers or publishers.
 
-- [ ] **Step 3: Implement minimal continuous forwarding**
+- [x] **Step 3: Implement minimal continuous forwarding**
 
   Add `Float32` subscriptions and per-arm command publishers. In the callback, ignore values unless the current mode is `pikaposition` or `pikavelocity`, ignore dry-run, validate finite `0.0..1.0`, and publish the normalized value to the mapped manager topic. Keep pose/velocity action state independent from gripper topic forwarding.
 
-- [ ] **Step 4: Run router tests and Python compilation**
+- [x] **Step 4: Run router tests and Python compilation**
 
   Run `pytest -q src/behavior/realman_bt/test/test_pika_control_router.py` and `python3 -m py_compile src/behavior/realman_bt/scripts/pika_control_router.py`.
   Expected: PASS with no syntax errors.
 
-- [ ] **Step 5: Commit the router slice**
+- [x] **Step 5: Commit the router slice**
 
   Commit with `git add src/behavior/realman_bt && git commit -m "feat: route continuous Pika gripper commands"`.
 
@@ -93,15 +93,15 @@
 - Modify: `website/docs/development/gripper-control.md`
 - Modify: `website/docs/development/realman-action-development.md` only where the Pika ROS contract is listed
 
-- [ ] **Step 1: Document the exact topics and units**
+- [x] **Step 1: Document the exact topics and units**
 
   Add Pika input topics, manager command topics, the `0.0` closed/`1.0` open convention, l/r-only scope, active-mode gate, and the distinction between non-blocking command topics and synchronous Web percentage services.
 
-- [ ] **Step 2: Verify documentation links and wording**
+- [x] **Step 2: Verify documentation links and wording**
 
   Search the edited pages for stale statements that Pika controls only Cartesian pose/velocity or that all gripper commands are synchronous.
 
-- [ ] **Step 3: Commit documentation**
+- [x] **Step 3: Commit documentation**
 
   Commit with `git add website/docs/development && git commit -m "docs: describe Pika gripper routing"`.
 
@@ -110,18 +110,18 @@
 **Files:**
 - Modify only files required by failing verification.
 
-- [ ] **Step 1: Run focused and existing gripper/router tests**
+- [x] **Step 1: Run focused and existing gripper/router tests**
 
   Run the Task 1 and Task 2 commands plus `pytest -q src/driver/realman_web_control/test/test_gripper_protocol.py`.
 
-- [ ] **Step 2: Run repository checks**
+- [x] **Step 2: Run repository checks**
 
   Run `git diff --check`, `docker compose config`, `python3 -m compileall -q src/gripper/gripper_ros2 src/behavior/realman_bt`, and `npm run build` from `website/`.
 
-- [ ] **Step 3: Build the ROS image and inspect the result**
+- [x] **Step 3: Build the ROS image and inspect the result**
 
   Run `docker compose build realman_bringup_remote` and confirm the manager topic is present in the built source/install tree. Do not send real gripper commands.
 
-- [ ] **Step 4: Review the final diff and runtime contract**
+- [x] **Step 4: Review the final diff and runtime contract**
 
   Confirm no middle-arm Pika topic, no synchronous service call in the continuous callback, and no production `.env` changes. Report any hardware validation not performed.

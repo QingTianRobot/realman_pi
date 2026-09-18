@@ -40,7 +40,7 @@ realman_bt_executor ── /realman_bt_executor/input_mode_state ──▶ ModeW
 | 段 | 字段 | 单位/范围 | 作用 |
 | --- | --- | --- | --- |
 | `network` | `server_host` | 字符串，`${POLICY_WS_HOST:-127.0.0.1}` | 策略服务地址，敏感值走环境变量 |
-| `network` | `server_port` | `1..65535`；当前 `8766` | 策略服务端口 |
+| `network` | `server_port` | `1..65535`；当前 `18000` | 策略服务端口（OpenPI 默认） |
 | `network` | `infer_timeout_s` | 秒；当前 `1.5` | 单次推理超时，超时丢弃本次不覆盖旧队列 |
 | `network` | `reconnect_backoff` | `initial_s/max_s/factor` | 断开后指数退避重连 |
 | `network` | `inference_threads` | `>=1`；当前 `2` | 推理线程池大小，避免阻塞发布定时器 |
@@ -95,20 +95,24 @@ realman_bt_executor ── /realman_bt_executor/input_mode_state ──▶ ModeW
 
 ## WebSocket 协议
 
-字段名固定，与策略服务约定：
+传输采用 **OpenPI `WebsocketPolicyServer` 协议**：msgpack 承载 NumPy 原始字节（**不是 JSON**），由包内 vendored 客户端 `src/policy_bridge/policy_bridge/inference/openpi_client/` 实现（`WebsocketClientPolicy` + `msgpack_numpy`）。`WsClient` 只负责惰性连接、`infer` 超时、指数退避与错误计数；obs 以 dict 原样交给 transport 打包，字段名即 obs 的 key。
 
-```json
-// 请求（上行 obs）
-{"state":[0.1,0.2,0.3,0.4,0.5,0.6,0.8],
- "wrist_image":{"shape":[480,640,3],"dtype":"uint8","b64":"<base64 raw C-order>"},
- "global_image":{"shape":[480,640,3],"dtype":"uint8","b64":"..."},
- "prompt":"pick the red block"}
+obs 字段名固定，值为 NumPy 数组 / 字符串：
 
-// 响应（下行 actions）
-{"actions":[[0.0,0.0,0.0,0.0,0.0,0.0,0.0]]}  // 形状必须 (16,7)
+```python
+# 请求（上行 obs）—— 由 ObservationBuilder 组装
+{"state": np.float32[7],              # 6 维笛卡尔/关节 + 1 维夹爪
+ "wrist_image": np.uint8[H, W, 3],    # key = observation.image_topics[].name
+ "global_image": np.uint8[H, W, 3],
+ "prompt": "pick the red block"}
+
+# 响应（下行 actions）—— 服务端返回
+{"actions": np.float32[16, 7]}        # 形状必须 (action_horizon, action_dim)
 ```
 
-响应经 `validators.check`：形状必须精确为 `(action_horizon, 7)`、全部有限，否则整块拒绝（绝不下发到机械臂）；合法值 clip 到 `action_clip`。只取前 `steps_per_inference` 步入队。
+连接建立时服务端先发一帧 metadata，客户端 `recv` 后才进入请求-响应；每次 `infer` 发一帧 obs、收一帧 actions。响应经 `validators.check`：形状必须精确为 `(action_horizon, action_dim)`、全部有限，否则整块拒绝（绝不下发到机械臂）；合法值 clip 到 `action_clip`。只取前 `steps_per_inference` 步入队。
+
+> `action_horizon` 必须与服务端实际返回的行数一致（如 pi0 常见 50 行），否则整块被 `validators.check` 按 shape 拒绝。上线前用 `mock_policy_server` 或 `get_server_metadata()` 核对。
 
 ## 安全与看门狗约定
 
@@ -122,15 +126,30 @@ realman_bt_executor ── /realman_bt_executor/input_mode_state ──▶ ModeW
 
 `./rm65 up policy` 在生产图（`realman_bringup_remote` + `realman_web_control`）基础上追加启动独立的 `policy_bridge` 容器。该容器与 Web control 平级，共享 `ROS_DOMAIN_ID`、只读挂载 `config/`、写入 `logs/`，通过 `POLICY_WS_HOST` 解析策略服务地址。桥接容器保持空闲，直到 Router 选择 policy 模式且调用 `/policy/activate`。
 
-开发环境可在已构建并 source 的 ROS 2 工作区中运行：
+开发环境可在已构建并 source 的 ROS 2 工作区中运行（dev shell 用仓库内配置路径，容器路径 `/opt/rm65_ws/...` 在宿主机不存在）：
 
 ```bash
 colcon build --packages-select realman_msgs policy_bridge
 source install/setup.bash
 ros2 launch policy_bridge policy_bridge.launch.py \
-  config_file:=/opt/rm65_ws/config/ros/policy_bridge.yaml \
+  config_file:=$PWD/config/ros/policy_bridge.yaml \
   active_side:=left
 ```
+
+### 无模型联调：mock 策略服务
+
+真实策略服务未就绪时，用包内 mock 服务在 `:18000` 顶替，验证连接、obs 字段与动作回流（不涉及模型与机械臂）：
+
+```bash
+# 终端 A：起 mock 服务（random 让发布的 Twist 数值可见变化）
+ros2 run policy_bridge mock_policy_server --port 18000 --mode random
+# 或免安装：python3 -m policy_bridge.tools.mock_policy_server --port 18000 --mode random
+
+# 终端 B：起节点，指向同一端口（server_port 默认已是 18000）
+ros2 launch policy_bridge policy_bridge.launch.py config_file:=$PWD/config/ros/policy_bridge.yaml
+```
+
+mock 服务日志会打印每次收到的 obs key 与 shape（`state (7,)`、`wrist_image (H,W,3)` …），据此确认上行契约；随后按下面「健康判断与排障」activate + force_infer 观察下行 topic。切到真实服务只改 `POLICY_WS_HOST`（及必要时 `server_port`），代码与配置结构不变。
 
 ## 健康判断与排障
 
@@ -162,12 +181,17 @@ docker compose exec policy_bridge ros2 topic echo --once /policy/stats
 
 ## 验证
 
-无硬件回归测试使用 mock WebSocket transport 与录制的假 chunk，覆盖模式门控发布、ROS 时钟 stamp、50Hz 周期、一块 → `steps_per_inference` 次发布、队列空/inactive 停发：
+**无硬件回归测试**（`cd src/policy_bridge`）：
 
 ```bash
-cd src/policy_bridge
 PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=".:$PYTHONPATH" \
-  python3 -m pytest test/ -q          # 85 passed（含 test_integration_mock_ws.py）
+  python3 -m pytest test/ -q          # 86 passed
 ```
 
-真机联调仅在 R1 开门后、显式操作决策、清空工作区、低速、急停可达时进行。
+- `test_integration_mock_ws.py`：dict 级 mock transport + 录制的假 chunk，覆盖模式门控发布、ROS 时钟 stamp、50Hz 周期、一块 → `steps_per_inference` 次发布、队列空/inactive 停发。
+- `test_ws_client.py::test_ws_client_real_socket_roundtrip`：起一个真实 localhost WebSocket 服务，走 vendored `WebsocketClientPolicy` + msgpack 完整往返，断言收到 `(16,7)` actions、连接建立/关闭状态正确——**证明真实网络链路可用**。
+- msgpack 序列化往返（state float32 / 图像 uint8 / actions）单测。
+
+**无模型联调**：用上文 `mock_policy_server` 在 `:18000` 顶替真实服务，跑通节点上行 obs → 下行 topic 全链路。
+
+**真机联调**：仅在 R1 开门后、显式操作决策、清空工作区、低速、急停可达时进行；`action_horizon` 需先与真实服务返回行数对齐。

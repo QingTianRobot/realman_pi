@@ -339,6 +339,11 @@ Pika 使用 `/pika/l/cartesian_pose` 和 `/pika/r/cartesian_pose`；Web 选择
 `Pika / 位置控制` 后由 `pika_control_router` 转发到上面的 driver topic。`m` 不创建 Pika
 session。
 
+夹爪连续控制使用 `/pika/l/gripper_percentage` 和 `/pika/r/gripper_percentage`
+（`std_msgs/msg/Float32`，`0.0` 闭合、`1.0` 张开），由同一 router 转发到
+`/gripper_left/percentage/command` 和 `/gripper_right/percentage/command`。这些 command topic
+是非阻塞的持续目标；一次性 Web 操作仍使用同步的 `/<name>/percentage` service。
+
 `PoseStamped.header.frame_id` 必须是对应基座 frame（例如 `l/base_link`），位置单位是米，
 姿态是 ROS 四元数（驱动内部使用 WXYZ 语义）。时间戳必须非零、不早于 session epoch、严格
 递增且不超过 watchdog。驱动会归一化四元数，并按配置的线速度、角速度上限限制每个周期的

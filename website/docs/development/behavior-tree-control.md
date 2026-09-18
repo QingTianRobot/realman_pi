@@ -18,6 +18,8 @@ Policy 和 Pika 的两个输入叶只产生每次进入一次的诊断；实际 
 选择器显示 `Pika / 位置控制`（模式 ID `pikaposition`）和 `Pika / 速度控制`（模式 ID
 `pikavelocity`）两个独立选项。Pika 生产 topic 为 `/pika/l|r/cartesian_pose`（`PoseStamped`）
 和 `/pika/l|r/cartesian_velocity`（`TwistStamped`）；位置数据是基座坐标系下的米和四元数。
+夹爪开合度由 `/pika/l|r/gripper_percentage`（`std_msgs/msg/Float32`）持续发布，范围是
+`0.0..1.0`（`0` 闭合，`1` 张开）。Pika 只控制 l/r，绝不订阅或发送 m 的夹爪信号。
 
 `InputModeGuard` 的 `mode`、`label`、`selectable` 字面量在 XML 构造时注册目录，
 因此新增模式只改 XML 和相应叶注册，不能在 Web 或 Python 写静态枚举。路由根节点必须保留
@@ -47,8 +49,11 @@ Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。
 `safe_fallback_mode: none`。`none` 既是安全回退也是中性 tick，不能删除或改成 Web。
 
 同一 launch 还启动 `pika_control_router`。它接收 executor 的 active mode，并只为 l/r 管理 Pika
-Action session；`dry_run=true`（默认）时只验证模式和 topic，不提交任何机器人 goal。需要真实
-Pika 运动时必须显式设置 `REALMAN_BT_DRY_RUN=false`，并完成低速、急停和工作区检查。
+Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/command` 和
+`/gripper_right/percentage/command`。只有 `pikaposition` 或 `pikavelocity` 处于 `ACTIVE` 时才转发；
+其它模式会丢弃输入，不自动开合。夹爪 command topic 是非阻塞的连续控制路径，`dry_run=true`
+（默认）时不发送机器人 Action 或夹爪 command。需要真实 Pika 运动时必须显式设置
+`REALMAN_BT_DRY_RUN=false`，并完成低速、急停和工作区检查。
 
 ## 生命周期和无硬件验证
 

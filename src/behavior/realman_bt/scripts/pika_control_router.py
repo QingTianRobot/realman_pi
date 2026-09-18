@@ -4,6 +4,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
+import math
 import time
 from typing import Any
 
@@ -15,6 +16,13 @@ from rclpy.node import Node
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
 from realman_msgs.action import CartesianPose, CartesianVelocity
 from realman_msgs.msg import InputModeState
+from std_msgs.msg import Float32
+
+
+GRIPPER_COMMAND_TOPICS = {
+    "l": "/gripper_left/percentage/command",
+    "r": "/gripper_right/percentage/command",
+}
 
 
 @dataclass
@@ -23,6 +31,7 @@ class _ArmState:
     velocity_client: ActionClient
     pose_publisher: Any
     velocity_publisher: Any
+    gripper_publisher: Any
     goal_handle: Any = None
     pending_goal: Any = None
     active_kind: str = ""
@@ -52,9 +61,22 @@ class PikaControlRouter(Node):
             velocity_client = ActionClient(self, CartesianVelocity, f"/{arm}/cartesian_velocity")
             pose_publisher = self.create_publisher(PoseStamped, f"/{arm}/cartesian_pose/command", 1)
             velocity_publisher = self.create_publisher(TwistStamped, f"/{arm}/cartesian_velocity/command", 1)
-            self._arms[arm] = _ArmState(pose_client, velocity_client, pose_publisher, velocity_publisher)
+            gripper_publisher = self.create_publisher(Float32, GRIPPER_COMMAND_TOPICS[arm], 10)
+            self._arms[arm] = _ArmState(
+                pose_client,
+                velocity_client,
+                pose_publisher,
+                velocity_publisher,
+                gripper_publisher,
+            )
             self.create_subscription(PoseStamped, f"/pika/{arm}/cartesian_pose", lambda message, arm=arm: self._pose(arm, message), 1)
             self.create_subscription(TwistStamped, f"/pika/{arm}/cartesian_velocity", lambda message, arm=arm: self._velocity(arm, message), 1)
+            self.create_subscription(
+                Float32,
+                f"/pika/{arm}/gripper_percentage",
+                lambda message, arm=arm: self._gripper(arm, message),
+                10,
+            )
         self.create_timer(0.05, self._reconcile)
         self.get_logger().info("Pika Cartesian router ready for l/r; middle arm is excluded")
 
@@ -152,6 +174,17 @@ class PikaControlRouter(Node):
             state.velocity_publisher.publish(message)
         else:
             self._reconcile()
+
+    def _gripper(self, arm: str, message: Float32) -> None:
+        if self.mode not in {"pikaposition", "pikavelocity"} or self.dry_run:
+            return
+        value = float(message.data)
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            self.get_logger().warning(
+                f"Ignoring invalid Pika gripper percentage for {arm}: {value!r}"
+            )
+            return
+        self._arms[arm].gripper_publisher.publish(Float32(data=value))
 
     def _pose_goal(self) -> CartesianPose.Goal:
         goal = CartesianPose.Goal()

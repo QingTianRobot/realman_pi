@@ -62,11 +62,20 @@ Web `percentage` 的范围是 `0.0..1.0`：`0` 映射到 `close_position`，`1` 
 | `/<name>/calibrate` | `std_srvs/srv/Trigger` | 当前固定返回失败；默认禁用自动标定 |
 | `/<name>/enable` | `std_srvs/srv/SetBool` | `true` 使能，`false` 禁用 |
 | `/<name>/percentage` | `gripper_ros2_msgs/srv/GripperPercentage` | 按 `0.0..1.0` 移动 |
+| `/<name>/percentage/command` | `std_msgs/msg/Float32` | 非阻塞持续目标；`0.0` 闭合，`1.0` 张开 |
 | `/<name>/position` | `std_msgs/msg/Float64` | 反馈位置 |
 | `/<name>/speed`、`current`、`alarm` | `std_msgs/msg/Int32` | 反馈速度、电流和报警码 |
 | `/<name>/torque_reached`、`connected` | `std_msgs/msg/Bool` | 力矩到达和通信健康状态 |
 
 服务在设备不可用时返回 `success=false`，manager 继续运行并尝试重连。除显式 `enable=false` 外，运动服务会在需要时先使能设备。
+
+`/<name>/percentage/command` 是给连续控制器使用的非阻塞 topic。manager 只校验范围、确保设备已使能，
+将百分比转换为配置中的设备位置并把最新目标交给总线线程，不等待夹爪到位反馈；同一总线上的新目标会覆盖尚未处理的旧目标。
+它不改变同步 `/<name>/percentage` service 的等待和结果语义。
+
+行为树的 Pika router 订阅 `/pika/l/gripper_percentage`、`/pika/r/gripper_percentage`，在
+`pikaposition` 或 `pikavelocity` 为 `ACTIVE` 时分别转发到 `gripper_left`、`gripper_right` 的 command topic。
+Pika 不控制 `gripper_mid`；切出 Pika 模式后不会自动发送开、合或停止命令。
 
 ## WebSocket 生命周期
 

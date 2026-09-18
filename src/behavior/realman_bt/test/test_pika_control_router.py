@@ -33,3 +33,17 @@ def test_pika_router_uses_both_continuous_driver_actions():
     assert "cartesian_pose/command" in source
     assert "cartesian_velocity/command" in source
     assert 'self.mode != expected_mode' in source
+
+
+def test_pika_router_forwards_continuous_gripper_percentages_for_left_and_right():
+    source = ROUTER.read_text(encoding="utf-8")
+
+    assert "Float32" in source
+    assert '"/pika/{arm}/gripper_percentage"' in source
+    assert '"/gripper_left/percentage/command"' in source
+    assert '"/gripper_right/percentage/command"' in source
+    assert 'self.mode not in {"pikaposition", "pikavelocity"}' in source
+    assert "math.isfinite" in source
+    assert "0.0 <= value <= 1.0" in source
+    assert 'for arm in ("l", "r")' in source
+    assert '"/pika/m/gripper_percentage"' not in source

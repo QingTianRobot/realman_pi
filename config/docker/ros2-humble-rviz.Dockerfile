@@ -95,10 +95,18 @@ RUN python3 -m pip install --no-cache-dir \
         --timeout 60 \
         --requirement /opt/rm65_ws/config/python/gripper-requirements.txt
 
+# Transport deps (msgpack + websockets) for the vendored OpenPI policy client
+# used by policy_bridge.
+RUN python3 -m pip install --no-cache-dir \
+        --index-url "${PYPI_INDEX_URL}" \
+        --retries 5 \
+        --timeout 60 \
+        --requirement /opt/rm65_ws/config/python/policy-bridge-requirements.txt
+
 RUN . /opt/ros/humble/setup.sh \
     && colcon build --symlink-install \
-        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock \
-    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock \
+        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock policy_bridge \
+    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock policy_bridge \
     && colcon test-result --verbose
 
 COPY --from=bt_editor_build /opt/bt_editor/dist /opt/rm65_ws/behavior_tree/editor-dist

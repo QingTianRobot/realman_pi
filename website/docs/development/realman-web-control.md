@@ -139,7 +139,7 @@ RM65_DRY_RUN=1 ./rm65 bt control
 | `joint_state` | `arm`, `positions_rad`, `stamp_ns` | 各 arm 的实体 URDF 姿态唯一来源，以及未编辑时的滑轨值 |
 | `connection` | `arm`, `connected` | 控制器在线状态 |
 | `coordinate_state` | `arm`, `motion_allowed`, `preferred_reference`, `tool`, `work` | 各 arm 的激活坐标、可运动状态和默认参考系 |
-| `action_state` | `action`, `request_id`, `state` | submitting/accepted/canceling |
+| `action_state` | `action`, `request_id`, `state` | submitting/accepted/canceling；`stopped` 表示 Action 结果通道在运动中断后不可用 |
 | `action_feedback` | `feedback` | 原 Action feedback 的 JSON 映射 |
 | `action_result` | `status`, `result` | 原 Action result 和 rclpy 状态 |
 | `software_stop_result` | `success`, `message` | `/arm/stop` 的结果 |
@@ -185,6 +185,10 @@ degree 并固定为三位小数，例如 `[5.730, 11.459, 17.189, 22.918, 28.648
 feedback”。如果 8 秒内没有收到任何该请求的 Action feedback，页面会提示“运行状态未知”，但仍
 保持发送按钮禁用、保留取消/软件停止路径；这不会自动重发命令。此时应检查 `/{arm}/execute_motion`
 Action 服务和驱动日志，确认轨迹是否仍在控制器中运行。
+如果控制柜物理急停使 ROS Action 服务端先于客户端清理 goal，结果回调可能收到
+`Goal handle is not known to this client`。Web 后端会把这个传输层异常记录到 ROS 日志，但对浏览器发送
+`action_state` 的 `state=stopped`、`code=goal_handle_unknown`，并显示“运动已中断，请检查急停状态并恢复机械臂”；
+不会把底层英文异常作为用户提示，也会释放该 Web Action 的占用。这个状态不代表急停已经解除，恢复后仍需按现场流程确认控制柜状态。
 驱动对非阻塞 MOVEL/MOVEJ_P 会保留“提交调用返回前就到达”的成功事件；因此极短位姿运动不会因回调竞态被误判为超时。MOVEJ 仍要求提交返回后再接受事件，以避免复用旧轨迹回调。
 在没有人工改动目标之前，右侧滑条会跟随该 arm 的实时 `joint_state`；一旦人工拖动滑条，该 arm
 的目标值就会保持用户输入，直到再次切换或重置。

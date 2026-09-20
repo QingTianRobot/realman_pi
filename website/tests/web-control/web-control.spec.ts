@@ -608,6 +608,33 @@ test("clears MOVEL waiting feedback placeholder when the action is rejected", as
   await expect(page.locator("#feedback")).not.toContainText("等待 feedback");
 });
 
+test("reports an emergency-stop action result transport loss without exposing the ROS exception", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("button[data-motion-command=\"1\"]").click();
+  await page.locator("#pose-x").fill("0.4");
+  await page.locator("#pose-y").fill("0.1");
+  await page.locator("#pose-z").fill("0.5");
+  await expect(page.locator("#execute-motion")).toBeEnabled();
+  await page.locator("#execute-motion").click();
+  await expect(page.locator("#feedback")).toContainText("等待 feedback");
+  const requestId = await page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map((value) => JSON.parse(value))
+      .findLast((item) => item.type === "execute_motion").request_id,
+  );
+  await page.evaluate((id) => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "action_state", arm: "l", action: "execute_motion", request_id: id,
+      state: "stopped", code: "goal_handle_unknown",
+      message: "运动已中断，Action 结果不可用；请检查急停状态并恢复机械臂",
+    }) });
+  }, requestId);
+  await expect(page.locator("#feedback")).toContainText("请检查急停状态并恢复机械臂");
+  await expect(page.locator("#feedback")).not.toContainText("Goal handle is not known");
+  await expect(page.locator("#execute-motion")).toBeEnabled();
+  await expect(page.locator("#cancel-motion")).toBeDisabled();
+});
+
 test("warns when MOVEL has no feedback without permitting a second motion", async ({ page }) => {
   test.setTimeout(25_000);
   await page.goto("/");

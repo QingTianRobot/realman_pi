@@ -1483,7 +1483,7 @@ class WebControlNode(Node):
             record.result_unavailable = True
             self._release_unobserved_cancel(record)
             self.get_logger().error(f"Web result listener failed for {record.arm}/{record.action}: {error}")
-            self._server.send_event(action_event(record, "error", message=str(error)))
+            self._server.send_event(self._result_transport_event(record, error))
 
     def _action_feedback(self, record: ActionRecord, feedback_message: Any) -> None:
         if self._actions.get((record.arm, record.action)) is not record:
@@ -1497,6 +1497,21 @@ class WebControlNode(Node):
                 "feedback": message_to_json(feedback_message.feedback),
             }
         )
+
+    def _result_transport_event(self, record: ActionRecord, error: Exception) -> dict[str, Any]:
+        if "goal handle is not known to this client" in str(error).lower():
+            # A physical emergency stop can tear down the action server's
+            # goal state before rclpy delivers the result.  The raw
+            # transport exception is useful in logs but is not a browser
+            # diagnosis, and this goal can no longer be cancelled.
+            self._actions.pop((record.arm, record.action), None)
+            return action_event(
+                record,
+                "stopped",
+                code="goal_handle_unknown",
+                message="运动已中断，Action 结果不可用；请检查急停状态并恢复机械臂",
+            )
+        return action_event(record, "error", message=str(error))
 
     @_serialized_control
     def _action_result(self, record: ActionRecord, future: Any) -> None:
@@ -1520,7 +1535,7 @@ class WebControlNode(Node):
             self.get_logger().error(
                 f"Web action result failed for {record.arm}/{record.action}: {error}"
             )
-            event = action_event(record, "error", message=str(error))
+            event = self._result_transport_event(record, error)
         self._server.send_event(event)
 
     def _cancel_action(self, client_id: str, arm: str, action: str) -> None:

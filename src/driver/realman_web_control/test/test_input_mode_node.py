@@ -396,6 +396,23 @@ def test_result_transport_failure_does_not_drop_unsent_cancellation(node):
     assert ("l", "execute_motion") not in node._actions
 
 
+def test_unknown_goal_handle_after_emergency_stop_is_reported_as_stopped(node):
+    record = ActionRecord("l", "execute_motion", "owner", "request")
+    handle = GoalHandle(node.log, "goal")
+    record.goal_handle = handle
+    node._actions[("l", "execute_motion")] = record
+
+    handle.result_future.set_exception(RuntimeError("Goal handle is not known to this client"))
+    node._action_result(record, handle.result_future)
+
+    assert ("l", "execute_motion") not in node._actions
+    event = node._server.events[-1][0]
+    assert event["type"] == "action_state"
+    assert event["state"] == "stopped"
+    assert event["code"] == "goal_handle_unknown"
+    assert "Goal handle is not known" not in event["message"]
+
+
 def test_cancel_failure_marks_and_attempts_remaining_goals_but_does_not_select(node):
     node._input_modes.update_catalog(CATALOG)
     node._input_modes.update_state(InputModeSnapshot("web", "web", "web", "ACTIVE", 40, 1))

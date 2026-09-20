@@ -1139,7 +1139,7 @@ function handleMessage(message: Message) {
     actionState.textContent = String(message.state).toUpperCase();
     actionState.className = `mini-state ${message.state}`;
     if (message.action === "cartesian_velocity") velocityState.textContent = String(message.state).toUpperCase();
-    if (["rejected", "error"].includes(message.state)) {
+    if (["rejected", "error", "stopped"].includes(message.state)) {
       if (message.action === "execute_motion") {
         window.clearTimeout(motionFeedbackTimer);
         motionFeedbackTimer = 0;

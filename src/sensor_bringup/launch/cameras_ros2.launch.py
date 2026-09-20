@@ -58,7 +58,15 @@ def _load_defaults():
         # Global RealSense D435 (native realsense2_camera node). use_realsense is
         # auto-degraded to false by rm65_camera_ros2 when the driver is missing.
         "use_realsense": "true" if global_camera.get("enabled", True) else "false",
-        "realsense_serial_no": str(global_camera.get("serial_no", "")),
+        # Wrap the serial in single quotes so launch_ros' YAML parameter inference
+        # keeps it a string. The D435 serial is all digits and would otherwise be
+        # parsed as an integer, which realsense_node_factory rejects: the node
+        # then dies with "parameter 'serial_no' has invalid type".
+        "realsense_serial_no": (
+            "'{}'".format(global_camera["serial_no"])
+            if global_camera.get("serial_no", "")
+            else ""
+        ),
         "realsense_device_type": str(global_camera.get("device_type", "d435")),
         "realsense_namespace": str(global_camera.get("namespace", "camera_global")),
         "realsense_camera_name": str(global_camera.get("camera_name", "d435")),

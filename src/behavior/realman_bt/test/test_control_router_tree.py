@@ -27,13 +27,14 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
     assert len(document.findall(".//ReactiveFallback")) == 1
 
     expected = [
-        ("web", "Web", "false", "WebInputStub", None),
-        ("policy", "Policy", "true", "PolicyInputStub", None),
+        ("web", "Web", "false", "WebInputStub", None, False),
+        ("policy", "Policy", "true", "PolicyInputStub", None, False),
         (
             "pikaposition",
             "Pika / 位置控制",
             "true",
             "PikaPositionInput",
+            "pika_position_entry",
             True,
         ),
         (
@@ -41,17 +42,21 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
             "Pika / 速度控制",
             "true",
             "PikaVelocityInput",
+            "pika_velocity_entry",
             True,
         ),
-        ("none", "无输入", "true", "IdleInput", None),
+        ("none", "无输入", "true", "IdleInput", None, False),
     ]
     assert len(list(router)) == len(expected)
-    for branch, (mode, label, selectable, leaf_tag, has_entry_move) in zip(router, expected):
+    for branch, (mode, label, selectable, leaf_tag, entry_sequence_name, has_entry_move) in zip(router, expected):
         assert branch.tag == "ReactiveSequence"
         assert branch.attrib == {"name": f"{mode}_branch"}
         children = list(branch)
         if has_entry_move:
-            guard, entry_move, activation, leaf = children
+            guard, entry_sequence = children
+            assert entry_sequence.tag == "Sequence"
+            assert entry_sequence.attrib == {"name": entry_sequence_name}
+            entry_move, activation, leaf = list(entry_sequence)
             assert entry_move.tag == "ThreeArmMoveJ"
             assert entry_move.attrib == {
                 "name": "pika_default_pose",

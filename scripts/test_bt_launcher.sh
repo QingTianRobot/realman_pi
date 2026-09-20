@@ -16,6 +16,8 @@ grep -Fq 'BT_READ_ONLY=true' <<<"$output"
 grep -Fq 'BT_RUNTIME_SNAPSHOT=/tmp/realman-bt-workspace/runtime.json' <<<"$output"
 grep -Fq 'BT_EXIT_ON_TERMINAL=true' <<<"$output"
 grep -Fq 'BT_RUNTIME_ARCHIVE_ROOT=/opt/rm65_ws/logs/behavior-trees' <<<"$output"
+grep -Fq 'realman_bt_executor/stop' "$ROOT/scripts/bt.sh"
+grep -Fq 'pending_cancellations' "$ROOT/scripts/bt.sh"
 
 if REALMAN_BT_DRY_RUN=maybe "$ROOT/scripts/bt.sh" r >/dev/null 2>&1; then
   echo 'invalid dry-run value unexpectedly accepted' >&2

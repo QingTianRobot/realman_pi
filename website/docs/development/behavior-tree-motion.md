@@ -22,7 +22,7 @@ Sequence、MoveJ 和 ThreeArmMoveJ，不替换生产 ./rm65 up 编排，也不�
            -> /l|m|r/execute_motion (realman_msgs/action/ExecuteMotion)
 
 `./rm65 bt` 使用 one-shot 生命周期。执行器到达 `SUCCESS` 或 `FAILURE` 后停止 tick、halt 树，并等待
-所有 cancellation drain 成功提交取消请求；随后写出最终快照、退出 executor，`ros2 launch` 和只读
+所有 cancellation drain 成功提交取消请求；快照中的 `pending_cancellations` 归零后，随后写出最终快照、退出 executor，`ros2 launch` 和只读
 监视器也随之退出。三臂 driver 及其 RealMan SDK 连接不退出，下一棵行为树继续复用原有 Action Server。
 
 MoveJ 使用 command=MOVEJ、reference_type=BASE，joint_degrees 为六个角度（单位：度），
@@ -326,8 +326,9 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 
 当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ，以及 `control_router.xml` 的
 `SelectInputMode`、`InputModeGuard`、`ActivateInputMode` 和输入叶。切入
-`pikaposition` 或 `pikavelocity` 时，输入树会先执行一次三臂 ThreeArmMoveJ 默认姿态准备动作，
-成功后才激活 Pika；该姿态来自生产端关节话题的静态采样，不是每次切换时动态读取。新增节点仍须在执行器中显式
+`pikaposition` 或 `pikavelocity` 时，输入树会先执行一次有状态 Sequence 中的三臂 ThreeArmMoveJ 默认姿态准备动作，
+成功后才激活 Pika；该姿态来自生产端关节话题的静态采样，不是每次切换时动态读取。Pika 分支保持运行时，
+准备动作不会被 ReactiveSequence 的后续 tick 重复执行；离开后重新进入才会再次准备。新增节点仍须在执行器中显式
 注册，并同步更新 XML 契约测试。控制路由的 reactive 交接规则见
 [行为树控制权与 Mock 测试](./behavior-tree-control)。节点、端口、Action/Service 接入、取消所有权或运行诊断变更时，
 遵守项目 [行为树开发 Skill](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/developing-realman-behavior-trees/SKILL.md) 的 dry-run

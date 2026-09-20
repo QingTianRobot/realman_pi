@@ -25,7 +25,9 @@ Policy 和 Pika 的两个输入叶只产生每次进入一次的诊断；实际 
 因此新增模式只改 XML 和相应叶注册，不能在 Web 或 Python 写静态枚举。路由根节点必须保留
 `ReactiveSequence` 和 `ReactiveFallback`，使 guard 每个 10 Hz tick 都重算并 halt 离开的
 RUNNING 分支。普通分支是 `InputModeGuard` → `ActivateInputMode` → 输入叶；Pika 分支在激活前
-额外运行一次 `ThreeArmMoveJ` 准备动作，准备成功后才发布 Pika `ACTIVE`。
+额外运行一次有状态 `Sequence` 中的 `ThreeArmMoveJ` 准备动作，准备成功后才发布 Pika `ACTIVE`。
+准备动作成功后，后续 tick 会从该 `Sequence` 的 Pika 输入叶继续，不会重新进入准备动作；只有离开
+Pika 分支后再次进入，才会重新执行准备动作。
 
 切换到不同模式时，选择先进入 `SWITCHING` 并选择 `none`。下一 tick 必须激活/运行这个中性分支，
 下一 tick 才选择并激活目标模式；这让 Policy/Pika 不必自行结束即可交接。重选已经 active 的模式会
@@ -78,8 +80,10 @@ Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/com
 ```
 
 `./rm65 bt control` 的 Ctrl-C（非交互运行也可向 CLI 发送 SIGINT）按本次调用的唯一 token
-通知对应容器 wrapper。wrapper 中断本次 ROS launch/executor 进程组、停止监视器、归档已产生的
-runtime snapshot 并释放锁；CLI 返回 130。其他 driver 和其他容器保持运行。
+通知对应容器 wrapper。wrapper 先调用 `/realman_bt_executor/stop`，让 executor halt 行为树并由独立
+timer 提交所有未完成 Action 的取消请求；快照中的 `pending_cancellations` 归零后才终止本次 ROS
+launch/executor 进程组、停止监视器、归档 runtime snapshot 并释放锁。若取消在 10 秒内未清空，wrapper
+会打印警告并强制清理；CLI 返回 130。其他 driver 和其他容器保持运行。
 
 mock 节点不会连接 SDK/CAN，也不会发布生产控制命令。可通过 ROS 参数注入模式、owner
 和后端健康状态；命令记录器可将 mock 输出写为 JSONL。

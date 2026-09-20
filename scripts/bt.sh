@@ -121,12 +121,42 @@ forward_interrupt() {
     control="/tmp/realman-bt-client.$1"
     # Remember interruption even if bt-start has not installed its trap yet.
     touch "$control.stop"
+  ' -- "$client_token" || true
+  # Ask the persistent executor to halt its tree while ROS is still spinning.
+  # This gives accepted MoveJ goals a chance to submit cancellation requests;
+  # killing the launch process first can destroy that ownership too early.
+  docker exec "$container_id" bash -lc '
+    source /opt/ros/humble/setup.bash
+    source /opt/rm65_ws/install/setup.bash
+    timeout 3s ros2 service call /realman_bt_executor/stop std_srvs/srv/Trigger "{}"
+  ' >/dev/null 2>&1 || true
+  local deadline=$((SECONDS + 10))
+  local pending=""
+  while (( SECONDS < deadline )); do
+    pending="$(docker exec "$container_id" python3 -c '
+import json
+from pathlib import Path
+path = Path("/tmp/realman-bt-workspace/runtime.json")
+try:
+    print(json.loads(path.read_text()).get("pending_cancellations", -1))
+except (OSError, ValueError, TypeError):
+    print(-1)
+' 2>/dev/null || true)"
+    if [[ "$pending" == "0" ]]; then
+      break
+    fi
+    sleep 0.1
+  done
+  if [[ "$pending" != "0" ]]; then
+    printf 'rm65 bt: cancellation drain did not clear before forced shutdown\n' >&2
+  fi
+  docker exec "$container_id" bash -c '
+    control="/tmp/realman-bt-client.$1"
     if [[ -r "$control.pid" ]]; then
       read -r pid < "$control.pid"
       if [[ "$pid" =~ ^[0-9]+$ ]] &&
           grep -zFxq "BT_CLIENT_TOKEN=$1" "/proc/$pid/environ" 2>/dev/null; then
         kill -TERM "$pid" 2>/dev/null || true
-        while [[ -r "$control.pid" ]] && kill -0 "$pid" 2>/dev/null; do sleep 0.1; done
       fi
     fi
   ' -- "$client_token" || true

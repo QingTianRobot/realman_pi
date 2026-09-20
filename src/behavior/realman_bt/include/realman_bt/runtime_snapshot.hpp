@@ -66,6 +66,9 @@ class RuntimeSnapshotWriter {
              std::uint64_t sequence);
   void write(const bt_core::Tree& tree, std::string tree_id,
              std::uint64_t sequence, const RuntimeDiagnostics* diagnostics);
+  void write(const bt_core::Tree& tree, std::string tree_id,
+             std::uint64_t sequence, const RuntimeDiagnostics* diagnostics,
+             std::size_t pending_cancellations);
 
   void writeIdle(std::string tree_id);
   void writeIdle(std::string tree_id,

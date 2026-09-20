@@ -317,7 +317,8 @@ void RealmanBtExecutorNode::flushSnapshot() {
   if (!snapshot_writer_ || !tree_) return;
   ++snapshot_sequence_;
   try {
-    snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_);
+    snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_,
+                            cancellation_drains_.size());
   } catch (const std::exception& error) {
     RCLCPP_ERROR(get_logger(), "failed to write behavior tree snapshot: %s", error.what());
   }

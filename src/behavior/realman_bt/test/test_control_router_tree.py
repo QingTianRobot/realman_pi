@@ -3,13 +3,20 @@ import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).parents[4]
-ROUTER = ROOT / "config/behavior-trees/control_router.xml"
+ROUTER = ROOT / "config/behavior-trees/control.xml"
 CMAKE = ROOT / "src/behavior/realman_bt/CMakeLists.txt"
 
 
 def test_control_router_is_the_literal_authoritative_mode_catalog():
     document = ET.parse(ROUTER).getroot()
-    assert document.attrib == {"main_tree_to_execute": "InputControl"}
+    assert document.attrib == {
+        "main_tree_to_execute": "InputControl",
+        "realman_arm_id": "r",
+        "realman_required_arms": "l,m,r",
+        "realman_launch": "control_router",
+        "realman_stop_on_terminal": "false",
+        "realman_exit_on_terminal": "false",
+    }
     behavior_tree = document.find("BehaviorTree")
     assert behavior_tree is not None
     assert behavior_tree.attrib == {"ID": "InputControl"}
@@ -94,5 +101,5 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
 
 def test_control_router_is_installed_with_the_package():
     source = CMAKE.read_text()
-    assert 'config/behavior-trees/control_router.xml"' in source
+    assert 'config/behavior-trees/control.xml"' in source
     assert "DESTINATION share/${PROJECT_NAME}/behavior-trees" in source

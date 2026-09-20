@@ -16,11 +16,11 @@ def _default_tree_file() -> str:
     """Prefer the repository config mount, then use the installed tree."""
     config_root = os.environ.get("REALMAN_CONFIG_ROOT")
     if config_root:
-        candidate = Path(config_root) / "behavior-trees" / "arm_move.xml"
+        candidate = Path(config_root) / "behavior-trees" / "move.xml"
         if candidate.is_file():
             return str(candidate)
     package_share = Path(get_package_share_directory("realman_bt"))
-    return str(package_share / "behavior-trees" / "arm_move.xml")
+    return str(package_share / "behavior-trees" / "move.xml")
 
 
 def _log_directory() -> Path:

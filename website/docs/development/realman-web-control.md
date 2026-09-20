@@ -63,7 +63,7 @@ watchdog 和 lockout，不会直接调用 SDK。
 
 输入路由器是可选的独立进程：`./rm65 up` 启动长期 driver 与本服务，但**不会**启动它。要启用
 全局路由，在 driver 容器已运行后执行 `./rm65 bt control`；它加载
-[`config/behavior-trees/control_router.xml`](../../../config/behavior-trees/control_router.xml)，并在 Ctrl-C
+[`config/behavior-trees/control.xml`](../../../config/behavior-trees/control.xml)，并在 Ctrl-C
 前保持 executor 和 :8080 只读监视器运行。Ctrl-C 不会停止 driver 或本服务，`./rm65 down` 才停止
 统一运行时。路由和本服务必须使用同一个 `ROS_DOMAIN_ID`。
 

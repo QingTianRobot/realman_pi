@@ -17,7 +17,7 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 | RealMan 状态回读 | Include `three_realman_drivers.launch.py` | `config/ros/realman_driver.yaml` |
 | Xbox 设备读取 | 创建 `joy/game_controller_node` | `config/ros/xbox_controller.yaml` |
 | 按键边沿处理 | 创建 `xbox_controller_node` | `xbox_controller_driver` |
-| 持久输入路由 | 不随 Bringup 自动创建；由 `./rm65 bt control` 显式启动 | `config/behavior-trees/control_router.xml`、`config/ros/behavior_tree.yaml` |
+| 持久输入路由 | 不随 Bringup 自动创建；由 `./rm65 bt control` 显式启动 | `config/behavior-trees/control.xml`、`config/ros/behavior_tree.yaml` |
 | RViz 2 | 透传 `use_rviz` 给三臂 launch | `config/rviz/three_robots.rviz` |
 | 运行日志 | 创建时间目录并设置 ROS 2 环境变量 | `REALMAN_LOG_ROOT`、`ROS_LOG_DIR` |
 

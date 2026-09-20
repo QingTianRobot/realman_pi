@@ -31,7 +31,7 @@ def generate_launch_description():
     config_root = _config_root()
     tree_file = DeclareLaunchArgument(
         "tree_file",
-        default_value=str(config_root / "behavior-trees" / "control_router.xml"),
+        default_value=str(config_root / "behavior-trees" / "control.xml"),
         description="Absolute path to the persistent control-router XML file.",
     )
     arm_id = DeclareLaunchArgument(

@@ -17,8 +17,8 @@ Sequence、MoveJ 和 ThreeArmMoveJ，不替换生产 ./rm65 up 编排，也不�
 
     arm_move.launch.py
       -> realman_bt_executor
-           -> arm_move.xml: Sequence -> MoveJ
-           -> three_arm_staged_move.xml: Sequence -> ThreeArmMoveJ -> ThreeArmMoveJ
+           -> move.xml: Sequence -> MoveJ
+           -> three.xml: Sequence -> ThreeArmMoveJ -> ThreeArmMoveJ
            -> /l|m|r/execute_motion (realman_msgs/action/ExecuteMotion)
 
 `./rm65 bt` 使用 one-shot 生命周期。执行器到达 `SUCCESS` 或 `FAILURE` 后停止 tick、halt 树，并等待
@@ -30,8 +30,8 @@ velocity_percent 和 blend_radius_percent 的范围分别为 1..100 和 0..100�
 0,0,0,0,0,0，速度为 10%，单次 Action 超时为 120 秒；仍需按实际 RM65 安装姿态和工作空间
 确认该目标是否安全。
 
-单臂权威树文件为 config/behavior-trees/arm_move.xml，其中 arm_id 和 dry_run 通过黑板重映射，能被
-launch 参数覆盖。三臂权威树文件为 config/behavior-trees/three_arm_staged_move.xml；每个
+单臂权威树文件为 config/behavior-trees/move.xml，其中 arm_id 和 dry_run 通过黑板重映射，能被
+launch 参数覆盖。三臂权威树文件为 config/behavior-trees/three.xml；每个
 ThreeArmMoveJ 叶节点先确认三路 Action Server 都可用，在同一行为树 tick 中依次提交 l/m/r 三个异步
 goal，并在三路都成功后返回 SUCCESS。任一路失败或超时会使叶节点失败，并取消或移交仍未完成的 goal。
 
@@ -153,7 +153,7 @@ python3 docker/bt_runtime_result.py logs/behavior-trees/<run-id>/runtime.json
 显式关闭 dry-run 后，容器启动日志会再次打印安全警告，执行器才会发送真实 `ExecuteMotion` goal。
 可用 `REALMAN_BT_ARM_ID=l|m|r`、`BT_SERVER_PORT` 和
 `BT_PUBLIC_HOST` 覆盖默认参数；运行监视器只读，容器临时 workspace 和快照不会覆盖
-`config/behavior-trees/arm_move.xml`。
+`config/behavior-trees/move.xml`。
 
 执行器发布根节点状态：
 
@@ -238,7 +238,7 @@ ROS timer，因此应在可用时让 cancel 提交完成并确认运行快照；
 
 launch 每次运行都会在 REALMAN_LOG_ROOT（未设置时为当前目录下的 logs/）创建
 YYYYMMDD_HHMMSS/，并启用彩色 ROS 2 日志。设置 REALMAN_CONFIG_ROOT 后，若其中存在
-behavior-trees/arm_move.xml，launch 会优先使用该配置。
+behavior-trees/move.xml，launch 会优先使用该配置。
 
 ## 真机执行
 
@@ -316,7 +316,7 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| tree_file | 安装后的 behavior-trees/arm_move.xml | XML 绝对路径；`three` 入口改用 three_arm_staged_move.xml |
+| tree_file | 安装后的 behavior-trees/move.xml | XML 绝对路径；`three` 入口改用 three.xml |
 | arm_id | r | 只能是 l、m 或 r |
 | dry_run | true | true 只校验；false 发真实 goal |
 | tick_rate_hz | 20.0 | 行为树 tick 频率（Hz） |
@@ -324,7 +324,7 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 | stop_on_terminal | true | SUCCESS/FAILURE 后停止 timer |
 | exit_on_terminal | true | 终态且 cancellation drain 清空后退出 executor；false 保留 Service 常驻模式 |
 
-当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ，以及 `control_router.xml` 的
+当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ，以及 `control.xml` 的
 `SelectInputMode`、`InputModeGuard`、`ActivateInputMode` 和输入叶。切入
 `pikaposition` 或 `pikavelocity` 时，输入树会先执行一次有状态 Sequence 中的三臂 ThreeArmMoveJ 默认姿态准备动作，
 成功后才激活 Pika；该姿态来自生产端关节话题的静态采样，不是每次切换时动态读取。Pika 分支保持运行时，
@@ -334,8 +334,12 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 遵守项目 [行为树开发 Skill](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/developing-realman-behavior-trees/SKILL.md) 的 dry-run
 边界和验证顺序。
 
-`./rm65 bt` 接受 `l|m|r|three|control`，不接受 XML 路径；选择其他树时使用上述 ROS launch 的
-`tree_file:=<XML绝对路径>`，或显式配置容器 `bt-start` 的 `BT_TREE_FILE` 和 `BT_REQUIRED_ARMS`。
+`./rm65 bt <tree-name>` 接受 `config/behavior-trees/` 下的简单 XML 文件名，`.xml` 后缀可省略；例如
+`./rm65 bt move`、`./rm65 bt three`、`./rm65 bt control` 或 `./rm65 bt custom_tree.xml`。
+新建树只需将 XML 放入该目录，并在 `<root>` 上声明 `realman_arm_id`、`realman_required_arms`、
+`realman_launch`、`realman_stop_on_terminal` 和 `realman_exit_on_terminal`。缺省值依次为 `r`、当前 arm、
+`arm_move`、`true`、`true`；`realman_launch` 只允许 `arm_move` 或 `control_router`，不会执行 XML 中的任意 shell 命令。
+旧入口 `arm_move.xml`、`three_arm_staged_move.xml` 和 `control_router.xml` 仍映射到新短名，便于已有脚本迁移。
 直接 ROS launch 不包含容器入口提供的单实例锁、监视器和归档功能。
 
 ## 在 Codex 中复用行为树 Skill

@@ -145,7 +145,7 @@ Commands:
   logs                Show recent camera and bringup logs.
   camera              Run the legacy RTSP/TCP camera helper.
   bt-test build|mock|web|all  Build, run, or validate isolated behavior-tree scenarios.
-  bt [l|m|r|three]    Run a one-shot behavior tree; executor and :8080 monitor exit at terminal state.
+  bt [tree-name|l|m|r|three|control]  Run a behavior tree from config/behavior-trees; .xml may be omitted.
   bt control          Run the persistent input router and :8080 monitor until Ctrl-C.
   sync                Synchronize the clean main branch to production.
 EOF

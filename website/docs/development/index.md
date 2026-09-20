@@ -14,7 +14,7 @@ description: realman_pi 功能契约、实现边界、配置来源和验证方�
 | [功能文档同步](./documentation-workflow) | 功能完成门槛、Web 手册结构和验证流程 | `.agents/skills/document-feature-updates/SKILL.md` |
 | [启动入口索引](./startup-entries) | `functions.zsh` 每个启动、构建、测试和部署入口的当前用途、组件范围和权威配置 | `functions.zsh`、`config/docker/compose.yaml` |
 | [睿尔曼 Python 驱动查询 Skill](./realman-python-driver) | Python API 文档检索、驱动开发约束、版本与安全核对流程 | `.agents/skills/realman-python-driver/SKILL.md` |
-| [行为树控制权与 Mock 测试](./behavior-tree-control) | 动态 XML 输入目录、Web override、无硬件 mock、只读监视器及 Action/Service 边界 | `config/behavior-trees/control_router.xml`、`config/ros/behavior_tree.yaml`、`src/behavior/realman_bt/` |
+| [行为树控制权与 Mock 测试](./behavior-tree-control) | 动态 XML 输入目录、Web override、无硬件 mock、只读监视器及 Action/Service 边界 | `config/behavior-trees/control.xml`、`config/ros/behavior_tree.yaml`、`src/behavior/realman_bt/` |
 | [行为树机械臂移动 Demo](./behavior-tree-motion) | 单臂/三臂阶段屏障、one-shot 退出、诊断归档和 ROS domain 排查 | `config/behavior-trees/`、`src/behavior/realman_bt/` |
 | [行为树开发 Skill](./behavior-tree-motion#在-codex-中复用行为树-skill) | 节点与 Action 所有权、启动部署、重复执行和 UNKNOWN 排障的可复用指引 | `.agents/skills/developing-realman-behavior-trees/SKILL.md` |
 | [睿尔曼三臂驱动与运动控制](./realman-driver-scaffold) | 三臂关节回读、可取消运动、坐标系、末端速度、RViz 和 mock 验证 | `config/ros/realman_driver.yaml`、`config/ros/realman_coordinates.yaml`、`config/ros/realman_motion.yaml` |

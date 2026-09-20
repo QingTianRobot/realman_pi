@@ -1,5 +1,10 @@
 <?xml version="1.0"?>
-<root main_tree_to_execute="InputControl">
+<root main_tree_to_execute="InputControl"
+      realman_arm_id="r"
+      realman_required_arms="l,m,r"
+      realman_launch="control_router"
+      realman_stop_on_terminal="false"
+      realman_exit_on_terminal="false">
   <BehaviorTree ID="InputControl">
     <ReactiveSequence name="input_control">
       <SelectInputMode selected_mode="{selected_mode}"/>

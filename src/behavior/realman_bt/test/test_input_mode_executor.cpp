@@ -36,7 +36,7 @@ std::string readFile(const std::filesystem::path& path) {
 }
 
 std::string routerXml() {
-  return readFile(std::filesystem::path(BT_TEST_CONFIG_DIR) / "control_router.xml");
+  return readFile(std::filesystem::path(BT_TEST_CONFIG_DIR) / "control.xml");
 }
 
 void replaceOnce(std::string& text, const std::string& from, const std::string& to) {
@@ -208,7 +208,7 @@ void testSubscriberConnectedBeforePublisher() {
 
 void testMoveJHasNoModeInterfaces() {
   Fixture f;
-  f.load(readFile(std::filesystem::path(BT_TEST_CONFIG_DIR) / "arm_move.xml"));
+  f.load(readFile(std::filesystem::path(BT_TEST_CONFIG_DIR) / "move.xml"));
   auto list = f.client_node->create_client<List>(kList);
   auto select = f.client_node->create_client<Select>(kSelect);
   require(!list->wait_for_service(250ms) && !select->wait_for_service(250ms),

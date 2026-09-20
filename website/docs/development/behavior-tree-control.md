@@ -7,7 +7,7 @@ description: RealMan 控制模式切换、工业任务树和隔离 mock 验证�
 
 行为树运行时位于 `realman_bt`，底层仍使用 RealMan Action 和
 `motion_coordinator`。持久输入路由器的权威定义是
-[`config/behavior-trees/control_router.xml`](../../../config/behavior-trees/control_router.xml)：
+[`config/behavior-trees/control.xml`](../../../config/behavior-trees/control.xml)：
 当前目录顺序为 `web`、`policy`、`pikaposition`、`pikavelocity`、`none`。其中 `policy`、`pikaposition`、`pikavelocity` 和
 `none` 可由浏览器选择器请求；`web` 是粘性且最高优先级的覆盖，不出现在浏览器选择器中。
 ROS selection service 接受任何已注册模式（包括 `web`），只要求调用者提供非空 `requester_id`；
@@ -120,8 +120,8 @@ Service 常驻模式。
 `UNKNOWN`，先按[排查步骤](./behavior-tree-motion#重复执行与-unknown-排查)核对实际 domain 中的服务器数量。
 生产 Web 控制页面只请求模式，不绕过仲裁层发送动作。
 
-编辑器支持通过 URL 直接打开工作区树：访问 `bt_editor/?tree=arm_move.xml` 后，前端先拉取
-`/api/nodes`，再请求 `GET /api/tree/open?name=arm_move.xml`，将返回的 XML 导入画布并同步到
+编辑器支持通过 URL 直接打开工作区树：访问 `bt_editor/?tree=move.xml` 后，前端先拉取
+`/api/nodes`，再请求 `GET /api/tree/open?name=move.xml`，将返回的 XML 导入画布并同步到
 `/api/tree/load`。文件名会进行 URL 编码；打开失败会显示错误 toast。该 URL 参数只在启动时消费一次，
 因此后续编辑不会因 React 状态更新而重复打开或覆盖画布。
 

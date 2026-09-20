@@ -24,8 +24,8 @@ Policy 和 Pika 的两个输入叶只产生每次进入一次的诊断；实际 
 `InputModeGuard` 的 `mode`、`label`、`selectable` 字面量在 XML 构造时注册目录，
 因此新增模式只改 XML 和相应叶注册，不能在 Web 或 Python 写静态枚举。路由根节点必须保留
 `ReactiveSequence` 和 `ReactiveFallback`，使 guard 每个 10 Hz tick 都重算并 halt 离开的
-RUNNING 分支。每个分支严格是 `InputModeGuard` → `ActivateInputMode` → 输入叶：activation
-同步发布状态，故叶开始前已是 active。
+RUNNING 分支。普通分支是 `InputModeGuard` → `ActivateInputMode` → 输入叶；Pika 分支在激活前
+额外运行一次 `ThreeArmMoveJ` 准备动作，准备成功后才发布 Pika `ACTIVE`。
 
 切换到不同模式时，选择先进入 `SWITCHING` 并选择 `none`。下一 tick 必须激活/运行这个中性分支，
 下一 tick 才选择并激活目标模式；这让 Policy/Pika 不必自行结束即可交接。重选已经 active 的模式会
@@ -54,6 +54,13 @@ Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/com
 其它模式会丢弃输入，不自动开合。夹爪 command topic 是非阻塞的连续控制路径，`dry_run=true`
 （默认）时不发送机器人 Action 或夹爪 command。需要真实 Pika 运动时必须显式设置
 `REALMAN_BT_DRY_RUN=false`，并完成低速、急停和工作区检查。
+
+切入任一 Pika 模式时，行为树先用 `ThreeArmMoveJ` 将 l/m/r 移动到
+`12.172,25.223,73.054,-16.703,80.307,14.455`、
+`0,17.997,70,0,90,8.997`、
+`-9.89,18.046,79.074,15.505,79.606,-6.194`（单位：度），再激活 Pika。
+这些值是 2026-09-20 从生产端 `/<arm>/joint_states`（弧度）采样并换算的静态默认姿态；
+生产姿态变化后需要重新采样并更新 XML。准备动作失败或切换期间被取消时，不会进入 Pika `ACTIVE`。
 
 ## 生命周期和无硬件验证
 

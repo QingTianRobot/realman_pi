@@ -325,7 +325,9 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 | exit_on_terminal | true | 终态且 cancellation drain 清空后退出 executor；false 保留 Service 常驻模式 |
 
 当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ，以及 `control_router.xml` 的
-`SelectInputMode`、`InputModeGuard`、`ActivateInputMode` 和输入叶。新增节点仍须在执行器中显式
+`SelectInputMode`、`InputModeGuard`、`ActivateInputMode` 和输入叶。切入
+`pikaposition` 或 `pikavelocity` 时，输入树会先执行一次三臂 ThreeArmMoveJ 默认姿态准备动作，
+成功后才激活 Pika；该姿态来自生产端关节话题的静态采样，不是每次切换时动态读取。新增节点仍须在执行器中显式
 注册，并同步更新 XML 契约测试。控制路由的 reactive 交接规则见
 [行为树控制权与 Mock 测试](./behavior-tree-control)。节点、端口、Action/Service 接入、取消所有权或运行诊断变更时，
 遵守项目 [行为树开发 Skill](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/developing-realman-behavior-trees/SKILL.md) 的 dry-run

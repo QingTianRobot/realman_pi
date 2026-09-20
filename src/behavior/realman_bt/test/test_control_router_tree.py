@@ -27,17 +27,44 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
     assert len(document.findall(".//ReactiveFallback")) == 1
 
     expected = [
-        ("web", "Web", "false", "WebInputStub"),
-        ("policy", "Policy", "true", "PolicyInputStub"),
-        ("pikaposition", "Pika / 位置控制", "true", "PikaPositionInput"),
-        ("pikavelocity", "Pika / 速度控制", "true", "PikaVelocityInput"),
-        ("none", "无输入", "true", "IdleInput"),
+        ("web", "Web", "false", "WebInputStub", None),
+        ("policy", "Policy", "true", "PolicyInputStub", None),
+        (
+            "pikaposition",
+            "Pika / 位置控制",
+            "true",
+            "PikaPositionInput",
+            True,
+        ),
+        (
+            "pikavelocity",
+            "Pika / 速度控制",
+            "true",
+            "PikaVelocityInput",
+            True,
+        ),
+        ("none", "无输入", "true", "IdleInput", None),
     ]
     assert len(list(router)) == len(expected)
-    for branch, (mode, label, selectable, leaf_tag) in zip(router, expected):
+    for branch, (mode, label, selectable, leaf_tag, has_entry_move) in zip(router, expected):
         assert branch.tag == "ReactiveSequence"
         assert branch.attrib == {"name": f"{mode}_branch"}
-        guard, activation, leaf = list(branch)
+        children = list(branch)
+        if has_entry_move:
+            guard, entry_move, activation, leaf = children
+            assert entry_move.tag == "ThreeArmMoveJ"
+            assert entry_move.attrib == {
+                "name": "pika_default_pose",
+                "dry_run": "{dry_run}",
+                "l_joint_degrees": "12.172,25.223,73.054,-16.703,80.307,14.455",
+                "m_joint_degrees": "0,17.997,70,0,90,8.997",
+                "r_joint_degrees": "-9.89,18.046,79.074,15.505,79.606,-6.194",
+                "velocity_percent": "10",
+                "blend_radius_percent": "0",
+                "timeout_sec": "120",
+            }
+        else:
+            guard, activation, leaf = children
         assert guard.tag == "InputModeGuard"
         assert guard.attrib == {
             "mode": mode,

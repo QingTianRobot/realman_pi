@@ -75,6 +75,7 @@ class InputModeBridge:
         self._state_revision = 0
         self._next_token = 0
         self._pending: _PendingSelection | None = None
+        self._keyboard_owner: str | None = None
 
     @property
     def available(self) -> bool:
@@ -104,6 +105,7 @@ class InputModeBridge:
         effects = []
         if modes is None:
             effects = self._discard("input_mode_unavailable", "input mode router is unavailable")
+            effects += self._release_keyboard()
             self._snapshot = None
             self._state_revision = 0
         elif not self.available:
@@ -151,6 +153,8 @@ class InputModeBridge:
     def _begin(self, client_id: str, request_id: str, mode_id: str,
                motion: dict[str, Any] | None = None) -> list[InputModeEffect]:
         effects = self._discard("input_mode_superseded", "superseded by a newer Web request")
+        if mode_id != "keyboard":
+            effects += self._release_keyboard()
         self._next_token += 1
         self._pending = _PendingSelection(
             self._next_token, client_id, request_id, mode_id,
@@ -234,9 +238,21 @@ class InputModeBridge:
         if snapshot.active_mode != pending.mode_id:
             return self._discard("input_mode_superseded", "executor activated a different input mode")
         self._pending = None
+        effects: list[InputModeEffect] = []
+        if pending.mode_id == "keyboard":
+            if self._keyboard_owner is not None and self._keyboard_owner != pending.client_id:
+                effects += self._release_keyboard()
+            self._keyboard_owner = pending.client_id
+            effects.append(
+                InputModeEffect(
+                    "keyboard_lease", pending.client_id, {"active": True}
+                )
+            )
         if pending.motion is not None:
-            return [InputModeEffect("forward_motion", pending.client_id, pending.motion)]
-        return []
+            effects.append(
+                InputModeEffect("forward_motion", pending.client_id, pending.motion)
+            )
+        return effects
 
     def expire(self) -> list[InputModeEffect]:
         if self._pending is not None and self._clock() >= self._pending.deadline:
@@ -244,9 +260,26 @@ class InputModeBridge:
         return []
 
     def client_disconnected(self, client_id: str) -> list[InputModeEffect]:
+        effects = []
         if self._pending is not None and self._pending.client_id == client_id:
-            return self._discard("input_mode_disconnected", "requesting Web client disconnected")
-        return []
+            effects += self._discard(
+                "input_mode_disconnected", "requesting Web client disconnected"
+            )
+        if self._keyboard_owner == client_id:
+            effects += self._release_keyboard()
+            effects.append(
+                InputModeEffect("request_safe_mode", None, {"mode_id": "none"})
+            )
+        return effects
+
+    def _release_keyboard(self) -> list[InputModeEffect]:
+        owner, self._keyboard_owner = self._keyboard_owner, None
+        if owner is None:
+            return []
+        return [
+            InputModeEffect("keyboard_zero", owner, {}),
+            InputModeEffect("keyboard_lease", owner, {"active": False}),
+        ]
 
     def cancel_motion(self, arm: str, *, action: str | None = None,
                       client_id: str | None = None) -> list[InputModeEffect]:

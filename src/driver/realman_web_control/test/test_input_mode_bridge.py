@@ -11,11 +11,32 @@ from realman_web_control.input_mode_bridge import (
 
 CATALOG = (
     InputModeOption("web", "Web", False),
+    InputModeOption("keyboard", "Web / 键盘速度控制", True),
     InputModeOption("policy", "Policy", True),
     InputModeOption("pika", "Pika", True),
     InputModeOption("none", "None", True),
     InputModeOption("maintenance", "Maintenance", False),
 )
+
+
+def activate_keyboard(controller):
+    controller.update_catalog(CATALOG)
+    effects = controller.select_mode("browser-a", {"request_id": "keyboard-1", "mode_id": "keyboard"})
+    token = effects[-1].token
+    controller.selection_response(token, True, 50, "accepted")
+    return controller.update_state(state(50, "keyboard"))
+
+
+def test_keyboard_activation_leaving_and_disconnect_release_the_lease(bridge):
+    controller, _ = bridge
+    effects = activate_keyboard(controller)
+    assert effects[-1] == InputModeEffect("keyboard_lease", "browser-a", {"active": True})
+    leaving = controller.select_mode("browser-a", {"request_id": "none-1", "mode_id": "none"})
+    assert kinds(leaving) == ["keyboard_zero", "keyboard_lease", "cancel_web_actions", "request_mode"]
+    activate_keyboard(controller)
+    disconnected = controller.client_disconnected("browser-a")
+    assert kinds(disconnected) == ["keyboard_zero", "keyboard_lease", "request_safe_mode"]
+    assert disconnected[-1].payload == {"mode_id": "none"}
 
 
 class Clock:

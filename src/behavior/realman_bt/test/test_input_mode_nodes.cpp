@@ -22,6 +22,7 @@ using realman_bt::IdleInputNode;
 using realman_bt::InputModeCoordinator;
 using realman_bt::InputModeGuardNode;
 using realman_bt::InputModeRegistry;
+using realman_bt::KeyboardVelocityInputNode;
 using realman_bt::PikaInputStubNode;
 using realman_bt::PolicyInputStubNode;
 using realman_bt::SelectInputModeNode;
@@ -89,10 +90,11 @@ void testFactoryProbesDoNotRequireBusinessBlackboardEntries() {
   factory.registerNodeType<ActivateInputModeNode>("ActivateInputMode");
   factory.registerNodeType<WebInputStubNode>("WebInputStub");
   factory.registerNodeType<PolicyInputStubNode>("PolicyInputStub");
+  factory.registerNodeType<KeyboardVelocityInputNode>("KeyboardVelocityInput");
   factory.registerNodeType<PikaInputStubNode>("PikaInputStub");
   factory.registerNodeType<IdleInputNode>("IdleInput");
 
-  assert(factory.size() == 7);
+  assert(factory.size() == 8);
 }
 
 void testGuardRejectsRemappedRegistrationMetadataIndependently() {
@@ -248,6 +250,8 @@ void testPlaceholderLeavesRunWithoutRosOrActionDependencies() {
                                         bt_core::NodeConfig>);
   static_assert(std::is_constructible_v<PolicyInputStubNode, std::string,
                                         bt_core::NodeConfig>);
+  static_assert(std::is_constructible_v<KeyboardVelocityInputNode, std::string,
+                                        bt_core::NodeConfig>);
   static_assert(std::is_constructible_v<PikaInputStubNode, std::string,
                                         bt_core::NodeConfig>);
   static_assert(std::is_constructible_v<IdleInputNode, std::string,
@@ -266,23 +270,30 @@ void testPlaceholderLeavesRunWithoutRosOrActionDependencies() {
   diagnostic_config.blackboard->set<realman_bt::RuntimeDiagnostics*>(
       realman_bt::kRuntimeDiagnosticsBlackboardKey, &diagnostics);
   PolicyInputStubNode policy("policy", diagnostic_config);
+  KeyboardVelocityInputNode keyboard("keyboard", diagnostic_config);
   PikaInputStubNode pika("pika", diagnostic_config);
   assert(policy.executeTick() == bt_core::NodeStatus::RUNNING);
   assert(policy.executeTick() == bt_core::NodeStatus::RUNNING);
+  assert(keyboard.executeTick() == bt_core::NodeStatus::RUNNING);
+  assert(keyboard.executeTick() == bt_core::NodeStatus::RUNNING);
   assert(pika.executeTick() == bt_core::NodeStatus::RUNNING);
   auto snapshot = diagnostics.snapshot();
-  assert(snapshot.events.size() == 2);
+  assert(snapshot.events.size() == 3);
   assert(snapshot.events[0].source == "EXECUTOR");
   assert(snapshot.events[0].phase == "placeholder");
   assert(snapshot.events[0].detail ==
          "Policy input is a placeholder; no command emitted");
   assert(snapshot.events[1].detail ==
+         "Keyboard velocity stream is routed by keyboard_control_router");
+  assert(snapshot.events[2].detail ==
          "Pika input is a placeholder; no command emitted");
 
   policy.halt();
   assert(policy.executeTick() == bt_core::NodeStatus::RUNNING);
+  keyboard.halt();
+  assert(keyboard.executeTick() == bt_core::NodeStatus::RUNNING);
   snapshot = diagnostics.snapshot();
-  assert(snapshot.events.size() == 3);
+  assert(snapshot.events.size() == 5);
 }
 
 void testPostNeutralTickReplacesIdleWithRecoveredHigherPriorityBranch() {

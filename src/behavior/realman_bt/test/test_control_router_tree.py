@@ -35,6 +35,14 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
 
     expected = [
         ("web", "Web", "false", "WebInputStub", None, False),
+        (
+            "keyboard",
+            "Web / 键盘速度控制",
+            "true",
+            "KeyboardVelocityInput",
+            None,
+            False,
+        ),
         ("policy", "Policy", "true", "PolicyInputStub", None, False),
         (
             "pikaposition",
@@ -96,7 +104,7 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
         for attribute, value in node.attrib.items()
         if value.startswith("{") or value.endswith("}")
     ]
-    assert remapped == [("selected_mode", "{selected_mode}")] * 6
+    assert remapped == [("selected_mode", "{selected_mode}")] * 7
 
 
 def test_control_router_is_installed_with_the_package():

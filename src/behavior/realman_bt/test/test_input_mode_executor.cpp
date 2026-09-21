@@ -134,12 +134,17 @@ void testCatalogSelectionAndLateSubscriber() {
   f.load(routerXml());
   const auto catalog = f.call<List>(kList, std::make_shared<List::Request>());
   require(catalog->success, "catalog failed");
-  require(catalog->mode_ids == std::vector<std::string>({"web", "policy", "pikaposition", "pikavelocity", "none"}),
+  require(catalog->mode_ids == std::vector<std::string>(
+              {"web", "keyboard", "policy", "pikaposition", "pikavelocity", "none"}),
           "catalog order differs from XML declarations");
-  require(catalog->labels == std::vector<std::string>({"Web", "Policy", "Pika / 位置控制", "Pika / 速度控制", "无输入"}),
+  require(catalog->labels == std::vector<std::string>(
+              {"Web", "Web / 键盘速度控制", "Policy", "Pika / 位置控制",
+               "Pika / 速度控制", "无输入"}),
           "catalog labels differ from XML declarations");
-  require(catalog->selectable.size() == 5 && !catalog->selectable[0] &&
-              catalog->selectable[1] && catalog->selectable[2] && catalog->selectable[3] && catalog->selectable[4],
+  require(catalog->selectable.size() == 6 && !catalog->selectable[0] &&
+              catalog->selectable[1] && catalog->selectable[2] &&
+              catalog->selectable[3] && catalog->selectable[4] &&
+              catalog->selectable[5],
           "catalog arrays/selectability differ from XML declarations");
   f.subscribe();  // No tree ticks or prior subscribers: this must replay startup.
   require(f.until([&] { return !f.states.empty(); }), "late subscriber missed startup state");

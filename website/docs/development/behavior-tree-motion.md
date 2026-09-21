@@ -111,8 +111,11 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt tool_x
 
 节点在 Action 接受后通过独立 ROS timer 按配置周期发布 `TwistStamped`，因此命令刷新频率不依赖行为树
 tick 频率。publisher 使用 `KEEP_LAST=1`、`VOLATILE`，DDS lifespan 等于配置 watchdog；每条消息使用
-ROS clock 的新时间戳以及映射后的 `frame_id`。时长到达后先发布零速度，再取消开放式
-`CartesianVelocity` session。节点会在发布任何速度前通过 `/<arm>/get_current_pose` 保存真机关节角和
+ROS clock 的新时间戳以及映射后的 `frame_id`。时长到达后节点进入停止等待状态：立即请求取消开放式
+`CartesianVelocity` session，并继续按控制周期刷新零速度，直到 Action 返回终态或超过配置的停止超时。
+这样取消处理即使超过一个 watchdog 周期，也不会把正常的定时停止误报为
+`velocity command watchdog expired`；非零速度刷新意外中断时，驱动 watchdog 仍会执行故障停止。节点会在
+发布任何速度前通过 `/<arm>/get_current_pose` 保存真机关节角和
 末端位姿，并在驱动返回预期的 `CANCELED` 终态后再次读取。只有平移至少 `0.001 m`、旋转至少
 `0.5°`，或任一关节变化至少 `0.1°` 时才返回 `SUCCESS`。三项变化都低于阈值时返回 `FAILURE`，事件中
 记录 `translation_m`、`rotation_rad` 和 `max_joint_change_deg`；因此 Action 正常取消不再等同于真机运动

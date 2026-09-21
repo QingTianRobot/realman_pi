@@ -232,6 +232,187 @@ int main(int argc, char** argv) {
   assert(no_motion_events.back().detail.find("translation_m=") !=
          std::string::npos);
 
+  struct WatchdogState {
+    std::mutex mutex;
+    std::condition_variable changed;
+    int goals{0};
+    int cancels{0};
+    int pose_reads{0};
+    std::vector<std::chrono::steady_clock::time_point> command_times;
+    std::vector<bool> zero_commands;
+  } watchdog;
+  auto watchdog_pose_service = ros_node->create_service<GetCurrentPose>(
+      "/m/get_current_pose",
+      [&watchdog](const std::shared_ptr<GetCurrentPose::Request> request,
+                  std::shared_ptr<GetCurrentPose::Response> response) {
+        std::lock_guard<std::mutex> lock(watchdog.mutex);
+        assert(request->reference_type == GetCurrentPose::Request::TOOL);
+        assert(request->reference_name == "tcpgrip");
+        ++watchdog.pose_reads;
+        response->success = true;
+        response->api2_status = 0;
+        response->current_joint_degrees = {
+            0.0, 0.0, 0.0, 0.0, 0.0,
+            watchdog.pose_reads > 1 ? 0.5 : 0.0};
+        response->pose_position_m = {
+            watchdog.pose_reads > 1 ? 0.01 : 0.0, 0.0, 0.4};
+        response->pose_quaternion_wxyz = {1.0, 0.0, 0.0, 0.0};
+        response->message = "current pose read";
+      });
+  auto watchdog_server = rclcpp_action::create_server<Action>(
+      ros_node, "/m/cartesian_velocity",
+      [](const rclcpp_action::GoalUUID&, std::shared_ptr<const Action::Goal>) {
+        return rclcpp_action::GoalResponse::ACCEPT_AND_EXECUTE;
+      },
+      [&watchdog](const std::shared_ptr<ServerGoalHandle>) {
+        std::lock_guard<std::mutex> lock(watchdog.mutex);
+        ++watchdog.cancels;
+        watchdog.changed.notify_all();
+        return rclcpp_action::CancelResponse::ACCEPT;
+      },
+      [&watchdog](const std::shared_ptr<ServerGoalHandle> goal_handle) {
+        int goal_number;
+        {
+          std::lock_guard<std::mutex> lock(watchdog.mutex);
+          goal_number = ++watchdog.goals;
+          watchdog.changed.notify_all();
+        }
+        std::thread([&watchdog, goal_handle, goal_number]() {
+          const auto watchdog_limit = std::chrono::milliseconds(100);
+          const auto cancel_delay = goal_number == 1
+                                        ? std::chrono::milliseconds(180)
+                                        : std::chrono::milliseconds(500);
+          std::chrono::steady_clock::time_point cancel_seen_at{};
+          while (true) {
+            std::chrono::steady_clock::time_point last_command{};
+            {
+              std::unique_lock<std::mutex> lock(watchdog.mutex);
+              watchdog.changed.wait_for(lock, std::chrono::milliseconds(5));
+              if (!watchdog.command_times.empty()) {
+                last_command = watchdog.command_times.back();
+              }
+            }
+            const auto now = std::chrono::steady_clock::now();
+            if (goal_handle->is_canceling() &&
+                cancel_seen_at.time_since_epoch().count() == 0) {
+              cancel_seen_at = now;
+            }
+            if (last_command.time_since_epoch().count() != 0 &&
+                now - last_command > watchdog_limit) {
+              auto result = std::make_shared<Action::Result>();
+              result->success = false;
+              result->terminal_state = Action::Result::WATCHDOG_STOP;
+              result->message = "velocity command watchdog expired";
+              goal_handle->abort(result);
+              return;
+            }
+            if (cancel_seen_at.time_since_epoch().count() != 0 &&
+                now - cancel_seen_at >= cancel_delay) {
+              auto result = std::make_shared<Action::Result>();
+              result->success = false;
+              result->terminal_state = Action::Result::CANCELED;
+              result->message = "velocity session canceled";
+              goal_handle->canceled(result);
+              return;
+            }
+          }
+        }).detach();
+      });
+  auto watchdog_subscription =
+      ros_node->create_subscription<geometry_msgs::msg::TwistStamped>(
+          "/m/cartesian_velocity/command", rclcpp::QoS(20),
+          [&watchdog](geometry_msgs::msg::TwistStamped::SharedPtr command) {
+            const auto& twist = command->twist;
+            const bool zero =
+                twist.linear.x == 0.0 && twist.linear.y == 0.0 &&
+                twist.linear.z == 0.0 && twist.angular.x == 0.0 &&
+                twist.angular.y == 0.0 && twist.angular.z == 0.0;
+            std::lock_guard<std::mutex> lock(watchdog.mutex);
+            watchdog.command_times.push_back(std::chrono::steady_clock::now());
+            watchdog.zero_commands.push_back(zero);
+            watchdog.changed.notify_all();
+          });
+  realman_bt::CoordinateReferenceRegistry watchdog_references({
+      "m|default_tool|2|tcpgrip|m/tool/tcpgrip",
+  });
+  realman_bt::CartesianVelocityProfileRegistry watchdog_profiles({
+      "m|20|100|0.1|0.5|0.2|1.0|1|0.4",
+  });
+  realman_bt::RuntimeDiagnostics watchdog_diagnostics;
+  Node watchdog_node(
+      "watchdog_velocity",
+      config(ros_node.get(), &watchdog_references, &watchdog_profiles,
+             &watchdog_diagnostics, false, 0.12, "m"));
+  const auto watchdog_terminal = tickUntil(
+      watchdog_node,
+      [](bt_core::NodeStatus status) {
+        return status == bt_core::NodeStatus::SUCCESS ||
+               status == bt_core::NodeStatus::FAILURE;
+      },
+      std::chrono::seconds(5));
+  assert(watchdog_terminal == bt_core::NodeStatus::SUCCESS);
+  std::size_t terminal_command_count;
+  {
+    std::lock_guard<std::mutex> lock(watchdog.mutex);
+    assert(watchdog.goals == 1);
+    assert(watchdog.cancels == 1);
+    assert(watchdog.pose_reads == 2);
+    assert(watchdog.command_times.size() == watchdog.zero_commands.size());
+    std::vector<std::chrono::steady_clock::time_point> zero_times;
+    for (std::size_t index = 0; index < watchdog.zero_commands.size(); ++index) {
+      if (watchdog.zero_commands[index]) {
+        zero_times.push_back(watchdog.command_times[index]);
+      }
+    }
+    assert(zero_times.size() >= 4);
+    for (std::size_t index = 1; index < zero_times.size(); ++index) {
+      assert(zero_times[index] - zero_times[index - 1] <
+             std::chrono::milliseconds(100));
+    }
+    assert(zero_times.back() - zero_times.front() >=
+           std::chrono::milliseconds(100));
+    terminal_command_count = watchdog.command_times.size();
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  {
+    std::lock_guard<std::mutex> lock(watchdog.mutex);
+    assert(watchdog.command_times.size() == terminal_command_count);
+    watchdog.pose_reads = 0;
+    watchdog.command_times.clear();
+    watchdog.zero_commands.clear();
+  }
+
+  realman_bt::CartesianVelocityProfileRegistry stop_timeout_profiles({
+      "m|20|100|0.1|0.5|0.2|1.0|1|0.12",
+  });
+  realman_bt::RuntimeDiagnostics stop_timeout_diagnostics;
+  Node stop_timeout_node(
+      "stop_timeout_velocity",
+      config(ros_node.get(), &watchdog_references, &stop_timeout_profiles,
+             &stop_timeout_diagnostics, false, 0.05, "m"));
+  const auto stop_timeout_terminal = tickUntil(
+      stop_timeout_node,
+      [](bt_core::NodeStatus status) {
+        return status == bt_core::NodeStatus::SUCCESS ||
+               status == bt_core::NodeStatus::FAILURE;
+      },
+      std::chrono::seconds(5));
+  assert(stop_timeout_terminal == bt_core::NodeStatus::FAILURE);
+  assert(stop_timeout_node.failureReason().find(
+             "did not stop before timeout") != std::string::npos);
+  std::size_t timeout_command_count;
+  {
+    std::lock_guard<std::mutex> lock(watchdog.mutex);
+    assert(watchdog.goals == 2);
+    assert(watchdog.cancels == 2);
+    timeout_command_count = watchdog.command_times.size();
+  }
+  std::this_thread::sleep_for(std::chrono::milliseconds(120));
+  {
+    std::lock_guard<std::mutex> lock(watchdog.mutex);
+    assert(watchdog.command_times.size() == timeout_command_count);
+  }
+
   realman_bt::RuntimeDiagnostics halt_diagnostics;
   auto halt_config = config(ros_node.get(), &references, &profiles,
                             &halt_diagnostics, false, 5.0);

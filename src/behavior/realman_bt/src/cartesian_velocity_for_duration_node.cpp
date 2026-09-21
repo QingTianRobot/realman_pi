@@ -350,12 +350,14 @@ void CartesianVelocityForDurationNode::startCommandTimer() {
   publishCommand(false);
   command_timer_ = ros_node_->create_wall_timer(
       std::chrono::milliseconds(profile_->control_period_ms), [this]() {
-        if (duration_elapsed_) return;
+        if (duration_elapsed_) {
+          publishCommand(true);
+          return;
+        }
         if (std::chrono::duration<double>(std::chrono::steady_clock::now() -
                                           motion_started_at_).count() >= duration_sec_) {
           publishCommand(true);
           duration_elapsed_ = true;
-          if (command_timer_) command_timer_->cancel();
           return;
         }
         publishCommand(false);
@@ -518,6 +520,7 @@ bool CartesianVelocityForDurationNode::handoffInFlightGoal() {
 }
 
 void CartesianVelocityForDurationNode::fail(const std::string& detail) {
+  if (command_timer_) command_timer_->cancel();
   failed_ = true;
   setFailureReason(detail);
   recordEvent("result", detail, "ERROR");

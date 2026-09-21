@@ -57,8 +57,17 @@ The router also subscribes to:
 ```
 
 The driver-facing Action goal uses each arm's profile from
-`config/ros/realman_motion.yaml`. Version 1 uses the base reference only.
-Commands use fresh `TwistStamped` timestamps and `frame_id=base`.
+`config/ros/realman_motion.yaml` and that arm's configured `default_work` from
+`config/ros/realman_coordinates.yaml`. The current driver rejects BASE for
+Cartesian velocity sessions because the vendor velocity initializer supports
+only WORK or TOOL. Version 1 therefore requires the active, verified default
+WORK reference. Commands use fresh `TwistStamped` timestamps and the resolved
+WORK `ros_frame_id`.
+
+The router does not silently fall back to TOOL. If an arm's configured default
+WORK is not active and verified, keyboard control for that arm remains disabled
+and no Action goal is sent. This preserves fixed directional semantics instead
+of making the key directions rotate with the tool pose.
 
 ## Behavior-tree contract
 
@@ -150,8 +159,10 @@ and `wz`, respectively. The initial linear and angular command fractions are
 current `0.05 m/s` and `0.25 rad/s` maxima. The initial browser heartbeat is
 `50 ms`; the Web-input timeout is `150 ms`. The router refreshes accepted
 driver commands at each arm's configured `20 ms` period, while the driver's
-existing `100 ms` watchdog independently stops a failed router. All fractions
-and timings are finite, positive, and range-validated during startup.
+existing `100 ms` watchdog independently stops a failed router. WORK controller
+names and ROS frame IDs are resolved from `realman_coordinates.yaml`; the new
+configuration does not duplicate them. All fractions and timings are finite,
+positive, and range-validated during startup.
 
 The Web node loads and validates this file, adds a sanitized
 `keyboard_control` section to the existing hello/layout payload, and uses the
@@ -165,6 +176,10 @@ key.
 `keyboard_control_router` creates Action clients, command publishers, and input
 subscriptions only for `l` and `r`.
 
+- Before opening a session, the router requires the selected arm's current
+  coordinate state to report the configured default WORK as active and
+  verified. If that condition is false, it suppresses the goal, publishes no
+  command, and reports the arm as unavailable.
 - On `ACTIVE/keyboard`, the first non-zero input starts that arm's Cartesian
   velocity session. The two arms start independently and are not physically
   synchronized.
@@ -197,10 +212,13 @@ The existing input-mode card remains catalog-driven. The keyboard panel is
 rendered when the discovered catalog contains `keyboard`, which occurs after
 `./rm65 bt control` is running and discovered by the long-lived :8765 service.
 It shows independent `l` and `r` key groups, the currently pressed keys, and a
-local `READY`, `MOVING`, or `RELEASED` state. These labels describe browser
-input capture, not confirmation of physical motion. If the control tree
-disappears, the panel is disabled, pressed-key state is cleared, and no further
-keyboard messages are sent.
+local `READY`, `MOVING`, `RELEASED`, or `WORK UNAVAILABLE` state. It also shows
+the resolved WORK frame for each arm, such as `l/work/cell` or `r/work/cell`.
+These labels describe browser input capture and coordinate eligibility, not
+confirmation of physical motion. If the control tree disappears or an arm's
+WORK reference becomes unverified, the affected controls are disabled,
+pressed-key state is cleared, and no further non-zero keyboard messages are
+sent for that arm.
 
 The panel does not expose arbitrary velocity or frame values in the keyboard
 path. It shows the configured mapping and safety status. Existing direct Web
@@ -232,6 +250,8 @@ Focused tests must cover:
 - exact `control.xml` branch order, literals, registration, and metadata;
 - `KeyboardVelocityInput` lifecycle and halt behavior;
 - keyboard YAML validation, key uniqueness, finite limits, and l/r-only scope;
+- default-WORK resolution, active/verified coordinate gating, and explicit
+  rejection of BASE or TOOL fallback;
 - WebSocket parsing, rejected `m`, duplicate/unknown keys, sequence ordering,
   empty-state zero behavior, and bounded payloads;
 - one keyboard lease, disconnect/release, competing clients, and mode changes;

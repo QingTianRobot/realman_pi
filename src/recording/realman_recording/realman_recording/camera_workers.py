@@ -456,13 +456,16 @@ def downscale_jpeg(frame: PreviewFrame, *, width: int, height: int, quality: int
     return frame
 
 
-def image_to_jpeg(image: Any, *, quality: int = 90) -> bytes:
+def image_to_jpeg(image: Any, *, quality: int = 90, width: int | None = None, height: int | None = None) -> bytes:
     """Encode a raw ``sensor_msgs/Image`` frame to JPEG bytes.
 
     The recorder subscribes to the driver's native ``Image`` topics, so frames must be
     JPEG-encoded before the archive/preview consumers (which are JPEG-only). Handles the
     row-stride padding some camera drivers add; raises ``ValueError`` for an unsupported
     encoding so a malformed frame is dropped rather than written as a corrupt JPEG.
+
+    When ``width``/``height`` are given, the frame is downscaled before encoding so the
+    preview path avoids the encode → decode → resize → re-encode round-trip.
     """
     import cv2  # type: ignore[import-not-found]
     import numpy as np  # type: ignore[import-not-found]
@@ -479,6 +482,14 @@ def image_to_jpeg(image: Any, *, quality: int = 90) -> bytes:
         array = cv2.cvtColor(array, cv2.COLOR_RGB2BGR)
     elif image.encoding == "mono8":
         array = cv2.cvtColor(array, cv2.COLOR_GRAY2BGR)
+    if width and height:
+        ratio = min(width / array.shape[1], height / array.shape[0], 1.0)
+        if ratio < 1.0:
+            array = cv2.resize(
+                array,
+                (max(1, int(array.shape[1] * ratio)), max(1, int(array.shape[0] * ratio))),
+                interpolation=cv2.INTER_AREA,
+            )
     ok, encoded = cv2.imencode(".jpg", array, [cv2.IMWRITE_JPEG_QUALITY, quality])
     if not ok:
         raise ValueError("JPEG encode failed for raw image frame")

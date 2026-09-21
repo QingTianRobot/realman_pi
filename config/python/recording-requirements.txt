@@ -1,3 +1,5 @@
 # Optional live visualizer dependency. The recording core handles ImportError and
 # remains fully functional when this SDK is absent; production images install it here.
 rerun-sdk
+# LeRobot dataset export: columnar parquet writing (episode/frame tables).
+pyarrow

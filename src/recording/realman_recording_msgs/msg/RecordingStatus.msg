@@ -23,3 +23,9 @@ bool cameras_healthy
 string detail
 string diagnostics_json
 uint64 scheduled_start_walltime_ns
+# LeRobot export progress in 0.0..1.0 and the dataset directory once export completes.
+float64 export_progress
+string export_dir
+# Non-empty only when the most recent export failed; the browser surfaces this as
+# "conversion failed" instead of leaving the export panel silently idle.
+string export_error

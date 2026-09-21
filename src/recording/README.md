@@ -42,7 +42,6 @@ src/recording/
 │   └── test/                              # 无设备可运行的纯逻辑/worker测试
 └── realman_recording_msgs/                # ROS 2 interface 包（复数命名）
     ├── srv/ManageRecording.srv            # 上游唯一控制接口
-    ├── action/ManageRecording.action      # 兼容旧实现；目标是移除 Web 对它的依赖
     └── msg/RecordingStatus.msg            # 状态广播
 ```
 
@@ -116,7 +115,7 @@ Service：`/recording/manage`，类型：`realman_recording_msgs/srv/ManageRecor
 
 时间戳约定：所有接收时间使用 ROS 2 `SYSTEM_TIME`（epoch nanoseconds）；MCAP bag record time 使用回调接收时间；消息自身的 `header.stamp` 若存在必须原样保留；浏览器倒计时只显示 `/recording/status`，不能决定停止时刻；预约开始在触发时重新执行预检。
 
-Action `recording/manage_session` 是历史兼容接口；Web 已不再创建 ActionClient（纯只读展示），上游控制只使用 `/recording/manage` Service。若要删除 Action，必须先确认没有部署脚本、测试或外部客户端依赖它，再同步修改 interface 和 recorder。
+`/recording/manage` 是唯一的会话控制入口；录制平台不再提供 `recording/manage_session` Action。Web 保持纯只读，不创建任何控制客户端。
 
 ## 6. Session 文件格式
 

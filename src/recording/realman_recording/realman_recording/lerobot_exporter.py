@@ -1,82 +1,511 @@
-"""Explicit asynchronous LeRobot export boundary.
+"""LeRobot dataset export from a finalized recording session.
 
-LeRobot conversion is deliberately last in the platform implementation order.  This
-module validates the raw-session contract and fails truthfully until the exporter is
-implemented against the selected LeRobot runtime, so adoption can never be reported as
-a generated training dataset merely because a placeholder file was written.
+The exporter reads the raw ``state.mcap`` (joint/gripper/action streams) and the
+per-camera JPEG archive, aligns every stream onto the camera image wall-time anchors
+(the recording contract records both in the same ROS 2 SYSTEM_TIME nanosecond domain),
+and writes a LeRobot-compatible dataset: ``meta/`` + ``data/*.parquet`` + ``videos/*.mp4``.
+
+Progress is reported through an optional callback ``(done_frames, total_frames)`` so the
+recorder can relay it to the web dashboard without importing any visualization stack.
 """
 from __future__ import annotations
 
-import argparse
 import json
+import os
+import shutil
+import subprocess
+from bisect import bisect_right
 from dataclasses import dataclass
 from pathlib import Path
+from typing import Any, Callable, Sequence
 
-from .json_io import atomic_json_write
-from .lerobot_align import AlignmentPolicy
+import numpy as np
 
-
-STREAM_POLICIES = {
-    "image": None,
-    "arm_state": AlignmentPolicy.LINEAR,
-    "arm_action": AlignmentPolicy.LINEAR,
-    "gripper": AlignmentPolicy.FORWARD_FILL,
-}
+from .lerobot_align import AlignmentPolicy, TimedSample, align_streams
 
 
 @dataclass(frozen=True)
 class ExportRequest:
+    """One finalized session's conversion parameters."""
+
     session_dir: Path
     output_dir: Path
     target_fps: float
+    max_gap_sec: float
+    progress_callback: Callable[[int, int], None] | None = None
 
 
 class LeRobotExporter:
-    """Validate a finalized session before the isolated export worker runs."""
+    """Convert a finalized session into a single-episode LeRobot dataset."""
 
+    JOINTS_PER_ARM = 6
+
+    # topic → (message class, value extractor). Extractor returns None to skip a topic.
     def export(self, request: ExportRequest) -> Path:
         manifest = self._load_final_manifest(request.session_dir)
-        if request.target_fps <= 0:
-            raise ValueError("target_fps must be positive")
-        request.output_dir.mkdir(mode=0o750, parents=True, exist_ok=True)
-        metadata_path = request.output_dir / "export-not-implemented.json"
-        atomic_json_write(
-            metadata_path,
-            {
-                "source_session_id": manifest["session_id"],
-                "status": "NOT_IMPLEMENTED",
-                "target_fps": request.target_fps,
-            },
-        )
-        raise RuntimeError(
-            "LeRobot export is not implemented yet; session remains raw and export is marked FAILED"
-        )
+        output_dir = request.output_dir
+        output_dir.mkdir(parents=True, exist_ok=True)
 
-    @staticmethod
-    def _load_final_manifest(session_dir: Path) -> dict:
+        streams = self._read_mcap_streams(request.session_dir)
+        camera_anchors, camera_frames = self._read_camera_anchors(request.session_dir)
+        if not camera_anchors:
+            raise ValueError("session has no camera frames to anchor alignment")
+
+        state_action = self._state_action_streams(streams, manifest)
+        camera_anchors = self._trim_to_overlap(camera_anchors, state_action)
+        if not camera_anchors:
+            raise ValueError("no camera frame falls within the state/action overlap window")
+
+        # Align the state/action inputs onto the camera image timestamps.
+        aligned = align_streams(
+            camera_anchors,
+            {name: (samples, policy) for name, samples, policy in state_action},
+            max_gap_ns=int(request.max_gap_sec * 1e9) if request.max_gap_sec > 0 else None,
+        )
+        # Progress spans the whole export: align 5%, parquet 5-25%, videos 25-90%,
+        # meta+replay 90-100%. Video encoding is the slow step, so it gets the widest band.
+        self._report(request, 5, 100)
+
+        episode_frames = self._assemble_frames(aligned, manifest, camera_frames, output_dir, request)
+        self._write_videos(camera_anchors, camera_frames, output_dir, request.target_fps, request)
+        self._write_meta(output_dir, manifest, episode_frames, camera_frames, request.target_fps)
+        self._write_replay_index(output_dir, request.session_dir, manifest, aligned, camera_frames)
+        self._report(request, 100, 100)
+        return output_dir
+
+    # ---- loading -----------------------------------------------------------
+
+    def _load_final_manifest(self, session_dir: Path) -> dict[str, Any]:
         manifest_path = session_dir / "manifest.json"
         if not manifest_path.is_file():
             raise ValueError("session must have finalized manifest.json before export")
-        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
-        if not isinstance(payload, dict) or payload.get("state") != "READY":
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if manifest.get("state") != "READY":
             raise ValueError("only READY sessions can be exported")
-        if not isinstance(payload.get("session_id"), str):
-            raise ValueError("manifest has no valid session_id")
-        return payload
+        return manifest
+
+    def _read_mcap_streams(self, session_dir: Path) -> dict[str, list[TimedSample]]:
+        """Read every recorded topic into ``{topic: [TimedSample]}` ordered by time."""
+        from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions  # type: ignore[import-not-found]
+        from rclpy.serialization import deserialize_message  # type: ignore[import-not-found]
+        from geometry_msgs.msg import TwistStamped  # type: ignore[import-not-found]
+        from sensor_msgs.msg import JointState  # type: ignore[import-not-found]
+        from std_msgs.msg import Float64  # type: ignore[import-not-found]
+
+        bag_uri = str(session_dir / "state.mcap")
+        reader = SequentialReader()
+        reader.open(
+            StorageOptions(uri=bag_uri, storage_id="mcap"),
+            ConverterOptions(
+                input_serialization_format="cdr",
+                output_serialization_format="cdr",
+            ),
+        )
+        type_to_class = {
+            "sensor_msgs/msg/JointState": JointState,
+            "std_msgs/msg/Float64": Float64,
+            "geometry_msgs/msg/TwistStamped": TwistStamped,
+        }
+        topic_types = {meta.name: meta.type for meta in reader.get_all_topics_and_types()}
+
+        streams: dict[str, list[TimedSample]] = {}
+        while reader.has_next():
+            topic, data, record_ns = reader.read_next()
+            message_class = type_to_class.get(topic_types.get(topic))
+            if message_class is None:
+                continue
+            message = deserialize_message(data, message_class)
+            value = self._extract_value(topic, message)
+            if value is not None:
+                streams.setdefault(topic, []).append(TimedSample(timestamp_ns=record_ns, value=value))
+        return streams
+
+    @staticmethod
+    def _extract_value(topic: str, message: Any) -> Any:
+        """Pull the export-relevant value out of a deserialized message, or None to skip."""
+        if topic.endswith("/joint_states"):
+            return list(message.position)
+        if "/cartesian_velocity/command" in topic:
+            twist = message.twist
+            return [twist.linear.x, twist.linear.y, twist.linear.z, twist.angular.x, twist.angular.y, twist.angular.z]
+        if topic.startswith("/gripper_") and topic.endswith("/position"):
+            return float(message.data)
+        return None
+
+    @staticmethod
+    def _topic_groups(manifest: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:
+        """Return the ordered (joint, gripper, action) topic triples for one export.
+
+        The same deterministic ordering feeds state assembly, the replay index and the
+        LeRobot ``features`` contract, so every consumer agrees on the state/action layout:
+        three six-axis arms followed by left/middle/right gripper positions.
+        """
+        topic_types = manifest.get("metadata", {}).get("topic_types", {})
+        arm_topics = sorted(t for t in topic_types if "/joint_states" in t)
+        gripper_topics = sorted(t for t in topic_types if t.startswith("/gripper_") and t.endswith("/position"))
+        action_topics = sorted(t for t in topic_types if "/cartesian_velocity/command" in t)
+        return arm_topics, gripper_topics, action_topics
+
+    @staticmethod
+    def _assemble_action(values: dict[str, Any], action_topics: list[str]) -> list[float]:
+        """Concatenate velocity topics, padding absent streams with a six-value zero vector.
+
+        Cartesian velocity is only published while the arm moves, so a static recording has
+        no velocity samples. The action must stay fixed-dimensional (3 arms x 6 velocity
+        components), so a missing stream contributes ``[0.0] * 6`` rather than shrinking.
+        """
+        out: list[float] = []
+        for topic in action_topics:
+            value = values.get(topic)
+            if isinstance(value, (list, tuple)):
+                out.extend(float(x) for x in value)
+            else:
+                out.extend([0.0] * 6)
+        return out
+
+    @staticmethod
+    def _jpeg_dimensions(path: Path) -> tuple[int, int] | None:
+        """Return ``(width, height)`` from a JPEG SOF marker without decoding pixels."""
+        try:
+            data = path.read_bytes()[:65536]
+        except OSError:
+            return None
+        index = 2
+        while index + 9 < len(data):
+            if data[index] != 0xFF:
+                index += 1
+                continue
+            marker = data[index + 1]
+            if marker in (0xC0, 0xC1, 0xC2, 0xC3, 0xC5, 0xC6, 0xC7, 0xC9, 0xCA, 0xCB, 0xCD, 0xCE, 0xCF):
+                height = int.from_bytes(data[index + 5 : index + 7], "big")
+                width = int.from_bytes(data[index + 7 : index + 9], "big")
+                return width, height
+            index += 2 + int.from_bytes(data[index + 2 : index + 4], "big")
+        return None
+
+    def _read_camera_anchors(self, session_dir: Path) -> tuple[list[int], dict[str, list[tuple[int, Path]]]]:
+        """Return the merged image anchor timeline and per-camera ``(wall_ns, path)`` frames."""
+        index_path = session_dir / "videos" / "media-index.json"
+        if not index_path.is_file():
+            raise ValueError("session is missing videos/media-index.json")
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        anchors: list[int] = []
+        camera_frames: dict[str, list[tuple[int, Path]]] = {}
+        for segment in index.get("segments", []):
+            camera_id = segment["camera_id"]
+            frames: list[tuple[int, Path]] = []
+            for entry in segment.get("frames", []):
+                wall_ns = int(entry["walltime_ns"])
+                frames.append((wall_ns, session_dir / "videos" / entry["path"]))
+                anchors.append(wall_ns)
+            camera_frames[camera_id] = sorted(frames, key=lambda item: item[0])
+        return sorted(set(anchors)), camera_frames
+
+    # ---- stream assembly ---------------------------------------------------
+
+    def _state_action_streams(
+        self, streams: dict[str, list[TimedSample]], manifest: dict[str, Any]
+    ) -> list[tuple[str, list[TimedSample], AlignmentPolicy]]:
+        """Map recorded topics onto the state/action streams, in a fixed arm order."""
+        arm_topics, gripper_topics, action_topics = self._topic_groups(manifest)
+
+        result: list[tuple[str, list[TimedSample], AlignmentPolicy]] = []
+        for topic in arm_topics:
+            if topic in streams:
+                result.append((topic, streams[topic], AlignmentPolicy.LINEAR))
+        for topic in gripper_topics:
+            if topic in streams:
+                result.append((topic, streams[topic], AlignmentPolicy.FORWARD_FILL))
+        for topic in action_topics:
+            if topic in streams:
+                result.append((topic, streams[topic], AlignmentPolicy.LINEAR))
+        return result
+
+    @staticmethod
+    def _trim_to_overlap(
+        anchors_ns: Sequence[int],
+        state_action: Sequence[tuple[str, Sequence[TimedSample], AlignmentPolicy]],
+    ) -> list[int]:
+        """Drop camera anchors no stream can bracket.
+
+        A forward-fill stream (grippers) has no sample at or before an anchor earlier than
+        its first receipt, so those anchors can never be labelled. Anchors after a stream's
+        last sample would only ever hold a stale value, so both ends are trimmed to the
+        widest window every stream actually covers.
+        """
+        if not state_action:
+            return list(anchors_ns)
+        first = max(samples[0].timestamp_ns for _, samples, _ in state_action)
+        last = min(samples[-1].timestamp_ns for _, samples, _ in state_action)
+        return [anchor for anchor in anchors_ns if first <= anchor <= last]
+
+    def _assemble_frames(
+        self,
+        aligned: Sequence[Any],
+        manifest: dict[str, Any],
+        camera_frames: dict[str, list[tuple[int, Path]]],
+        output_dir: Path,
+        request: ExportRequest,
+    ) -> list[dict[str, Any]]:
+        """Assemble the per-frame state/action dicts and write the parquet."""
+        import pyarrow as pa  # type: ignore[import-not-found]
+        import pyarrow.parquet as pq  # type: ignore[import-not-found]
+
+        arm_topics, gripper_topics, action_topics = self._topic_groups(manifest)
+        camera_ids = sorted(camera_frames)
+        first_ns = aligned[0].timestamp_ns if aligned else 0
+
+        rows: list[dict[str, Any]] = []
+        for index, frame in enumerate(aligned):
+            row: dict[str, Any] = {
+                # LeRobot uses seconds since the episode start, not an epoch timestamp.
+                "timestamp": (frame.timestamp_ns - first_ns) / 1e9,
+                "frame_index": index,
+                "episode_index": 0,
+                "index": index,
+                "observation.state": [float(x) for x in self._concat(frame.values, arm_topics + gripper_topics)],
+                "action": self._assemble_action(frame.values, action_topics),
+            }
+            for camera_id in camera_ids:
+                row[f"observation.images.{camera_id}"] = f"videos/chunk-000/observation.images.{camera_id}/episode_000000.mp4"
+            rows.append(row)
+            self._report(request, 5 + round((index + 1) / len(aligned) * 20), 100)
+
+        data_dir = output_dir / "data" / "chunk-000"
+        data_dir.mkdir(parents=True, exist_ok=True)
+        pq.write_table(pa.Table.from_pylist(rows), data_dir / "episode_000000.parquet")
+        return rows
+
+    @staticmethod
+    def _concat(values: dict[str, Any], topics: list[str]) -> list[float]:
+        out: list[float] = []
+        for topic in topics:
+            value = values.get(topic)
+            if isinstance(value, (list, tuple)):
+                out.extend(float(x) for x in value)
+            elif value is not None:
+                out.append(float(value))
+        return out
+
+    @staticmethod
+    def _camera_path_at(session_dir: Path, frames: list[tuple[int, Path]], timestamp_ns: int) -> str | None:
+        """Return the newest causal JPEG path for one image-anchored replay frame."""
+        times = [item[0] for item in frames]
+        index = bisect_right(times, timestamp_ns) - 1
+        if index < 0:
+            return None
+        path = frames[index][1].resolve()
+        root = session_dir.resolve()
+        if root not in path.parents:
+            raise ValueError("camera frame path escapes recording session")
+        return path.relative_to(root).as_posix()
+
+    @staticmethod
+    def _link_replay_jpeg(session_dir: Path, output_dir: Path, relative: str) -> None:
+        """Expose one source JPEG under the LeRobot root for the read-only browser.
+
+        ``replay.json`` lives inside ``output_dir`` and its camera paths are resolved
+        against ``lerobot_root``, so each referenced JPEG is symlinked into ``output_dir``
+        at the same relative location instead of duplicating the raw archive. The symlink
+        is relative so the whole tree stays relocatable across machines.
+        """
+        target = output_dir / relative
+        target.parent.mkdir(parents=True, exist_ok=True)
+        if not target.is_symlink() and not target.exists():
+            target.symlink_to(os.path.relpath(session_dir / relative, target.parent))
+
+    def _write_replay_index(
+        self,
+        output_dir: Path,
+        session_dir: Path,
+        manifest: dict[str, Any],
+        aligned: Sequence[Any],
+        camera_frames: dict[str, list[tuple[int, Path]]],
+    ) -> None:
+        """Write the exact JPEG/state mapping used by the read-only browser timeline."""
+        arm_topics, gripper_topics, action_topics = self._topic_groups(manifest)
+        frames = []
+        for index, frame in enumerate(aligned):
+            cameras: dict[str, str] = {}
+            for camera_id, entries in camera_frames.items():
+                relative = self._camera_path_at(session_dir, entries, frame.timestamp_ns)
+                if relative is None:
+                    continue
+                self._link_replay_jpeg(session_dir, output_dir, relative)
+                cameras[camera_id] = relative
+            frames.append(
+                {
+                    "frame_index": index,
+                    "timestamp_ns": int(frame.timestamp_ns),
+                    "state": [float(x) for x in self._concat(frame.values, arm_topics + gripper_topics)],
+                    "action": self._assemble_action(frame.values, action_topics),
+                    "cameras": cameras,
+                }
+            )
+        payload = {
+            "schema_version": 1,
+            "session_id": manifest.get("session_id", output_dir.name),
+            "base_poses": manifest.get("metadata", {}).get("base_poses", []),
+            "frames": frames,
+        }
+        (output_dir / "replay.json").write_text(json.dumps(payload, separators=(",", ":")), encoding="utf-8")
+
+    # ---- dataset output ----------------------------------------------------
+
+    def _write_videos(
+        self,
+        anchors_ns: Sequence[int],
+        camera_frames: dict[str, list[tuple[int, Path]]],
+        output_dir: Path,
+        fps: float,
+        request: ExportRequest,
+    ) -> None:
+        total_cameras = len(camera_frames)
+        for index, (camera_id, frames) in enumerate(camera_frames.items()):
+            video_dir = output_dir / "videos" / "chunk-000" / f"observation.images.{camera_id}"
+            video_dir.mkdir(parents=True, exist_ok=True)
+            resampled = self._resample_camera_frames(frames, anchors_ns)
+            self._jpeg_frames_to_mp4(resampled, video_dir / "episode_000000.mp4", fps)
+            self._report(request, 25 + round((index + 1) / total_cameras * 65), 100)
+
+    @staticmethod
+    def _resample_camera_frames(
+        frames: Sequence[tuple[int, Path]], anchors_ns: Sequence[int]
+    ) -> list[tuple[int, Path]]:
+        """Pick one frame per anchor so every camera video has exactly ``len(anchors)`` frames.
+
+        Uses the latest frame at-or-before each anchor (forward-fill). An anchor earlier
+        than a camera's first frame clamps to that first frame, which keeps the frame count
+        identical across cameras even when one camera started a beat later than another.
+        """
+        if not frames:
+            return []
+        timestamps = [ts for ts, _ in frames]
+        return [frames[max(0, bisect_right(timestamps, anchor) - 1)] for anchor in anchors_ns]
+
+    def _jpeg_frames_to_mp4(self, frames: list[tuple[int, Path]], video_path: Path, fps: float) -> None:
+        if not frames:
+            return
+        staging = video_path.parent / ".staging"
+        staging.mkdir(parents=True, exist_ok=True)
+        try:
+            for index, (_, path) in enumerate(frames):
+                (staging / f"frame_{index:06d}.jpg").symlink_to(path)
+            subprocess.run(
+                [
+                    "ffmpeg", "-y", "-loglevel", "error",
+                    "-framerate", str(fps),
+                    "-i", str(staging / "frame_%06d.jpg"),
+                    "-c:v", "libx264", "-pix_fmt", "yuv420p",
+                    str(video_path),
+                ],
+                check=True,
+                capture_output=True,
+            )
+        finally:
+            shutil.rmtree(staging, ignore_errors=True)
+
+    def _write_meta(
+        self,
+        output_dir: Path,
+        manifest: dict[str, Any],
+        frames: list[dict[str, Any]],
+        camera_frames: dict[str, list[tuple[int, Path]]],
+        target_fps: float,
+    ) -> None:
+        """Write LeRobot v2 metadata: ``info.json`` + ``episodes/tasks/stats``."""
+        meta_dir = output_dir / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+
+        states = np.asarray([row["observation.state"] for row in frames], dtype=float)
+        actions = np.asarray([row["action"] for row in frames], dtype=float)
+
+        features: dict[str, dict[str, Any]] = {
+            "observation.state": {"dtype": "float32", "shape": [states.shape[1]]},
+            "action": {"dtype": "float32", "shape": [actions.shape[1]]},
+        }
+        for camera_id, entries in sorted(camera_frames.items()):
+            shape = [3, 240, 320]
+            if entries:
+                dims = self._jpeg_dimensions(entries[0][1])
+                if dims:
+                    shape = [3, dims[1], dims[0]]
+            features[f"observation.images.{camera_id}"] = {
+                "dtype": "video",
+                "shape": shape,
+                "names": ["channels", "height", "width"],
+                "fps": float(target_fps),
+                "codec": "h264",
+                "pix_fmt": "yuv420p",
+            }
+
+        info = {
+            "codebase_version": "v2.0",
+            "robot_type": "realman_rm65",
+            "total_episodes": 1,
+            "total_frames": len(frames),
+            "total_tasks": 1,
+            "chunks_size": 1000,
+            "data_path": "data/chunk-000",
+            "video_path": "videos/chunk-000",
+            "fps": float(target_fps),
+            "features": features,
+        }
+        (meta_dir / "info.json").write_text(json.dumps(info, indent=2), encoding="utf-8")
+
+        task = manifest.get("metadata", {}).get("task", "recording")
+        episodes = [{"episode_index": 0, "length": len(frames), "tasks": [task]}]
+        (meta_dir / "episodes.jsonl").write_text("\n".join(json.dumps(e) for e in episodes), encoding="utf-8")
+
+        tasks = [{"task_index": 0, "task": task}]
+        (meta_dir / "tasks.jsonl").write_text("\n".join(json.dumps(t) for t in tasks), encoding="utf-8")
+
+        def feature_stats(values: np.ndarray) -> dict[str, Any]:
+            if not len(values):
+                return {"min": [], "max": [], "mean": [], "std": [], "count": 0, "p01": [], "p999": []}
+            return {
+                "min": values.min(axis=0).tolist(),
+                "max": values.max(axis=0).tolist(),
+                "mean": values.mean(axis=0).tolist(),
+                "std": values.std(axis=0).tolist(),
+                "count": int(len(values)),
+                "p01": np.percentile(values, 0.1, axis=0).tolist(),
+                "p999": np.percentile(values, 99.9, axis=0).tolist(),
+            }
+
+        stats = {
+            "observation.state": feature_stats(states),
+            "action": feature_stats(actions),
+        }
+        (meta_dir / "stats.json").write_text(json.dumps(stats, indent=2), encoding="utf-8")
+
+    def _report(self, request: ExportRequest, done: int, total: int) -> None:
+        if request.progress_callback is not None:
+            request.progress_callback(done, total)
 
 
 def main(args: list[str] | None = None) -> int:
+    import argparse
+
     parser = argparse.ArgumentParser(description="Export one finalized recording session to LeRobot")
-    parser.add_argument("session_dir")
-    parser.add_argument("--output-dir", default="")
+    parser.add_argument("session_dir", type=Path)
+    parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--target-fps", type=float, default=10.0)
+    parser.add_argument("--max-gap-sec", type=float, default=2.0)
     parsed = parser.parse_args(args)
-    session_dir = Path(parsed.session_dir).expanduser().resolve()
-    output_dir = Path(parsed.output_dir).expanduser().resolve() if parsed.output_dir else session_dir / "export" / "lerobot"
-    result = LeRobotExporter().export(ExportRequest(session_dir, output_dir, parsed.target_fps))
-    print(result)
+
+    session_dir = parsed.session_dir.expanduser().resolve()
+    output_dir = (parsed.output_dir or session_dir / "export" / "lerobot").expanduser().resolve()
+    LeRobotExporter().export(
+        ExportRequest(
+            session_dir=session_dir,
+            output_dir=output_dir,
+            target_fps=parsed.target_fps,
+            max_gap_sec=parsed.max_gap_sec,
+        )
+    )
     return 0
 
 
-if __name__ == "__main__":  # pragma: no cover
+if __name__ == "__main__":
     raise SystemExit(main())

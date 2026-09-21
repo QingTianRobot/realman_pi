@@ -16,14 +16,12 @@ from pathlib import Path
 from typing import Any
 
 import rclpy
-from rclpy.action import ActionServer, CancelResponse, GoalResponse
 from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.clock import Clock, ClockType
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
-from realman_recording_msgs.action import ManageRecording
 from realman_recording_msgs.msg import RecordingStatus
 from realman_recording_msgs.srv import ManageRecording as ManageRecordingService
 
@@ -60,6 +58,7 @@ class RecordingRecorderNode(Node):
     def __init__(self) -> None:
         super().__init__("recording_recorder")
         self.declare_parameter("recording_root", "/data/realman-recordings")
+        self.declare_parameter("lerobot_export_dir", "/data/realman-recordings/lerobot")
         self.declare_parameter("max_state_queue", 10_000)
         self.declare_parameter("arm_namespaces", ["l", "m", "r"])
         self.declare_parameter("arm_action_topics", [""])
@@ -77,7 +76,7 @@ class RecordingRecorderNode(Node):
         self.declare_parameter("max_camera_image_queue", 64)
         self.declare_parameter("camera_rtsp_urls", [""])
         self.declare_parameter("export_target_fps", 10.0)
-        self.declare_parameter("export_max_gap_sec", 0.5)
+        self.declare_parameter("export_max_gap_sec", 2.0)
         self.declare_parameter("preflight_max_age_sec", 2.0)
         # A larger fresh-data skew requests asynchronous post-record alignment; it
         # never masks a stale/disconnected sensor, which remains a hard PREPARE fail.
@@ -121,6 +120,10 @@ class RecordingRecorderNode(Node):
         self._scheduled_goal: Any | None = None
         self._scheduled_start_wall_ns = 0
         self._scheduled_starting = False
+        # LeRobot export state relayed through /recording/status for the web dashboard.
+        self._export_progress = 0.0
+        self._export_dir = ""
+        self._export_error = ""
 
         self._topic_types: dict[str, str] = {}
         self._subscriptions = []
@@ -128,15 +131,6 @@ class RecordingRecorderNode(Node):
         self._register_camera_subscriptions()
         self._status_publisher = self.create_publisher(RecordingStatus, "recording/status", 10)
         self._status_timer = self.create_timer(0.1, self._tick, callback_group=self._callback_group)
-        self._action_server = ActionServer(
-            self,
-            ManageRecording,
-            "recording/manage_session",
-            execute_callback=self._execute_command,
-            goal_callback=self._goal_callback,
-            cancel_callback=lambda _goal: CancelResponse.ACCEPT,
-            callback_group=self._callback_group,
-        )
         self._upstream_service = self.create_service(
             ManageRecordingService,
             "recording/manage",
@@ -149,7 +143,6 @@ class RecordingRecorderNode(Node):
 
     def destroy_node(self) -> bool:
         self._stop_session(success=False, reason="recording node shutdown")
-        self._action_server.destroy()
         return super().destroy_node()
 
     def _manage_service(
@@ -160,6 +153,11 @@ class RecordingRecorderNode(Node):
             if request.command == ManageRecordingService.Request.PREPARE:
                 session_id = self._prepare(request)
             elif request.command == ManageRecordingService.Request.START:
+                # START runs admission checks internally; no separate PREPARE is required.
+                self._prepare(request)
+                if self._last_preflight is None or not self._last_preflight.ready:
+                    summary = self._last_preflight.summary if self._last_preflight else "preflight unavailable"
+                    raise RuntimeError(f"preflight failed: {summary}")
                 session_id = self._start_session(request)
             elif request.command == ManageRecordingService.Request.STOP:
                 session_id = self._stop_or_cancel(reason="upstream stopped recording")
@@ -177,7 +175,12 @@ class RecordingRecorderNode(Node):
             )
             response.session_id = session_id
             response.state = self._state.value
-            response.message = self._last_preflight.summary if request.command == ManageRecordingService.Request.PREPARE and self._last_preflight else "accepted"
+            if request.command == ManageRecordingService.Request.PREPARE and self._last_preflight:
+                response.message = self._last_preflight.summary
+            elif request.command == ManageRecordingService.Request.STOP:
+                response.message = "recording stopped; LeRobot conversion started"
+            else:
+                response.message = "accepted"
         except Exception as error:  # noqa: BLE001 - ROS service callers need a stable error payload
             self.get_logger().error(f"Recording service request failed: {error}")
             response.success = False
@@ -242,60 +245,6 @@ class RecordingRecorderNode(Node):
             except ValueError:
                 return
             archive.offer(source.camera_id, receipt_wall_ns, jpeg)
-
-    def _goal_callback(self, goal: ManageRecording.Goal) -> GoalResponse:
-        """Reject invalid or profile-less goals before they reach the executor."""
-        if goal.command not in {
-            ManageRecording.Goal.PREPARE,
-            ManageRecording.Goal.START,
-            ManageRecording.Goal.PAUSE,
-            ManageRecording.Goal.RESUME,
-            ManageRecording.Goal.STOP,
-        }:
-            return GoalResponse.REJECT
-        if goal.command == ManageRecording.Goal.START and not goal.profile.strip():
-            self.get_logger().warn("Rejecting recording start without profile")
-            return GoalResponse.REJECT
-        return GoalResponse.ACCEPT
-
-    def _execute_command(self, goal_handle: Any) -> ManageRecording.Result:
-        """Run one legacy action goal and always answer with a stable result payload."""
-        goal = goal_handle.request
-        result = ManageRecording.Result()
-        try:
-            if goal.command == ManageRecording.Goal.PREPARE:
-                session_id = self._prepare(goal)
-            elif goal.command == ManageRecording.Goal.START:
-                session_id = self._start_session(goal)
-            elif goal.command == ManageRecording.Goal.PAUSE:
-                session_id = self._pause_session()
-            elif goal.command == ManageRecording.Goal.RESUME:
-                session_id = self._resume_session()
-            else:
-                session_id = self._stop_or_cancel(reason="operator stopped recording")
-                if session_id is None:
-                    raise RuntimeError("no active recording session to stop")
-            result.success = not (
-                goal.command == ManageRecording.Goal.PREPARE
-                and (self._last_preflight is None or not self._last_preflight.ready)
-            )
-            result.session_id = session_id
-            result.state = _STATUS_CODE[self._state]
-            result.message = self._state.value
-            result.diagnostics_json = self._diagnostics_json()
-            if result.success:
-                goal_handle.succeed()
-            else:
-                goal_handle.abort()
-        except Exception as error:  # noqa: BLE001 - action clients need a stable failure result
-            self.get_logger().error(f"Recording command failed: {error}")
-            result.success = False
-            result.session_id = self._store.session.session_id if self._store and self._store.session else ""
-            result.state = _STATUS_CODE[self._state]
-            result.message = str(error)
-            result.diagnostics_json = self._diagnostics_json()
-            goal_handle.abort()
-        return result
 
     def _prepare(self, request: Any, *, preserve_scheduled_state: bool = False) -> str:
         """Run admission checks without creating a session or opening a writer."""
@@ -568,6 +517,7 @@ class RecordingRecorderNode(Node):
         archive_write_errors = archive_stats.write_errors if archive_stats else 1
         final_success = success and archive_write_errors == 0
         final_reason = reason if final_success else f"{reason}; MCAP write/close errors: {archive_write_errors}"
+        directory = store.session.directory
         store.finalize(
             final_success,
             reason=final_reason,
@@ -582,8 +532,10 @@ class RecordingRecorderNode(Node):
             self._last_archive_stats = archive_stats
             self._last_camera_summary = camera_summary
             self._state = SessionState.READY if final_success else SessionState.FAILED
-        # ai TODO: submit LeRobotExporter to a separate process/worker here and expose
-        # EXPORTING/READY states. Do not run video decode/export in this ROS executor.
+        if final_success:
+            # A clean STOP finalizes the session and immediately queues its LeRobot
+            # conversion; the web dashboard follows progress via /recording/status.
+            self._queue_export(directory, session_id)
         return session_id
 
     def _stop_or_cancel(self, *, reason: str) -> str | None:
@@ -619,6 +571,12 @@ class RecordingRecorderNode(Node):
             summary = manifest.get("summary", {})
             if not isinstance(summary, dict) or int(summary.get("write_errors", 0)) != 0:
                 raise RuntimeError("recording session has MCAP write errors and cannot be adopted")
+        self._queue_export(directory, session_id)
+        return session_id
+
+    def _queue_export(self, directory: Path, session_id: str) -> None:
+        """Mark a finalized session adopted and start its LeRobot export worker."""
+        with self._decision_lock:
             SessionStore.update_final_manifest(
                 directory,
                 decision="ADOPTED",
@@ -630,7 +588,6 @@ class RecordingRecorderNode(Node):
             name=f"recording-export-{session_id}",
             daemon=True,
         ).start()
-        return session_id
 
     def _discard_session(self, session_id: str) -> str:
         """Logically discard a finalized session while retaining raw artifacts for audit."""
@@ -650,7 +607,12 @@ class RecordingRecorderNode(Node):
 
     def _export_adopted_session(self, directory: Path) -> None:
         """Run expensive LeRobot conversion away from every ROS callback/executor thread."""
+        export_root = Path(str(self.get_parameter("lerobot_export_dir").value))
+        output_dir = export_root / directory.name
         with self._decision_lock:
+            self._export_progress = 0.0
+            self._export_dir = ""
+            self._export_error = ""
             SessionStore.update_final_manifest(
                 directory,
                 export={"state": "RUNNING", "started_realtime_ns": time.time_ns()},
@@ -659,12 +621,16 @@ class RecordingRecorderNode(Node):
             result = LeRobotExporter().export(
                 ExportRequest(
                     session_dir=directory,
-                    output_dir=directory / "export" / "lerobot",
+                    output_dir=output_dir,
                     target_fps=float(self.get_parameter("export_target_fps").value),
+                    max_gap_sec=float(self.get_parameter("export_max_gap_sec").value),
+                    progress_callback=self._export_progress_callback,
                 )
             )
         except Exception as error:  # noqa: BLE001 - failure is persisted for upstream polling
             with self._decision_lock:
+                self._export_progress = 0.0
+                self._export_error = str(error)
                 SessionStore.update_final_manifest(
                     directory,
                     export={"state": "FAILED", "message": str(error), "ended_realtime_ns": time.time_ns()},
@@ -672,10 +638,18 @@ class RecordingRecorderNode(Node):
             self.get_logger().error(f"LeRobot export failed for {directory.name}: {error}")
         else:
             with self._decision_lock:
+                self._export_progress = 1.0
+                self._export_dir = str(result)
+                self._export_error = ""
                 SessionStore.update_final_manifest(
                     directory,
                     export={"state": "SUCCEEDED", "result": str(result), "ended_realtime_ns": time.time_ns()},
                 )
+
+    def _export_progress_callback(self, done: int, total: int) -> None:
+        """Relay exporter frame progress to the status publisher (and web dashboard)."""
+        with self._decision_lock:
+            self._export_progress = (done / total) if total > 0 else 1.0
 
     def _record_message(self, topic: str, message: Any, connected_arm: str | None = None) -> None:
         """Freshness/receipt bookkeeping plus a non-blocking archive enqueue."""
@@ -776,6 +750,9 @@ class RecordingRecorderNode(Node):
         status.detail = self._state.value
         status.diagnostics_json = self._diagnostics_json()
         status.scheduled_start_walltime_ns = self._scheduled_start_wall_ns
+        status.export_progress = self._export_progress
+        status.export_dir = self._export_dir
+        status.export_error = self._export_error
         self._status_publisher.publish(status)
 
     def _remaining_sec(self) -> float:

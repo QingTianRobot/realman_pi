@@ -9,6 +9,15 @@ from realman_recording.lerobot_align import (
     align_series,
     align_streams,
 )
+from realman_recording.lerobot_exporter import LeRobotExporter
+
+
+def test_replay_camera_path_uses_latest_frame_at_or_before_camera_anchor(tmp_path):
+    dataset = tmp_path
+    exporter = LeRobotExporter()
+    frames = [(100, tmp_path / "videos" / "left" / "000100.jpg"), (200, tmp_path / "videos" / "left" / "000200.jpg")]
+
+    assert exporter._camera_path_at(dataset, frames, 150) == "videos/left/000100.jpg"
 
 
 def test_linear_interpolates_vector_state():

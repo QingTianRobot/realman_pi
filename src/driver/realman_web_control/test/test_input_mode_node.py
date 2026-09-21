@@ -22,8 +22,10 @@ from realman_msgs.msg import InputModeState
 from realman_msgs.srv import ListInputModes, SelectInputMode
 
 from realman_web_control.action_bridge import ActionRecord
-from realman_web_control.input_mode_bridge import InputModeBridge, InputModeOption, InputModeSnapshot
-from realman_web_control.protocol import parse_message
+from realman_web_control.input_mode_bridge import InputModeBridge, InputModeEffect, InputModeOption, InputModeSnapshot
+from realman_web_control.keyboard_control import load_keyboard_control_config
+from realman_web_control.keyboard_control_bridge import KeyboardControlBridge
+from realman_web_control.protocol import ProtocolError, parse_message
 from realman_web_control.web_control_node import WebControlNode
 
 
@@ -71,6 +73,14 @@ class ActionTransport:
         return future
 
 
+class Publisher:
+    def __init__(self):
+        self.messages = []
+
+    def publish(self, message):
+        self.messages.append(message)
+
+
 class GoalHandle:
     accepted = True
 
@@ -102,6 +112,13 @@ def node(monkeypatch):
     value._server = Events()
     value._actions = {}
     value._coordinate_state = {}
+    value._keyboard_config = load_keyboard_control_config(
+        Path(__file__).parents[4] / "config/ros/keyboard_control.yaml",
+        Path(__file__).parents[4] / "config/ros/realman_motion.yaml",
+        Path(__file__).parents[4] / "config/ros/realman_coordinates.yaml",
+    )
+    value._keyboard = KeyboardControlBridge(value._keyboard_config)
+    value._keyboard_publishers = {arm: Publisher() for arm in ("l", "r")}
     value._input_modes = InputModeBridge(web_override_timeout_sec=5.0)
     value._mode_discovery_period = 0.25
     value._mode_list_future = None
@@ -148,6 +165,51 @@ def state(request_id=41):
 def sent(node):
     return [goal for clients in (node._motion_clients, node._trajectory_clients, node._velocity_clients)
             for client in clients.values() for goal, _ in client.goals]
+
+
+def test_keyboard_owner_publishes_only_verified_default_work_commands(node):
+    node._keyboard.activate("browser")
+    node._coordinate_state["l"] = {
+        "motion_allowed": True,
+        "work_matched": True,
+        "current_work": "cell",
+        "expected_work": "cell",
+        "work": {"name": "cell", "frame_id": "l/work/cell"},
+    }
+    node._dispatch("browser", {
+        "type": "keyboard_state", "arm": "l", "keys": ["KeyW"], "sequence": 1,
+    })
+    message = node._keyboard_publishers["l"].messages[-1]
+    assert message.header.frame_id == "l/work/cell"
+    assert message.twist.linear.x == pytest.approx(0.02)
+
+
+def test_keyboard_rejects_unverified_work_and_never_constructs_middle_publisher(node):
+    node._keyboard.activate("browser")
+    node._coordinate_state["l"] = {
+        "motion_allowed": False,
+        "work_matched": False,
+        "current_work": "other",
+        "expected_work": "cell",
+    }
+    with pytest.raises(ProtocolError, match="WORK"):
+        node._dispatch("browser", {
+            "type": "keyboard_state", "arm": "l", "keys": ["KeyW"], "sequence": 1,
+        })
+    assert set(node._keyboard_publishers) == {"l", "r"}
+
+
+def test_keyboard_disconnect_effects_publish_two_zeros_and_request_none(node):
+    node._keyboard.activate("browser")
+    node._apply_input_mode_effects([
+        InputModeEffect("keyboard_zero", "browser", {}),
+        InputModeEffect("keyboard_lease", "browser", {"active": False}),
+        InputModeEffect("request_safe_mode", None, {"mode_id": "none"}),
+    ])
+    assert all(len(publisher.messages) == 1 for publisher in node._keyboard_publishers.values())
+    request, _future = node._mode_select_client.calls[-1]
+    assert request.mode_id == "none"
+    assert request.requester_id
 
 
 @pytest.mark.parametrize("kind,goal_type", [

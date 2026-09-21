@@ -46,6 +46,8 @@ from tf2_ros import Buffer, TransformListener
 from .action_bridge import ActionRecord, action_event, assign_fields, message_to_json
 from .input_mode_bridge import InputModeBridge, InputModeEffect, InputModeOption, InputModeSnapshot, MOTION_TYPES
 from .joint_records import JointRecordStore
+from .keyboard_control import KeyboardArmCommand, load_keyboard_control_config
+from .keyboard_control_bridge import KeyboardControlBridge
 from .model_manifest import build_manifest
 from .protocol import ProtocolError
 from .tf_pose import transform_stamped_pose
@@ -138,6 +140,16 @@ class WebControlNode(Node):
             description_root,
         )
         self._robots = {robot["id"]: robot for robot in self._manifest["robots"]}
+        self._keyboard_config = load_keyboard_control_config(
+            keyboard_file, motion_file, coordinates_file
+        )
+        self._keyboard = KeyboardControlBridge(self._keyboard_config)
+        self._keyboard_publishers = {
+            arm: self.create_publisher(
+                TwistStamped, f"/keyboard/{arm}/cartesian_velocity", 1
+            )
+            for arm in ("l", "r")
+        }
         self._commands: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue(maxsize=2048)
         self._control_lock = threading.RLock()
         self._actions: dict[tuple[str, str], ActionRecord] = {}
@@ -397,6 +409,8 @@ class WebControlNode(Node):
             self._gripper_command(client_id, message)
         elif message_type == "select_input_mode":
             self._apply_input_mode_effects(self._input_modes.select_mode(client_id, message))
+        elif message_type == "keyboard_state":
+            self._keyboard_state(client_id, message)
         elif message_type in MOTION_TYPES:
             if not self._input_modes.available:
                 self._apply_input_mode_effects(self._input_modes.update_catalog(
@@ -626,7 +640,65 @@ class WebControlNode(Node):
                 except Exception as error:
                     self.get_logger().error(f"Web motion dispatch failed: {error}")
                     self._server.send_event(ProtocolError("internal_error", str(error), effect.payload["request_id"]).event(), effect.client_id)
+            elif effect.kind == "keyboard_lease":
+                if effect.payload["active"]:
+                    self._keyboard.activate(effect.client_id)
+                else:
+                    self._keyboard.deactivate()
+            elif effect.kind == "keyboard_zero":
+                self._publish_keyboard_zeros()
+            elif effect.kind == "request_safe_mode":
+                self._request_keyboard_safe_mode()
         self._forget_mode_selection_futures()
+
+    def _keyboard_work_available(self, arm: str) -> bool:
+        state = self._coordinate_state.get(arm, {})
+        arm_config = self._keyboard_config.arms[arm]
+        work = state.get("work")
+        return bool(
+            state.get("motion_allowed") is True
+            and state.get("work_matched") is True
+            and state.get("current_work") == arm_config.reference_name
+            and state.get("expected_work") == arm_config.reference_name
+            and isinstance(work, dict)
+            and work.get("name") == arm_config.reference_name
+            and work.get("frame_id") == arm_config.frame_id
+        )
+
+    def _keyboard_state(self, client_id: str, message: dict[str, Any]) -> None:
+        command = self._keyboard.command(client_id, message)
+        nonzero = any(command.linear) or any(command.angular)
+        if nonzero and not self._keyboard_work_available(command.arm):
+            raise ProtocolError(
+                "keyboard_work_unavailable",
+                f"{command.arm} default WORK reference is unavailable",
+            )
+        self._publish_keyboard_command(command)
+
+    def _publish_keyboard_command(self, command: KeyboardArmCommand) -> None:
+        message = TwistStamped()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = command.frame_id
+        message.twist.linear.x, message.twist.linear.y, message.twist.linear.z = command.linear
+        message.twist.angular.x, message.twist.angular.y, message.twist.angular.z = command.angular
+        self._keyboard_publishers[command.arm].publish(message)
+
+    def _publish_keyboard_zeros(self) -> None:
+        for arm in ("l", "r"):
+            self._publish_keyboard_command(
+                self._keyboard_config.command(arm, frozenset())
+            )
+
+    def _request_keyboard_safe_mode(self) -> None:
+        request = SelectInputMode.Request()
+        request.mode_id = "none"
+        request.requester_id = "web:keyboard-disconnect"
+        try:
+            self._mode_select_client.call_async(request)
+        except Exception as error:
+            self.get_logger().warning(
+                f"Keyboard safe-mode request failed: {error}"
+            )
 
     def _gripper_state(self, name: str, field: str, value: Any) -> None:
         state = self._gripper_states.get(name)
@@ -1796,6 +1868,8 @@ class WebControlNode(Node):
         )
 
     def destroy_node(self) -> bool:
+        self._publish_keyboard_zeros()
+        self._keyboard.deactivate()
         self._server.stop()
         return super().destroy_node()
 

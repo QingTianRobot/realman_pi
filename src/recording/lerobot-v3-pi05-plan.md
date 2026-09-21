@@ -1,197 +1,121 @@
-# LeRobot v3 / π₀.₅ 数据集迁移计划
+# Canonical Robot Dataset / LeRobot v3 实施计划
 
-## 目标
+> **For agentic workers:** 逐任务执行时使用 `superpowers:executing-plans`，每项先写失败测试、再实现、再验证并独立提交。
 
-将已封存的原始录制 session（MCAP、JPEG 相机帧、manifest）异步转换为可由固定
-LeRobot 运行时加载，并可直接用于 `policy.type=pi05` 微调的 LeRobot v3 数据集。
+**目标：** 将原始 ROS 2 录制物化为可重建、模型无关的 Canonical Robot Dataset，并以 LeRobot v3 作为固定 policy-rate 存储层；π0.5、未来 VLA、WAM 和 RL 只通过 adapter 消费它。
 
-原始录制链路保持不变：recording 节点只读订阅驱动数据、持久化原始数据；LeRobot
-转换失败不得影响已经完成的原始 session，也不得阻塞下一次录制。
+**架构：** `state.mcap`、JPEG、标定与 URDF 快照是不可变事实来源。ADOPT 后 exporter 在固定 `dataset_fps` 网格对齐原始流，生成有 provenance 的 LeRobot v3 episode。FK、EE 速度、模型 state、reward 都是可版本化重建的派生字段，不能反写或取代原始录制。
 
-## 当前实现不能用于 π₀.₅ 的原因
+**技术栈：** ROS 2 Humble、rosbag2 MCAP、`lerobot==0.6.1`、NumPy、Pillow、URDF/KDL FK 后端（在 Humble 容器固定）、OpenPI data transforms。
 
-`realman_recording/lerobot_exporter.py` 当前手写的是 v2 风格布局：
+## 不可变原则
 
-- 写入 `codebase_version: v2.0`；
-- 使用 `episode_000000.parquet`、`episodes.jsonl`、`tasks.jsonl` 和每 episode 视频；
-- 未安装或固定 `lerobot` SDK，无法以 `LeRobotDataset` 重载验证；
-- `stats.json` 使用 `p01` / `p999`，而 π₀.₅ 的量化归一化要求 `q01` / `q99`；
-- 合并四路相机 receipt timestamp 作为 anchor，会把 N 路相机错误扩展为约 N 倍的
-  数据帧率，数据行与按固定 FPS 写入的视频不能一一对应；
-- action 仅含 Cartesian velocity，缺少夹爪的真实控制命令，不能作为完整策略监督信号。
+1. recorder 只读 ROS topic；不为录制新增驱动 topic，也不向机械臂或夹爪发布命令。
+2. MCAP/JPEG/header/receipt `SYSTEM_TIME` 是 raw truth；SDK 管理的 LeRobot `timestamp` 是 policy-grid 时间，不能冒充原始传感器时间。
+3. 每个 feature 声明 `raw` 或 `derived`、单位、参考坐标系、生成器版本；重新导出只生成新 derived 数据集。
+4. 一个 v3 dataset 只有一个 embodiment、固定 feature shape、相同 frame/unit/action 约定。多机器人使用独立 dataset + `embodiment_id` + adapter，不混入可变维度向量。
+5. canonical 姿态固定为 base-frame `xyz + quaternion_xyzw`；rot6d、delta pose、`observation.state` 都是 adapter 输出。
+6. `action.command.*` 是真实控制输入；没有驱动执行反馈时，FK 差分状态不能称为 `action.executed.*`。
+7. required source 缺失、超 gap、四元数无效或 FK 失败必须拒绝 episode；不得补历史图像、伪造夹爪 action 或写零速度。
 
-## 不可变约束
+## Canonical v1 特征契约
 
-1. 输入时间戳为 recorder 接收数据时记录的 ROS 2 `SYSTEM_TIME` epoch nanoseconds。
-2. 每个输出 episode 使用单一、固定的 `dataset_fps` 时间网格；不重复图像来伪造更高 FPS。
-3. 机械臂 state 线性插值；离散夹爪状态前向保持；action 的插值/保持策略必须由其
-   控制语义定义并记录在 schema 中。
-4. 缺失、过期或超过 `max_gap_sec` 的必需输入必须使导出失败，而不是悄悄填充坏标签。
-5. 每个 ADOPTED session 对应长期 dataset 中一个 episode；不再为每个 session 创建一套
-   独立训练 dataset。
-6. 导出使用目标 LeRobot SDK 的公开 writer API。不得手写 v3 的 file/chunk、episode
-   metadata offset、视频路径模板或 parquet schema。
-7. 回放与浏览器可以保留加速缓存，但训练数据真相只能是 LeRobot dataset。
+数组顺序由 config 明确的 `l,m,r` 与 `left,mid,right` 决定，单位为 SI。
 
-## 目标特征契约
+| Feature | Shape | 来源 | 约定 |
+| --- | ---: | --- | --- |
+| `observation.joint_position` | 18 | raw `JointState.position` | rad |
+| `observation.joint_velocity` | 18 | raw `JointState.velocity` | rad/s；完整有效才导出 |
+| `observation.joint_effort` | 18 | raw `JointState.effort` | 不假称 Nm，记录 capability |
+| `observation.ee_pose_base` | 21 | derived FK | 每臂 `[x,y,z,qx,qy,qz,qw]` |
+| `observation.ee_velocity_base` | 18 | derived pose 差分 | 每臂 `[vx,vy,vz,wx,wy,wz]` |
+| `observation.gripper_position` | 3 | raw `Float64` | 原始设备单位记录在 metadata |
+| `action.command.cartesian_velocity` | 18 | raw `TwistStamped` | 3 × `[vx,vy,vz,wx,wy,wz]` |
+| `action.command.gripper` | 0 或 3 | raw command topic | 无真实 source 时不存在 |
+| `observation.images.<camera>` | HWC RGB | raw JPEG | SDK video writer |
+| `quality.valid` | 1 | derived | 所有 required source 有效 |
+| `quality.sync_error_ns.<source>` | 1 | derived | anchor 与 source 时间差 |
+| `task` | string | session metadata | 人类可读 instruction |
 
-初始三臂配置的特征命名固定如下。维度及 topic 映射来自权威
-`config/ros/recording.yaml`，不得按 topic 字典序隐式推断。
+`observation.state`、顶层 `action`、rot6d、delta action、RL `log_prob/value/advantage` 不属于 canonical dataset；每个模型 adapter 从上述字段生成。
 
-| Feature | 初始 shape | 语义 |
-| --- | ---: | --- |
-| `observation.state` | 21 | `l/m/r` 六关节位置（18）+ 左/中/右夹爪位置（3） |
-| `action` | 21（建议） | 三臂各 6D 实际下发 Cartesian 命令（18）+ 三夹爪实际下发命令（3） |
-| `observation.images.orbbec-left` | CHW | 左侧 Gemini 305 RGB |
-| `observation.images.orbbec-middle` | CHW | 中/腕部 Gemini 305 RGB |
-| `observation.images.orbbec-right` | CHW | 右侧 Gemini 305 RGB |
-| `observation.images.d435` | CHW | 全局 RealSense RGB |
-| `task` | string | 该 episode 的人类可读任务描述 |
+## Episode metadata
 
-若实际控制接口不是 6D Cartesian 命令，必须先改变此表和 action extractor，再录制训练
-数据。禁止用 observation state 伪装 action。
+manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URDF hash、joint names/limits、EE/base frame、tool/work frame、控制模式/action 语义、相机 intrinsics/extrinsics hash、calibration version、采集频率、operator/teleop、task/result、frame/unit convention、schema hash 与 derived generator versions。
+
+`success`、`terminated`、`truncated`、failure reason、intervention 是 episode annotation。reward 分量、VLM 标注和 RL rollout metadata 为独立 annotation extension，不能阻塞基础 session ADOPT。
+
+## 已完成基线（不得回退）
+
+- ROS `SYSTEM_TIME` receipt、MCAP archive、4 路 JPEG archive、PREPARE 与 ADOPT/DISCARD 生命周期。
+- LeRobot v3 SDK writer、固定 FPS grid、相机 skew 拒绝、数据集锁、session→episode receipt。
+- 当前 exporter 仍只 materialize joint position、gripper position、Cartesian command；必须迁移至 canonical feature。
 
 ## 实施任务
 
-### 1. 固定 LeRobot / π₀.₅ 运行时
+### Task 1：Canonical schema、能力描述与配置
 
-**修改文件**
+**文件：** `config/ros/recording.yaml`、`realman_recording/lerobot_schema.py`、`test/test_lerobot_schema.py`、`src/recording/README.md`。
 
-- `config/python/recording-requirements.txt`
-- 新增 `src/recording/realman_recording/test/test_lerobot_runtime.py`
+1. 写失败测试：三臂 canonical feature shape 为 `18/18/18/21/18/3/18`，topic 枚举顺序变化不影响字段布局。
+2. 将 `LeRobotV3Schema.features()` 改为 canonical feature map，移除 writer 对 `observation.state`、顶层 `action` 的依赖。
+3. 配置加入 `embodiment_id`、URDF source/version、base/EE frame、joint name order、action frame/representation、sensor capability；所有非默认值写相邻注释。
+4. 运行纯 schema 测试、YAML parser、`compileall`，提交 `feat(recording): define canonical robot schema`。
 
-**工作**
+### Task 2：完整 JointState 与对齐质量报告
 
-1. 锁定一个可导入 `LeRobotDataset` 与 π₀.₅ policy 的 LeRobot revision，记录 package
-   version 与 Git commit。
-2. 增加运行时探测：验证 writer API、`LeRobotDataset` 重载和 π₀.₅ preprocessor 可用。
-3. 明确 recorder Docker 与训练环境必须使用相同 lockfile。
+**文件：** `lerobot_exporter.py`、`lerobot_align.py`、`test/test_lerobot_export_alignment.py`。
 
-**验收**
+1. 写失败测试：velocity/effort 缺失、长度不是 6、joint name 错序、source skew 超限必须明确失败；完整样本按固定臂顺序合并。
+2. MCAP extractor 从 position-only 改为结构化 joint sample；按 capability 选择是否 materialize velocity/effort，绝不零填充。
+3. 每个 camera/state/action 对齐返回 actual timestamp/skew/policy，写 `quality.valid` 与固定 shape `quality.sync_error_ns.*`。
+4. 验证四路 15Hz 不生成 60Hz timeline，提交 `feat(recording): materialize canonical joint and quality data`。
 
-- 探测测试打印固定 revision；缺包或 API 漂移必须明确失败。
+### Task 3：离线 FK 与 EE pose/velocity
 
-### 2. 引入显式 schema 和数据集仓库
+**文件：** 新增 `kinematics.py`，修改 exporter/schema/config，新增 `test/test_kinematics.py`。
 
-**修改文件**
+1. 写 FK fixture：零位/已知关节位返回预期 base-frame pose；未知 joint order、URDF hash 不匹配、非单位 quaternion 必须失败。
+2. 在 Humble 容器固定 URDF FK 后端，按 config joint order、active tool transform 计算 `ee_pose_base`；四元数统一 xyzw 且归一化。
+3. 中间帧中心差分、边界帧前后向差分；角速度以 `q_next * inverse(q_prev)` 的最短轴角 rotation vector 除以 `dt`，不使用 Euler 差分。
+4. 写入 FK backend/URDF hash/velocity algorithm；验证静止、恒定平移、quaternion sign flip，提交 `feat(recording): derive end-effector pose and velocity`。
 
-- 新增 `src/recording/realman_recording/realman_recording/lerobot_schema.py`
-- 修改 `config/ros/recording.yaml`
-- 新增 `src/recording/realman_recording/test/test_lerobot_schema.py`
+### Task 4：command、annotation 与 provenance
 
-**工作**
+**文件：** `recorder_node.py`、`session_store.py`、`lerobot_dataset_store.py`、`lerobot_exporter.py`、相关测试。
 
-1. 用 dataclass 定义 feature names、arm/gripper/action 固定顺序、dataset repo ID 与 FPS。
-2. 将需要的 action topic 配置化；当任一必需 action source 缺失时拒绝训练导出。
-3. 明确长期 dataset root、repo ID 和 session-to-episode 映射持久化位置。
+1. 写生命周期测试：STOP 不导出；ADOPT 只追加一次 episode；重复 ADOPT 或 worker 失败不损坏 raw session。
+2. 保存真实 `TwistStamped` command 的 `header.frame_id`/控制 mode；frame 不匹配、未知语义、无 samples 时拒绝 action-supervised export。
+3. receipt 写入 schema、SDK、raw manifest、URDF、calibration hashes、对齐报告和 generator versions。
+4. 为 success/terminated/truncated/intervention 保留 manifest annotation block；不实现 reward/RL writer。
+5. 提交 `feat(recording): preserve canonical episode provenance`。
 
-**验收**
+### Task 5：π0.5 adapter 与 smoke test
 
-- 三臂/三夹爪 topic 即使枚举顺序变化，state/action layout 仍完全相同。
-- 缺失夹爪 action topic 的 session 不能标记为可训练导出成功。
+**文件：** 新增 `realman_recording/adapters/pi05.py`、`test/test_pi05_adapter.py`、训练环境文档。
 
-### 3. 生成固定时间网格并对齐所有流
+1. 写纯 NumPy 测试：canonical `ee_pose_base + gripper_position` 转所选 checkpoint 的 `observation.state`；canonical command 转对应 action contract。
+2. adapter 的字段选择、pad、rot6d/delta、normalizer asset version 都显式配置；禁止训练代码猜测单位/shape。
+3. 在 OpenPI 训练容器跑 loader + one-batch smoke；action dimension 以实际 checkpoint 为准，不预设 21/32。
+4. 提交 `feat(recording): add pi05 canonical data adapter`。
 
-**修改文件**
+### Task 6：回放、文档与真机验证
 
-- 修改 `realman_recording/lerobot_align.py`
-- 修改 `realman_recording/lerobot_exporter.py`
-- 修改 `test/test_lerobot_align.py`
-- 新增 `test/test_lerobot_export_alignment.py`
+**文件：** `replay.py`、`web_server.py`、Web 前端、`website/docs/development/recording-platform.md`、`src/recording/README.md`。
 
-**工作**
+1. 回放从 canonical episode 读取 joint、EE、gripper、相机，展示 derived feature source/version。
+2. 文档列出 raw source、LeRobot feature、单位/frame、缺失策略与 annotation workflow。
+3. Humble 真机验收四相机/三臂/三夹爪：fixed FPS、quality masks、FK 基准、SDK reload、π0.5 adapter batch。
+4. 提交回放与文档变更。
 
-1. 在所有必需 state/action/camera 都有效的共同区间，以 `1 / dataset_fps` 生成 anchor。
-2. 为每一路相机选择时间差不超过阈值的最近 JPEG；拒绝缺帧而不是补历史帧。
-3. 对所有状态和 action 以显式策略进行对齐，并产出每流最大 skew、丢弃帧数等审计统计。
+## 顺序与明确不做的事
 
-**验收**
+先执行 Task 1–4，之后是 Task 5，最后回放/RL。当前不实现 force/torque、触觉、移动底盘、reward 聚合、`action.executed` 或 RL rollout 字段：它们没有可靠 raw source，仅保留 metadata extension 位置。
 
-- 四路各 15 Hz 输入产生 15 Hz 而非 60 Hz 的输出。
-- 导出时间戳严格单调且间隔恒定。
-- 任一 required 流超过 gap 阈值时导出明确失败。
+## 总验收门槛
 
-### 4. 使用官方 writer 写入 LeRobot v3 episode
-
-**修改文件**
-
-- 重写 `realman_recording/lerobot_exporter.py`
-- 新增 `realman_recording/lerobot_dataset_store.py`
-- 新增 `test/test_lerobot_v3_export.py`
-
-**工作**
-
-1. 以目标 SDK `LeRobotDataset.create()` 创建 dataset，或安全打开已有 dataset。
-2. 对一个对齐帧调用 `add_frame()`；session 完成后调用 `save_episode()`；按 SDK 要求调用
-   `finalize()`，写入 metadata、stats 和视频 shard。
-3. 使用临时工作目录和 dataset lock，导出失败不得污染已完成 episode。
-4. manifest 记录 dataset root、repo ID、episode index、SDK revision、schema hash、对齐报告。
-
-**验收**
-
-- SDK 可重新加载输出；输出是 v3 file/chunk 布局而不是 `episode_000000.*`/JSONL v2 布局。
-- `stats.json` 有正确维度的 `q01` 与 `q99`。
-
-### 5. 接入异步录制生命周期
-
-**修改文件**
-
-- 修改 `realman_recording/recorder_node.py`
-- 修改 `realman_recording/session_store.py`
-- 修改 `realman_recording_msgs/msg/RecordingStatus.msg`（仅字段确有缺失时）
-- 新增 `test/test_export_lifecycle.py`
-
-**工作**
-
-1. STOP 只完成原始数据封存；ADOPT 才提交导出任务，或将现有自动导出改为显式、单一语义。
-2. 将 QUEUED/RUNNING/SUCCEEDED/FAILED、dataset episode 引用和错误持久化到 manifest。
-3. Web status 仅观察进度，不能影响 exporter 或 recorder。
-
-**验收**
-
-- exporter 崩溃后原始 session 仍为 READY 且可重试。
-- 重复 ADOPT 不创建重复 episode。
-
-### 6. 让回放读取 LeRobot v3 episode
-
-**修改文件**
-
-- 修改 `realman_recording/replay.py`
-- 修改 `realman_recording/web_server.py`
-- 修改 `web/src/main.ts`
-- 修改相关 Web/replay 测试
-
-**工作**
-
-1. 回放入口以 `dataset_root + episode_index` 打开 LeRobotDataset。
-2. 私有 `replay.json` 若保留，只能从已导出的 dataset 生成，不能作为数据真相。
-3. 通过 dataset frame 同步更新四路图像、三臂关节和夹爪状态。
-
-**验收**
-
-- 同一个 episode 在 SDK loader、Rerun 和 Web 中具有相同 frame count、timestamp 与状态。
-
-### 7. π₀.₅ 端到端验证
-
-**修改文件**
-
-- 新增 `test/test_pi05_dataset_smoke.py`
-- 更新 `src/recording/README.md`
-- 更新 `website/docs/development/recording-platform.md`
-
-**工作**
-
-1. 用合成 MCAP/JPEG session 测试完整导出，不依赖真机。
-2. 用同一 LeRobot runtime 重载 dataset，构造一个 π₀.₅ preprocessor batch。
-3. 真机可用后补一条真实 session fixture，验证四路相机、三臂和三夹爪的完整链路。
-
-**验收**
-
-- 训练加载器能够取 batch；`observation.state`、`action`、所有视觉字段、`task` 完整存在。
-- 量化归一化不因缺少 `q01`/`q99` 失败。
-
-## 推荐实施顺序
-
-先完成 1、2、3，再实现 4；随后接入 5、6，最后以 7 作为交付门槛。采集可靠性优先于
-数据集功能；任何未经 SDK 重载和 π₀.₅ batch 验证的输出只能标记为实验产物，不能标记为
-`SUCCEEDED`。
+- derived dataset 可从同一 raw session 删除后重建。
+- LeRobot SDK reload 的 feature shape、episode 边界、metadata 一致。
+- FK 与独立 FK 基准一致，EE velocity 无 quaternion sign-flip spike。
+- π0.5 adapter 用明确配置取得 batch，不改变 canonical dataset。
+- source 缺失、frame/unit ambiguity、对齐超限、FK/calibration hash 不匹配都显式失败。

@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from realman_recording.kinematics import UrdfKinematics, ee_velocity
+from realman_recording.kinematics import UrdfKinematics, ee_velocity, finite_difference
 
 
 def test_urdf_fk_resolves_revolute_chain_and_returns_xyzw(tmp_path: Path):
@@ -16,3 +16,9 @@ def test_ee_velocity_uses_shortest_quaternion_arc():
     previous = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0)
     current = (1.0, 0.0, 0.0, 0.0, 0.0, 1.0, 0.0)
     assert ee_velocity(previous, current, 1.0) == (1.0, 0.0, 0.0, 0.0, 0.0, 3.141592653589793)
+
+
+def test_finite_difference_uses_center_and_one_sided_boundaries():
+    assert finite_difference([(0, (0.0,)), (1_000_000_000, (1.0,)), (2_000_000_000, (2.0,))]) == [
+        (1.0,), (1.0,), (1.0,)
+    ]

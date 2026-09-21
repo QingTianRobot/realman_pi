@@ -123,3 +123,21 @@ def ee_velocity(previous: tuple[float, ...], current: tuple[float, ...], dt_sec:
     magnitude = sqrt(x*x + y*y + z*z)
     angular = (0.0, 0.0, 0.0) if magnitude < 1e-12 else (x/magnitude*angle/dt_sec, y/magnitude*angle/dt_sec, z/magnitude*angle/dt_sec)
     return (*linear, *angular)
+
+
+def finite_difference(samples: list[tuple[int, tuple[float, ...]]]) -> list[tuple[float, ...]]:
+    """Differentiate fixed-width vectors using central interior differences."""
+    if len(samples) < 2:
+        raise ValueError("at least two timestamped samples are required")
+    width = len(samples[0][1])
+    if not width or any(len(value) != width for _, value in samples):
+        raise ValueError("sample vectors must have one non-zero dimension")
+    result = []
+    for index, (timestamp, _value) in enumerate(samples):
+        left = max(0, index - 1)
+        right = min(len(samples) - 1, index + 1)
+        dt = (samples[right][0] - samples[left][0]) / 1e9
+        if dt <= 0:
+            raise ValueError("sample timestamps must be strictly increasing")
+        result.append(tuple((samples[right][1][axis] - samples[left][1][axis]) / dt for axis in range(width)))
+    return result

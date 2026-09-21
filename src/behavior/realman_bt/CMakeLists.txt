@@ -78,6 +78,9 @@ install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/control.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/three.xml"
   DESTINATION share/${PROJECT_NAME}/behavior-trees)
+install(FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/ros/pika_config.yaml"
+  DESTINATION share/${PROJECT_NAME}/config/ros)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
@@ -137,6 +140,7 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_tree_contract test/test_tree_contract.py)
   ament_add_pytest_test(test_control_router_tree test/test_control_router_tree.py)
   ament_add_pytest_test(test_pika_control_router test/test_pika_control_router.py)
+  ament_add_pytest_test(test_pika_config test/test_pika_config.py)
   ament_add_pytest_test(test_tree_startup_metadata test/test_tree_startup_metadata.py)
   ament_add_pytest_test(test_arm_move_tree test/test_arm_move_tree.py)
   ament_add_pytest_test(test_three_arm_move_tree test/test_three_arm_move_tree.py)

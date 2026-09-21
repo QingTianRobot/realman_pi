@@ -68,9 +68,9 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
             assert entry_move.attrib == {
                 "name": "pika_default_pose",
                 "dry_run": "{dry_run}",
-                "l_joint_degrees": "12.172,25.223,73.054,-16.703,80.307,14.455",
-                "m_joint_degrees": "0,17.997,70,0,90,8.997",
-                "r_joint_degrees": "-9.89,18.046,79.074,15.505,79.606,-6.194",
+                "l_joint_degrees": "{pika_l_joint_degrees}",
+                "m_joint_degrees": "{pika_m_joint_degrees}",
+                "r_joint_degrees": "{pika_r_joint_degrees}",
                 "velocity_percent": "10",
                 "blend_radius_percent": "0",
                 "timeout_sec": "120",

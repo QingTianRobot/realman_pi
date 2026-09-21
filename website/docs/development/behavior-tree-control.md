@@ -58,11 +58,11 @@ Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/com
 `REALMAN_BT_DRY_RUN=false`，并完成低速、急停和工作区检查。
 
 切入任一 Pika 模式时，行为树先用 `ThreeArmMoveJ` 将 l/m/r 移动到
-`12.172,25.223,73.054,-16.703,80.307,14.455`、
-`0,17.997,70,0,90,8.997`、
-`-9.89,18.046,79.074,15.505,79.606,-6.194`（单位：度），再激活 Pika。
-这些值是 2026-09-20 从生产端 `/<arm>/joint_states`（弧度）采样并换算的静态默认姿态；
-生产姿态变化后需要重新采样并更新 XML。准备动作失败或切换期间被取消时，不会进入 Pika `ACTIVE`。
+[`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 中
+`pika_default_pose.left|middle|right.joint_degrees` 指定的关节角（单位：度），再激活 Pika。
+`control_router.launch.py` 启动时读取这三组关节角并注入行为树黑板；同一配置中的 `tcp_pose` 不参与
+这次初始 MoveJ。修改默认姿态只需更新该 YAML 并重启控制树，不要再修改 `control.xml`。准备动作失败
+或切换期间被取消时，不会进入 Pika `ACTIVE`。
 
 ## 生命周期和无硬件验证
 

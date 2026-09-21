@@ -1,9 +1,12 @@
 #!/usr/bin/env python3
 """Launch the persistent, configuration-driven input-mode router."""
 
+import math
 import os
 from datetime import datetime
 from pathlib import Path
+
+import yaml
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
@@ -27,8 +30,44 @@ def _default_runtime_snapshot_file() -> str:
     return os.environ.get("BT_TREE_WORKSPACE", "/tmp/realman-bt-workspace") + "/runtime.json"
 
 
+def _load_pika_joint_defaults(config_file: Path) -> dict[str, str]:
+    """Load the production Pika schema and expose only its joint angles."""
+    with config_file.open("r", encoding="utf-8") as stream:
+        document = yaml.safe_load(stream) or {}
+    pose = document.get("pika_default_pose")
+    if not isinstance(pose, dict):
+        raise ValueError(f"missing pika_default_pose in {config_file}")
+
+    values: dict[str, str] = {}
+    for config_name, blackboard_name in (
+        ("left", "pika_l_joint_degrees"),
+        ("middle", "pika_m_joint_degrees"),
+        ("right", "pika_r_joint_degrees"),
+    ):
+        arm = pose.get(config_name)
+        joints = arm.get("joint_degrees") if isinstance(arm, dict) else None
+        if not isinstance(joints, list) or len(joints) != 6:
+            raise ValueError(
+                f"{config_file}: pika_default_pose.{config_name}.joint_degrees must contain six values"
+            )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for value in joints
+        ):
+            raise ValueError(
+                f"{config_file}: pika_default_pose.{config_name}.joint_degrees must be finite numbers"
+            )
+        values[blackboard_name] = ",".join(format(float(value), ".15g") for value in joints)
+    return values
+
+
 def generate_launch_description():
     config_root = _config_root()
+    pika_joint_defaults = _load_pika_joint_defaults(
+        config_root / "ros" / "pika_config.yaml"
+    )
     tree_file = DeclareLaunchArgument(
         "tree_file",
         default_value=str(config_root / "behavior-trees" / "control.xml"),
@@ -75,6 +114,7 @@ def generate_launch_description():
                 "stop_on_terminal": LaunchConfiguration("stop_on_terminal"),
                 "exit_on_terminal": LaunchConfiguration("exit_on_terminal"),
                 "runtime_snapshot_file": LaunchConfiguration("runtime_snapshot_file"),
+                **pika_joint_defaults,
             },
         ],
     )

@@ -31,6 +31,12 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   const std::string tree_file = declare_parameter<std::string>("tree_file", "");
   const std::string arm_id = declare_parameter<std::string>("arm_id", "r");
   const bool dry_run = declare_parameter<bool>("dry_run", true);
+  const std::string pika_l_joint_degrees = declare_parameter<std::string>(
+      "pika_l_joint_degrees", "");
+  const std::string pika_m_joint_degrees = declare_parameter<std::string>(
+      "pika_m_joint_degrees", "");
+  const std::string pika_r_joint_degrees = declare_parameter<std::string>(
+      "pika_r_joint_degrees", "");
   const std::string runtime_snapshot_file = declare_parameter<std::string>(
       "runtime_snapshot_file", "/tmp/realman-bt-workspace/runtime.json");
   tick_rate_hz_ = declare_parameter<double>("tick_rate_hz", 20.0);
@@ -58,6 +64,11 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
                                          input_mode_coordinator_.get());
   blackboard_->set<std::string>("arm_id", arm_id);
   blackboard_->set<bool>("dry_run", dry_run);
+  if (!pika_l_joint_degrees.empty()) {
+    blackboard_->set<std::string>("pika_l_joint_degrees", pika_l_joint_degrees);
+    blackboard_->set<std::string>("pika_m_joint_degrees", pika_m_joint_degrees);
+    blackboard_->set<std::string>("pika_r_joint_degrees", pika_r_joint_degrees);
+  }
   blackboard_->set<rclcpp::Node*>(kRosNodeBlackboardKey, this);
   blackboard_->set<RuntimeDiagnostics*>(kRuntimeDiagnosticsBlackboardKey,
                                         &diagnostics_);

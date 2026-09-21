@@ -67,6 +67,15 @@ def _load_pika_joint_defaults(config_file: Path) -> dict[str, str]:
     return values
 
 
+def _load_keyboard_input_timeout(config_file: Path) -> int:
+    with config_file.open("r", encoding="utf-8") as stream:
+        document = yaml.safe_load(stream) or {}
+    value = document.get("input_timeout_ms")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{config_file}: input_timeout_ms must be a positive integer")
+    return value
+
+
 def generate_launch_description():
     config_root = _config_root()
     pika_joint_defaults = _load_pika_joint_defaults(
@@ -75,6 +84,9 @@ def generate_launch_description():
     coordinate_references, velocity_profiles = load_runtime_registries(
         config_root / "ros" / "realman_coordinates.yaml",
         config_root / "ros" / "realman_motion.yaml",
+    )
+    keyboard_input_timeout_ms = _load_keyboard_input_timeout(
+        config_root / "ros" / "keyboard_control.yaml"
     )
     tree_file = DeclareLaunchArgument(
         "tree_file",
@@ -137,6 +149,19 @@ def generate_launch_description():
         parameters=[{"dry_run": LaunchConfiguration("dry_run")}],
     )
 
+    keyboard_router = Node(
+        package="realman_bt",
+        executable="keyboard_control_router",
+        name="keyboard_control_router",
+        output="screen",
+        parameters=[{
+            "dry_run": LaunchConfiguration("dry_run"),
+            "input_timeout_ms": keyboard_input_timeout_ms,
+            "coordinate_references": coordinate_references,
+            "cartesian_velocity_profiles": velocity_profiles,
+        }],
+    )
+
     return LaunchDescription(
         [
             SetEnvironmentVariable("RCUTILS_COLORIZED_OUTPUT", "1"),
@@ -149,5 +174,6 @@ def generate_launch_description():
             runtime_snapshot_file,
             executor,
             pika_router,
+            keyboard_router,
         ]
     )

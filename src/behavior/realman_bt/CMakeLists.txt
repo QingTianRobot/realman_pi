@@ -69,6 +69,9 @@ install(TARGETS realman_bt_executor DESTINATION lib/${PROJECT_NAME})
 install(PROGRAMS scripts/pika_control_router.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME pika_control_router)
+install(PROGRAMS scripts/keyboard_control_router.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME keyboard_control_router)
 install(TARGETS move_j_nodes
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
@@ -84,6 +87,7 @@ install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/ros/realman_coordinates.yaml"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/ros/realman_motion.yaml"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/ros/pika_config.yaml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/ros/keyboard_control.yaml"
   DESTINATION share/${PROJECT_NAME}/config/ros)
 
 if(BUILD_TESTING)
@@ -152,6 +156,8 @@ if(BUILD_TESTING)
   ament_add_pytest_test(test_tree_contract test/test_tree_contract.py)
   ament_add_pytest_test(test_control_router_tree test/test_control_router_tree.py)
   ament_add_pytest_test(test_pika_control_router test/test_pika_control_router.py)
+  ament_add_pytest_test(test_keyboard_control_router
+    test/test_keyboard_control_router.py)
   ament_add_pytest_test(test_pika_config test/test_pika_config.py)
   ament_add_pytest_test(test_coordinate_reference_registry
     test/test_coordinate_reference_registry.py)

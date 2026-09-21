@@ -13,3 +13,10 @@ def test_launch_files_resolve_their_installed_sibling_registry():
             "from coordinate_reference_registry import load_runtime_registries"
             in source
         )
+
+
+def test_control_router_launches_keyboard_and_pika_routers():
+    source = (LAUNCH / "control_router.launch.py").read_text(encoding="utf-8")
+    assert 'executable="keyboard_control_router"' in source
+    assert '"input_timeout_ms": keyboard_input_timeout_ms' in source
+    assert "keyboard_router" in source

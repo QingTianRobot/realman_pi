@@ -584,6 +584,33 @@ test("unlocks input mode selection when reconnect loses its result", async ({ pa
   await expect(page.locator("#input-mode-select")).toHaveValue("policy");
 });
 
+test("enables input mode selection when the socket opens after catalog discovery", async ({ page }) => {
+  await page.goto("/");
+  await expect.poll(() => page.evaluate(() =>
+    (window as any).__webSocket?.readyState,
+  )).toBe(1);
+  await page.evaluate(() => {
+    const socket = (window as any).__webSocket;
+    socket.readyState = 0;
+    socket.emit("message", { data: JSON.stringify({
+      type: "input_mode_list",
+      available: true,
+      modes: [
+        { id: "web", label: "Web", selectable: false },
+        { id: "policy", label: "Policy", selectable: true },
+      ],
+    }) });
+  });
+  await expect(page.locator("#input-mode-select")).toBeDisabled();
+
+  await page.evaluate(() => {
+    const socket = (window as any).__webSocket;
+    socket.readyState = 1;
+    socket.emit("open", {});
+  });
+  await expect(page.locator("#input-mode-select")).toBeEnabled();
+});
+
 test("captures independent l/r physical keys only while keyboard is active", async ({ page }) => {
   await page.goto("/");
   await emitWebSocketEvent(page, {

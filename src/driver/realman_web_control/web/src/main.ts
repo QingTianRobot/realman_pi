@@ -1347,7 +1347,10 @@ function connect() {
   socket?.close();
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   socket = new WebSocket(`${protocol}://${location.host}/ws`);
-  socket.addEventListener("open", () => setConnection(true));
+  socket.addEventListener("open", () => {
+    setConnection(true);
+    updateButtons();
+  });
   socket.addEventListener("close", () => {
     releaseKeyboardInput();
     setConnection(false);

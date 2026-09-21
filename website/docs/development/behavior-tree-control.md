@@ -8,12 +8,15 @@ description: RealMan 控制模式切换、工业任务树和隔离 mock 验证�
 行为树运行时位于 `realman_bt`，底层仍使用 RealMan Action 和
 `motion_coordinator`。持久输入路由器的权威定义是
 [`config/behavior-trees/control.xml`](../../../config/behavior-trees/control.xml)：
-当前目录顺序为 `web`、`policy`、`pikaposition`、`pikavelocity`、`none`。其中 `policy`、`pikaposition`、`pikavelocity` 和
-`none` 可由浏览器选择器请求；`web` 是粘性且最高优先级的覆盖，不出现在浏览器选择器中。
+当前目录顺序为 `web`、`keyboard`、`policy`、`pikaposition`、`pikavelocity`、`none`。其中
+`keyboard`、`policy`、`pikaposition`、`pikavelocity` 和 `none` 可由浏览器选择器请求；`web`
+是粘性且最高优先级的覆盖，不出现在浏览器选择器中。
 ROS selection service 接受任何已注册模式（包括 `web`），只要求调用者提供非空 `requester_id`；
 该字段用于请求关联，并非 service 层的身份验证或授权。
-Policy 和 Pika 的两个输入叶只产生每次进入一次的诊断；实际 Pika topic 转发由同一 launch 中的
-`pika_control_router` 完成，并且只为 l/r 建立 session，绝不为 m 建立 goal。
+`keyboard` 分支固定为 `InputModeGuard` → `ActivateInputMode` → `KeyboardVelocityInput`。该叶节点和
+Policy/Pika 输入叶一样保持 `RUNNING` 并记录控制权；实际键盘速度 session 由同一 launch 中的
+`keyboard_control_router` 管理，Pika topic 转发由 `pika_control_router` 管理。两个 router 都只为 l/r
+建立 session，绝不为 m 建立 goal、订阅或 command publisher。
 
 选择器显示 `Pika / 位置控制`（模式 ID `pikaposition`）和 `Pika / 速度控制`（模式 ID
 `pikavelocity`）两个独立选项。Pika 生产 topic 为 `/pika/l|r/cartesian_pose`（`PoseStamped`）
@@ -29,12 +32,24 @@ RUNNING 分支。普通分支是 `InputModeGuard` → `ActivateInputMode` → �
 准备动作成功后，后续 tick 会从该 `Sequence` 的 Pika 输入叶继续，不会重新进入准备动作；只有离开
 Pika 分支后再次进入，才会重新执行准备动作。
 
+键盘 Web ingress 是 `/keyboard/l/cartesian_velocity` 和 `/keyboard/r/cartesian_velocity`
+（`geometry_msgs/msg/TwistStamped`）。`keyboard_control_router` 为左右臂分别拥有
+`/l|r/cartesian_velocity` Action，并在 session 接受后向
+`/l|r/cartesian_velocity/command` 刷新命令。两臂互不绑定：一侧没有按键、WORK 不可用或输入超时，
+只释放该侧，不影响另一侧仍满足条件的 session。
+
+键盘只允许每臂当前已验证的默认 WORK 坐标：坐标状态必须同时确认 `motion_allowed=true`、
+`work_matched=true`、当前/预期 WORK 名称及 frame ID 都与
+[`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml) 一致。Goal 固定使用
+`CartesianVelocity.Goal.WORK`；BASE 被拒绝，也不会在 WORK 不可用时自动回退到 TOOL。
+
 切换到不同模式时，选择先进入 `SWITCHING` 并选择 `none`。下一 tick 必须激活/运行这个中性分支，
 下一 tick 才选择并激活目标模式；这让 Policy/Pika 不必自行结束即可交接。重选已经 active 的模式会
 立即返回已有 request ID，不经过中性 tick，`epoch` 也不会递增。Web 离开到非 Web 模式时，桥先取消
 所有 Web-owned Action：等待尚未返回的 goal response 被拒绝、Action 已终结，或取消成功提交，
 再请求全局模式。取消提交异常会重试；不等待取消确认或机械臂物理停止。
-Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。
+Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。键盘模式同样经过 `none` 中性交接，并且只有
+请求它的 WebSocket 在收到匹配的 `ACTIVE/keyboard` 后取得独占 lease；其它浏览器的按键消息会被拒绝。
 
 ## 输入路由 ROS 契约
 
@@ -49,6 +64,19 @@ Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。
 配置在 [`config/ros/behavior_tree.yaml`](../../../config/ros/behavior_tree.yaml)：
 `tick_rate_hz: 10.0`（Hz）、`switch_timeout_ms: 5000`（ms），以及必须是已注册且可选模式的
 `safe_fallback_mode: none`。`none` 既是安全回退也是中性 tick，不能删除或改成 Web。
+
+键盘按键、速度比例和 Web 输入时序的权威配置是
+[`config/ros/keyboard_control.yaml`](../../../config/ros/keyboard_control.yaml)。浏览器每 `50 ms` 发送一次
+左右臂各自的完整按键集合；Web bridge 对每臂要求严格递增的 sequence，并拒绝未知物理键码、重复键码、
+非 lease owner 和任何 m 输入。Web 输入超过 `150 ms` 未刷新时，keyboard router 对该臂发布零速度并
+取消 session。driver 仍按 `config/ros/realman_motion.yaml` 的 `20 ms` 周期和 `100 ms` watchdog
+执行第二层失效保护。
+
+离开 `keyboard`、WORK 失配、按键全部释放、Web 输入超时、owner WebSocket 关闭或 router 关闭时，
+相关臂先收敛到零速度，再取消其 Action session。浏览器 owner 断开还会释放 lease 并请求安全模式
+`none`。如果停止条件发生在 Action goal response 返回之前，router 设置 `cancel_after_accept`；迟到接受的
+goal 会立即取消，不能成为 active session。`dry_run=true` 时仍校验模式、WORK、配置和输入，但不发送
+driver Goal，也不发布 driver command。
 
 同一 launch 还启动 `pika_control_router`。它接收 executor 的 active mode，并只为 l/r 管理 Pika
 Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/command` 和

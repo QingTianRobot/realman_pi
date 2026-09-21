@@ -82,8 +82,8 @@ transient-local 订阅 `/realman_bt_executor/input_mode_state`。同一 YAML 的
 `request_id`、`epoch`、`detail`。
 
 目录完全由 XML 的字面 `InputModeGuard` 项发现，浏览器不会维护模式名单。当前 picker 显示一个
-“GLOBAL INPUT / 输入模式”卡片，带一个动态 select：`none`、`policy`、`pikaposition`、`pikavelocity`
-都可选；`web` 虽会由
+“GLOBAL INPUT / 输入模式”卡片，带一个动态 select：`none`、`keyboard`、`policy`、`pikaposition`、
+`pikavelocity` 都可选；`web` 虽会由
 状态显示为 active，却保持隐藏且不可选。没有正在运行的路由器或 discovery 不健康时，卡片隐藏；
 既有直接 Action 控制继续兼容，仅在两项 router service 都确认为不可用时启用。服务只短暂失联或
 catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返回 `input_mode_unavailable`，而不是绕过仲裁。
@@ -106,7 +106,8 @@ catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返
 `software_stop` 绕过路由；夹爪、恢复、标定、运动学、位姿和记录操作均是 mode-neutral（包括
 `gripper_command`、`recover_motion`、`capture_calibration_sample`、`solve_calibration`、
 `get_current_pose`、`solve_ik`、`list_joint_records`、`save_joint_record`、`delete_joint_record` 与
-`apply_joint_record`）。Policy 与 Pika 目前只是 RUNNING 占位，不产生任何 robot goal。
+`apply_joint_record`）。Policy 输入叶目前只是 RUNNING 占位；Pika 和 keyboard 输入叶记录行为树控制权，
+实际 robot session 分别由 `pika_control_router` 和 `keyboard_control_router` 管理。
 排查卡片缺失或停留在 SWITCHING 时，先检查 router 是否显式运行、三个 ROS 名称是否在同一 domain，
 以及 `input_mode_state.detail` 或 `type: "error"` 事件的 `code` 字段
 （`input_mode_timeout` / `input_mode_failed`）；这些 code 不是独立事件类型。不要添加硬编码选项。
@@ -118,6 +119,51 @@ Action 取消也会丢弃匹配 arm/action 且由该浏览器拥有的排队请�
 后端通过状态发布者的 ROS endpoint identity 识别路由器重启，即使两次探测之间 service
 一直显示 ready，也会清空旧目录、状态和请求关联并重新订阅。`FAILED` 后同一 request ID
 的更高 epoch 回退状态可以刷新页面，但不会恢复已失败的原运动请求。
+
+### 双臂键盘末端速度
+
+只有动态目录包含可选的 `keyboard` 时，8765 页面才显示“双臂键盘末端速度”卡片；切换状态必须达到
+`ACTIVE/keyboard` 后才捕获运动键。浏览器使用物理位置稳定的 `KeyboardEvent.code`，不使用会受输入法、
+Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`select` 和 `contenteditable` 中的输入。
+左右臂按键完全独立，可同时按住：
+
+| 末端轴 | 左臂正/负 | 右臂正/负 |
+| --- | --- | --- |
+| X | `W` / `S` | `I` / `K` |
+| Y | `A` / `D` | `J` / `L` |
+| Z | `R` / `F` | `U` / `O` |
+| RX | `Q` / `E` | `Y` / `P` |
+| RY | `Z` / `C` | `N` / `M` |
+| RZ | `X` / `V` | `B` / `G` |
+
+浏览器对每臂发送完整按键集合，而不是单独的 keydown/keyup 边沿：
+
+```json
+{"type":"keyboard_state","arm":"l","keys":["KeyW","KeyQ"],"sequence":42}
+```
+
+`arm` 只能是 `l` 或 `r`；`keys` 只能包含该臂配置的、互不重复的 `KeyA`..`KeyZ` 物理码；`sequence`
+必须在每臂范围内严格递增。成功进入 keyboard 后，一个 WebSocket 获得独占 lease，竞争连接、旧 sequence、
+未知键、重复键和 m 输入均被拒绝。每 `50 ms` 心跳都会发送左右臂各自的完整集合，包括空集合；
+后端 `150 ms` 未收到该臂新输入就清零并取消该臂 session。
+
+键位、`50 ms` 心跳、`150 ms` Web 输入超时和 `0.4` 速度比例来自
+[`config/ros/keyboard_control.yaml`](../../../config/ros/keyboard_control.yaml)。比例乘以
+[`config/ros/realman_motion.yaml`](../../../config/ros/realman_motion.yaml) 的逐臂上限；当前 l/r 都派生为
+`0.02 m/s` 线速度和 `0.10 rad/s` 角速度。WORK 名称和 frame ID 仍来自
+[`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml)，键盘配置不会复制
+运动上限或坐标定义。
+
+每臂必须独立满足默认 WORK gate；一侧失配只清空该侧，另一侧仍可控制。卡片状态含义是：
+`READY`（活动模式下至少一侧 WORK 可用且当前没有按键）、`MOVING`（浏览器存在按下键）、`RELEASED`（未处于活动
+keyboard）和 `WORK UNAVAILABLE`（活动模式下两侧均不满足 WORK gate）。这些标签只描述浏览器输入状态，
+不证明机械臂已经产生物理运动。
+
+`keyup` 会立即发送该臂更新后的完整集合；松开某一臂的全部按键只停止该臂。对应臂 WORK 失配时也只
+清空并发送该臂，另一臂和活动心跳继续。窗口 `blur`、页面隐藏、目录不再包含 keyboard 或离开
+`ACTIVE/keyboard` 时，浏览器清空两臂并停止心跳；WebSocket 已关闭时不能再发送消息，因此服务端通过
+disconnect 处理释放 lease、发布两臂零值并请求 `none`。服务端输入超时和 driver watchdog 是浏览器事件
+之外的独立保护，不能用前端状态替代。
 
 以下验证不访问输入设备或真实机械臂：
 

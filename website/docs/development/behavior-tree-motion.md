@@ -126,6 +126,33 @@ ROS clock 的新时间戳以及映射后的 `frame_id`。时长到达后节点�
 response 或 accepted goal 移交给 executor 的 cancellation drain。`pending_cancellations` 同时统计 MoveJ
 和笛卡尔速度 session；one-shot executor 要等两类 drain 都完成取消提交后才退出。
 
+## 键盘连续速度 session
+
+`control.xml` 的 `keyboard` 分支不直接发送机器人命令；`KeyboardVelocityInput` 只是长驻控制权叶节点，
+同一 `control_router.launch.py` 中的 `keyboard_control_router` 分别拥有 l/r 两个连续速度 session：
+
+```text
+:8765 keyboard_state
+  -> /keyboard/l|r/cartesian_velocity
+  -> keyboard_control_router
+  -> /l|r/cartesian_velocity Action
+     + /l|r/cartesian_velocity/command
+```
+
+l/r 的 pending goal、accepted handle、最新命令、输入时间和取消状态完全独立，m 不参与键盘控制。
+某一侧按键为空、WORK 不可用或超时，只发布并取消该侧的 session；另一侧可以继续按自己的按键和状态运行。
+
+每个 Goal 固定使用 `CartesianVelocity.Goal.WORK`，名称和 frame ID 必须匹配该臂已验证的
+`default_work`。BASE 不允许，WORK 不可用时也不会自动改用 TOOL。模式离开 keyboard、坐标失配、按键释放、
+输入超时或节点关闭时，router 先对已接受 session 发布零速度，再提交取消。如果 goal response 尚未返回，
+`cancel_after_accept` 会阻止迟到接受的 goal 成为 active session，并立即对其发起取消。
+
+失效保护分两层：浏览器按 `config/ros/keyboard_control.yaml` 每 `50 ms` 发送完整按键集合，keyboard router
+在 `150 ms` 没有新输入时释放该臂；已接受 session 的 driver command 按
+`config/ros/realman_motion.yaml` 的 `20 ms` 周期刷新，而 driver 自身 `100 ms` watchdog 对命令流再次检查。
+前一层处理 Web/网络停更，后一层处理 router 到 driver 的刷新中断。`dry_run=true` 时 router 仍执行目录、
+WORK、frame、速度上限和 timeout 校验，但不发送 Action Goal，也不向 driver command topic 发布消息。
+
 ## 构建
 
 在 ROS 2 Humble 工作区根目录执行：
@@ -398,8 +425,9 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 | stop_on_terminal | true | SUCCESS/FAILURE 后停止 timer |
 | exit_on_terminal | true | 终态且 cancellation drain 清空后退出 executor；false 保留 Service 常驻模式 |
 
-当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ，以及 `control.xml` 的
-`SelectInputMode`、`InputModeGuard`、`ActivateInputMode` 和输入叶。切入
+当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ、定时笛卡尔速度，以及 `control.xml` 的
+`SelectInputMode`、`InputModeGuard`、`ActivateInputMode`、`KeyboardVelocityInput` 和其它输入叶。切入
+`keyboard` 时，ReactiveFallback 激活键盘叶并由独立 router 管理 l/r WORK 速度 session；切入
 `pikaposition` 或 `pikavelocity` 时，输入树会先执行一次有状态 Sequence 中的三臂 ThreeArmMoveJ 默认姿态准备动作，
 成功后才激活 Pika；该姿态来自 `config/ros/pika_config.yaml` 的 `joint_degrees`，由
 `control_router.launch.py` 启动时注入，不是每次切换时动态读取。Pika 分支保持运行时，

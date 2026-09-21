@@ -17,7 +17,7 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 | RealMan 状态回读 | Include `three_realman_drivers.launch.py` | `config/ros/realman_driver.yaml` |
 | Xbox 设备读取 | 创建 `joy/game_controller_node` | `config/ros/xbox_controller.yaml` |
 | 按键边沿处理 | 创建 `xbox_controller_node` | `xbox_controller_driver` |
-| 持久输入路由 | 不随 Bringup 自动创建；由 `./rm65 bt control` 显式启动 | `config/behavior-trees/control.xml`、`config/ros/behavior_tree.yaml` |
+| 持久输入路由 | 不随 Bringup 自动创建；由 `./rm65 bt control` 显式启动 executor、Pika router 和 keyboard router | `config/behavior-trees/control.xml`、`config/ros/behavior_tree.yaml`、`config/ros/keyboard_control.yaml` |
 | RViz 2 | 透传 `use_rviz` 给三臂 launch | `config/rviz/three_robots.rviz` |
 | 运行日志 | 创建时间目录并设置 ROS 2 环境变量 | `REALMAN_LOG_ROOT`、`ROS_LOG_DIR` |
 
@@ -41,10 +41,15 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 相机后台进程 PID 保存在 `logs/.rm65-camera.pid`，其标准输出写入 `logs/rm65-camera.log`；ROS 2
 节点仍按官方机制写入 `logs/YYYYMMDD_HHMMSS/`。
 
-`bt control` 必须在 `up` 后单独运行：它加入同一 ROS domain，保持 :8080 只读监视器和
-`realman_bt_executor` 到 Ctrl-C，而 `up` 继续拥有长期 driver 与 :8765 Web control。停止 router 不会
-停止这些服务；使用 `./rm65 down` 才终止统一运行时。当前 XML registry 提供可选的 `none`、`policy`、
-`pikaposition`/`pikavelocity` 和粘性、非可选的 Web override；详见[行为树控制权与 Mock 测试](./behavior-tree-control)。
+`bt control` 必须在 `up` 后单独运行：它加入同一 ROS domain，保持 :8080 只读监视器、
+`realman_bt_executor`、`pika_control_router` 和 `keyboard_control_router` 到 Ctrl-C，而 `up` 继续拥有长期
+driver 与 :8765 Web control。停止 router 不会停止这些服务；使用 `./rm65 down` 才终止统一运行时。
+
+`./rm65 up` 会加载键盘配置并在 8765 静态页面中提供键盘卡片代码，但不会自行声明 `keyboard` 输入模式。
+只有运行中的 `control.xml` 目录通过 ROS 暴露可选的 `keyboard` 后，页面才显示并启用双臂键盘卡片；切到
+`ACTIVE/keyboard` 后才能发送 l/r 独立按键。当前 XML registry 还提供可选的 `none`、`policy`、
+`pikaposition`/`pikavelocity` 和粘性、非可选的 Web override；详见
+[行为树控制权与 Mock 测试](./behavior-tree-control)。
 
 ## 启动入口
 

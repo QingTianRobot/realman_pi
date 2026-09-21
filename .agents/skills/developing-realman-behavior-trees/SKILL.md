@@ -1,47 +1,51 @@
 ---
 name: developing-realman-behavior-trees
-description: Use when developing or operating RealMan behavior trees, ThreeArmMoveJ staged motion, Action cancellation, one-shot executor/launcher shutdown, runtime snapshots, or repeated-run failures and ROS_DOMAIN_ID conflicts.
+description: Use when designing, implementing, reviewing, testing, launching, or diagnosing RealMan behavior trees, behavior-tree XML, custom BT nodes and ports, input-mode routing, Pika control interfaces, cancellable robot motion, runtime snapshots, or repeated-run ROS 2 failures.
 ---
 
 # Developing RealMan Behavior Trees
 
-Treat `src/behavior/realman_bt/` and `config/behavior-trees/` as a robot-motion boundary. Keep the default path dry-run; do not make a real goal part of ordinary validation.
+Treat `src/behavior/realman_bt/` and `config/behavior-trees/` as a robot-motion and control-ownership boundary. Derive contracts from the executor registration, XML, ROS interfaces, launch files, and focused tests together. Default validation stays dry-run; real motion always requires an explicit operator decision.
 
-## Choose the Reference
+## Read the Relevant Reference
 
-Read the existing node, executor, XML tree, and focused tests. Register a new node explicitly in `RealmanBtExecutorNode`; update the XML contract when a public node or port changes.
+- Read [architecture and XML](references/architecture-and-xml.md) before designing a tree, choosing control nodes, adding root startup metadata, or changing the persistent input router.
+- Read [node authoring](references/node-authoring.md) before implementing or reviewing a C++ leaf, port, asynchronous Action lifecycle, continuous command session, failure path, or cancellation drain.
+- Read [ROS interfaces and naming](references/ros-interfaces-and-naming.md) before adding an Action, Service, Topic, parameter, blackboard key, input-mode ID, or any Pika-facing interface.
+- Read [runtime diagnostics](references/runtime-diagnostics.md) when changing snapshots, executor events, `/rosout`, failure reasons, or the read-only monitor DTO.
+- Read [execution and deployment](references/execution-and-deployment.md) for `./rm65 bt`, XML-name launching, startup preflight, one-shot exit, archives, repeated execution, or `UNKNOWN`/duplicate Action Server diagnosis.
 
-- Read [node authoring](references/node-authoring.md) for ports, failure reasons, Action ownership, Service boundaries, dry-run, and tests.
-- Read [node authoring](references/node-authoring.md) before changing the persistent input router, its XML-discovered catalog, or a router input leaf.
-- Read [runtime diagnostics](references/runtime-diagnostics.md) when changing snapshots, executor events, `/rosout`, or the read-only monitor DTO.
-- Read [execution and deployment](references/execution-and-deployment.md) for `./rm65 bt`, three-arm stage barriers, one-shot exit, archives, repeated execution, or `UNKNOWN`/duplicate Action Server diagnosis.
+## Non-Negotiable Design Boundaries
 
-## Runtime Model
+1. The BT orchestrates; drivers own SDK connections, motion arbitration, watchdogs, and physical stop behavior. A BT leaf never opens a RealMan SDK connection.
+2. Use a ROS Action for long-running, cancellable, or session-owning robot work. Use a Service only for a short request/response operation. Use a Topic for a stream or observation whose individual messages are not independently completed operations.
+3. Every custom node must be registered explicitly in `RealmanBtExecutorNode`. Only registered control and leaf tags may appear in an executable XML tree; do not assume upstream BehaviorTree.CPP nodes exist.
+4. Validate every port before creating a ROS client or publisher. Preserve a useful `failureReason()` before returning `FAILURE`.
+5. A halt must not abandon a pending goal response, accepted nonterminal goal, live command timer, or failed result-listener setup. Stop command publication first, publish the interface-specific neutral command when required, then transfer cancellation ownership to the executor drain.
+6. `dry_run=true` validates configuration and emits diagnostics but creates no motion Action client, sends no goal, and publishes no hardware command. Keep it the default.
+7. XML under root `config/behavior-trees/` is the authoritative tree source. Runtime configuration belongs under root `config/ros/`; do not duplicate production values in XML, Python, the Web client, or C++ constants.
 
-`realman_bt` uses the vendored `third_party/behavior_tree_cpp` factory/parser, with explicit `Sequence`, `MoveJ`, and `ThreeArmMoveJ` registration. Do not assume upstream BehaviorTree.CPP node names or all task-template nodes are registered. XML lives under root `config/behavior-trees/`.
+## Current Runtime Shape
 
-`./rm65 up` owns the long-lived drivers. `./rm65 bt [l|m|r|three]` runs a one-shot executor and read-only monitor inside the existing `realman_bringup_remote` container; it does not create a second driver. A new run reuses the driver's Action Servers, not the previous executor. SDK connections belong to drivers, not BT leaves.
+The executor currently registers `Sequence`, `ReactiveSequence`, `ReactiveFallback`, input-mode nodes, `MoveJ`, `ThreeArmMoveJ`, and `CartesianVelocityForDuration`. The production trees are:
 
-`./rm65 bt control` is the separate persistent global input router. It loads
-`config/behavior-trees/control_router.xml`, stays alive with its read-only
-monitor until Ctrl-C, and does not make `./rm65 up` start an executor. The XML
-literal `InputModeGuard` entries are the catalog consumed by the executor and
-Web bridge; do not add a Python, ROS, or browser-side mode enum.
+| XML | Purpose | Lifecycle |
+| --- | --- | --- |
+| `move.xml` | One arm `MoveJ` | One-shot |
+| `three.xml` | Two staged, concurrent three-arm barriers | One-shot |
+| `tool_x.xml` | Timed Cartesian velocity in a configured logical frame | One-shot |
+| `control.xml` | Global Web/Policy/Pika/None input router | Persistent |
 
-For concurrent three-arm stages, reuse `ThreeArmMoveJ`: submit all three goals in one tick, return success only when all three results succeed, then let `Sequence` advance. This is a completion barrier, not synchronized physical arrival. The reusable zero-then-pose tree is `config/behavior-trees/three_arm_staged_move.xml`.
+`approach_and_grasp.xml` and `pick_task.xml` contain task-template tags that the current executor does not register. Do not present them as runnable production trees unless all referenced nodes and controls are implemented, registered, and tested.
 
-## Required Boundary
+`./rm65 up` owns long-lived drivers and Web control. `./rm65 bt <name>` starts a separate executor and read-only monitor inside the existing driver container, using a simple filename from `config/behavior-trees/`; `.xml` is optional. It never creates a second driver.
 
-Use an Action for long-running or cancellable robot motion. Use a Service only for a short executor control request. A terminal node result must preserve a useful `failureReason()` before returning `FAILURE`.
+## Required Validation Order
 
-While the tree is ticking, retain a pending goal response or accepted Action until rejection or a terminal result. Only after halt transfers it to `MoveJCancellationDrain` may ownership release: retain the pending response until rejection, or the accepted nonterminal handle until `async_cancel_goal()` successfully submits; retry submission exceptions, then release without waiting for a cancel acknowledgement or terminal result. A halt must not discard a pending goal response, an accepted handle, or a failed result-listener setup.
+1. Run focused unit and XML/metadata contract tests.
+2. Run the relevant mock or isolated BT suite.
+3. Run `RM65_DRY_RUN=1 ./rm65 bt <tree>` to inspect the wrapper plan when launch behavior changed.
+4. Run the real executor with `REALMAN_BT_DRY_RUN=true` and confirm no goal or hardware command is emitted.
+5. Perform real motion only after explicit authorization, target review, a cleared workspace, low speed, and an accessible emergency stop.
 
-`exit_on_terminal=true` waits for an empty cancellation drain before shutting down the executor. Final archived root/node status may be `IDLE` after halt; use the unique terminal tick and event details. Releasing a leaf client in its destructor does not resolve duplicate Action Servers or replace cancellation ownership.
-
-## Validation Order
-
-1. Run the relevant source, unit, and XML contract tests.
-2. Run dry-run first; confirm it only validates and emits diagnostics.
-3. Test real motion only with an explicit operator decision, a cleared workspace, low speed, and an accessible emergency stop.
-
-Update the existing Web manual pages `website/docs/development/behavior-tree-motion.md` and `behavior-tree-control.md` for changed contracts; use `document-feature-updates` for verification.
+When behavior, ROS interfaces, configuration, commands, or operator-visible failure modes change, update `website/docs/development/behavior-tree-motion.md`, `behavior-tree-control.md`, and any owning interface page, then build the Web manual.

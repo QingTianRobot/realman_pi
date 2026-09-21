@@ -47,17 +47,7 @@ ROS CompressedImage ──► bounded JPEG archive ──► videos/
 - `/tf` (`tf2_msgs/msg/TFMessage`)
 - `gripper_*_topics` 中配置的夹爪位置、力矩到位与告警话题。
 
-会话控制 Action 是 `/recording/manage_session`，类型为 `realman_recording_msgs/action/ManageRecording`：
-
-| 命令 | 语义 |
-| --- | --- |
-| `PREPARE` | 不创建 session；检查 4 路相机、3 臂 joint state、3 夹爪 position 的 topic 新鲜度、机械臂连接、磁盘空间和 MCAP 后端。新鲜数据超过 `preflight_alignment_trigger_sec` 时仍可开始，但会标记为需要离线对齐。 |
-| `START` | 创建 session，开始状态录制；`duration_sec=0` 表示由 `STOP` 结束。设置未来的 `start_at_walltime_ns` 会预约开始，触发时自动复检设备后才创建 session。 |
-| `PAUSE` | 兼容接口记录暂停区间、冻结服务端倒计时，并结束当前媒体分段。正式上游控制使用 Service 的生命周期命令。 |
-| `RESUME` | 关闭暂停区间、恢复倒计时，并启动新的媒体分段。 |
-| `STOP` | 结束会话并原子地将 partial manifest 改名为 `manifest.json`。 |
-
-上游系统使用 `/recording/manage` Service，类型为 `realman_recording_msgs/srv/ManageRecording`：
+`/recording/manage` 是唯一的会话控制入口，类型为 `realman_recording_msgs/srv/ManageRecording`。录制平台不提供 `recording/manage_session` Action；网页也只读取状态，不发起录制控制：
 
 | 命令 | 所需字段 | 行为 |
 | --- | --- | --- |

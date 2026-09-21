@@ -15,6 +15,7 @@
     "test:web-control": "playwright test --config ../config/web-control/playwright.config.mjs"
   },
   "dependencies": {
+    "gridstack": "^13.3.0",
     "three": "0.185.1",
     "urdf-loader": "0.13.1",
     "vue": "3.5.41"

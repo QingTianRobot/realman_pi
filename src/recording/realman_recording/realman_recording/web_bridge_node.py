@@ -44,6 +44,7 @@ class RecordingWebBridgeNode(Node):
         self.declare_parameter("description_root", description_root)
         self.declare_parameter("bind_host", "127.0.0.1")
         self.declare_parameter("port", 8770)
+        self.declare_parameter("lerobot_export_dir", "/data/realman-recordings/lerobot")
         self.declare_parameter("web_state_hz", 10.0)
         self.declare_parameter("rerun_enabled", False)
         self.declare_parameter("rerun_hz", 10.0)
@@ -84,12 +85,17 @@ class RecordingWebBridgeNode(Node):
         # decoding is disabled or a source has not produced its first frame yet.
         self._camera_sources = load_camera_sources(self)
         self._preview_worker: LatestFramePreview | None = self._create_preview_worker()
-        for source in self._camera_sources:
-            self._subscriptions.append(self.create_subscription(
-                Image, source.image_topic,
-                lambda message, selected=source.camera_id: self._preview_image(selected, message),
-                10, callback_group=self._callback_group,
-            ))
+        # Full-resolution camera images are only needed for the lossy preview.
+        # When preview is disabled, skip these subscriptions entirely: deserialising
+        # ~4 x 640x480 frames per second would otherwise saturate the executor and
+        # starve the snapshot timer.
+        if self._preview_worker is not None:
+            for source in self._camera_sources:
+                self._subscriptions.append(self.create_subscription(
+                    Image, source.image_topic,
+                    lambda message, selected=source.camera_id: self._preview_image(selected, message),
+                    10, callback_group=self._callback_group,
+                ))
         self._rerun = RerunVisualizationAdapter(
             application_id=str(self.get_parameter("rerun_application_id").value),
             spawn=bool(self.get_parameter("rerun_spawn").value),
@@ -125,6 +131,7 @@ class RecordingWebBridgeNode(Node):
             static_root=str(self.get_parameter("static_root").value),
             manifest=self._manifest,
             description_root=self.get_parameter("description_root").value,
+            lerobot_root=self.get_parameter("lerobot_export_dir").value,
             logger=self.get_logger(),
         )
         self._server.start()
@@ -160,6 +167,10 @@ class RecordingWebBridgeNode(Node):
             return None
         width = int(self.get_parameter("preview_width").value)
         height = int(self.get_parameter("preview_height").value)
+        # Downscale on the raw frame before the JPEG encode (in _preview_image), so the
+        # worker's transform is a no-op fallback for the already-sized frame.
+        self._preview_width = width
+        self._preview_height = height
         return LatestFramePreview(
             self._preview_frame,
             transform=lambda frame: downscale_jpeg(frame, width=width, height=height),
@@ -170,7 +181,11 @@ class RecordingWebBridgeNode(Node):
         if self._preview_worker is None:
             return
         try:
-            jpeg = image_to_jpeg(message)
+            jpeg = image_to_jpeg(
+                message,
+                width=getattr(self, "_preview_width", None),
+                height=getattr(self, "_preview_height", None),
+            )
         except ValueError:
             return
         self._preview_worker.offer(PreviewFrame(
@@ -235,6 +250,9 @@ class RecordingWebBridgeNode(Node):
             "detail": message.detail,
             "diagnostics_json": message.diagnostics_json,
             "scheduled_start_walltime_ns": int(message.scheduled_start_walltime_ns),
+            "export_progress": float(message.export_progress),
+            "export_dir": message.export_dir,
+            "export_error": message.export_error,
         }
 
     def _send_snapshot(self) -> None:

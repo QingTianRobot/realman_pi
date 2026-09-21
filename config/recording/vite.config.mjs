@@ -70,6 +70,7 @@ export default defineConfig({
     alias: {
       three: resolve(websiteDirectory, "node_modules/three"),
       "urdf-loader": resolve(websiteDirectory, "node_modules/urdf-loader"),
+      gridstack: resolve(websiteDirectory, "node_modules/gridstack"),
     },
   },
   build: {

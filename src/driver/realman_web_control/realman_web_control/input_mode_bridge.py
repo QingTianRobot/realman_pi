@@ -89,6 +89,17 @@ class InputModeBridge:
     def generation(self) -> int:
         return self._generation
 
+    def keyboard_snapshot(self, client_id: str) -> InputModeSnapshot:
+        """Authorize input against both the lease and current executor state."""
+        if client_id != self._keyboard_owner:
+            raise ProtocolError("keyboard_lease", "client does not own keyboard control lease")
+        snapshot = self._snapshot
+        if (not any(option.id == "keyboard" and option.selectable for option in self._catalog or ())
+                or snapshot is None or snapshot.phase != "ACTIVE"
+                or snapshot.active_mode != "keyboard"):
+            raise ProtocolError("keyboard_inactive", "keyboard input mode is not active")
+        return snapshot
+
     def cached_events(self, client_id: str | None = None) -> list[InputModeEffect]:
         events = [InputModeEffect("send_event", client_id, {
             "type": "input_mode_list", "available": self.available,
@@ -113,6 +124,10 @@ class InputModeBridge:
             self._snapshot = None
             self._state_revision = 0
         self._catalog = tuple(modes) if modes is not None else None
+        if not any(option.id == "keyboard" and option.selectable for option in self._catalog or ()):
+            effects += self._release_keyboard()
+            if self._pending is not None and self._pending.mode_id == "keyboard":
+                effects += self._discard("input_mode_unavailable", "keyboard mode is unavailable")
         # An unhealthy or pending probe is not evidence that the router is absent.
         self._direct_control_allowed = modes is None and confirmed_absent
         return effects + self.cached_events()
@@ -209,6 +224,9 @@ class InputModeBridge:
                 return effects
         self._snapshot = snapshot
         self._state_revision += 1
+        if (snapshot.phase != "ACTIVE" or snapshot.active_mode != "keyboard"
+                or (previous is not None and snapshot.epoch != previous.epoch)):
+            effects += self._release_keyboard()
         if snapshot.phase == "FAILED" and self._pending is not None:
             # Preserve this request's failure even if recovery is published
             # before the outstanding selection response reaches the bridge.

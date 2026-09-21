@@ -1,4 +1,4 @@
-# Hold-to-run Web keyboard input for the left and right arms only.
+# Hold-to-run arm velocities and press-once gripper targets for l/r only.
 version: 1
 
 # The browser sends its complete pressed-key set at this interval.
@@ -9,6 +9,13 @@ input_timeout_ms: 150
 # Fractions multiply per-arm maxima from realman_motion.yaml.
 linear_speed_fraction: 0.4
 angular_speed_fraction: 0.4
+
+# Physical KeyboardEvent.code values; globally unique across arms and grippers.
+# One press submits a full target (release does not cancel it). Endpoints remain
+# authoritative in gripper.yaml: open = 1.0, close = 0.0.
+grippers:
+  l: {open: Digit1, close: Digit2}
+  r: {open: Digit9, close: Digit0}
 
 arms:
   l:

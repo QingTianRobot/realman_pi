@@ -130,16 +130,16 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
         keys = message.get("keys")
         if (
             not isinstance(keys, list)
-            or len(keys) > 12
+            or len(keys) > 14
             or not all(
-                isinstance(code, str) and re.fullmatch(r"Key[A-Z]", code)
+                isinstance(code, str) and re.fullmatch(r"Key[A-Z]|Digit[0-9]", code)
                 for code in keys
             )
             or len(set(keys)) != len(keys)
         ):
             raise ProtocolError(
                 "invalid_field",
-                "keys must be unique physical KeyA through KeyZ codes",
+                "keys must be unique physical KeyA–KeyZ or Digit0–Digit9 codes",
             )
         sequence = _integer(
             message.get("sequence"), "sequence", 0, 9_007_199_254_740_991

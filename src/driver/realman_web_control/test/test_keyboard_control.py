@@ -34,3 +34,30 @@ def test_opposite_keys_cancel_and_middle_arm_is_rejected():
     assert command.linear == (0.0, 0.0, 0.0)
     with pytest.raises(ValueError, match="l or r"):
         config.command("m", frozenset())
+
+
+def test_gripper_keys_preserve_independent_velocity_and_manifest_mapping():
+    config = load_config()
+    command = config.command("l", frozenset({"KeyW", "Digit1"}))
+    assert command.linear == pytest.approx((0.02, 0.0, 0.0))
+    assert config.public_manifest()["grippers"] == {
+        "l": {"open": "Digit1", "close": "Digit2"},
+        "r": {"open": "Digit9", "close": "Digit0"},
+    }
+    assert config.command("r", frozenset({"Digit0"})).linear == (0.0, 0.0, 0.0)
+    with pytest.raises(ValueError, match="unknown"):
+        config.command("l", frozenset({"Digit9"}))
+
+
+def test_gripper_key_configuration_rejects_conflicts(tmp_path):
+    import yaml
+    source = yaml.safe_load((ROOT / "config/ros/keyboard_control.yaml").read_text())
+    source["grippers"] = {
+        "l": {"open": "KeyW", "close": "Digit2"},
+        "r": {"open": "Digit9", "close": "Digit0"},
+    }
+    path = tmp_path / "keyboard.yaml"
+    path.write_text(yaml.safe_dump(source))
+    with pytest.raises(ValueError, match="unique"):
+        load_keyboard_control_config(path, ROOT / "config/ros/realman_motion.yaml",
+                                     ROOT / "config/ros/realman_coordinates.yaml")

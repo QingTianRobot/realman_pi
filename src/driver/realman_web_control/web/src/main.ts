@@ -52,6 +52,7 @@ type Manifest = {
   keyboard_control: {
     heartbeat_period_ms: number;
     input_timeout_ms: number;
+    grippers: Record<KeyboardArmId, { open: string; close: string }>;
     arms: Record<KeyboardArmId, {
       bindings: Record<string, { positive: string; negative: string }>;
       linear_speed_mps: number;
@@ -118,8 +119,8 @@ app.innerHTML = `
         <div class="input-mode-body"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div></div>
       </section>
       <section id="keyboard-control-card" class="panel panel-section keyboard-control-card" hidden>
-        <div class="panel-heading compact"><div><span class="eyebrow">HOLD TO RUN</span><h2>双臂键盘末端速度</h2></div><span id="keyboard-control-state" class="mini-state">RELEASED</span></div>
-        <p class="keyboard-help">切换到“Web / 键盘速度控制”后按住按键运动；松开、失焦或通信中断立即停止。</p>
+        <div class="panel-heading compact"><div><span class="eyebrow">KEYBOARD / L + R</span><h2>双臂键盘速度与夹爪</h2></div><span id="keyboard-control-state" class="mini-state">RELEASED</span></div>
+        <p class="keyboard-help">切换到“Web / 键盘速度控制”后：机械臂按住运动，松键、失焦或通信超时停止；夹爪按一次全开／全闭，松键不撤销已提交目标。仅在在线且无报警时接收新夹爪指令。</p>
         <div class="keyboard-arm-grid">
           <div id="keyboard-left" class="keyboard-arm" data-arm="l"></div>
           <div id="keyboard-right" class="keyboard-arm" data-arm="r"></div>
@@ -324,15 +325,25 @@ function keyboardWorkAvailable(arm: KeyboardArmId) {
     state.current_work === settings.work_reference_name && state.expected_work === settings.work_reference_name &&
     state.work?.name === settings.work_reference_name && state.work?.frame_id === settings.work_frame_id);
 }
-function keyboardArmReady(arm: KeyboardArmId) {
-  return keyboardModeActive() && keyboardWorkAvailable(arm) && canWrite();
+function keyboardGripperAvailable(arm: KeyboardArmId) {
+  const state = gripperStates[arm === "l" ? "gripper_left" : "gripper_right"];
+  return state?.connected === true && state.alarm === 0;
 }
-function keyboardCodes(arm: KeyboardArmId) {
+function keyboardVelocityCodes(arm: KeyboardArmId) {
   const bindings = manifest?.keyboard_control?.arms[arm]?.bindings ?? {};
   return new Set(Object.values(bindings).flatMap((binding) => [binding.positive, binding.negative]));
 }
+function keyboardGripperCodes(arm: KeyboardArmId) {
+  return new Set(Object.values(manifest?.keyboard_control?.grippers?.[arm] ?? {}));
+}
+function keyboardCodeReady(arm: KeyboardArmId, code: string) {
+  return keyboardModeActive() && canWrite() && !document.hidden &&
+    (keyboardGripperCodes(arm).has(code) ? keyboardGripperAvailable(arm) : keyboardWorkAvailable(arm));
+}
 function keyboardArmForCode(code: string): KeyboardArmId | undefined {
-  for (const arm of ["l", "r"] as const) if (keyboardCodes(arm).has(code)) return arm;
+  for (const arm of ["l", "r"] as const) {
+    if (keyboardVelocityCodes(arm).has(code) || keyboardGripperCodes(arm).has(code)) return arm;
+  }
   return undefined;
 }
 function sendKeyboardState(arm: KeyboardArmId) {
@@ -359,10 +370,14 @@ function reconcileKeyboardControl() {
     return;
   }
   for (const arm of ["l", "r"] as const) {
-    if (!keyboardWorkAvailable(arm) && keyboardPressed[arm].size) {
-      keyboardPressed[arm].clear();
-      sendKeyboardState(arm);
+    let changed = false;
+    for (const code of keyboardPressed[arm]) {
+      if (!keyboardCodeReady(arm, code)) {
+        keyboardPressed[arm].delete(code);
+        changed = true;
+      }
     }
+    if (changed) sendKeyboardState(arm);
   }
   if (!keyboardHeartbeat) {
     sendKeyboardStates();
@@ -375,19 +390,24 @@ function renderKeyboardArm(arm: KeyboardArmId) {
   const settings = manifest?.keyboard_control?.arms[arm];
   if (!settings) { host.replaceChildren(); return; }
   const axisLabels: Record<string, string> = { vx: "X", vy: "Y", vz: "Z", wx: "RX", wy: "RY", wz: "RZ" };
-  host.innerHTML = `<div class="keyboard-arm-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span>${escapeHtml(settings.work_frame_id)}</span></div><div class="keyboard-bindings">${Object.entries(settings.bindings).map(([axis, binding]) => `
-    <div class="keyboard-binding"><span>${axisLabels[axis] ?? axis}</span><kbd data-code="${escapeHtml(binding.positive)}">${escapeHtml(binding.positive.replace("Key", ""))}</kbd><em>+</em><kbd data-code="${escapeHtml(binding.negative)}">${escapeHtml(binding.negative.replace("Key", ""))}</kbd><em>−</em></div>`).join("")}</div>`;
+  const keyLabel = (code: string) => escapeHtml(code.replace(/^(Key|Digit)/, ""));
+  const gripper = manifest?.keyboard_control?.grippers?.[arm];
+  const health = gripperStates[arm === "l" ? "gripper_left" : "gripper_right"];
+  const gripperStatus = health?.connected !== true ? "OFFLINE" : health.alarm !== 0 ? "ALARM" : "READY";
+  host.innerHTML = `<div class="keyboard-arm-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span>${escapeHtml(settings.work_frame_id)}</span></div><div class="keyboard-bindings ${keyboardWorkAvailable(arm) ? "" : "unavailable"}">${Object.entries(settings.bindings).map(([axis, binding]) => `
+    <div class="keyboard-binding"><span>${axisLabels[axis] ?? axis}</span><kbd data-code="${escapeHtml(binding.positive)}">${keyLabel(binding.positive)}</kbd><em>+</em><kbd data-code="${escapeHtml(binding.negative)}">${keyLabel(binding.negative)}</kbd><em>−</em></div>`).join("")}</div>
+    ${gripper ? `<div class="keyboard-gripper ${keyboardGripperAvailable(arm) ? "" : "unavailable"}"><div class="keyboard-arm-heading"><strong>夹爪 / 单次目标</strong><span>${gripperStatus}</span></div><div class="keyboard-binding gripper-binding"><kbd data-code="${escapeHtml(gripper.open)}">${keyLabel(gripper.open)}</kbd><span>全开</span><kbd data-code="${escapeHtml(gripper.close)}">${keyLabel(gripper.close)}</kbd><span>全闭</span></div></div>` : ""}`;
   host.querySelectorAll<HTMLElement>("kbd[data-code]").forEach((key) => key.classList.toggle("pressed", keyboardPressed[arm].has(key.dataset.code ?? "")));
-  host.classList.toggle("unavailable", !keyboardWorkAvailable(arm));
 }
 function renderKeyboardControl() {
   keyboardControlCard.hidden = !keyboardModeDiscovered() || !manifest?.keyboard_control;
   if (keyboardControlCard.hidden) return;
   renderKeyboardArm("l");
   renderKeyboardArm("r");
-  const moving = keyboardPressed.l.size + keyboardPressed.r.size > 0;
+  const moving = (["l", "r"] as const).some((arm) => [...keyboardPressed[arm]].some((code) => keyboardVelocityCodes(arm).has(code)));
   const anyAvailable = keyboardWorkAvailable("l") || keyboardWorkAvailable("r");
-  const label = !keyboardModeActive() ? "RELEASED" : !anyAvailable ? "WORK UNAVAILABLE" : moving ? "MOVING" : "READY";
+  const gripperAvailable = keyboardGripperAvailable("l") || keyboardGripperAvailable("r");
+  const label = !keyboardModeActive() ? "RELEASED" : !anyAvailable ? (gripperAvailable ? "GRIPPER ONLY" : "WORK UNAVAILABLE") : moving ? "MOVING" : "READY";
   keyboardControlState.textContent = label;
   keyboardControlState.className = `mini-state keyboard-${label.toLowerCase().replaceAll(" ", "-")}`;
 }
@@ -1083,6 +1103,7 @@ function handleMessage(message: Message) {
       renderInputModeCard();
     }
   } else if (message.type === "input_mode_state") {
+    if (inputModeState && inputModeState.epoch !== Number(message.epoch)) releaseKeyboardInput();
     inputModeState = {
       requested_mode: String(message.requested_mode ?? ""),
       selected_mode: String(message.selected_mode ?? ""),
@@ -1099,6 +1120,7 @@ function handleMessage(message: Message) {
   } else if (message.type === "gripper_state") {
     gripperStates[String(message.name)] = message;
     renderGripperState();
+    reconcileKeyboardControl();
   } else if (message.type === "gripper_result") {
     if (message.message) $("#gripper-feedback").textContent = String(message.message);
   } else if (message.type === "coordinate_state") {
@@ -1417,12 +1439,14 @@ function loadManifest(next: Manifest) {
 
 window.addEventListener("keydown", (event) => {
   const target = event.target as HTMLElement | null;
-  if (target?.matches("input, textarea, select, [contenteditable='true']")) return;
+  if (event.repeat || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.isComposing) return;
+  if (target?.closest("input, textarea, select") || target?.isContentEditable) return;
   const arm = keyboardArmForCode(event.code);
-  if (!arm || !keyboardArmReady(arm)) return;
+  if (!arm || !keyboardCodeReady(arm, event.code)) return;
   event.preventDefault();
   if (!keyboardPressed[arm].has(event.code)) {
     keyboardPressed[arm].add(event.code);
+    reconcileKeyboardControl();
     sendKeyboardStates();
     renderKeyboardControl();
   }

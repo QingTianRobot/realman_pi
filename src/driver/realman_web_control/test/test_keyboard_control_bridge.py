@@ -37,3 +37,32 @@ def test_deactivate_clears_the_owner_and_sequence_state(config):
     assert bridge.owner is None
     with pytest.raises(ProtocolError, match="lease"):
         bridge.command("browser-a", {"arm": "l", "keys": [], "sequence": 6})
+
+
+def test_gripper_edges_fire_once_until_release_independently_per_arm(config):
+    bridge = KeyboardControlBridge(config)
+    bridge.activate("owner")
+    def send(arm, keys, sequence, client="owner"):
+        return bridge.command(client, {"arm": arm, "keys": keys, "sequence": sequence})
+
+    assert send("l", ["Digit1"], 1).gripper_command == "open"
+    assert send("r", ["Digit0"], 1).gripper_command == "close"
+    bridge.activate("owner")  # Repeated ACTIVE must not re-arm held keys.
+    assert send("l", ["Digit1", "KeyW"], 2).gripper_command is None
+    with pytest.raises(ProtocolError, match="lease"):
+        send("l", ["Digit2"], 3, "other")
+    with pytest.raises(ProtocolError, match="sequence"):
+        send("l", ["Digit2"], 2)
+    assert send("l", [], 3).gripper_command is None
+    assert send("l", ["Digit2"], 4).gripper_command == "close"
+
+
+def test_conflicting_gripper_keys_require_full_release_before_rearming(config):
+    bridge = KeyboardControlBridge(config)
+    bridge.activate("owner")
+    def send(keys, sequence):
+        return bridge.command("owner", {"arm": "l", "keys": keys, "sequence": sequence})
+    assert send(["Digit1", "Digit2"], 1).gripper_command is None
+    assert send(["Digit1"], 2).gripper_command is None
+    assert send([], 3).gripper_command is None
+    assert send(["Digit1"], 4).gripper_command == "open"

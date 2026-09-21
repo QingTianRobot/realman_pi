@@ -12,12 +12,14 @@ from typing import Any
 import rclpy
 from geometry_msgs.msg import TwistStamped
 from rclpy.action import ActionClient
+from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
 from realman_msgs.action import CartesianVelocity
 from realman_msgs.msg import InputModeState
-from std_msgs.msg import String
+from std_msgs.msg import Bool, Float32, Int32, String
 
 
 @dataclass(frozen=True)
@@ -126,10 +128,15 @@ class KeyboardControlRouter(Node):
         if self.input_timeout_ms <= 0:
             raise ValueError("input_timeout_ms must be positive")
         profiles = parse_arm_profiles(
-            list(self.declare_parameter("coordinate_references", []).value),
-            list(self.declare_parameter("cartesian_velocity_profiles", []).value),
+            list(self.declare_parameter("coordinate_references", Parameter.Type.STRING_ARRAY).value),
+            list(self.declare_parameter("cartesian_velocity_profiles", Parameter.Type.STRING_ARRAY).value),
         )
         self.mode = ""
+        self._mode_epoch = -1
+        self._mode_request_id = -1
+        self._gripper_publishers: dict[str, Any] = {}
+        self._gripper_states = {arm: {"connected": False, "alarm": None} for arm in ("l", "r")}
+        self._gripper_last_stamp = {"l": 0, "r": 0}
         self._arms: dict[str, _ArmState] = {}
         state_qos = QoSProfile(
             depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL
@@ -141,6 +148,21 @@ class KeyboardControlRouter(Node):
             state_qos,
         )
         for arm in ("l", "r"):
+            gripper = {"l": "gripper_left", "r": "gripper_right"}[arm]
+            self._gripper_publishers[arm] = self.create_publisher(
+                Float32, f"/{gripper}/percentage/command", 1
+            )
+            self.create_subscription(
+                String, f"/keyboard/{arm}/gripper_command",
+                lambda message, selected=arm: self._gripper_input(selected, message),
+                QoSProfile(depth=1, lifespan=Duration(nanoseconds=self.input_timeout_ms * 1_000_000)),
+            )
+            for field, message_type in (("connected", Bool), ("alarm", Int32)):
+                self.create_subscription(
+                    message_type, f"/{gripper}/{field}",
+                    lambda message, selected=arm, key=field: self._gripper_health(selected, key, message),
+                    1,
+                )
             state = _ArmState(
                 ActionClient(self, CartesianVelocity, f"/{arm}/cartesian_velocity"),
                 self.create_publisher(
@@ -164,7 +186,7 @@ class KeyboardControlRouter(Node):
         period = min(profile.control_period_ms for profile in profiles.values())
         self.create_timer(period / 1000.0, self._reconcile)
         self.get_logger().info(
-            "Keyboard velocity router ready for l/r default WORK sessions"
+            "Keyboard router ready for l/r default WORK velocities and gripper targets"
         )
 
     def _mode_state(self, message: InputModeState) -> None:
@@ -174,12 +196,45 @@ class KeyboardControlRouter(Node):
             and message.active_mode == "keyboard"
             else ""
         )
-        if active != self.mode:
+        epoch_changed = message.epoch != self._mode_epoch
+        self._mode_epoch = message.epoch
+        self._mode_request_id = message.request_id
+        if active != self.mode or epoch_changed:
             self.mode = active
-            if not active:
+            if not active or epoch_changed:
                 for arm in ("l", "r"):
                     self._publish_zero(arm)
                     self._cancel(arm, "input mode left keyboard")
+
+    def _gripper_health(self, arm: str, field: str, message: Any) -> None:
+        self._gripper_states[arm][field] = message.data
+
+    def _gripper_input(self, arm: str, message: String) -> None:
+        """Consume a fresh discrete target; never queue it for later activation."""
+        try:
+            event = json.loads(message.data)
+            if not isinstance(event, dict) or event.get("command") not in ("open", "close"):
+                raise ValueError("expected open or close")
+            if any(type(event.get(key)) is not int for key in ("epoch", "request_id", "stamp_ns")):
+                raise ValueError("epoch, request_id and stamp_ns must be integers")
+            stamp = event["stamp_ns"]
+            age_ns = self.get_clock().now().nanoseconds - stamp
+            if stamp <= self._gripper_last_stamp[arm] or not 0 <= age_ns <= self.input_timeout_ms * 1_000_000:
+                raise ValueError("stale or repeated gripper event")
+            # Consume valid edges even if a gate rejects them, including dry-run.
+            self._gripper_last_stamp[arm] = stamp
+            if (self.mode != "keyboard" or event["epoch"] != self._mode_epoch
+                    or event["request_id"] != self._mode_request_id):
+                raise ValueError("keyboard mode epoch/request is not active")
+            health = self._gripper_states[arm]
+            if health["connected"] is not True or health["alarm"] != 0:
+                raise ValueError("gripper is offline or alarmed")
+            if not self.dry_run:
+                self._gripper_publishers[arm].publish(
+                    Float32(data=1.0 if event["command"] == "open" else 0.0)
+                )
+        except (ValueError, TypeError) as error:
+            self.get_logger().warning(f"Ignoring keyboard gripper input for {arm}: {error}")
 
     def _coordinate_state(self, arm: str, message: String) -> None:
         try:

@@ -120,11 +120,12 @@ Action 取消也会丢弃匹配 arm/action 且由该浏览器拥有的排队请�
 一直显示 ready，也会清空旧目录、状态和请求关联并重新订阅。`FAILED` 后同一 request ID
 的更高 epoch 回退状态可以刷新页面，但不会恢复已失败的原运动请求。
 
-### 双臂键盘末端速度
+### 双臂键盘末端速度与夹爪
 
-只有动态目录包含可选的 `keyboard` 时，8765 页面才显示“双臂键盘末端速度”卡片；切换状态必须达到
+只有动态目录包含可选的 `keyboard` 时，8765 页面才显示“双臂键盘速度与夹爪”卡片；切换状态必须达到
 `ACTIVE/keyboard` 后才捕获运动键。浏览器使用物理位置稳定的 `KeyboardEvent.code`，不使用会受输入法、
 Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`select` 和 `contenteditable` 中的输入。
+自动重复、输入法组合事件，以及带 Ctrl/Alt/Meta/Shift 的快捷键不触发新控制输入。
 左右臂按键完全独立，可同时按住：
 
 | 末端轴 | 左臂正/负 | 右臂正/负 |
@@ -136,15 +137,29 @@ Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`s
 | RY | `Z` / `C` | `N` / `M` |
 | RZ | `X` / `V` | `B` / `G` |
 
+| 夹爪单次目标 | 左夹爪 | 右夹爪 |
+| --- | --- | --- |
+| 全开 | `1`（`Digit1`） | `9`（`Digit9`） |
+| 全闭 | `2`（`Digit2`） | `0`（`Digit0`） |
+
+数字键使用主键盘物理码，不是小键盘 `Numpad*`。每侧显示独立的 `READY`、`OFFLINE` 或 `ALARM`。
+夹爪只要求连接正常且无报警，不依赖 WORK；机械臂 WORK 不可用时，健康夹爪仍可使用。
+夹爪按一次提交一次目标，长按／心跳不重复发送；同侧开闭键同时按下不发送，必须全部松开后才重新接收。
+**松键、失焦、离开模式和断网只阻止新夹爪目标，不撤销已提交的全开／全闭动作。**
+目标沿 keyboard router 转发，`dry_run=true` 不输出夹爪命令；键盘路径没有到位完成回执，按键高亮不代表物理完成。
+完整数据流和端点语义见[夹爪控制](./gripper-control#键盘双夹爪全开-全闭)。
+
 浏览器对每臂发送完整按键集合，而不是单独的 keydown/keyup 边沿：
 
 ```json
-{"type":"keyboard_state","arm":"l","keys":["KeyW","KeyQ"],"sequence":42}
+{"type":"keyboard_state","arm":"l","keys":["KeyW","KeyQ","Digit1"],"sequence":42}
 ```
 
-`arm` 只能是 `l` 或 `r`；`keys` 只能包含该臂配置的、互不重复的 `KeyA`..`KeyZ` 物理码；`sequence`
+`arm` 只能是 `l` 或 `r`；`keys` 最多 14 项，只能包含该侧配置的、互不重复的 `KeyA`..`KeyZ` 或 `Digit0`..`Digit9` 物理码；`sequence`
 必须在每臂范围内严格递增。成功进入 keyboard 后，一个 WebSocket 获得独占 lease，竞争连接、旧 sequence、
-未知键、重复键和 m 输入均被拒绝。每 `50 ms` 心跳都会发送左右臂各自的完整集合，包括空集合；
+未知键、重复键和 m 输入均被拒绝。同一 owner 重选 keyboard 不重置 sequence 或夹爪按键边沿。
+外部模式切换、epoch 改变、目录移除 keyboard 也会释放旧 lease，不能靠缓存控制权继续发送。
+每 `50 ms` 心跳都会发送左右臂各自的完整集合，包括空集合；
 后端 `150 ms` 未收到该臂新输入就清零并取消该臂 session。
 
 键位、`50 ms` 心跳、`150 ms` Web 输入超时和 `0.4` 速度比例来自
@@ -152,15 +167,17 @@ Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`s
 [`config/ros/realman_motion.yaml`](../../../config/ros/realman_motion.yaml) 的逐臂上限；当前 l/r 都派生为
 `0.02 m/s` 线速度和 `0.10 rad/s` 角速度。WORK 名称和 frame ID 仍来自
 [`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml)，键盘配置不会复制
-运动上限或坐标定义。
+运动上限或坐标定义。`grippers.l|r.open|close` 定义夹爪物理键；全部机械臂和夹爪键码必须全局唯一。
+实际全开／全闭位置仍只由 `config/ros/gripper.yaml` 管理。
 
-每臂必须独立满足默认 WORK gate；一侧失配只清空该侧，另一侧仍可控制。卡片状态含义是：
-`READY`（活动模式下至少一侧 WORK 可用且当前没有按键）、`MOVING`（浏览器存在按下键）、`RELEASED`（未处于活动
-keyboard）和 `WORK UNAVAILABLE`（活动模式下两侧均不满足 WORK gate）。这些标签只描述浏览器输入状态，
+每臂速度必须独立满足默认 WORK gate；一侧失配只清空该侧速度键，不清除健康夹爪键。卡片状态含义是：
+`READY`（活动模式下至少一侧 WORK 可用且没有速度键按下）、`MOVING`（浏览器存在速度键）、`RELEASED`（未处于活动
+keyboard）、`GRIPPER ONLY`（WORK 均不可用但有健康夹爪）和 `WORK UNAVAILABLE`（WORK 均不可用且无健康夹爪）。这些标签只描述浏览器输入状态，
 不证明机械臂已经产生物理运动。
 
-`keyup` 会立即发送该臂更新后的完整集合；松开某一臂的全部按键只停止该臂。对应臂 WORK 失配时也只
-清空并发送该臂，另一臂和活动心跳继续。窗口 `blur`、页面隐藏、目录不再包含 keyboard 或离开
+`keyup` 会立即发送该侧更新后的完整集合；松开某一臂的全部速度键只停止该臂。对应臂 WORK 失配时也只
+清空该臂速度键并发送，另一臂、健康夹爪键和活动心跳继续。夹爪离线／报警只清空该侧夹爪键。
+窗口 `blur`、页面隐藏、目录不再包含 keyboard 或离开
 `ACTIVE/keyboard` 时，浏览器清空两臂并停止心跳；WebSocket 已关闭时不能再发送消息，因此服务端通过
 disconnect 处理释放 lease、发布两臂零值并请求 `none`。服务端输入超时和 driver watchdog 是浏览器事件
 之外的独立保护，不能用前端状态替代。

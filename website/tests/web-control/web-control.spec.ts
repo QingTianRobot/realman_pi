@@ -661,6 +661,85 @@ test("captures independent l/r physical keys only while keyboard is active", asy
   await page.keyboard.up("i");
 });
 
+async function activateKeyboardWithGrippers(page: any) {
+  await page.goto("/");
+  await expect(page.locator(".fleet-chip[data-arm='l']")).toContainText("ONLINE");
+  await emitWebSocketEvent(page, { type: "input_mode_list", available: true,
+    modes: [{ id: "keyboard", label: "Keyboard", selectable: true }] });
+  await emitWebSocketEvent(page, { type: "input_mode_state", requested_mode: "keyboard",
+    selected_mode: "keyboard", active_mode: "keyboard", phase: "ACTIVE", request_id: 55, epoch: 8 });
+  for (const name of ["gripper_left", "gripper_right"]) {
+    await emitWebSocketEvent(page, { type: "gripper_state", name, connected: true, alarm: 0,
+      position: 0, speed: 0, current: 0, torque_reached: false });
+  }
+}
+
+async function latestKeys(page: any, arm: string) {
+  return page.evaluate((id: string) => ((window as any).__webMessages as string[]).map(JSON.parse)
+    .findLast((msg) => msg.type === "keyboard_state" && msg.arm === id)?.keys ?? [], arm);
+}
+
+test("keyboard grippers use independent full-target keys alongside arm velocity", async ({ page }) => {
+  await activateKeyboardWithGrippers(page);
+  await expect(page.locator("#keyboard-control-card")).toContainText("松键不撤销");
+  await expect(page.locator('#keyboard-left [data-code="Digit1"]')).toHaveText("1");
+  await expect(page.locator('#keyboard-right [data-code="Digit0"]')).toHaveText("0");
+  await page.keyboard.down("w");
+  await page.keyboard.down("1");
+  await page.keyboard.down("0");
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["Digit1", "KeyW"]);
+  await expect.poll(() => latestKeys(page, "r")).toEqual(["Digit0"]);
+  await page.keyboard.up("1");
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["KeyW"]);
+  await page.keyboard.up("w");
+  await page.keyboard.up("0");
+  await page.keyboard.down("2");
+  await page.keyboard.down("9");
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["Digit2"]);
+  await expect.poll(() => latestKeys(page, "r")).toEqual(["Digit9"]);
+});
+
+test("keyboard gripper readiness is independent from WORK and blocks alarms", async ({ page }) => {
+  await activateKeyboardWithGrippers(page);
+  await page.keyboard.down("w");
+  await page.keyboard.down("1");
+  await emitWebSocketEvent(page, { type: "coordinate_state", arm: "l", motion_allowed: false,
+    work_matched: false, current_work: "other", expected_work: "cell" });
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["Digit1"]);
+  await page.keyboard.up("1");
+  await page.keyboard.down("2");
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["Digit2"]);
+  await emitWebSocketEvent(page, { type: "gripper_state", name: "gripper_left", connected: true, alarm: 1 });
+  await expect.poll(() => latestKeys(page, "l")).toEqual([]);
+  await expect(page.locator("#keyboard-left .keyboard-gripper")).toContainText("ALARM");
+  await page.keyboard.up("2");
+  await page.keyboard.down("1");
+  await expect.poll(() => latestKeys(page, "l")).toEqual([]);
+  await page.keyboard.down("9");
+  await expect.poll(() => latestKeys(page, "r")).toEqual(["Digit9"]);
+});
+
+test("keyboard grippers ignore repeats after blur, modifiers and editable targets", async ({ page }) => {
+  await activateKeyboardWithGrippers(page);
+  await page.keyboard.down("1");
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["Digit1"]);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await page.keyboard.down("1"); // Physical key is still down: repeat=true.
+  await expect.poll(() => latestKeys(page, "l")).toEqual([]);
+  await page.keyboard.up("1");
+  await page.keyboard.press("Control+2");
+  await expect.poll(() => latestKeys(page, "l")).toEqual([]);
+  await page.locator("input[data-joint-index='0']").focus();
+  await page.keyboard.press("1");
+  await expect.poll(() => latestKeys(page, "l")).toEqual([]);
+  await page.locator("input[data-joint-index='0']").blur();
+  await page.keyboard.down("2");
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["Digit2"]);
+  await emitWebSocketEvent(page, { type: "input_mode_state", requested_mode: "none", selected_mode: "none",
+    active_mode: "none", phase: "ACTIVE", request_id: 56, epoch: 9 });
+  await expect.poll(() => latestKeys(page, "l")).toEqual([]);
+});
+
 test("keyboard safety events release both arms and stop heartbeat", async ({ page }) => {
   await page.goto("/");
   await emitWebSocketEvent(page, {

@@ -13,7 +13,7 @@ import yaml
 
 _ARMS = ("l", "r")
 _AXES = ("vx", "vy", "vz", "wx", "wy", "wz")
-_CODE = re.compile(r"Key[A-Z]")
+_CODE = re.compile(r"Key[A-Z]|Digit[0-9]")
 
 
 @dataclass(frozen=True)
@@ -23,6 +23,7 @@ class KeyboardArmCommand:
     angular: tuple[float, float, float]
     reference_name: str
     frame_id: str
+    gripper_command: str | None = None
 
 
 @dataclass(frozen=True)
@@ -40,6 +41,7 @@ class KeyboardControlConfig:
     heartbeat_period_ms: int
     input_timeout_ms: int
     arms: dict[str, KeyboardArmConfig]
+    grippers: dict[str, dict[str, str]]
 
     def command(self, arm: str, keys: frozenset[str]) -> KeyboardArmCommand:
         arm_config = self.arms.get(arm)
@@ -62,6 +64,7 @@ class KeyboardControlConfig:
         return {
             "heartbeat_period_ms": self.heartbeat_period_ms,
             "input_timeout_ms": self.input_timeout_ms,
+            "grippers": {arm: dict(bindings) for arm, bindings in self.grippers.items()},
             "arms": {
                 arm: {
                     "bindings": {
@@ -121,6 +124,9 @@ def load_keyboard_control_config(
     arms_document = _mapping(document.get("arms"), "keyboard.arms")
     if set(arms_document) != set(_ARMS):
         raise ValueError("keyboard.arms must define exactly l and r")
+    grippers_document = _mapping(document.get("grippers"), "keyboard.grippers")
+    if set(grippers_document) != set(_ARMS):
+        raise ValueError("keyboard.grippers must define exactly l and r")
 
     heartbeat = document.get("heartbeat_period_ms")
     timeout = document.get("input_timeout_ms")
@@ -138,6 +144,18 @@ def load_keyboard_control_config(
     coordinate_robots = _mapping(coordinates.get("robots"), "coordinates.robots")
 
     seen_codes: set[str] = set()
+    grippers: dict[str, dict[str, str]] = {}
+    for arm in _ARMS:
+        pair = _mapping(grippers_document[arm], f"keyboard.grippers.{arm}")
+        if set(pair) != {"open", "close"}:
+            raise ValueError(f"keyboard.grippers.{arm} must define open and close")
+        codes = (pair["open"], pair["close"])
+        if not all(isinstance(code, str) and _CODE.fullmatch(code) for code in codes):
+            raise ValueError("keyboard codes must match physical KeyA–KeyZ or Digit0–Digit9")
+        if codes[0] == codes[1] or seen_codes.intersection(codes):
+            raise ValueError("keyboard physical codes must be globally unique")
+        seen_codes.update(codes)
+        grippers[arm] = dict(pair)
     arms: dict[str, KeyboardArmConfig] = {}
     for arm in _ARMS:
         bindings_document = _mapping(arms_document[arm], f"keyboard.arms.{arm}")
@@ -150,7 +168,7 @@ def load_keyboard_control_config(
                 raise ValueError(f"keyboard.arms.{arm}.{axis} must define positive and negative")
             codes = (pair["positive"], pair["negative"])
             if not all(isinstance(code, str) and _CODE.fullmatch(code) for code in codes):
-                raise ValueError("keyboard codes must match physical KeyA through KeyZ")
+                raise ValueError("keyboard codes must match physical KeyA–KeyZ or Digit0–Digit9")
             if codes[0] == codes[1] or seen_codes.intersection(codes):
                 raise ValueError("keyboard physical codes must be globally unique")
             seen_codes.update(codes)
@@ -174,7 +192,8 @@ def load_keyboard_control_config(
             raise ValueError(f"coordinates.robots.{arm} default WORK names are missing")
         arms[arm] = KeyboardArmConfig(
             bindings=bindings,
-            allowed_codes=frozenset(code for pair in bindings.values() for code in pair),
+            allowed_codes=frozenset(code for pair in bindings.values() for code in pair)
+            | frozenset(grippers[arm].values()),
             linear_speed_mps=linear_fraction * _positive_speed(
                 motion_arm.get("max_linear_speed_mps"),
                 f"motion.robots.{arm}.max_linear_speed_mps",
@@ -186,4 +205,4 @@ def load_keyboard_control_config(
             reference_name=controller_name,
             frame_id=frame_id,
         )
-    return KeyboardControlConfig(heartbeat, timeout, arms)
+    return KeyboardControlConfig(heartbeat, timeout, arms, grippers)

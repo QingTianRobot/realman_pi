@@ -10,6 +10,16 @@ def test_keyboard_state_uses_l_r_physical_codes_and_safe_sequence():
     assert parse_message(json.dumps(message)) == message
 
 
+def test_keyboard_state_accepts_full_arm_and_gripper_set_but_not_arbitrary_codes():
+    keys = ["KeyW", "KeyS", "KeyA", "KeyD", "KeyR", "KeyF", "KeyQ", "KeyE",
+            "KeyZ", "KeyC", "KeyX", "KeyV", "Digit1", "Digit2"]
+    message = {"type": "keyboard_state", "arm": "l", "keys": keys, "sequence": 4}
+    assert parse_message(json.dumps(message)) == message
+    for invalid in (["1"], ["Numpad1"], ["Digit1", "Digit1"], ["ControlLeft"]):
+        with pytest.raises(ProtocolError):
+            parse_message(json.dumps({**message, "keys": invalid}))
+
+
 @pytest.mark.parametrize("message", [
     {"type": "keyboard_state", "arm": "m", "keys": [], "sequence": 1},
     {"type": "keyboard_state", "arm": "l", "keys": ["w"], "sequence": 1},

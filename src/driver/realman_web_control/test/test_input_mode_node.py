@@ -119,6 +119,11 @@ def node(monkeypatch):
     )
     value._keyboard = KeyboardControlBridge(value._keyboard_config)
     value._keyboard_publishers = {arm: Publisher() for arm in ("l", "r")}
+    value._keyboard_gripper_publishers = {arm: Publisher() for arm in ("l", "r")}
+    value._gripper_states = {
+        name: {"connected": True, "alarm": 0}
+        for name in ("gripper_left", "gripper_right")
+    }
     value._input_modes = InputModeBridge(web_override_timeout_sec=5.0)
     value._mode_discovery_period = 0.25
     value._mode_list_future = None
@@ -167,8 +172,65 @@ def sent(node):
             for client in clients.values() for goal, _ in client.goals]
 
 
+def activate_keyboard(node):
+    node._input_modes.update_catalog((*CATALOG, InputModeOption("keyboard", "Keyboard", True)))
+    effects = node._input_modes.select_mode("browser", {"request_id": "keyboard", "mode_id": "keyboard"})
+    node._input_modes.selection_response(effects[-1].token, True, 50, "accepted")
+    node._apply_input_mode_effects(node._input_modes.update_state(
+        InputModeSnapshot("keyboard", "keyboard", "keyboard", "ACTIVE", 50, 2)))
+
+
+def test_keyboard_grippers_publish_edges_without_work_and_do_not_repeat(node):
+    activate_keyboard(node)
+    for arm, key in (("l", "Digit1"), ("r", "Digit0")):
+        for sequence in (1, 2):
+            node._dispatch("browser", {"type": "keyboard_state", "arm": arm,
+                                      "keys": [key], "sequence": sequence})
+    for arm, action in (("l", "open"), ("r", "close")):
+        messages = node._keyboard_gripper_publishers[arm].messages
+        assert len(messages) == 1
+        event = json.loads(messages[0].data)
+        assert event["command"] == action
+        assert event["epoch"] == 2
+        assert event["request_id"] == 50
+        assert event["stamp_ns"] > 0
+    assert set(node._keyboard_gripper_publishers) == {"l", "r"}
+
+
+def test_healthy_gripper_edge_survives_simultaneous_invalid_work_velocity(node):
+    activate_keyboard(node)
+    with pytest.raises(ProtocolError, match="WORK"):
+        node._dispatch("browser", {"type": "keyboard_state", "arm": "l",
+                                  "keys": ["KeyW", "Digit1"], "sequence": 1})
+    assert len(node._keyboard_gripper_publishers["l"].messages) == 1
+    assert not any(msg.twist.linear.x for msg in node._keyboard_publishers["l"].messages)
+
+
+@pytest.mark.parametrize("health", [{"connected": False, "alarm": 0}, {"connected": True, "alarm": 1}, {}])
+def test_keyboard_rejects_unhealthy_gripper_without_delayed_replay(node, health):
+    activate_keyboard(node)
+    node._gripper_states["gripper_left"] = health
+    with pytest.raises(ProtocolError, match="gripper"):
+        node._dispatch("browser", {"type": "keyboard_state", "arm": "l",
+                                  "keys": ["Digit1"], "sequence": 1})
+    node._gripper_states["gripper_left"] = {"connected": True, "alarm": 0}
+    node._dispatch("browser", {"type": "keyboard_state", "arm": "l",
+                              "keys": ["Digit1"], "sequence": 2})
+    assert node._keyboard_gripper_publishers["l"].messages == []
+
+
+def test_keyboard_stale_lease_cannot_submit_after_external_mode_loss(node):
+    activate_keyboard(node)
+    node._apply_input_mode_effects(node._input_modes.update_state(
+        InputModeSnapshot("none", "none", "none", "ACTIVE", 51, 3)))
+    with pytest.raises(ProtocolError):
+        node._dispatch("browser", {"type": "keyboard_state", "arm": "l",
+                                  "keys": ["Digit1"], "sequence": 1})
+    assert node._keyboard_gripper_publishers["l"].messages == []
+
+
 def test_keyboard_owner_publishes_only_verified_default_work_commands(node):
-    node._keyboard.activate("browser")
+    activate_keyboard(node)
     node._coordinate_state["l"] = {
         "motion_allowed": True,
         "work_matched": True,
@@ -185,7 +247,7 @@ def test_keyboard_owner_publishes_only_verified_default_work_commands(node):
 
 
 def test_keyboard_rejects_unverified_work_and_never_constructs_middle_publisher(node):
-    node._keyboard.activate("browser")
+    activate_keyboard(node)
     node._coordinate_state["l"] = {
         "motion_allowed": False,
         "work_matched": False,

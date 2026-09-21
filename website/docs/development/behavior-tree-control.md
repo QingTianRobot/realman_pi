@@ -78,6 +78,15 @@ Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。键盘�
 goal 会立即取消，不能成为 active session。`dry_run=true` 时仍校验模式、WORK、配置和输入，但不发送
 driver Goal，也不发布 driver command。
 
+同一 keyboard 分支还支持左右夹爪的单次全开／全闭：左 `1/2`、右 `9/0`，与速度键独立。
+Web bridge 检查 lease/sequence 并识别新按下边沿，发布 `/keyboard/l|r/gripper_command`
+（`std_msgs/msg/String` JSON：`command`、`epoch`、`request_id`、`stamp_ns`）。router 只在
+`ACTIVE/keyboard`、epoch/request 匹配、事件未重复且在 `input_timeout_ms` 内、对应夹爪在线且无报警时，
+转发 `Float32` 到 `/gripper_left|right/percentage/command`；`1.0` 全开、`0.0` 全闭。
+夹爪不依赖 WORK，也不建立机械臂 Action。`dry_run=true` 消费事件但不输出；非活动、旧 epoch、健康拒绝事件不重放。
+松键／模式离开不会取消已提交夹爪目标，更不能向夹爪发送零值来模拟停止。详见
+[键盘夹爪契约](./gripper-control#键盘双夹爪全开-全闭)。原 ReactiveFallback 和 `KeyboardVelocityInput` 无需新分支。
+
 同一 launch 还启动 `pika_control_router`。它接收 executor 的 active mode，并只为 l/r 管理 Pika
 Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/command` 和
 `/gripper_right/percentage/command`。只有 `pikaposition` 或 `pikavelocity` 处于 `ACTIVE` 时才转发；

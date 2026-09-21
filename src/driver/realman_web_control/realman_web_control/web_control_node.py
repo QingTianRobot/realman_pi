@@ -144,6 +144,12 @@ class WebControlNode(Node):
             keyboard_file, motion_file, coordinates_file
         )
         self._keyboard = KeyboardControlBridge(self._keyboard_config)
+        self._keyboard_gripper_publishers = {
+            arm: self.create_publisher(String, f"/keyboard/{arm}/gripper_command",
+                QoSProfile(depth=1, lifespan=Duration(
+                    nanoseconds=self._keyboard_config.input_timeout_ms * 1_000_000)))
+            for arm in ("l", "r")
+        }
         self._keyboard_publishers = {
             arm: self.create_publisher(
                 TwistStamped, f"/keyboard/{arm}/cartesian_velocity", 1
@@ -666,14 +672,33 @@ class WebControlNode(Node):
         )
 
     def _keyboard_state(self, client_id: str, message: dict[str, Any]) -> None:
+        snapshot = self._input_modes.keyboard_snapshot(client_id)
         command = self._keyboard.command(client_id, message)
+        gripper_error = None
+        if command.gripper_command is not None:
+            name = {"l": "gripper_left", "r": "gripper_right"}[command.arm]
+            state = self._gripper_states.get(name, {})
+            if state.get("connected") is not True or state.get("alarm") != 0:
+                gripper_error = ProtocolError("keyboard_gripper_unavailable", f"{name} gripper is offline or alarmed")
+            else:
+                # Discrete press edge; the BT router owns dry-run and mode gates.
+                # Never publish a release value: 0.0 means FULL CLOSE, not stop.
+                event = String(data=json.dumps({
+                    "command": command.gripper_command,
+                    "epoch": snapshot.epoch, "request_id": snapshot.request_id,
+                    "stamp_ns": self.get_clock().now().nanoseconds,
+                }))
+                self._keyboard_gripper_publishers[command.arm].publish(event)
         nonzero = any(command.linear) or any(command.angular)
         if nonzero and not self._keyboard_work_available(command.arm):
+            self._publish_keyboard_command(self._keyboard_config.command(command.arm, frozenset()))
             raise ProtocolError(
                 "keyboard_work_unavailable",
                 f"{command.arm} default WORK reference is unavailable",
             )
         self._publish_keyboard_command(command)
+        if gripper_error is not None:
+            raise gripper_error
 
     def _publish_keyboard_command(self, command: KeyboardArmCommand) -> None:
         message = TwistStamped()

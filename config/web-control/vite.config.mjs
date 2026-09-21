@@ -58,6 +58,7 @@ async function devManifest() {
       heartbeat_period_ms: keyboard.heartbeat_period_ms,
       input_timeout_ms: keyboard.input_timeout_ms,
       arms: keyboardArms,
+      grippers: keyboard.grippers,
     },
   };
 }

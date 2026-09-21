@@ -1,6 +1,8 @@
 from concurrent.futures import Future
 from pathlib import Path
 import sys
+import json
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -103,3 +105,167 @@ def test_late_accepted_goal_is_cancelled_after_mode_loss():
 
     assert handle.cancelled
     assert state.goal_handle is None
+
+
+@pytest.fixture
+def router_node(request):
+    from keyboard_control_router import KeyboardControlRouter
+    import rclpy
+    from rclpy.node import Node
+
+    rclpy.init(args=["--ros-args", "-p", "coordinate_references:=['l|default_work|1|cell|l/work/cell','r|default_work|1|cell|r/work/cell']",
+                     "-p", "cartesian_velocity_profiles:=['l|20|100|0.05|0.25|0.1|0.5|10|2','r|20|100|0.05|0.25|0.1|0.5|10|2']"])
+    request.addfinalizer(rclpy.shutdown)
+    router = KeyboardControlRouter()
+    request.addfinalizer(lambda: Node.destroy_node(router))
+    return router
+
+
+@pytest.fixture
+def gripper_router(router_node):
+    from std_msgs.msg import Bool, Int32
+    from realman_msgs.msg import InputModeState
+    router = router_node
+    router.dry_run = False
+    outputs = {"l": [], "r": []}
+    # Replace only external output transport; all mode/readiness gates stay real.
+    router._gripper_publishers = {arm: SimpleNamespace(publish=messages.append)
+                                   for arm, messages in outputs.items()}
+    for arm in outputs:
+        router._gripper_health(arm, "connected", Bool(data=True))
+        router._gripper_health(arm, "alarm", Int32(data=0))
+    router._mode_state(InputModeState(active_mode="keyboard", phase=InputModeState.ACTIVE,
+                                     epoch=2, request_id=50))
+    yield router, outputs
+
+
+def gripper_event(router, **changes):
+    from std_msgs.msg import String
+    payload = {"command": "open", "epoch": 2, "request_id": 50,
+               "stamp_ns": router.get_clock().now().nanoseconds}
+    payload.update(changes)
+    return String(data=json.dumps(payload))
+
+
+def test_gripper_router_forwards_independent_targets_once_without_work(gripper_router):
+    router, outputs = gripper_router
+    event = gripper_event(router)
+    router._gripper_input("l", event)
+    router._gripper_input("l", event)
+    router._gripper_input("r", gripper_event(router, command="close"))
+    assert [msg.data for msg in outputs["l"]] == [1.0]
+    assert [msg.data for msg in outputs["r"]] == [0.0]
+    assert not router._arms["l"].work_available
+    assert set(router._gripper_publishers) == {"l", "r"}
+
+
+def test_gripper_router_dry_run_consumes_event_without_later_replay(gripper_router):
+    router, outputs = gripper_router
+    event = gripper_event(router)
+    router.dry_run = True
+    router._gripper_input("l", event)
+    router.dry_run = False
+    router._gripper_input("l", event)
+    assert outputs == {"l": [], "r": []}
+
+
+@pytest.mark.parametrize("changes", [{"command": "stop"}, {"epoch": 1}, {"epoch": True},
+                                     {"request_id": 49}, {"stamp_ns": 0}, {"stamp_ns": True},
+                                     {"stamp_ns": 9999999999999999999}])
+def test_gripper_router_rejects_invalid_or_stale_event(gripper_router, changes):
+    router, outputs = gripper_router
+    router._gripper_input("l", gripper_event(router, **changes))
+    assert outputs["l"] == []
+
+
+def test_gripper_router_rejects_expired_event_and_malformed_json(gripper_router):
+    from std_msgs.msg import String
+    router, outputs = gripper_router
+    router._gripper_input("l", gripper_event(router,
+        stamp_ns=router.get_clock().now().nanoseconds - 151_000_000))
+    for invalid in ("not json", "null", "[]", '{}'):
+        router._gripper_input("l", String(data=invalid))
+    assert outputs["l"] == []
+
+
+@pytest.mark.parametrize("field,value", [("connected", False), ("alarm", 1)])
+def test_gripper_router_checks_health_and_drops_unhealthy_events(gripper_router, field, value):
+    from std_msgs.msg import Bool, Int32
+    router, outputs = gripper_router
+    message_type = Bool if field == "connected" else Int32
+    router._gripper_health("l", field, message_type(data=value))
+    event = gripper_event(router)
+    router._gripper_input("l", event)
+    router._gripper_health("l", field, message_type(data=True if field == "connected" else 0))
+    router._gripper_input("l", event)
+    assert outputs["l"] == []
+
+
+def test_gripper_router_mode_loss_and_reentry_do_not_replay_or_close(gripper_router):
+    from realman_msgs.msg import InputModeState
+    router, outputs = gripper_router
+    old = gripper_event(router)
+    router._mode_state(InputModeState(active_mode="none", phase=InputModeState.ACTIVE,
+                                     epoch=3, request_id=51))
+    router._gripper_input("l", old)
+    router._mode_state(InputModeState(active_mode="keyboard", phase=InputModeState.ACTIVE,
+                                     epoch=4, request_id=52))
+    router._gripper_input("l", old)
+    assert outputs == {"l": [], "r": []}
+    router._gripper_input("l", gripper_event(router, epoch=4, request_id=52))
+    assert [msg.data for msg in outputs["l"]] == [1.0]
+
+
+def test_gripper_topics_route_real_dds_messages_and_suppress_dry_run(router_node):
+    """Isolated ROS domain/container only; no driver or gripper manager exists."""
+    from rclpy.node import Node
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.qos import QoSProfile, QoSDurabilityPolicy
+    from realman_msgs.msg import InputModeState
+    from std_msgs.msg import Bool, Float32, Int32, String
+
+    router = router_node
+    peer = Node("keyboard_gripper_test_peer")
+    executor = SingleThreadedExecutor()
+    executor.add_node(router)
+    executor.add_node(peer)
+    outputs = {"l": [], "r": []}
+    mode = peer.create_publisher(InputModeState, "/realman_bt_executor/input_mode_state",
+        QoSProfile(depth=1, durability=QoSDurabilityPolicy.TRANSIENT_LOCAL))
+    ingress, health = {}, []
+    for arm, name in (("l", "gripper_left"), ("r", "gripper_right")):
+        peer.create_subscription(Float32, f"/{name}/percentage/command",
+                                 lambda msg, side=arm: outputs[side].append(msg.data), 1)
+        ingress[arm] = peer.create_publisher(String, f"/keyboard/{arm}/gripper_command", 1)
+        health.extend((
+            (peer.create_publisher(Bool, f"/{name}/connected", 1), Bool(data=True)),
+            (peer.create_publisher(Int32, f"/{name}/alarm", 1), Int32(data=0)),
+        ))
+
+    def spin_until(predicate):
+        deadline = time.monotonic() + 5.0
+        while not predicate() and time.monotonic() < deadline:
+            executor.spin_once(timeout_sec=0.01)
+        assert predicate(), "isolated ROS graph did not reach expected state"
+
+    try:
+        spin_until(lambda: all(pub.get_subscription_count() for pub in [mode, *ingress.values(), *(p for p, _ in health)])
+                   and all(pub.get_subscription_count() for pub in router._gripper_publishers.values()))
+        mode.publish(InputModeState(active_mode="keyboard", phase=InputModeState.ACTIVE, epoch=2, request_id=50))
+        for publisher, message in health:
+            publisher.publish(message)
+        spin_until(lambda: router.mode == "keyboard" and all(s == {"connected": True, "alarm": 0}
+                    for s in router._gripper_states.values()))
+        assert router.dry_run is True
+        ingress["l"].publish(gripper_event(router))
+        spin_until(lambda: router._gripper_last_stamp["l"] > 0)
+        assert outputs == {"l": [], "r": []}
+        router.dry_run = False
+        ingress["l"].publish(gripper_event(router))
+        ingress["r"].publish(gripper_event(router, command="close"))
+        spin_until(lambda: outputs == {"l": [1.0], "r": [0.0]})
+    finally:
+        executor.remove_node(peer)
+        executor.remove_node(router)
+        executor.shutdown()
+        peer.destroy_node()

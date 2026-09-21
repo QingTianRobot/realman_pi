@@ -39,6 +39,24 @@ def test_keyboard_activation_leaving_and_disconnect_release_the_lease(bridge):
     assert disconnected[-1].payload == {"mode_id": "none"}
 
 
+@pytest.mark.parametrize("change", ["external_mode", "epoch", "catalog"])
+def test_keyboard_authorization_is_revoked_on_external_changes(bridge, change):
+    from realman_web_control.protocol import ProtocolError
+    controller, _ = bridge
+    activate_keyboard(controller)
+    assert controller.keyboard_snapshot("browser-a").epoch == 2
+    with pytest.raises(ProtocolError, match="lease"):
+        controller.keyboard_snapshot("other")
+    if change == "catalog":
+        effects = controller.update_catalog(tuple(x for x in CATALOG if x.id != "keyboard"))
+    else:
+        effects = controller.update_state(state(51, "none" if change == "external_mode" else "keyboard", epoch=3))
+    assert "keyboard_zero" in kinds(effects)
+    assert InputModeEffect("keyboard_lease", "browser-a", {"active": False}) in effects
+    with pytest.raises(ProtocolError):
+        controller.keyboard_snapshot("browser-a")
+
+
 class Clock:
     now = 10.0
 

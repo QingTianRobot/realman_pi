@@ -153,6 +153,11 @@ l/r 的 pending goal、accepted handle、最新命令、输入时间和取消状
 前一层处理 Web/网络停更，后一层处理 router 到 driver 的刷新中断。`dry_run=true` 时 router 仍执行目录、
 WORK、frame、速度上限和 timeout 校验，但不发送 Action Goal，也不向 driver command topic 发布消息。
 
+同一个 keyboard router 还接收左右夹爪的全开／全闭边沿（左 `1/2`、右 `9/0`）。它们不属于速度 session，
+不依赖 WORK，按次经 `/keyboard/l|r/gripper_command` 转发到 `/gripper_left|right/percentage/command`。
+模式、epoch/request、时效、夹爪健康和 dry-run 都在 router 检查；松键不撤销已提交目标，不发送“零值停止夹爪”。
+详细键位、JSON 契约和验证见[键盘双夹爪](./gripper-control#键盘双夹爪全开-全闭)。
+
 ## 构建
 
 在 ROS 2 Humble 工作区根目录执行：

@@ -642,6 +642,12 @@ class RecordingRecorderNode(Node):
                         gripper_position_topics=self.get_parameter("gripper_position_topics").value,
                         gripper_action_topics=self.get_parameter("gripper_action_topics").value,
                         camera_ids=self.get_parameter("camera_ids").value,
+                        joint_names=self.get_parameter("joint_names").value,
+                        embodiment_id=str(self.get_parameter("embodiment_id").value),
+                        urdf_relative_path=str(self.get_parameter("urdf_relative_path").value),
+                        base_frames=self.get_parameter("base_frames").value,
+                        ee_links=self.get_parameter("ee_links").value,
+                        cartesian_command_representation=str(self.get_parameter("cartesian_command_representation").value),
                     ),
                     progress_callback=self._export_progress_callback,
                 )

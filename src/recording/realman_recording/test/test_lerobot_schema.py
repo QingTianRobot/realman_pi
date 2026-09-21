@@ -13,16 +13,27 @@ def _schema():
 
 def test_schema_keeps_declared_arm_and_gripper_order():
     schema = _schema()
-    assert schema.state_dim == 21
-    assert schema.action_dim == 21
+    assert schema.joint_dim == 18
+    assert schema.ee_pose_dim == 21
+    assert schema.ee_velocity_dim == 18
+    assert schema.command_dim == 18
     assert schema.arm_joint_topics == ("/l/joint_states", "/m/joint_states", "/r/joint_states")
 
 
 def test_schema_features_are_v3_writer_features():
     features = _schema().features({camera: (240, 320, 3) for camera in _schema().camera_ids})
-    assert features["observation.state"]["shape"] == (21,)
-    assert features["action"]["shape"] == (21,)
+    assert features["observation.joint_position"]["shape"] == (18,)
+    assert features["observation.joint_velocity"]["shape"] == (18,)
+    assert features["observation.ee_pose_base"]["shape"] == (21,)
+    assert features["observation.ee_velocity_base"]["shape"] == (18,)
+    assert features["observation.gripper_position"]["shape"] == (3,)
+    assert features["action.command.cartesian_velocity"]["shape"] == (18,)
+    assert features["action.command.gripper"]["shape"] == (3,)
+    assert features["quality.valid"]["shape"] == (1,)
+    assert features["quality.sync_error_ns"]["shape"] == (16,)
     assert features["observation.images.d435"]["dtype"] == "video"
+    assert "observation.state" not in features
+    assert "action" not in features
 
 
 def test_schema_does_not_fabricate_gripper_actions_when_unavailable():
@@ -32,5 +43,5 @@ def test_schema_does_not_fabricate_gripper_actions_when_unavailable():
         gripper_position_topics=["/gripper_left/position", "/gripper_mid/position", "/gripper_right/position"],
         gripper_action_topics=[], camera_ids=["left"],
     )
-    assert schema.state_dim == 21
-    assert schema.action_dim == 18
+    assert schema.gripper_command_dim == 0
+    assert "action.command.gripper" not in schema.features({"left": (240, 320, 3)})

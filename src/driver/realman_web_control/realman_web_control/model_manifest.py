@@ -10,6 +10,8 @@ import xml.etree.ElementTree as ET
 
 import yaml
 
+from .keyboard_control import load_keyboard_control_config
+
 
 ARMS = ("l", "m", "r")
 MODEL_PATTERN = re.compile(r"^[A-Za-z0-9-]+$")
@@ -84,6 +86,7 @@ def build_manifest(
     layout_path: str | Path,
     motion_path: str | Path,
     coordinates_path: str | Path,
+    keyboard_path: str | Path,
     description_root: str | Path,
 ) -> dict[str, Any]:
     """Return browser-safe layout data without copying model files."""
@@ -91,10 +94,14 @@ def build_manifest(
     layout_path = Path(layout_path).resolve()
     motion_path = Path(motion_path).resolve()
     coordinates_path = Path(coordinates_path).resolve()
+    keyboard_path = Path(keyboard_path).resolve()
     description_root = Path(description_root).resolve()
     layout = _load_yaml(layout_path)
     motion = _load_yaml(motion_path)
     coordinates = _load_yaml(coordinates_path)
+    keyboard = load_keyboard_control_config(
+        keyboard_path, motion_path, coordinates_path
+    )
     layout_robots = _child_mapping(layout.get("robots"), "layout.robots")
     motion_robots = _child_mapping(motion.get("robots"), "motion.robots")
     if set(layout_robots) != set(ARMS) or set(motion_robots) != set(ARMS):
@@ -147,12 +154,14 @@ def build_manifest(
             "layout": "config/ros/three_robots.yaml",
             "motion": "config/ros/realman_motion.yaml",
             "coordinates": "config/ros/realman_coordinates.yaml",
+            "keyboard": "config/ros/keyboard_control.yaml",
         },
         "root_frame": robots[0]["parent_frame"],
         "default_joint_position_rad": _finite(
             settings.get("default_joint_position", 0.0), "layout.settings.default_joint_position"
         ),
         "robots": robots,
+        "keyboard_control": keyboard.public_manifest(),
     }
 
 

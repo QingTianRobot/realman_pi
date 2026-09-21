@@ -95,6 +95,10 @@ class WebControlNode(Node):
             str(config_root / "ros" / "realman_coordinates.yaml"),
         )
         self.declare_parameter(
+            "keyboard_control_config_file",
+            str(config_root / "ros" / "keyboard_control.yaml"),
+        )
+        self.declare_parameter(
             "joint_record_dir",
             str(config_root / "web-control" / "joint-records"),
         )
@@ -116,6 +120,7 @@ class WebControlNode(Node):
         layout_file = self._parameter("layout_config_file")
         motion_file = self._parameter("motion_config_file")
         coordinates_file = self._parameter("coordinates_config_file")
+        keyboard_file = self._parameter("keyboard_control_config_file")
         joint_record_dir = self._parameter("joint_record_dir")
         description_root = self._parameter("description_root")
         static_root = self._parameter("static_root")
@@ -129,6 +134,7 @@ class WebControlNode(Node):
             layout_file,
             motion_file,
             coordinates_file,
+            keyboard_file,
             description_root,
         )
         self._robots = {robot["id"]: robot for robot in self._manifest["robots"]}

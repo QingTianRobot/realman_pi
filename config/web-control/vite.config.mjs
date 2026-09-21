@@ -19,6 +19,7 @@ async function devManifest() {
   const layout = YAML.parse(await readFile(resolve(repositoryDirectory, "config/ros/three_robots.yaml"), "utf8"));
   const motion = YAML.parse(await readFile(resolve(repositoryDirectory, "config/ros/realman_motion.yaml"), "utf8"));
   const coordinates = YAML.parse(await readFile(resolve(repositoryDirectory, "config/ros/realman_coordinates.yaml"), "utf8"));
+  const keyboard = YAML.parse(await readFile(resolve(repositoryDirectory, "config/ros/keyboard_control.yaml"), "utf8"));
   const robots = await Promise.all(["l", "m", "r"].map(async (id) => {
     const item = layout.robots[id];
     const settings = motion.robots[id];
@@ -36,7 +37,29 @@ async function devManifest() {
       motion: settings,
     };
   }));
-  return { version: 1, root_frame: robots[0].parent_frame || layout.robots.l.parent_frame, default_joint_position_rad: layout.settings.default_joint_position || 0, robots };
+  const keyboardArms = Object.fromEntries(["l", "r"].map((id) => {
+    const coordinate = coordinates.robots[id];
+    const work = coordinate.work_frames[coordinate.default_work];
+    const bindings = Object.fromEntries(Object.entries(keyboard.arms[id]).map(([axis, pair]) => [axis, { positive: pair.positive, negative: pair.negative }]));
+    return [id, {
+      bindings,
+      linear_speed_mps: keyboard.linear_speed_fraction * motion.robots[id].max_linear_speed_mps,
+      angular_speed_radps: keyboard.angular_speed_fraction * motion.robots[id].max_angular_speed_radps,
+      work_reference_name: work.controller_name,
+      work_frame_id: work.ros_frame_id,
+    }];
+  }));
+  return {
+    version: 1,
+    root_frame: robots[0].parent_frame || layout.robots.l.parent_frame,
+    default_joint_position_rad: layout.settings.default_joint_position || 0,
+    robots,
+    keyboard_control: {
+      heartbeat_period_ms: keyboard.heartbeat_period_ms,
+      input_timeout_ms: keyboard.input_timeout_ms,
+      arms: keyboardArms,
+    },
+  };
 }
 
 function devApiPlugin() {

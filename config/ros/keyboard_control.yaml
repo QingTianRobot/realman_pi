@@ -1,0 +1,27 @@
+# Hold-to-run Web keyboard input for the left and right arms only.
+version: 1
+
+# The browser sends its complete pressed-key set at this interval.
+heartbeat_period_ms: 50
+# The ROS keyboard router stops an arm after this gap in Web input.
+input_timeout_ms: 150
+
+# Fractions multiply per-arm maxima from realman_motion.yaml.
+linear_speed_fraction: 0.4
+angular_speed_fraction: 0.4
+
+arms:
+  l:
+    vx: {positive: KeyW, negative: KeyS}
+    vy: {positive: KeyA, negative: KeyD}
+    vz: {positive: KeyR, negative: KeyF}
+    wx: {positive: KeyQ, negative: KeyE}
+    wy: {positive: KeyZ, negative: KeyC}
+    wz: {positive: KeyX, negative: KeyV}
+  r:
+    vx: {positive: KeyI, negative: KeyK}
+    vy: {positive: KeyJ, negative: KeyL}
+    vz: {positive: KeyU, negative: KeyO}
+    wx: {positive: KeyY, negative: KeyP}
+    wy: {positive: KeyN, negative: KeyM}
+    wz: {positive: KeyB, negative: KeyG}

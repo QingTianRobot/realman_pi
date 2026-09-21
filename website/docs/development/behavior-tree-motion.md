@@ -94,7 +94,7 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt tool_x
 
 | 逻辑名称 | 含义 |
 | --- | --- |
-| `base` | 当前臂的 BASE；映射为 `<arm>/base_link`。 |
+| `base` | 当前臂的 BASE；定时笛卡尔速度不支持该引用，会在发送 Goal 前失败。 |
 | `default_tool` | 当前臂配置的默认工具。 |
 | `default_work` | 当前臂配置的默认工作坐标。 |
 | `tool/<key>` | `tools` 中指定配置键，例如 `tool/tcpgrip`。 |
@@ -104,11 +104,20 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt tool_x
 `reference_name=tcpgrip` 和话题帧 `l/tool/tcpgrip`。控制周期、watchdog、线/角速度上限、线/角加速度
 上限以及停止超时统一读取 `config/ros/realman_motion.yaml`，XML 不能绕过这些逐臂限制。
 
+驱动不会把项目内部的 `BASE=0 / WORK=1 / TOOL=2` 数值直接传入厂商接口。
+`rm_set_movev_canfd_init` 使用独立枚举：`TOOL` 显式映射为厂商 `frame_type=0`，`WORK`
+映射为 `frame_type=1`。厂商速度初始化没有独立 BASE 选项，因此 `reference="base"` 会被明确拒绝，
+调用方应选择已配置的工具坐标或工作坐标。
+
 节点在 Action 接受后通过独立 ROS timer 按配置周期发布 `TwistStamped`，因此命令刷新频率不依赖行为树
 tick 频率。publisher 使用 `KEEP_LAST=1`、`VOLATILE`，DDS lifespan 等于配置 watchdog；每条消息使用
 ROS clock 的新时间戳以及映射后的 `frame_id`。时长到达后先发布零速度，再取消开放式
-`CartesianVelocity` session；驱动返回预期的 `CANCELED` 终态时，节点才返回 `SUCCESS`。如果 Action
-提前结束、引用未知、输入超限或停止超时，节点返回 `FAILURE` 并保留原始诊断。
+`CartesianVelocity` session。节点会在发布任何速度前通过 `/<arm>/get_current_pose` 保存真机关节角和
+末端位姿，并在驱动返回预期的 `CANCELED` 终态后再次读取。只有平移至少 `0.001 m`、旋转至少
+`0.5°`，或任一关节变化至少 `0.1°` 时才返回 `SUCCESS`。三项变化都低于阈值时返回 `FAILURE`，事件中
+记录 `translation_m`、`rotation_rad` 和 `max_joint_change_deg`；因此 Action 正常取消不再等同于真机运动
+成功。前后状态读取失败或超时、Action 提前结束、引用未知、输入超限或停止超时也都会返回
+`FAILURE` 并保留诊断。
 
 树被 `/stop`、分支切换或 Ctrl-C halt 时，节点先停止周期 timer 并发布一次零速度，再把 pending goal
 response 或 accepted goal 移交给 executor 的 cancellation drain。`pending_cancellations` 同时统计 MoveJ

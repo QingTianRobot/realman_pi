@@ -248,7 +248,7 @@ class CartesianVelocitySession:
             init_status = _status(
                 self.adapter.set_movev_init(
                     self._avoid_singularity_flag,
-                    int(validated.reference_type),
+                    _vendor_velocity_frame_type(validated.reference_type),
                     validated.control_period_ms,
                 )
             )
@@ -821,6 +821,7 @@ class CartesianVelocitySession:
 
     def _validate_goal(self, goal: Any) -> _ValidatedGoal:
         reference_type = _enum_value(_field(goal, "reference_type"), ReferenceType, "reference_type")
+        _vendor_velocity_frame_type(reference_type)
         reference_name = _field(goal, "reference_name")
         if not isinstance(reference_name, str) or not reference_name:
             raise ValueError("reference_name must be a non-empty string")
@@ -1390,6 +1391,18 @@ def _status(value: Any) -> int:
         return int(value)
     except (TypeError, ValueError, OverflowError):
         return -1
+
+
+def _vendor_velocity_frame_type(reference_type: ReferenceType) -> int:
+    """Map project reference types to rm_set_movev_canfd_init frame_type."""
+    if reference_type is ReferenceType.TOOL:
+        return 0
+    if reference_type is ReferenceType.WORK:
+        return 1
+    raise ValueError(
+        "BASE reference is not supported by Cartesian velocity control; "
+        "use a configured WORK or TOOL reference"
+    )
 
 
 def _stop_result_status(

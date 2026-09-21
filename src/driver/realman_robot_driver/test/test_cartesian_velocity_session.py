@@ -187,6 +187,7 @@ def make_session(
     ownership=None,
     session_settings=None,
     ros_clock=None,
+    active_frame=None,
 ):
     kwargs = {}
     if ros_clock is not None:
@@ -196,7 +197,8 @@ def make_session(
         adapter=adapter or FakeAdapter(),
         ownership=ownership or ArmOwnership(),
         settings=session_settings or settings(),
-        active_frame=lambda reference_type: ("tcpgrip", "l/tool/tcpgrip"),
+        active_frame=active_frame
+        or (lambda reference_type: ("tcpgrip", "l/tool/tcpgrip")),
         motion_allowed=lambda arm: True,
         monotonic=clock or Clock(),
         **kwargs,
@@ -209,10 +211,45 @@ def test_start_initializes_zero_command_and_claims_arm():
     session = make_session(adapter=adapter, ownership=ownership)
 
     assert session.start(valid_goal()) is True
-    assert adapter.init_calls == [(1, int(ReferenceType.TOOL), 20)]
+    assert adapter.init_calls == [(1, 0, 20)]
     assert adapter.velocity_calls[0][0] == [0.0] * 6
     assert ownership.is_busy("l") is True
     session.shutdown()
+
+
+def test_work_velocity_uses_vendor_world_frame_type():
+    adapter = FakeAdapter()
+    session = make_session(
+        adapter=adapter,
+        active_frame=lambda reference_type: ("cell", "l/work/cell"),
+    )
+
+    assert session.start(
+        valid_goal(
+            reference_type=int(ReferenceType.WORK),
+            reference_name="cell",
+        )
+    ) is True
+    assert adapter.init_calls == [(1, 1, 20)]
+    session.shutdown()
+
+
+def test_base_velocity_is_rejected_before_vendor_initialization():
+    adapter = FakeAdapter()
+    session = make_session(
+        adapter=adapter,
+        active_frame=lambda reference_type: ("base", "l/base_link"),
+    )
+
+    with pytest.raises(ValueError, match="BASE reference is not supported"):
+        session.start(
+            valid_goal(
+                reference_type=int(ReferenceType.BASE),
+                reference_name="base",
+            )
+        )
+
+    assert adapter.init_calls == []
 
 
 def test_logger_severity_changes_do_not_crash_velocity_session():
@@ -1890,10 +1927,11 @@ def test_disconnect_cleanup_rejects_live_velocity_work_and_retains_lockout(
     assert ownership.is_busy("l") is True
 
 
-def test_base_velocity_uses_namespaced_base_link_frame():
+def test_base_velocity_is_rejected_even_with_namespaced_base_link_frame():
+    adapter = FakeAdapter()
     session = CartesianVelocitySession(
         arm_id="l",
-        adapter=FakeAdapter(),
+        adapter=adapter,
         ownership=ArmOwnership(),
         settings=settings(),
         active_frame={ReferenceType.BASE: ("base", "l/base_link")},
@@ -1902,6 +1940,7 @@ def test_base_velocity_uses_namespaced_base_link_frame():
     )
     goal = valid_goal(reference_type=int(ReferenceType.BASE), reference_name="base")
 
-    assert session.start(goal) is True
-    assert session.accept_command(twist("l/base_link")) is True
-    session.shutdown()
+    with pytest.raises(ValueError, match="BASE reference is not supported"):
+        session.start(goal)
+
+    assert adapter.init_calls == []

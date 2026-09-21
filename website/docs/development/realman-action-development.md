@@ -278,7 +278,7 @@ Action goal accepted
 
 | 字段 | 单位/约束 |
 | --- | --- |
-| `reference_type/name` | 必须对应当前已验证的 BASE/WORK/TOOL 坐标 |
+| `reference_type/name` | 必须对应当前已验证的 WORK 或 TOOL 坐标；速度模式拒绝 BASE |
 | `control_period_ms` | 必须等于配置周期，当前默认 20 ms |
 | `watchdog_ms` | 正数且不超过配置上限，当前默认 100 ms |
 | `max_linear_accel_mps2` | 正数且不超过逐臂配置上限 |
@@ -289,6 +289,10 @@ Action goal accepted
 `TwistStamped.twist` 的前三项是 `vx, vy, vz`（m/s），后三项是 `wx, wy, wz`（rad/s）。
 实现只处理速度向量，不把角速度拆成 Euler 角，也不会在速度 session 内维护一个姿态
 四元数。四元数只属于位姿 Action 和坐标配置边界。
+
+ROS 接口的 `ReferenceType` 与厂商速度初始化枚举不是同一个数值空间。驱动必须执行显式转换：
+`TOOL -> rm_set_movev_canfd_init frame_type 0`，`WORK -> frame_type 1`。不得把 ROS 的
+`TOOL=2` 原样传入 SDK。厂商接口没有独立 BASE 值，因此速度 Goal 使用 BASE 时在初始化前拒绝。
 
 速度 feedback 还会返回命令向量、经过速度/加速度限制后的向量、`command_age_ms`、
 活动坐标和 API2 status。IDL 保留 `SUCCEEDED=0`，但当前速度 session 是开放式控制，
@@ -303,7 +307,7 @@ Action goal accepted
 - 使用当前节点 ROS clock，不能晚于当前时间；
 - 不早于本 session 的启动 epoch；
 - 同一 session 内严格晚于上一条已接受命令；
-- `header.frame_id` 与目标坐标一致，例如 `/l` 的 BASE 使用 `l/base_link`。
+- `header.frame_id` 与目标坐标一致，例如左臂默认工具使用 `l/tool/tcpgrip`。
 
 无效命令在进入 SDK 前拒绝，并以 DEBUG 记录，避免高频输入刷屏。control worker 每个
 周期最多一次 `rm_movev_canfd`；如果 SDK 调用超过周期，下一次 tick 从调用完成时间
@@ -325,6 +329,11 @@ Action goal accepted
 `reference`、六轴速度和时长；节点根据 `config/ros/realman_coordinates.yaml` 同时解析驱动的
 `reference_type/reference_name` 与 ROS `frame_id`，并从 `config/ros/realman_motion.yaml` 读取刷新周期、
 watchdog、速度/加速度限制和停止超时。这样 XML 中不会出现彼此不一致的坐标字段。
+
+该叶节点的终态还要求可观测的真机状态变化。它在开始发布速度前和 Action 取消完成后分别调用
+`/<arm>/get_current_pose`，比较末端平移、四元数角距离和最大关节角变化。平移 `>=0.001 m`、旋转
+`>=0.5°` 或任一关节变化 `>=0.1°` 任一成立才返回 `SUCCESS`；否则返回 `FAILURE`，并把三个差值写入
+runtime diagnostics。Action 的 `CANCELED` 仅表示开放式 session 按请求停止，不再单独作为运动成功证据。
 
 沿左臂默认工具 +X 方向运动的示例为 `config/behavior-trees/tool_x.xml`；插件的完整端口、停止/取消
 语义和 dry-run 启动方式见[行为树机械臂移动 Demo](./behavior-tree-motion#定时笛卡尔速度节点)。

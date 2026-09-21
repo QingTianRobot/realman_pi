@@ -18,6 +18,7 @@
 #include "realman_bt/move_j_node.hpp"
 #include "realman_bt/runtime_snapshot.hpp"
 #include "realman_msgs/action/cartesian_velocity.hpp"
+#include "realman_msgs/srv/get_current_pose.hpp"
 
 namespace realman_bt {
 
@@ -104,6 +105,14 @@ class CartesianVelocityForDurationNode final : public bt_core::ActionNode {
   using Action = realman_msgs::action::CartesianVelocity;
   using Client = rclcpp_action::Client<Action>;
   using GoalHandle = Client::GoalHandle;
+  using GetCurrentPose = realman_msgs::srv::GetCurrentPose;
+  using PoseClient = rclcpp::Client<GetCurrentPose>;
+
+  struct PoseSample {
+    std::array<double, 6> joint_degrees{};
+    std::array<double, 3> position_m{};
+    std::array<double, 4> quaternion_wxyz{};
+  };
 
   static bt_core::PortsList providedPorts();
   bt_core::NodeStatus tick() override;
@@ -115,6 +124,13 @@ class CartesianVelocityForDurationNode final : public bt_core::ActionNode {
   void startCommandTimer();
   void publishCommand(bool zero);
   void requestCancel(const std::string& detail);
+  bool pollInitialPose();
+  bool pollFinalPose();
+  void requestPoseSample(bool final_sample);
+  bool consumePoseSample(
+      const std::shared_future<GetCurrentPose::Response::SharedPtr>& future,
+      PoseSample& sample, const std::string& phase);
+  bt_core::NodeStatus verifyObservedMotion();
   bool handoffPendingGoalResponse();
   bool handoffInFlightGoal();
   bool hasInFlightGoal() const;
@@ -134,6 +150,11 @@ class CartesianVelocityForDurationNode final : public bt_core::ActionNode {
   std::shared_future<Client::WrappedResult> result_future_;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr publisher_;
   rclcpp::TimerBase::SharedPtr command_timer_;
+  PoseClient::SharedPtr pose_client_;
+  std::shared_future<GetCurrentPose::Response::SharedPtr> initial_pose_future_;
+  std::shared_future<GetCurrentPose::Response::SharedPtr> final_pose_future_;
+  PoseSample initial_pose_{};
+  PoseSample final_pose_{};
   std::string action_name_;
   std::string command_topic_;
   std::chrono::steady_clock::time_point initialized_at_{};
@@ -147,6 +168,12 @@ class CartesianVelocityForDurationNode final : public bt_core::ActionNode {
   bool failed_{false};
   bool wait_server_recorded_{false};
   bool goal_response_timed_out_{false};
+  bool initial_pose_requested_{false};
+  bool initial_pose_ready_{false};
+  bool motion_result_received_{false};
+  bool final_pose_requested_{false};
+  bool final_pose_ready_{false};
+  std::chrono::steady_clock::time_point pose_request_started_at_{};
   std::atomic_bool duration_elapsed_{false};
 };
 

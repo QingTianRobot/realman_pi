@@ -11,6 +11,7 @@
 #include "geometry_msgs/msg/twist_stamped.hpp"
 #include "realman_bt/cartesian_velocity_for_duration_node.hpp"
 #include "realman_bt/runtime_snapshot.hpp"
+#include "realman_msgs/srv/get_current_pose.hpp"
 #include "rclcpp/rclcpp.hpp"
 #include "rclcpp_action/rclcpp_action.hpp"
 
@@ -19,6 +20,7 @@ namespace {
 using Node = realman_bt::CartesianVelocityForDurationNode;
 using Action = Node::Action;
 using ServerGoalHandle = rclcpp_action::ServerGoalHandle<Action>;
+using GetCurrentPose = realman_msgs::srv::GetCurrentPose;
 
 bt_core::NodeConfig config(rclcpp::Node* ros_node,
                            realman_bt::CoordinateReferenceRegistry* references,
@@ -99,7 +101,31 @@ int main(int argc, char** argv) {
     int cancels{0};
     Action::Goal goal{};
     std::vector<geometry_msgs::msg::TwistStamped> commands;
+    int pose_reads{0};
+    bool report_motion{true};
   } state;
+
+  auto pose_service = ros_node->create_service<GetCurrentPose>(
+      "/l/get_current_pose",
+      [&state](const std::shared_ptr<GetCurrentPose::Request> request,
+               std::shared_ptr<GetCurrentPose::Response> response) {
+        std::lock_guard<std::mutex> lock(state.mutex);
+        assert(request->reference_type == GetCurrentPose::Request::TOOL);
+        assert(request->reference_name == "tcpgrip");
+        ++state.pose_reads;
+        response->success = true;
+        response->api2_status = 0;
+        response->current_joint_degrees = {10.0, 20.0, 30.0, 40.0, 50.0,
+                                           state.report_motion && state.pose_reads > 1
+                                               ? 60.5
+                                               : 60.0};
+        response->pose_position_m = {
+            state.report_motion && state.pose_reads > 1 ? 0.012 : 0.0,
+            0.0,
+            0.4};
+        response->pose_quaternion_wxyz = {1.0, 0.0, 0.0, 0.0};
+        response->message = "current pose read";
+      });
 
   auto server = rclcpp_action::create_server<Action>(
       ros_node, "/l/cartesian_velocity",
@@ -158,6 +184,7 @@ int main(int argc, char** argv) {
     std::lock_guard<std::mutex> lock(state.mutex);
     assert(state.goals == 1);
     assert(state.cancels == 1);
+    assert(state.pose_reads == 2);
     assert(state.goal.reference_type == Action::Goal::TOOL);
     assert(state.goal.reference_name == "tcpgrip");
     assert(state.goal.control_period_ms == 20);
@@ -174,6 +201,36 @@ int main(int argc, char** argv) {
            final.linear.z == 0.0 && final.angular.x == 0.0 &&
            final.angular.y == 0.0 && final.angular.z == 0.0);
   }
+
+
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.report_motion = false;
+    state.pose_reads = 0;
+  }
+  realman_bt::RuntimeDiagnostics no_motion_diagnostics;
+  Node no_motion_node(
+      "no_motion_velocity",
+      config(ros_node.get(), &references, &profiles, &no_motion_diagnostics,
+             false, 0.15));
+  const auto no_motion_terminal = tickUntil(
+      no_motion_node,
+      [](bt_core::NodeStatus status) {
+        return status == bt_core::NodeStatus::SUCCESS ||
+               status == bt_core::NodeStatus::FAILURE;
+      },
+      std::chrono::seconds(5));
+  assert(no_motion_terminal == bt_core::NodeStatus::FAILURE);
+  assert(no_motion_node.failureReason().find("no observable robot motion") !=
+         std::string::npos);
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    assert(state.pose_reads == 2);
+  }
+  const auto no_motion_events = no_motion_diagnostics.snapshot().events;
+  assert(!no_motion_events.empty());
+  assert(no_motion_events.back().detail.find("translation_m=") !=
+         std::string::npos);
 
   realman_bt::RuntimeDiagnostics halt_diagnostics;
   auto halt_config = config(ros_node.get(), &references, &profiles,
@@ -216,12 +273,61 @@ int main(int argc, char** argv) {
     }));
   }
 
+  realman_bt::CartesianVelocityProfileRegistry short_profiles({
+      "l|20|100|0.1|0.5|0.2|1.0|0.2|2",
+  });
+  {
+    std::lock_guard<std::mutex> lock(state.mutex);
+    state.pose_reads = 0;
+  }
+  realman_bt::RuntimeDiagnostics missing_final_pose_diagnostics;
+  Node missing_final_pose_node(
+      "missing_final_pose_velocity",
+      config(ros_node.get(), &references, &short_profiles,
+             &missing_final_pose_diagnostics, false, 0.05));
+  const auto missing_pose_deadline =
+      std::chrono::steady_clock::now() + std::chrono::seconds(2);
+  bt_core::NodeStatus missing_final_pose_status = bt_core::NodeStatus::IDLE;
+  bool removed_pose_service = false;
+  while (std::chrono::steady_clock::now() < missing_pose_deadline) {
+    missing_final_pose_status = missing_final_pose_node.executeTick();
+    {
+      std::lock_guard<std::mutex> lock(state.mutex);
+      if (!removed_pose_service && state.pose_reads == 1) {
+        pose_service.reset();
+        removed_pose_service = true;
+      }
+    }
+    if (missing_final_pose_status == bt_core::NodeStatus::SUCCESS ||
+        missing_final_pose_status == bt_core::NodeStatus::FAILURE) {
+      break;
+    }
+    std::this_thread::sleep_for(std::chrono::milliseconds(5));
+  }
+  assert(removed_pose_service);
+  assert(missing_final_pose_status == bt_core::NodeStatus::FAILURE);
+  assert(missing_final_pose_node.failureReason().find(
+             "final current-pose request timed out") != std::string::npos);
+
   struct DelayedState {
     std::mutex mutex;
     std::condition_variable changed;
     int cancels{0};
     std::vector<geometry_msgs::msg::TwistStamped> commands;
   } delayed;
+  auto delayed_pose_service = ros_node->create_service<GetCurrentPose>(
+      "/r/get_current_pose",
+      [](const std::shared_ptr<GetCurrentPose::Request> request,
+         std::shared_ptr<GetCurrentPose::Response> response) {
+        assert(request->reference_type == GetCurrentPose::Request::TOOL);
+        assert(request->reference_name == "tcpgrip");
+        response->success = true;
+        response->api2_status = 0;
+        response->current_joint_degrees = {0.0, 0.0, 0.0, 0.0, 0.0, 0.0};
+        response->pose_position_m = {0.0, 0.0, 0.4};
+        response->pose_quaternion_wxyz = {1.0, 0.0, 0.0, 0.0};
+        response->message = "current pose read";
+      });
   auto delayed_server = rclcpp_action::create_server<Action>(
       ros_node, "/r/cartesian_velocity",
       [](const rclcpp_action::GoalUUID&, std::shared_ptr<const Action::Goal>) {

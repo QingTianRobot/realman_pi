@@ -1,6 +1,9 @@
 #include "realman_bt/cartesian_velocity_for_duration_node.hpp"
 
+#include <algorithm>
 #include <cmath>
+#include <iomanip>
+#include <limits>
 #include <sstream>
 #include <stdexcept>
 #include <utility>
@@ -39,6 +42,30 @@ std::array<double, 3> parseVector(const std::string& text,
 double norm(const std::array<double, 3>& value) {
   return std::sqrt(value[0] * value[0] + value[1] * value[1] +
                    value[2] * value[2]);
+}
+
+constexpr double kMinimumTranslationMeters = 0.001;
+constexpr double kMinimumRotationRadians = 0.008726646259971648;
+constexpr double kMinimumJointChangeDegrees = 0.1;
+
+double quaternionAngularDistance(const std::array<double, 4>& first,
+                                 const std::array<double, 4>& second) {
+  const auto magnitude = [](const std::array<double, 4>& value) {
+    return std::sqrt(value[0] * value[0] + value[1] * value[1] +
+                     value[2] * value[2] + value[3] * value[3]);
+  };
+  const double first_norm = magnitude(first);
+  const double second_norm = magnitude(second);
+  if (first_norm <= std::numeric_limits<double>::epsilon() ||
+      second_norm <= std::numeric_limits<double>::epsilon()) {
+    throw std::invalid_argument("current pose contains an invalid quaternion");
+  }
+  double dot = 0.0;
+  for (std::size_t index = 0; index < first.size(); ++index) {
+    dot += first[index] * second[index];
+  }
+  dot = std::clamp(std::abs(dot / (first_norm * second_norm)), 0.0, 1.0);
+  return 2.0 * std::acos(dot);
 }
 
 std::uint64_t timestampMilliseconds() {
@@ -294,6 +321,9 @@ bool CartesianVelocityForDurationNode::initialize() {
       static_cast<std::int64_t>(profile_->watchdog_ms) * 1000000));
   publisher_ = ros_node_->create_publisher<geometry_msgs::msg::TwistStamped>(
       command_topic_, command_qos);
+  pose_client_ = ros_node_->create_client<GetCurrentPose>(
+      "/" + getInput<std::string>("arm_id").value_or("") +
+      "/get_current_pose");
   return true;
 }
 
@@ -343,6 +373,123 @@ void CartesianVelocityForDurationNode::requestCancel(const std::string& detail) 
   }
 }
 
+void CartesianVelocityForDurationNode::requestPoseSample(bool final_sample) {
+  auto request = std::make_shared<GetCurrentPose::Request>();
+  request->reference_type = reference_->type;
+  request->reference_name = reference_->controller_name;
+  pose_request_started_at_ = std::chrono::steady_clock::now();
+  if (final_sample) {
+    final_pose_future_ = pose_client_->async_send_request(request).future.share();
+    final_pose_requested_ = true;
+  } else {
+    initial_pose_future_ = pose_client_->async_send_request(request).future.share();
+    initial_pose_requested_ = true;
+  }
+}
+
+bool CartesianVelocityForDurationNode::consumePoseSample(
+    const std::shared_future<GetCurrentPose::Response::SharedPtr>& future,
+    PoseSample& sample, const std::string& phase) {
+  if (!future.valid() ||
+      future.wait_for(std::chrono::milliseconds(0)) !=
+          std::future_status::ready) {
+    if (std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                      pose_request_started_at_).count() >
+        profile_->goal_timeout_sec) {
+      fail(phase + " current-pose request timed out");
+    }
+    return false;
+  }
+  GetCurrentPose::Response::SharedPtr response;
+  try {
+    response = future.get();
+  } catch (const std::exception& error) {
+    fail(phase + " current-pose request failed: " + error.what());
+    return false;
+  }
+  if (!response || !response->success) {
+    const std::string message = response && !response->message.empty()
+                                    ? response->message
+                                    : "current pose is unavailable";
+    fail(phase + " current-pose read failed: " + message);
+    return false;
+  }
+  std::copy(response->current_joint_degrees.begin(),
+            response->current_joint_degrees.end(), sample.joint_degrees.begin());
+  std::copy(response->pose_position_m.begin(), response->pose_position_m.end(),
+            sample.position_m.begin());
+  std::copy(response->pose_quaternion_wxyz.begin(),
+            response->pose_quaternion_wxyz.end(),
+            sample.quaternion_wxyz.begin());
+  return true;
+}
+
+bool CartesianVelocityForDurationNode::pollInitialPose() {
+  if (initial_pose_ready_) return true;
+  if (!pose_client_->service_is_ready()) return false;
+  if (!initial_pose_requested_) {
+    requestPoseSample(false);
+    return false;
+  }
+  initial_pose_ready_ = consumePoseSample(initial_pose_future_, initial_pose_,
+                                          "initial");
+  return initial_pose_ready_;
+}
+
+bool CartesianVelocityForDurationNode::pollFinalPose() {
+  if (final_pose_ready_) return true;
+  if (!final_pose_requested_) {
+    requestPoseSample(true);
+    return false;
+  }
+  final_pose_ready_ =
+      consumePoseSample(final_pose_future_, final_pose_, "final");
+  return final_pose_ready_;
+}
+
+bt_core::NodeStatus CartesianVelocityForDurationNode::verifyObservedMotion() {
+  if (!pollFinalPose()) {
+    return failed_ ? bt_core::NodeStatus::FAILURE
+                   : bt_core::NodeStatus::RUNNING;
+  }
+  std::array<double, 3> translation_delta{};
+  for (std::size_t index = 0; index < translation_delta.size(); ++index) {
+    translation_delta[index] =
+        final_pose_.position_m[index] - initial_pose_.position_m[index];
+  }
+  const double translation_m = norm(translation_delta);
+  double max_joint_change_deg = 0.0;
+  for (std::size_t index = 0; index < initial_pose_.joint_degrees.size();
+       ++index) {
+    max_joint_change_deg =
+        std::max(max_joint_change_deg,
+                 std::abs(final_pose_.joint_degrees[index] -
+                          initial_pose_.joint_degrees[index]));
+  }
+  double rotation_rad = 0.0;
+  try {
+    rotation_rad = quaternionAngularDistance(initial_pose_.quaternion_wxyz,
+                                             final_pose_.quaternion_wxyz);
+  } catch (const std::exception& error) {
+    fail(error.what());
+    return bt_core::NodeStatus::FAILURE;
+  }
+  std::ostringstream detail;
+  detail << std::fixed << std::setprecision(6)
+         << "motion verification: translation_m=" << translation_m
+         << " rotation_rad=" << rotation_rad
+         << " max_joint_change_deg=" << max_joint_change_deg;
+  if (translation_m < kMinimumTranslationMeters &&
+      rotation_rad < kMinimumRotationRadians &&
+      max_joint_change_deg < kMinimumJointChangeDegrees) {
+    fail("no observable robot motion; " + detail.str());
+    return bt_core::NodeStatus::FAILURE;
+  }
+  recordEvent("motion_verification", detail.str());
+  completed_ = true;
+  return bt_core::NodeStatus::SUCCESS;
+}
+
 bool CartesianVelocityForDurationNode::hasInFlightGoal() const {
   if (!client_ || !goal_handle_ || completed_) return false;
   if (!result_future_.valid()) return true;
@@ -390,6 +537,22 @@ bt_core::NodeStatus CartesianVelocityForDurationNode::tick() {
     completed_ = true;
     return bt_core::NodeStatus::SUCCESS;
   }
+
+  if (!initial_pose_ready_) {
+    if (!pollInitialPose()) {
+      if (failed_) return bt_core::NodeStatus::FAILURE;
+      if (!pose_client_->service_is_ready() &&
+          std::chrono::duration<double>(std::chrono::steady_clock::now() -
+                                        initialized_at_).count() >
+              profile_->goal_timeout_sec) {
+        fail("current-pose service is unavailable for motion verification");
+        return bt_core::NodeStatus::FAILURE;
+      }
+      return bt_core::NodeStatus::RUNNING;
+    }
+  }
+
+  if (motion_result_received_) return verifyObservedMotion();
 
   if (sent_ && !goal_handle_ && goal_future_.valid() &&
       goal_future_.wait_for(std::chrono::milliseconds(0)) ==
@@ -442,9 +605,9 @@ bt_core::NodeStatus CartesianVelocityForDurationNode::tick() {
         wrapped.code == rclcpp_action::ResultCode::CANCELED && wrapped.result &&
         wrapped.result->terminal_state == Action::Result::CANCELED) {
       recordEvent("result", detail);
-      completed_ = true;
       if (command_timer_) command_timer_->cancel();
-      return bt_core::NodeStatus::SUCCESS;
+      motion_result_received_ = true;
+      return verifyObservedMotion();
     }
     fail(detail);
     return bt_core::NodeStatus::FAILURE;
@@ -508,7 +671,10 @@ void CartesianVelocityForDurationNode::reset() {
   if (command_timer_) command_timer_->cancel();
   command_timer_.reset();
   publisher_.reset();
+  pose_client_.reset();
   result_future_ = {};
+  initial_pose_future_ = {};
+  final_pose_future_ = {};
   goal_future_ = {};
   goal_handle_.reset();
   client_.reset();
@@ -522,6 +688,11 @@ void CartesianVelocityForDurationNode::reset() {
   failed_ = false;
   wait_server_recorded_ = false;
   goal_response_timed_out_ = false;
+  initial_pose_requested_ = false;
+  initial_pose_ready_ = false;
+  motion_result_received_ = false;
+  final_pose_requested_ = false;
+  final_pose_ready_ = false;
   duration_elapsed_ = false;
   setFailureReason("");
 }

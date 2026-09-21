@@ -25,8 +25,8 @@
 | Feature | Shape | 来源 | 约定 |
 | --- | ---: | --- | --- |
 | `observation.joint_position` | 18 | raw `JointState.position` | rad |
-| `observation.joint_velocity` | 18 | raw `JointState.velocity` | rad/s；完整有效才导出 |
-| `observation.joint_effort` | 18 | raw `JointState.effort` | 不假称 Nm，记录 capability |
+| `observation.joint_velocity` | 18 | derived position 差分（当前驱动） | rad/s；驱动以后提供才改用 raw `JointState.velocity` |
+| `observation.joint_effort` | 可选 18 | raw `JointState.effort` | 当前驱动未发布；不假称 Nm，记录 capability |
 | `observation.ee_pose_base` | 21 | derived FK | 每臂 `[x,y,z,qx,qy,qz,qw]` |
 | `observation.ee_velocity_base` | 18 | derived pose 差分 | 每臂 `[vx,vy,vz,wx,wy,wz]` |
 | `observation.gripper_position` | 3 | raw `Float64` | 原始设备单位记录在 metadata |
@@ -66,8 +66,8 @@ manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URD
 
 **文件：** `lerobot_exporter.py`、`lerobot_align.py`、`test/test_lerobot_export_alignment.py`。
 
-1. 写失败测试：velocity/effort 缺失、长度不是 6、joint name 错序、source skew 超限必须明确失败；完整样本按固定臂顺序合并。
-2. MCAP extractor 从 position-only 改为结构化 joint sample；按 capability 选择是否 materialize velocity/effort，绝不零填充。
+1. 写失败测试：joint name 错序、source skew 超限必须明确失败；当前驱动没有 velocity 时从 position 推导，effort 不得以零值伪造。
+2. MCAP extractor 从 position-only 改为结构化 joint sample；当前 profile 用对齐 position 差分生成 velocity，未来仅在完整 raw velocity/effort 存在时 materialize 原始字段。
 3. 每个 camera/state/action 对齐返回 actual timestamp/skew/policy，写 `quality.valid` 与固定 shape `quality.sync_error_ns.*`。
 4. 验证四路 15Hz 不生成 60Hz timeline，提交 `feat(recording): materialize canonical joint and quality data`。
 

@@ -2,8 +2,8 @@
 
 ## Status
 
-Draft design approved at the approach level. Implementation starts only after
-this document is reviewed and approved.
+Approved on 2026-09-21, including the requirement to use each arm's active,
+verified default WORK frame because Cartesian velocity sessions reject BASE.
 
 ## Goal
 

@@ -234,10 +234,10 @@ overlay source RealSense/Orbbec，并在缺少 `realsense2_camera` 时降级为�
 
 默认模式实际发布三路 Orbbec 的 `color/image_raw`、`color/camera_info` 和 TF（当 `realsense2_camera`
 已构建时再加一路 `/camera_global/d435` 彩色）；深度路径只有显式
-使用 `rm65_camera_ros2 depth` 时才会发布。wrapper 2.7.6 在当前 USB2/libuvc 拓扑下同时
-打开同一设备的彩色和深度会创建 publisher 但不连续出帧，因此两种流是互斥模式。三台彩色
-在 `640x480@10 YUYV` 下预期约 10 Hz；YUYV 用于规避右侧设备在 USB2/MJPEG 下的持续帧撕裂，
-实际帧率应以 `ros2 topic hz` 验证。
+使用 `rm65_camera_ros2 depth` 时才会发布。wrapper 2.7.6 同时打开同一设备的彩色和深度会创建
+publisher 但不连续出帧，因此两种流是互斥模式。三台彩色默认在 `640x480@15 YUYV` 下发布；YUYV
+用于规避右侧设备的持续 MJPEG 帧撕裂。此配置要求每台 Gemini 305 在 `lsusb -t` 中协商为 `5000M`；
+任一路回退到 `480M`（USB2）时，应降低采集频率后再启动。实际帧率应以 `ros2 topic hz` 验证。
 
 有图形桌面的机器可以直接启动 RViz2：
 

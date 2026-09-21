@@ -41,6 +41,18 @@ def _load_defaults():
         "left_color_exposure": str(
             cameras.get("left", {}).get("color", {}).get("exposure", -1)
         ),
+        "middle_color_auto_exposure": "true"
+        if cameras.get("middle", {}).get("color", {}).get("auto_exposure", True)
+        else "false",
+        "middle_color_exposure": str(
+            cameras.get("middle", {}).get("color", {}).get("exposure", -1)
+        ),
+        "right_color_auto_exposure": "true"
+        if cameras.get("right", {}).get("color", {}).get("auto_exposure", True)
+        else "false",
+        "right_color_exposure": str(
+            cameras.get("right", {}).get("color", {}).get("exposure", -1)
+        ),
         "color_width": str(color.get("width", 640)),
         "color_height": str(color.get("height", 480)),
         "color_fps": str(color.get("fps", 30)),
@@ -195,6 +207,20 @@ def generate_launch_description():
         DeclareLaunchArgument(
             "left_color_exposure", default_value=defaults["left_color_exposure"]
         ),
+        DeclareLaunchArgument(
+            "middle_color_auto_exposure",
+            default_value=defaults["middle_color_auto_exposure"],
+        ),
+        DeclareLaunchArgument(
+            "middle_color_exposure", default_value=defaults["middle_color_exposure"]
+        ),
+        DeclareLaunchArgument(
+            "right_color_auto_exposure",
+            default_value=defaults["right_color_auto_exposure"],
+        ),
+        DeclareLaunchArgument(
+            "right_color_exposure", default_value=defaults["right_color_exposure"]
+        ),
         DeclareLaunchArgument("use_left", default_value="true"),
         DeclareLaunchArgument("use_middle", default_value="true"),
         DeclareLaunchArgument("use_right", default_value="true"),
@@ -276,14 +302,24 @@ def generate_launch_description():
         _camera_include(
             "middle",
             LaunchConfiguration("middle_serial"),
-            {},
+            {
+                "enable_color_auto_exposure": LaunchConfiguration(
+                    "middle_color_auto_exposure"
+                ),
+                "color_exposure": LaunchConfiguration("middle_color_exposure"),
+            },
             IfCondition(LaunchConfiguration("use_middle")),
             8.0,
         ),
         _camera_include(
             "right",
             LaunchConfiguration("right_serial"),
-            {},
+            {
+                "enable_color_auto_exposure": LaunchConfiguration(
+                    "right_color_auto_exposure"
+                ),
+                "color_exposure": LaunchConfiguration("right_color_exposure"),
+            },
             IfCondition(LaunchConfiguration("use_right")),
             16.0,
         ),

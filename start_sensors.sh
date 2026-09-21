@@ -4,7 +4,7 @@
 # 用法: bash start_sensors.sh [ros2 launch 参数, 例如 enable_depth:=true use_rviz:=true]
 # 说明: 推荐用 functions.zsh 里的 rm65_camera_ros2 [color|depth] [rviz]，本脚本是不依赖
 #       zsh 的等价 bash 入口。
-set -u
+set -e
 
 WS_MAIN="$(cd "$(dirname "$0")" && pwd)"
 WS_RS="$WS_MAIN/src/sensor/realsense/realsense_ws"

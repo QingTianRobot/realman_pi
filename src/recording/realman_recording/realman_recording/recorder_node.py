@@ -27,6 +27,7 @@ from realman_recording_msgs.srv import ManageRecording as ManageRecordingService
 
 from .camera_workers import CameraSource, RosImageArchive, image_to_jpeg, load_camera_sources
 from .lerobot_exporter import ExportRequest, LeRobotExporter
+from .lerobot_schema import schema_from_parameters
 from .preflight import PreflightChecker, PreflightRequirements, PreflightResult
 from .session_store import SessionState, SessionStore
 from .state_archive import McapStateArchive
@@ -62,6 +63,8 @@ class RecordingRecorderNode(Node):
         self.declare_parameter("max_state_queue", 10_000)
         self.declare_parameter("arm_namespaces", ["l", "m", "r"])
         self.declare_parameter("arm_action_topics", [""])
+        self.declare_parameter("gripper_action_topics", [""])
+        self.declare_parameter("lerobot_repo_id", "realman/pi05-three-arm")
         self.declare_parameter("gripper_position_topics", [""])
         self.declare_parameter("gripper_torque_topics", [""])
         self.declare_parameter("gripper_alarm_topics", [""])
@@ -195,6 +198,7 @@ class RecordingRecorderNode(Node):
             self._arms,
             arm_action_topics=self.get_parameter("arm_action_topics").value,
             gripper_position_topics=self.get_parameter("gripper_position_topics").value,
+            gripper_action_topics=self.get_parameter("gripper_action_topics").value,
             gripper_torque_topics=self.get_parameter("gripper_torque_topics").value,
             gripper_alarm_topics=self.get_parameter("gripper_alarm_topics").value,
         )
@@ -532,10 +536,8 @@ class RecordingRecorderNode(Node):
             self._last_archive_stats = archive_stats
             self._last_camera_summary = camera_summary
             self._state = SessionState.READY if final_success else SessionState.FAILED
-        if final_success:
-            # A clean STOP finalizes the session and immediately queues its LeRobot
-            # conversion; the web dashboard follows progress via /recording/status.
-            self._queue_export(directory, session_id)
+        # STOP only seals raw data.  The upstream ADOPT request is the single explicit
+        # authorization to spend CPU and append an episode to the training dataset.
         return session_id
 
     def _stop_or_cancel(self, *, reason: str) -> str | None:
@@ -608,7 +610,9 @@ class RecordingRecorderNode(Node):
     def _export_adopted_session(self, directory: Path) -> None:
         """Run expensive LeRobot conversion away from every ROS callback/executor thread."""
         export_root = Path(str(self.get_parameter("lerobot_export_dir").value))
-        output_dir = export_root / directory.name
+        # This is one append-only v3 dataset.  A session becomes one episode, rather
+        # than creating a v2-shaped dataset directory per session.
+        output_dir = export_root
         with self._decision_lock:
             self._export_progress = 0.0
             self._export_dir = ""
@@ -624,6 +628,15 @@ class RecordingRecorderNode(Node):
                     output_dir=output_dir,
                     target_fps=float(self.get_parameter("export_target_fps").value),
                     max_gap_sec=float(self.get_parameter("export_max_gap_sec").value),
+                    schema=schema_from_parameters(
+                        repo_id=str(self.get_parameter("lerobot_repo_id").value),
+                        fps=float(self.get_parameter("export_target_fps").value),
+                        arms=self._arms,
+                        arm_action_topics=self.get_parameter("arm_action_topics").value,
+                        gripper_position_topics=self.get_parameter("gripper_position_topics").value,
+                        gripper_action_topics=self.get_parameter("gripper_action_topics").value,
+                        camera_ids=self.get_parameter("camera_ids").value,
+                    ),
                     progress_callback=self._export_progress_callback,
                 )
             )

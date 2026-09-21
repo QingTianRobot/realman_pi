@@ -12,6 +12,12 @@
     # Controller-side Cartesian command streams. They are observations only; the recorder
     # never publishes to them. Configure each external teleoperation source explicitly.
     arm_action_topics: [/l/cartesian_velocity/command, /m/cartesian_velocity/command, /r/cartesian_velocity/command]
+    # Optional actual gripper command streams, in left/middle/right order.  Leave
+    # empty until the upstream gripper interface exposes a command topic: the
+    # exporter then writes an honest 18D arm-only action instead of copying state.
+    gripper_action_topics: ['']
+    # One long-lived v3 dataset, not a v2-style dataset per recorded session.
+    lerobot_repo_id: realman/pi05-three-arm
     # Keep raw gripper topics intact; recorder assigns ROS 2 SYSTEM_TIME receipt timestamps.
     gripper_position_topics: [/gripper_left/position, /gripper_mid/position, /gripper_right/position]
     gripper_torque_topics: [/gripper_left/torque_reached, /gripper_mid/torque_reached, /gripper_right/torque_reached]

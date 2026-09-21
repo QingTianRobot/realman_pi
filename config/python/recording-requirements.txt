@@ -1,5 +1,8 @@
 # Optional live visualizer dependency. The recording core handles ImportError and
 # remains fully functional when this SDK is absent; production images install it here.
 rerun-sdk
-# LeRobot dataset export: columnar parquet writing (episode/frame tables).
-pyarrow
+# LeRobot v3 writer used by the asynchronous, adopted-session exporter.  v0.6.1
+# is the current stable pip release; recorder and π₀.₅ training must share it.
+lerobot==0.6.1
+# Decode the recorder's JPEG archive to uint8 RGB HWC arrays for the official writer.
+Pillow

@@ -14,7 +14,7 @@ import json
 import os
 import shutil
 import subprocess
-from bisect import bisect_right
+from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -22,6 +22,8 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 from .lerobot_align import AlignmentPolicy, TimedSample, align_streams
+from .lerobot_schema import LeRobotV3Schema
+from .lerobot_dataset_store import dataset_lock
 
 
 @dataclass(frozen=True)
@@ -32,6 +34,7 @@ class ExportRequest:
     output_dir: Path
     target_fps: float
     max_gap_sec: float
+    schema: LeRobotV3Schema | None = None
     progress_callback: Callable[[int, int], None] | None = None
 
 
@@ -42,36 +45,147 @@ class LeRobotExporter:
 
     # topic → (message class, value extractor). Extractor returns None to skip a topic.
     def export(self, request: ExportRequest) -> Path:
+        """Write exactly one adopted raw session as one official LeRobot v3 episode.
+
+        ``LeRobotDataset`` owns all v3 paths, parquet shards, video encoding and
+        stats.  The old private writer methods remain below temporarily only to keep
+        their small parsing helpers available; this entry point never invokes them.
+        """
+        if request.schema is None:
+            raise ValueError("LeRobot v3 export requires an explicit schema")
+        return self._export_v3(request, request.schema)
+
+    def _export_v3(self, request: ExportRequest, schema: LeRobotV3Schema) -> Path:
         manifest = self._load_final_manifest(request.session_dir)
-        output_dir = request.output_dir
-        output_dir.mkdir(parents=True, exist_ok=True)
-
         streams = self._read_mcap_streams(request.session_dir)
-        camera_anchors, camera_frames = self._read_camera_anchors(request.session_dir)
-        if not camera_anchors:
-            raise ValueError("session has no camera frames to anchor alignment")
-
-        state_action = self._state_action_streams(streams, manifest)
-        camera_anchors = self._trim_to_overlap(camera_anchors, state_action)
-        if not camera_anchors:
-            raise ValueError("no camera frame falls within the state/action overlap window")
-
-        # Align the state/action inputs onto the camera image timestamps.
+        _unused_anchors, camera_frames = self._read_camera_anchors(request.session_dir)
+        required = self._v3_streams(streams, schema)
+        anchors = self._v3_anchors(required, camera_frames, schema, request.max_gap_sec)
         aligned = align_streams(
-            camera_anchors,
-            {name: (samples, policy) for name, samples, policy in state_action},
-            max_gap_ns=int(request.max_gap_sec * 1e9) if request.max_gap_sec > 0 else None,
+            anchors, {name: (samples, policy) for name, samples, policy in required},
+            max_gap_ns=self._gap_ns(request.max_gap_sec),
         )
-        # Progress spans the whole export: align 5%, parquet 5-25%, videos 25-90%,
-        # meta+replay 90-100%. Video encoding is the slow step, so it gets the widest band.
-        self._report(request, 5, 100)
-
-        episode_frames = self._assemble_frames(aligned, manifest, camera_frames, output_dir, request)
-        self._write_videos(camera_anchors, camera_frames, output_dir, request.target_fps, request)
-        self._write_meta(output_dir, manifest, episode_frames, camera_frames, request.target_fps)
-        self._write_replay_index(output_dir, request.session_dir, manifest, aligned, camera_frames)
+        images = self._v3_images(anchors, camera_frames, schema, self._gap_ns(request.max_gap_sec))
+        image_shapes = {camera: self._jpeg_shape(frames[0][1]) for camera, frames in images.items()}
+        with dataset_lock(request.output_dir):
+            dataset = self._open_v3_dataset(request.output_dir, schema, image_shapes)
+            try:
+                task = str(manifest.get("metadata", {}).get("task") or "recording")
+                for index, frame in enumerate(aligned):
+                    payload = {
+                        "observation.state": np.asarray(self._concat(frame.values, list(schema.arm_joint_topics) + list(schema.gripper_position_topics)), dtype=np.float32),
+                        "action": np.asarray(self._concat(frame.values, list(schema.arm_action_topics) + list(schema.gripper_action_topics)), dtype=np.float32),
+                        "task": task,
+                    }
+                    for camera_id, selected in images.items():
+                        payload[f"observation.images.{camera_id}"] = self._load_rgb(selected[index][1])
+                    dataset.add_frame(payload)
+                    self._report(request, index + 1, len(aligned))
+                episode_index = int(dataset.meta.total_episodes)
+                dataset.save_episode(parallel_encoding=True)
+            except BaseException:
+                if dataset.has_pending_frames():
+                    dataset.clear_episode_buffer()
+                raise
+            finally:
+                # Required by the SDK: flushes metadata/parquet footers before another
+                # adopted session calls resume().
+                dataset.finalize()
+        self._write_v3_receipt(request.session_dir, request.output_dir, manifest, schema, episode_index, anchors)
         self._report(request, 100, 100)
-        return output_dir
+        return request.output_dir
+
+    @staticmethod
+    def _gap_ns(max_gap_sec: float) -> int:
+        if max_gap_sec <= 0:
+            raise ValueError("LeRobot v3 export max_gap_sec must be positive")
+        return int(max_gap_sec * 1e9)
+
+    @staticmethod
+    def _v3_streams(streams: dict[str, list[TimedSample]], schema: LeRobotV3Schema) -> list[tuple[str, list[TimedSample], AlignmentPolicy]]:
+        declared = ((schema.arm_joint_topics, AlignmentPolicy.LINEAR),
+                    (schema.gripper_position_topics, AlignmentPolicy.FORWARD_FILL),
+                    (schema.arm_action_topics, AlignmentPolicy.LINEAR),
+                    (schema.gripper_action_topics, AlignmentPolicy.FORWARD_FILL))
+        result = []
+        for topics, policy in declared:
+            for topic in topics:
+                if not streams.get(topic):
+                    raise ValueError(f"required LeRobot v3 stream has no samples: {topic}")
+                result.append((topic, streams[topic], policy))
+        return result
+
+    @staticmethod
+    def _v3_anchors(required: Sequence[tuple[str, Sequence[TimedSample], AlignmentPolicy]], camera_frames: dict[str, list[tuple[int, Path]]], schema: LeRobotV3Schema, max_gap_sec: float) -> list[int]:
+        if set(camera_frames) != set(schema.camera_ids):
+            raise ValueError("recorded cameras do not match the configured LeRobot v3 schema")
+        if any(not camera_frames[camera] for camera in schema.camera_ids):
+            raise ValueError("a required camera has no recorded JPEG frames")
+        gap = int(max_gap_sec * 1e9)
+        # The interval must be valid for linear / causal stream policies and have a
+        # nearby image for every camera.  This produces one fixed FPS timeline, not a
+        # union of the four camera timelines.
+        start = max([samples[0].timestamp_ns for _, samples, _ in required] + [frames[0][0] - gap for frames in camera_frames.values()])
+        end = min([samples[-1].timestamp_ns for _, samples, _ in required] + [frames[-1][0] + gap for frames in camera_frames.values()])
+        step = round(1_000_000_000 / schema.fps)
+        first = ((start + step - 1) // step) * step
+        anchors = list(range(first, end + 1, step))
+        if not anchors:
+            raise ValueError("no common fixed-FPS interval for required LeRobot streams")
+        return anchors
+
+    @staticmethod
+    def _v3_images(anchors: Sequence[int], camera_frames: dict[str, list[tuple[int, Path]]], schema: LeRobotV3Schema, max_gap_ns: int) -> dict[str, list[tuple[int, Path]]]:
+        selected: dict[str, list[tuple[int, Path]]] = {}
+        for camera in schema.camera_ids:
+            frames = camera_frames[camera]
+            timestamps = [timestamp for timestamp, _ in frames]
+            picks: list[tuple[int, Path]] = []
+            for anchor in anchors:
+                right = bisect_left(timestamps, anchor)
+                candidates = [candidate for candidate in (right - 1, right) if 0 <= candidate < len(frames)]
+                index = min(candidates, key=lambda candidate: (abs(timestamps[candidate] - anchor), candidate))
+                if abs(timestamps[index] - anchor) > max_gap_ns:
+                    raise ValueError(f"camera {camera} exceeds max image skew at {anchor}")
+                picks.append(frames[index])
+            selected[camera] = picks
+        return selected
+
+    @staticmethod
+    def _jpeg_shape(path: Path) -> tuple[int, int, int]:
+        dimensions = LeRobotExporter._jpeg_dimensions(path)
+        if dimensions is None:
+            raise ValueError(f"unable to read JPEG dimensions: {path}")
+        width, height = dimensions
+        return height, width, 3
+
+    @staticmethod
+    def _load_rgb(path: Path) -> np.ndarray:
+        try:
+            from PIL import Image
+        except ImportError as error:
+            raise RuntimeError("Pillow is required for LeRobot v3 image export") from error
+        with Image.open(path) as image:
+            return np.asarray(image.convert("RGB"), dtype=np.uint8)
+
+    @staticmethod
+    def _open_v3_dataset(root: Path, schema: LeRobotV3Schema, image_shapes: dict[str, tuple[int, int, int]]) -> Any:
+        try:
+            from lerobot.datasets import LeRobotDataset
+        except ImportError as error:
+            raise RuntimeError("lerobot==0.6.1 is required for LeRobot v3 export") from error
+        if (root / "meta" / "info.json").is_file():
+            return LeRobotDataset.resume(repo_id=schema.repo_id, root=root, batch_encoding_size=1)
+        root.parent.mkdir(parents=True, exist_ok=True)
+        return LeRobotDataset.create(repo_id=schema.repo_id, root=root, fps=schema.fps, features=schema.features(image_shapes), robot_type="realman_rm65_three_arm", use_videos=True, batch_encoding_size=1)
+
+    @staticmethod
+    def _write_v3_receipt(session_dir: Path, root: Path, manifest: dict[str, Any], schema: LeRobotV3Schema, episode_index: int, anchors: Sequence[int]) -> None:
+        receipt = {"dataset_root": str(root), "repo_id": schema.repo_id, "episode_index": episode_index,
+                   "schema_fingerprint": schema.fingerprint, "frame_count": len(anchors),
+                   "first_walltime_ns": anchors[0], "last_walltime_ns": anchors[-1],
+                   "source_session_id": manifest.get("session_id", session_dir.name)}
+        (session_dir / "export" / "lerobot-v3.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
 
     # ---- loading -----------------------------------------------------------
 
@@ -128,7 +242,7 @@ class LeRobotExporter:
         if "/cartesian_velocity/command" in topic:
             twist = message.twist
             return [twist.linear.x, twist.linear.y, twist.linear.z, twist.angular.x, twist.angular.y, twist.angular.z]
-        if topic.startswith("/gripper_") and topic.endswith("/position"):
+        if topic.startswith("/gripper_") and (topic.endswith("/position") or topic.endswith("/command")):
             return float(message.data)
         return None
 
@@ -198,7 +312,9 @@ class LeRobotExporter:
                 wall_ns = int(entry["walltime_ns"])
                 frames.append((wall_ns, session_dir / "videos" / entry["path"]))
                 anchors.append(wall_ns)
-            camera_frames[camera_id] = sorted(frames, key=lambda item: item[0])
+            camera_frames.setdefault(camera_id, []).extend(frames)
+        for frames in camera_frames.values():
+            frames.sort(key=lambda item: item[0])
         return sorted(set(anchors)), camera_frames
 
     # ---- stream assembly ---------------------------------------------------

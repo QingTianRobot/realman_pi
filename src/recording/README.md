@@ -33,7 +33,9 @@ src/recording/
 │   │   ├── json_io.py                     # 原子 JSON 写（manifest/media-index 共用）
 │   │   ├── preflight.py                   # 设备/话题/磁盘/MCAP 预检策略
 │   │   ├── lerobot_align.py               # 后置：时间序列对齐数学
-│   │   ├── lerobot_exporter.py            # 后置：当前只做诚实失败占位
+│   │   ├── lerobot_schema.py              # LeRobot v3 特征与 topic 顺序契约
+│   │   ├── lerobot_dataset_store.py       # LeRobot v3 单数据集追加锁
+│   │   ├── lerobot_exporter.py            # ADOPT 后异步写入 LeRobot v3 episode
 │   │   ├── replay.py                      # P2：Rerun 离线回放 CLI
 │   │   ├── rerun_adapter.py               # 可选实时 Rerun 适配器（非采集依赖）
 │   │   └── static/                        # Vite 构建产物（index.html + assets/，随包安装）

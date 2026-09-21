@@ -72,7 +72,7 @@ Service 的采用返回表示“导出任务已接受”，不是“数据集已
 - `arm_namespaces` 与夹爪 topic 列表决定订阅集合；
 - `preflight_required_topics` 决定非相机的 PREPARE 硬门限；可按任务加入力控、报警或 action topic，未列出的录制 topic 不会阻止开始；
 - `preflight_alignment_trigger_sec` 是仅用于请求离线对齐的 receipt-walltime 差阈值；`alignment_enabled` 关闭时仍保留检测结论，但不请求后处理；
-- `camera_ids` 和 `camera_image_topics` 必须一一对应；后者必须是 `sensor_msgs/msg/CompressedImage` 的绝对 topic 名称；
+- `camera_ids` 和 `camera_image_topics` 必须一一对应；后者必须是 `sensor_msgs/msg/Image` 的绝对 topic 名称；
 - `web_state_hz` 是网页快照上限，不是采样或图像帧率。
 - `preflight_max_age_sec`、`preflight_valid_sec` 和 `min_free_space_bytes` 是开始录制前的硬性预检阈值；
 - `preview_*` 是 Web 独立预览限制，`preview_enabled=true` 才启动低清 JPEG 重压缩 worker；
@@ -103,7 +103,7 @@ Compose 将仓库 `recordings/` 挂载为容器 `/data/realman-recordings`，同
 1. `state_archive.py`（已接入）：用 `rosbag2_py` 的 `SequentialWriter` 以 `storage_id="mcap"` 建 topic、序列化消息并在收尾时关闭 writer；bag 记录时间取 receipt wall-clock 纳秒。session manifest 的成对 wall/monotonic 起始锚点供导出换算媒体时间轴；没有 `header.stamp` 的话题只可使用 receipt 时间。
 2. `camera_workers.py`（已接入）：每路相机独立 ffmpeg 分段录制；暂停产生媒体间隙；低清预览使用另一个限 FPS、限分辨率、只保留最新 JPEG 的 worker。
 3. `web_server.py` 与 `static/index.html`（已接入）：预览使用独立 endpoint；只读 Three.js/URDF 三臂 viewer 已实现（参考 web_control 的 urdf-loader 方案，把 `/l|m|r/joint_states` 实时套到 URDF 模型）。`/api/layout` 与 `/models` 由 `web_server.py` 提供，前端源在 `web/`，经 `npm run build:recording`（Vite，`config/recording/vite.config.mjs`）构建到 `static/`。
-4. `lerobot_exporter.py`：固定目标 LeRobot 版本，按 manifest 的单调时钟与媒体分段对齐，放在 ROS executor 外的 worker/process 中运行。对齐数学已落在 `lerobot_align.py`（见下方「LeRobot 对齐策略」）；仍需读 MCAP 样本与图像时间戳、写入 LeRobot 表/视频。
+4. `lerobot_exporter.py`：ADOPT 后在 ROS executor 外读取 MCAP/JPEG，以固定 15Hz SYSTEM_TIME 网格对齐，使用 `lerobot==0.6.1` 的公开 `create/resume`、`add_frame`、`save_episode`、`finalize` API 追加一个 v3 episode。多个 adopted session 用数据集锁串行化；没有已配置的真实夹爪 command topic 时，action 保持 18D 机械臂命令，绝不从状态伪造夹爪 action。
 5. `replay.py`（已并入 `realman_recording` 包）：Rerun 是离线分析适配器，不是 ROS 包或节点。正式回放仅接受 ADOPTED 且 LeRobot 导出成功的 session，并读取 `export/lerobot/`；原始 MCAP/媒体索引永不作为回放回退源。固定 LeRobot 版本后再接入 episode/frame、state/action 与视频字段。
 6. 完成后补充真实相机、磁盘满、WebSocket 慢客户端、暂停/恢复、崩溃恢复、Service adopt/discard 和 LeRobot 读回的端到端测试。
 

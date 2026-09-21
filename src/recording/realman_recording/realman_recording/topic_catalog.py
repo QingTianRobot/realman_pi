@@ -47,6 +47,7 @@ def build_topic_catalog(
     *,
     arm_action_topics: Iterable[str] = (),
     gripper_position_topics: Iterable[str] = (),
+    gripper_action_topics: Iterable[str] = (),
     gripper_torque_topics: Iterable[str] = (),
     gripper_alarm_topics: Iterable[str] = (),
 ) -> dict[str, TopicSpec]:
@@ -77,11 +78,21 @@ def build_topic_catalog(
         add(f"/{arm}/coordinates/state", String, "std_msgs/msg/String")
     add("/tf", TFMessage, "tf2_msgs/msg/TFMessage")
     for topic in arm_action_topics:
-        add(str(topic), TwistStamped, "geometry_msgs/msg/TwistStamped")
+        if str(topic):
+            add(str(topic), TwistStamped, "geometry_msgs/msg/TwistStamped")
     for topic in gripper_position_topics:
-        add(str(topic), Float64, "std_msgs/msg/Float64")
+        if str(topic):
+            add(str(topic), Float64, "std_msgs/msg/Float64")
+    # Command observations are recorded only when explicitly configured.  They are
+    # never published by this read-only recorder, and must not be inferred from a
+    # position feedback stream during LeRobot export.
+    for topic in gripper_action_topics:
+        if str(topic):
+            add(str(topic), Float64, "std_msgs/msg/Float64")
     for topic in gripper_torque_topics:
-        add(str(topic), Bool, "std_msgs/msg/Bool")
+        if str(topic):
+            add(str(topic), Bool, "std_msgs/msg/Bool")
     for topic in gripper_alarm_topics:
-        add(str(topic), Int32, "std_msgs/msg/Int32")
+        if str(topic):
+            add(str(topic), Int32, "std_msgs/msg/Int32")
     return catalog

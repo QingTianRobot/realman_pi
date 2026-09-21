@@ -584,6 +584,146 @@ test("unlocks input mode selection when reconnect loses its result", async ({ pa
   await expect(page.locator("#input-mode-select")).toHaveValue("policy");
 });
 
+test("captures independent l/r physical keys only while keyboard is active", async ({ page }) => {
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list",
+    available: true,
+    modes: [
+      { id: "web", label: "Web", selectable: false },
+      { id: "keyboard", label: "Web / 键盘速度控制", selectable: true },
+      { id: "none", label: "无输入", selectable: true },
+    ],
+  });
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state",
+    requested_mode: "keyboard",
+    selected_mode: "keyboard",
+    active_mode: "keyboard",
+    phase: "ACTIVE",
+    request_id: 51,
+    epoch: 4,
+    detail: "keyboard active",
+  });
+  await expect(page.locator("#keyboard-control-card")).toBeVisible();
+
+  await page.keyboard.down("w");
+  await page.keyboard.down("i");
+  await expect.poll(() => page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state")
+      .some((message) => message.arm === "l" && message.keys.includes("KeyW")),
+  )).toBe(true);
+  await expect.poll(() => page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state")
+      .some((message) => message.arm === "r" && message.keys.includes("KeyI")),
+  )).toBe(true);
+  await expect(page.locator('#keyboard-left [data-code="KeyW"]')).toHaveClass(/pressed/);
+  await expect(page.locator('#keyboard-right [data-code="KeyI"]')).toHaveClass(/pressed/);
+
+  await page.keyboard.up("w");
+  await expect.poll(() => page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state" && message.arm === "l")
+      .at(-1)?.keys.length,
+  )).toBe(0);
+  await page.keyboard.up("i");
+});
+
+test("keyboard safety events release both arms and stop heartbeat", async ({ page }) => {
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list", available: true,
+    modes: [{ id: "keyboard", label: "Web / 键盘速度控制", selectable: true }],
+  });
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state", requested_mode: "keyboard", selected_mode: "keyboard",
+    active_mode: "keyboard", phase: "ACTIVE", request_id: 52, epoch: 5, detail: "",
+  });
+  await page.keyboard.down("w");
+  await page.keyboard.down("i");
+  await expect.poll(() => page.evaluate(() =>
+    ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state").length,
+  )).toBeGreaterThan(0);
+
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect.poll(() => page.evaluate(() => {
+    const messages = ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state");
+    return ["l", "r"].every((arm) => messages.findLast((message) => message.arm === arm)?.keys.length === 0);
+  })).toBe(true);
+  const afterBlur = await page.evaluate(() =>
+    ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state").length,
+  );
+  await page.waitForTimeout(180);
+  expect(await page.evaluate(() =>
+    ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state").length,
+  )).toBe(afterBlur);
+
+  await emitWebSocketEvent(page, { type: "input_mode_list", available: false, modes: [] });
+  await expect(page.locator("#keyboard-control-card")).toBeHidden();
+});
+
+test("keyboard releases an unavailable arm and both arms on mode or visibility loss", async ({ page }) => {
+  await page.goto("/");
+  const catalog = {
+    type: "input_mode_list", available: true,
+    modes: [{ id: "keyboard", label: "Web / 键盘速度控制", selectable: true }],
+  };
+  const active = {
+    type: "input_mode_state", requested_mode: "keyboard", selected_mode: "keyboard",
+    active_mode: "keyboard", phase: "ACTIVE", request_id: 53, epoch: 6, detail: "",
+  };
+  await emitWebSocketEvent(page, catalog);
+  await emitWebSocketEvent(page, active);
+  await page.keyboard.down("w");
+  await page.keyboard.down("i");
+  await emitWebSocketEvent(page, {
+    type: "coordinate_state", arm: "l", motion_allowed: false,
+    work_matched: false, current_work: "other", expected_work: "cell",
+    work: { type: 1, name: "other", frame_id: "l/work/other" },
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const messages = ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state");
+    return messages.findLast((message) => message.arm === "l")?.keys.length;
+  })).toBe(0);
+  await expect.poll(() => page.evaluate(() => {
+    const messages = ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state");
+    return messages.findLast((message) => message.arm === "r")?.keys.includes("KeyI");
+  })).toBe(true);
+
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state", requested_mode: "none", selected_mode: "none",
+    active_mode: "none", phase: "ACTIVE", request_id: 54, epoch: 7, detail: "",
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const messages = ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state");
+    return ["l", "r"].every((arm) => messages.findLast((message) => message.arm === arm)?.keys.length === 0);
+  })).toBe(true);
+
+  await emitWebSocketEvent(page, active);
+  await page.keyboard.down("i");
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const messages = ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state");
+    return ["l", "r"].every((arm) => messages.findLast((message) => message.arm === arm)?.keys.length === 0);
+  })).toBe(true);
+});
+
 test("clears MOVEL waiting feedback placeholder when the action is rejected", async ({ page }) => {
   await page.goto("/");
   await page.locator("button[data-motion-command=\"1\"]").click();

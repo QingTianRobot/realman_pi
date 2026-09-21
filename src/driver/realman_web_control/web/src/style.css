@@ -53,9 +53,24 @@ canvas { display: block; width: 100%; height: 100%; }
 .controls { display: flex; flex-direction: column; gap: 16px; }
 .panel-section { padding: 16px; }
 .input-mode-card[hidden] { display: none; }
+.keyboard-control-card[hidden] { display: none; }
 .input-mode-body { display: grid; gap: 10px; }
 .input-mode-body label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 1.25fr); gap: 10px; align-items: center; color: #8fa6a9; font-size: 10px; }
 .input-mode-body select { width: 100%; min-width: 0; padding: 7px; font-size: 11px; }
+.keyboard-help { margin: 0 0 12px; color: #9db2b0; font-size: 11px; line-height: 1.5; }
+.keyboard-arm-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.keyboard-arm { min-width: 0; padding: 10px; border: 1px solid #2d4549; background: #101d20; }
+.keyboard-arm.unavailable { opacity: .55; }
+.keyboard-arm-heading { display: flex; justify-content: space-between; gap: 8px; margin-bottom: 8px; font-size: 10px; }
+.keyboard-arm-heading span { overflow: hidden; color: #849e9b; text-overflow: ellipsis; white-space: nowrap; }
+.keyboard-bindings { display: grid; gap: 5px; }
+.keyboard-binding { display: grid; grid-template-columns: 30px 25px 12px 25px 12px; gap: 4px; align-items: center; font-size: 9px; color: #8ea8a5; }
+.keyboard-binding kbd { display: grid; place-items: center; width: 25px; height: 24px; border: 1px solid #476166; border-bottom-width: 3px; border-radius: 3px; background: #18292d; color: #d9e7e4; font: 600 11px/1 ui-monospace, monospace; }
+.keyboard-binding kbd.pressed { border-color: #65d2c3; background: #24524e; color: #effffc; }
+.keyboard-binding em { font-style: normal; color: #637d7b; }
+.mini-state.keyboard-ready { color: #84dfd0; border-color: #477d79; }
+.mini-state.keyboard-moving { color: #f2d48b; border-color: #967d43; }
+.mini-state.keyboard-work-unavailable { color: #ef9e94; border-color: #8c4d49; }
 .input-mode-detail { min-height: 16px; color: #c3d4d1; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
 .mini-state.switching { color: #e4b16f; border-color: #896b45; }
 .mini-state.failed { color: #e37f68; border-color: #963d36; }
@@ -145,6 +160,7 @@ dialog input { width: 100%; margin: 8px 0 18px; }
   .fleet-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid #263b40; }
   .velocity-inputs { grid-template-columns: repeat(3, 1fr); row-gap: 8px; }
   .input-mode-body label { grid-template-columns: 1fr; gap: 5px; }
+  .keyboard-arm-grid { grid-template-columns: 1fr; }
   .viewer-footer { font-size: 9px; }
   .record-save-row, .record-apply-row { grid-template-columns: 1fr; }
 }

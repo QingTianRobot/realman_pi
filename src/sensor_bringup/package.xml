@@ -16,8 +16,8 @@
        不在此声明 exec_depend，避免 colcon 交叉检查。
        realsense2_camera 依赖 librealsense2；realsense_ws 子模块初始化并 colcon
        构建后，由 rm65_camera_ros2 / start_sensors.sh source 其 install/setup.sh
-       提供 ROS2 节点出图。缺少该 overlay 时 rm65_camera_ros2 自动降级
-       use_realsense:=false，三路 Orbbec 仍正常启动。 -->
+       提供 ROS2 节点出图。./rm65 up 要求全局 D435 通道必须可用，缺少该 overlay
+       时 rm65_camera_ros2 / start_sensors.sh 直接失败，不再降级为仅 Orbbec。 -->
 
   <export>
     <build_type>ament_cmake</build_type>

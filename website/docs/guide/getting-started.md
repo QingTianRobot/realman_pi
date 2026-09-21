@@ -145,7 +145,8 @@ USB2 总线上；三路 Orbbec 使用 `320x240@15` 深度低带宽档可正常�
 相机出图主线使用官方 Orbbec ROS2 驱动加 RealSense ROS2 驱动。`rm65_camera_ros2` 会先停止
 已弃用的 SDK 推流以释放 USB，source ROS2 Humble、Orbbec、RealSense 和本仓库工作区，然后从
 `config/ros/cameras_ros2.yaml` 按串号启动三路 Gemini 305，并在 24s 错峰后启动全局 RealSense
-D435；宿主机缺少 `realsense2_camera` 驱动时自动降级为仅三路 Orbbec。默认使用 USB2 兼容的
+D435；宿主机缺少 `realsense2_camera` 驱动时 `rm65_camera_ros2` / `start_sensors.sh` / `./rm65 up`
+直接失败，禁止降级为仅三路 Orbbec。默认使用 USB2 兼容的
 `640x480@10 YUYV` 彩色；YUYV 用于规避右侧
 设备在 USB2/MJPEG 下的持续帧撕裂；深度向驱动传入
 `640x480@15 Y16` 和硬件抽取系数 `2`，实际发布 `320x240@15`。点云关闭；每次运行的
@@ -171,7 +172,7 @@ rm65_camera_ros2_status
 ```
 
 默认会看到 `/camera_left`、`/camera_middle`、`/camera_right` 下的 `color/image_raw` 和
-对应 `camera_info`；已构建 `realsense2_camera` 时还会有全局
+对应 `camera_info`，以及全局
 `/camera_global/d435/color/image_raw`。需要深度时使用互斥的深度模式：
 
 ```zsh
@@ -210,7 +211,7 @@ rm65_docker_camera_rviz                 # 前台打开 RViz，关闭窗口或 Ct
 ```
 
 RViz 中会显示（前三路由 Orbbec 提供，第四路由 RealSense D435 提供；宿主机缺少
-`realsense2_camera` 驱动时 `rm65_camera_ros2` 自动降级为仅 Orbbec，此时第四格无图像）：
+`realsense2_camera` 驱动时 `rm65_camera_ros2` 直接失败，不会到达 RViz 阶段）：
 
 ```text
 /camera_left/color/image_raw

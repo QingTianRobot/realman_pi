@@ -1,0 +1,83 @@
+name: build_lrs_ROS2_package
+
+on:
+  push:
+    branches: ['**']
+  pull_request:
+    branches: ['**']
+
+permissions: read-all
+
+jobs:
+
+  build_lrs_ros2_package:
+    runs-on: ubuntu-latest
+    timeout-minutes: 45
+    strategy:
+      matrix:
+        ros_distribution:
+          - humble
+          - kilted
+          - rolling
+          - jazzy
+
+        include:
+          # Humble Hawksbill
+          - docker_image: ubuntu:jammy
+            ros_distribution: humble
+
+          # Kilted Kaiju
+          - docker_image: ubuntu:noble
+            ros_distribution: kilted
+
+          # Rolling Ridley
+          - docker_image: ubuntu:noble
+            ros_distribution: rolling
+
+          # Jazzy Jalisco
+          - docker_image: ubuntu:noble
+            ros_distribution: jazzy
+
+    container:
+      image: ${{ matrix.docker_image }}
+    steps:
+
+      - name: install ROS 2 apt source
+        # Workaround: setup-ros resolves the ros-apt-source version via an
+        # unauthenticated GitHub API call (60 req/hour per IP, shared across
+        # hosted runners), which intermittently gets rate-limited and fails the
+        # job with a 404. Pre-installing the package here makes setup-ros skip
+        # that step. The version is resolved from the releases/latest web
+        # redirect, which is not subject to the API rate limit.
+        # Remove once fixed upstream (ros-tooling/setup-ros).
+        shell: bash
+        run: |
+          set -euo pipefail
+          apt-get update && apt-get install -y --no-install-recommends curl ca-certificates
+          VERSION=$(curl -fsSLI -o /dev/null -w '%{url_effective}' --retry 5 --retry-delay 5 --retry-all-errors \
+            https://github.com/ros-infrastructure/ros-apt-source/releases/latest | sed 's|.*/||')
+          [[ "$VERSION" =~ ^[0-9]+(\.[0-9]+)+$ ]] || { echo "ERROR: could not resolve ros-apt-source version (got: '${VERSION}')"; exit 1; }
+          codename=$(. /etc/os-release && echo "${UBUNTU_CODENAME:-$VERSION_CODENAME}")
+          curl -fsSL --retry 5 --retry-delay 5 --retry-all-errors -o /tmp/ros2-apt-source.deb \
+            "https://github.com/ros-infrastructure/ros-apt-source/releases/download/${VERSION}/ros2-apt-source_${VERSION}.${codename}_all.deb"
+          dpkg -i /tmp/ros2-apt-source.deb
+
+      - name: setup ROS environment
+        uses: ros-tooling/setup-ros@77bcad67a6cb15f6192d61464d99bbab658e4ca9 #v0.7.18
+        with:
+          required-ros-distributions: ${{ matrix.ros_distribution }}
+
+      - name: build librealsense ROS 2
+        uses: ros-tooling/action-ros-ci@3a640b10f09b756dabe556dac5413aba369f71b0 #v0.4.8
+        with:
+          target-ros2-distro: ${{ matrix.ros_distribution }}
+          skip-tests: true
+          colcon-defaults: |  # We align the build flags to the librealsense2 ROS2 release build.
+            {
+              "build": {
+                "cmake-args": [
+                    "-DBUILD_GRAPHICAL_EXAMPLES=OFF",
+                    "-DBUILD_EXAMPLES=OFF"
+                ]
+              }
+            }

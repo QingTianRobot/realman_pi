@@ -5,6 +5,7 @@ Log/
 
 **/__pycache__/
 *.py[cod]
+*.DS_Store
 
 # Ignore local agent state while keeping repository-level policy skills versioned.
 .agents/*

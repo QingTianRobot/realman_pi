@@ -447,7 +447,7 @@ _rm65_source_camera_ros2() {
   done
 
   # The RealSense D435 driver lives in the src/sensor/realsense submodules and is
-  # optional; rm65_camera_ros2 degrades to use_realsense:=false when it is absent.
+  # mandatory for ./rm65 up; rm65_camera_ros2 aborts when the overlay is absent.
   realsense_candidates=(
     "${REALMAN_REALSENSE_ROS2_SETUP:-}"
     "$RM65_PROJECT_ROOT/src/sensor/realsense/realsense_ws/install/setup.sh"
@@ -550,10 +550,11 @@ rm65_camera_ros2() {
     launch_args+=("enable_color:=false" "enable_depth:=true")
   fi
   [[ "$use_rviz" == true ]] && launch_args+=("use_rviz:=true")
+  # ./rm65 up 要求全局 D435 通道必须可用；缺少 realsense2_camera 时直接失败，禁止降级为仅 Orbbec。
   if ! command ros2 pkg prefix realsense2_camera >/dev/null 2>&1; then
-    print -u2 -r -- "rm65: realsense2_camera is not in the sourced ROS 2 environment; starting Orbbec only"
+    print -u2 -r -- "rm65: realsense2_camera is not in the sourced ROS 2 environment; refusing to skip the global D435 channel"
     print -u2 -r -- "rm65: build src/sensor/realsense/realsense_ws or set REALMAN_REALSENSE_ROS2_SETUP to its install/setup.sh"
-    launch_args+=("use_realsense:=false")
+    return 1
   fi
   command ros2 launch sensor_bringup cameras_ros2.launch.py "${launch_args[@]}"
 }

@@ -318,6 +318,17 @@ Action goal accepted
 - `/stop`：抢占 ownership，使用最快的 `rm_set_arm_stop()`，不会被普通 cancel 覆盖。
 - `shutdown`/`disconnect`：先停止速度 session，再停止普通运动，最后才 disconnect SDK。
 
+### 行为树定时速度调用
+
+`realman_bt` 注册了 `CartesianVelocityForDuration` 叶节点，用同一个
+`CartesianVelocity` Action 和 `cartesian_velocity/command` 话题完成有限时长运动。调用方只给出逻辑
+`reference`、六轴速度和时长；节点根据 `config/ros/realman_coordinates.yaml` 同时解析驱动的
+`reference_type/reference_name` 与 ROS `frame_id`，并从 `config/ros/realman_motion.yaml` 读取刷新周期、
+watchdog、速度/加速度限制和停止超时。这样 XML 中不会出现彼此不一致的坐标字段。
+
+沿左臂默认工具 +X 方向运动的示例为 `config/behavior-trees/tool_x.xml`；插件的完整端口、停止/取消
+语义和 dry-run 启动方式见[行为树机械臂移动 Demo](./behavior-tree-motion#定时笛卡尔速度节点)。
+
 后续若加入新的连续控制 Action，必须复用这个 ownership 和停止顺序，不能为每个接口
 单独建立“看起来空闲”的布尔变量。
 

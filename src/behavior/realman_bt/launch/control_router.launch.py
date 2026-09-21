@@ -3,6 +3,7 @@
 
 import math
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -12,6 +13,9 @@ from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from coordinate_reference_registry import load_runtime_registries  # noqa: E402
 
 
 def _config_root() -> Path:
@@ -68,6 +72,10 @@ def generate_launch_description():
     pika_joint_defaults = _load_pika_joint_defaults(
         config_root / "ros" / "pika_config.yaml"
     )
+    coordinate_references, velocity_profiles = load_runtime_registries(
+        config_root / "ros" / "realman_coordinates.yaml",
+        config_root / "ros" / "realman_motion.yaml",
+    )
     tree_file = DeclareLaunchArgument(
         "tree_file",
         default_value=str(config_root / "behavior-trees" / "control.xml"),
@@ -115,6 +123,8 @@ def generate_launch_description():
                 "exit_on_terminal": LaunchConfiguration("exit_on_terminal"),
                 "runtime_snapshot_file": LaunchConfiguration("runtime_snapshot_file"),
                 **pika_joint_defaults,
+                "coordinate_references": coordinate_references,
+                "cartesian_velocity_profiles": velocity_profiles,
             },
         ],
     )

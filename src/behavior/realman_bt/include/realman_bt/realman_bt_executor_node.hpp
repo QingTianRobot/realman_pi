@@ -8,6 +8,7 @@
 
 #include "bt_core/node_factory.hpp"
 #include "bt_core/tree.hpp"
+#include "realman_bt/cartesian_velocity_for_duration_node.hpp"
 #include "realman_bt/input_mode.hpp"
 #include "realman_bt/runtime_snapshot.hpp"
 #include "realman_bt/terminal_exit_policy.hpp"
@@ -41,7 +42,10 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
   void onTick();
   void flushSnapshot();
   void enqueueCancellationDrain(std::shared_ptr<MoveJCancellationDrain> drain);
+  void enqueueCartesianVelocityCancellationDrain(
+      std::shared_ptr<CartesianVelocityCancellationDrain> drain);
   void drainCancellationQueue();
+  std::size_t pendingCancellationCount() const;
   void requestProcessExitIfReady();
   void handleStart(const std::shared_ptr<Trigger::Request>,
                    std::shared_ptr<Trigger::Response> response);
@@ -64,6 +68,8 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
   std::optional<InputModeSnapshot> last_published_input_mode_;
   std::unique_ptr<bt_core::Tree> tree_;
   RuntimeDiagnostics diagnostics_;
+  CoordinateReferenceRegistry coordinate_reference_registry_;
+  CartesianVelocityProfileRegistry cartesian_velocity_profile_registry_;
   std::unique_ptr<RuntimeSnapshotWriter> snapshot_writer_;
   std::string tree_id_;
   std::uint64_t snapshot_sequence_{0};
@@ -77,6 +83,8 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
   rclcpp::Subscription<rcl_interfaces::msg::Log>::SharedPtr rosout_sub_;
   rclcpp::TimerBase::SharedPtr cancellation_drain_timer_;
   std::vector<std::shared_ptr<MoveJCancellationDrain>> cancellation_drains_;
+  std::vector<std::shared_ptr<CartesianVelocityCancellationDrain>>
+      cartesian_velocity_cancellation_drains_;
   double tick_rate_hz_{10.0};
   bool autostart_{true};
   bool stop_on_terminal_{true};

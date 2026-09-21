@@ -340,6 +340,7 @@ Tree XmlParser::loadFromText(const std::string& xml_text,
     // arm/readiness/terminal contract without introducing a second manifest.
     const bool is_realman_launcher_metadata =
         key == "realman_arm_id" || key == "realman_required_arms" ||
+        key == "realman_required_actions" ||
         key == "realman_launch" || key == "realman_stop_on_terminal" ||
         key == "realman_exit_on_terminal";
     if (key != "main_tree_to_execute" && key != "BTCPP_format" &&

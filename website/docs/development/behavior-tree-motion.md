@@ -7,7 +7,8 @@ description: 使用 vendored BehaviorTree.CPP-X 执行单臂或三臂同步分�
 
 realman_bt 提供一个独立的 ROS 2 C++ 执行器，用于从 XML 加载行为树并执行关节移动。它参考
 third_party/behavior_tree_cpp 的 NodeFactory -> XmlParser -> Tree::tickOnce() 链路，注册
-Sequence、MoveJ 和 ThreeArmMoveJ，不替换生产 ./rm65 up 编排，也不会自动启动机械臂驱动。
+Sequence、MoveJ、ThreeArmMoveJ 和 CartesianVelocityForDuration，不替换生产 ./rm65 up 编排，也不会
+自动启动机械臂驱动。
 
 同一执行器还支持持久输入路由树，但不与本页的 one-shot MoveJ 生命周期混淆：`./rm65 up` 后另行执行
 `./rm65 bt control`，它持续到 Ctrl-C。其 XML 目录、Web override 和无硬件验证见
@@ -19,7 +20,10 @@ Sequence、MoveJ 和 ThreeArmMoveJ，不替换生产 ./rm65 up 编排，也不�
       -> realman_bt_executor
            -> move.xml: Sequence -> MoveJ
            -> three.xml: Sequence -> ThreeArmMoveJ -> ThreeArmMoveJ
+           -> tool_x.xml: Sequence -> CartesianVelocityForDuration
            -> /l|m|r/execute_motion (realman_msgs/action/ExecuteMotion)
+           -> /l|m|r/cartesian_velocity (realman_msgs/action/CartesianVelocity)
+              + /l|m|r/cartesian_velocity/command (geometry_msgs/msg/TwistStamped)
 
 `./rm65 bt` 使用 one-shot 生命周期。执行器到达 `SUCCESS` 或 `FAILURE` 后停止 tick、halt 树，并等待
 所有 cancellation drain 成功提交取消请求；快照中的 `pending_cancellations` 归零后，随后写出最终快照、退出 executor，`ros2 launch` 和只读
@@ -51,6 +55,64 @@ goal，并在三路都成功后返回 SUCCESS。任一路失败或超时会使�
 `dry_run`、`velocity_percent`、`blend_radius_percent`、`timeout_sec` 默认分别为 `true`、`10`、`0`、
 `120`。成功要求三路 Action 均返回 `SUCCEEDED`，且每个结果消息的 `success=true`。超时从节点初始化
 开始计算，包含等待服务器就绪的时间。
+
+## 定时笛卡尔速度节点
+
+`CartesianVelocityForDuration` 用于“沿指定坐标方向以固定速度运动一段时间”。XML 只使用统一的逻辑
+坐标名，不同时暴露容易冲突的 `reference_type`、`reference_name` 和 `frame_id`：
+
+```xml
+<CartesianVelocityForDuration
+    arm_id="l"
+    dry_run="{dry_run}"
+    reference="default_tool"
+    linear_velocity_mps="0.02,0,0"
+    angular_velocity_radps="0,0,0"
+    duration_sec="0.5"/>
+```
+
+该示例表示左臂沿默认工具坐标系的 +X 方向以 `0.02 m/s` 运行 `0.5 s`。完整示例位于
+`config/behavior-trees/tool_x.xml`，可用文件名直接启动：
+
+```bash
+./rm65 bt tool_x
+```
+
+树根的 `realman_required_actions="cartesian_velocity"` 会让容器入口等待
+`/l/cartesian_velocity`，而不是沿用 MoveJ 默认的 `/l/execute_motion`。未声明时默认仍为
+`execute_motion`；可用逗号同时声明 `execute_motion,cartesian_velocity`。该元数据和
+`realman_required_arms` 共同确定启动前只读就绪检查，不会由节点名做隐式猜测。
+
+默认仍为 dry-run，只校验引用、速度和时长，不创建 Action client，也不发布速度。真机命令必须在清空
+工作区、确认工具方向和速度、急停可达后显式执行：
+
+```bash
+REALMAN_BT_DRY_RUN=false ./rm65 bt tool_x
+```
+
+`reference` 的权威映射来自 `config/ros/realman_coordinates.yaml`：
+
+| 逻辑名称 | 含义 |
+| --- | --- |
+| `base` | 当前臂的 BASE；映射为 `<arm>/base_link`。 |
+| `default_tool` | 当前臂配置的默认工具。 |
+| `default_work` | 当前臂配置的默认工作坐标。 |
+| `tool/<key>` | `tools` 中指定配置键，例如 `tool/tcpgrip`。 |
+| `work/<key>` | `work_frames` 中指定配置键，例如 `work/cell`。 |
+
+例如左臂的 `default_tool` 当前映射为驱动目标 `reference_type=TOOL`、
+`reference_name=tcpgrip` 和话题帧 `l/tool/tcpgrip`。控制周期、watchdog、线/角速度上限、线/角加速度
+上限以及停止超时统一读取 `config/ros/realman_motion.yaml`，XML 不能绕过这些逐臂限制。
+
+节点在 Action 接受后通过独立 ROS timer 按配置周期发布 `TwistStamped`，因此命令刷新频率不依赖行为树
+tick 频率。publisher 使用 `KEEP_LAST=1`、`VOLATILE`，DDS lifespan 等于配置 watchdog；每条消息使用
+ROS clock 的新时间戳以及映射后的 `frame_id`。时长到达后先发布零速度，再取消开放式
+`CartesianVelocity` session；驱动返回预期的 `CANCELED` 终态时，节点才返回 `SUCCESS`。如果 Action
+提前结束、引用未知、输入超限或停止超时，节点返回 `FAILURE` 并保留原始诊断。
+
+树被 `/stop`、分支切换或 Ctrl-C halt 时，节点先停止周期 timer 并发布一次零速度，再把 pending goal
+response 或 accepted goal 移交给 executor 的 cancellation drain。`pending_cancellations` 同时统计 MoveJ
+和笛卡尔速度 session；one-shot executor 要等两类 drain 都完成取消提交后才退出。
 
 ## 构建
 

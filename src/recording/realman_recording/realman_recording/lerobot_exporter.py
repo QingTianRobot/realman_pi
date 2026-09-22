@@ -68,6 +68,7 @@ class LeRobotExporter:
                 "calibration", {"state": "UNAVAILABLE"}
             ),
         )
+        camera_archive_quality = self._camera_archive_quality(request.session_dir)
         streams = self._read_mcap_streams(request.session_dir, schema)
         _unused_anchors, camera_frames = self._read_camera_anchors(request.session_dir)
         required = self._v3_streams(streams, schema)
@@ -119,7 +120,16 @@ class LeRobotExporter:
                 # Required by the SDK: flushes metadata/parquet footers before another
                 # adopted session calls resume().
                 dataset.finalize()
-        self._write_v3_receipt(request.session_dir, request.output_dir, manifest, schema, episode_index, anchors, urdf_path)
+        self._write_v3_receipt(
+            request.session_dir,
+            request.output_dir,
+            manifest,
+            schema,
+            episode_index,
+            anchors,
+            urdf_path,
+            camera_archive_quality,
+        )
         self._report(request, 100, 100)
         return request.output_dir
 
@@ -212,7 +222,16 @@ class LeRobotExporter:
         )
 
     @staticmethod
-    def _write_v3_receipt(session_dir: Path, root: Path, manifest: dict[str, Any], schema: LeRobotV3Schema, episode_index: int, anchors: Sequence[int], urdf_path: Path) -> None:
+    def _write_v3_receipt(
+        session_dir: Path,
+        root: Path,
+        manifest: dict[str, Any],
+        schema: LeRobotV3Schema,
+        episode_index: int,
+        anchors: Sequence[int],
+        urdf_path: Path,
+        camera_archive_quality: dict[str, Any],
+    ) -> None:
         receipt = {"dataset_root": str(root), "repo_id": schema.repo_id, "episode_index": episode_index,
                    "schema_fingerprint": schema.fingerprint, "frame_count": len(anchors),
                    "first_walltime_ns": anchors[0], "last_walltime_ns": anchors[-1],
@@ -228,6 +247,7 @@ class LeRobotExporter:
                            "frames": schema.cartesian_command_frames,
                        },
                        "quality_sync_source_ids": schema.sync_source_ids,
+                       "camera_archive_quality": camera_archive_quality,
                        "calibration": manifest.get("metadata", {}).get("canonical", {}).get(
                            "calibration", {"state": "UNKNOWN"}
                        ),
@@ -237,6 +257,36 @@ class LeRobotExporter:
                        "generator_versions": {"joint_velocity": "finite_difference_v1", "ee_fk": "urdf_fk_v1", "ee_velocity": "quaternion_shortest_arc_v1"},
                    }}
         (session_dir / "export" / "lerobot-v3.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+
+    @staticmethod
+    def _camera_archive_quality(session_dir: Path) -> dict[str, Any]:
+        """Read persisted JPEG queue counters for receipt provenance only.
+
+        Older sessions lack these counters and remain exportable with an explicit
+        ``UNAVAILABLE`` result. A present malformed counter is rejected so offline
+        quality analysis never accepts ambiguous values.
+        """
+        index_path = session_dir / "videos" / "media-index.json"
+        if not index_path.is_file():
+            return {"state": "UNAVAILABLE"}
+        index = json.loads(index_path.read_text(encoding="utf-8"))
+        stats = index.get("stats") if isinstance(index, dict) else None
+        if stats is None:
+            return {"state": "UNAVAILABLE"}
+        if not isinstance(stats, dict):
+            raise ValueError("media-index stats must be an object")
+        normalized: dict[str, dict[str, int]] = {}
+        for camera_id, values in stats.items():
+            if not isinstance(camera_id, str) or not camera_id or not isinstance(values, dict):
+                raise ValueError("media-index stats contain an invalid camera entry")
+            normalized_values: dict[str, int] = {}
+            for name in ("accepted", "dropped", "errors"):
+                value = values.get(name)
+                if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+                    raise ValueError(f"media-index {camera_id} {name} must be a non-negative integer")
+                normalized_values[name] = value
+            normalized[camera_id] = normalized_values
+        return {"state": "AVAILABLE", "stats": normalized}
 
     # ---- loading -----------------------------------------------------------
 

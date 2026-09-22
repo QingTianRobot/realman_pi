@@ -140,6 +140,10 @@ Service：`/recording/manage`，类型：`realman_recording_msgs/srv/ManageRecor
 
 manifest 至少包含 `schema_version`、`session_id`、`metadata.profile/task`、起止时间锚点、文件位置、最终 summary、`decision` 和 `export` 状态。`accepted_samples` 表示成功写给 writer 的样本；`enqueued_samples`/`dropped_samples` 用于区分队列背压和实际落盘失败。
 
+LeRobot 导出 receipt 会原样引用 `media-index.json` 的每路相机
+`accepted/dropped/errors` 统计；旧 session 没有该统计时 receipt 标记为
+`UNAVAILABLE`，不会编造质量数据。
+
 `calibration_snapshot_path` 为空时，session 的 canonical metadata 明确写入 `calibration.state=UNAVAILABLE`；这类数据可以用于纯 2D 行为克隆，但不能冒充具备可靠几何标定的数据。配置该路径后，recorder 在 START 前复制该文件到 `metadata/camera_calibration.yaml` 并保存 SHA-256 和 version；配置了不存在的路径会拒绝启动。
 
 ## 7. Web 与 3D 展示方案

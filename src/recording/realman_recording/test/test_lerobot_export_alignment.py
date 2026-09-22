@@ -21,3 +21,15 @@ def test_v3_anchor_grid_is_fixed_fps_not_four_camera_union(tmp_path: Path):
     anchors = LeRobotExporter._v3_anchors(streams, cameras, schema, 0.2)
     assert 14 <= len(anchors) <= 16
     assert all(later - earlier == 66_666_667 for earlier, later in zip(anchors, anchors[1:]))
+
+
+def test_camera_archive_quality_reads_persisted_queue_stats(tmp_path: Path):
+    (tmp_path / "videos").mkdir()
+    (tmp_path / "videos" / "media-index.json").write_text(
+        '{"stats":{"front":{"accepted":10,"dropped":2,"errors":1}}}', encoding="utf-8"
+    )
+
+    assert LeRobotExporter._camera_archive_quality(tmp_path) == {
+        "state": "AVAILABLE",
+        "stats": {"front": {"accepted": 10, "dropped": 2, "errors": 1}},
+    }

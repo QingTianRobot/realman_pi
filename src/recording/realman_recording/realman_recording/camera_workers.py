@@ -118,8 +118,12 @@ class RosImageArchive:
                     }
                     for camera_id, frames in self._frames.items()
                 ]
+                stats = {camera_id: dict(values) for camera_id, values in self._stats.items()}
                 errors = {camera_id: str(values["errors"]) for camera_id, values in self._stats.items() if values["errors"]}
-            atomic_json_write(self._root / "media-index.json", {"segments": segments, "errors": errors})
+            atomic_json_write(
+                self._root / "media-index.json",
+                {"segments": segments, "stats": stats, "errors": errors},
+            )
         return self.health_summary(stopped=True)
 
     @property

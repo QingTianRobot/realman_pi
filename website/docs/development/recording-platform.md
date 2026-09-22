@@ -104,7 +104,7 @@ Compose 将仓库 `recordings/` 挂载为容器 `/data/realman-recordings`，同
 环境完成的集成验证，不应通过伪造依赖标记为成功：
 
 1. `state_archive.py`（已接入）：用 `rosbag2_py` 的 `SequentialWriter` 以 `storage_id="mcap"` 建 topic、序列化消息并在收尾时关闭 writer；bag 记录时间取 receipt wall-clock 纳秒。session manifest 的成对 wall/monotonic 起始锚点供导出换算媒体时间轴；没有 `header.stamp` 的话题只可使用 receipt 时间。
-2. `camera_workers.py`（已接入）：每路 ROS `Image` 回调只把原始消息放入独立有界队列，JPEG 编码和落盘均在 archive worker 中执行；STOP 时按每帧 receipt 写入 `media-index.json`。低清预览使用另一个限 FPS、限分辨率、只保留最新 JPEG 的 worker。录制平台不支持 RTSP/ffmpeg 输入。
+2. `camera_workers.py`（已接入）：每路 ROS `Image` 回调只把原始消息放入独立有界队列，JPEG 编码和落盘均在 archive worker 中执行；STOP 时按每帧 receipt 及每路 `accepted/dropped/errors` 统计写入 `media-index.json`。低清预览使用另一个限 FPS、限分辨率、只保留最新 JPEG 的 worker。录制平台不支持 RTSP/ffmpeg 输入。
 3. `web_server.py` 与 `static/index.html`（已接入）：预览使用独立 endpoint；只读 Three.js/URDF 三臂 viewer 已实现（参考 web_control 的 urdf-loader 方案，把 `/l|m|r/joint_states` 实时套到 URDF 模型）。它只提供 `/api/layout`、`/preview/<camera>.jpg`、`/models/*` 与 `/ws`，不提供 dataset/replay API；前端源在 `web/`，经 `npm run build:recording`（Vite，`config/recording/vite.config.mjs`）构建到 `static/`。
 4. `lerobot_exporter.py`：ADOPT 后在 ROS executor 外读取 MCAP/JPEG，以配置的 SYSTEM_TIME 网格对齐，使用 `lerobot==0.6.1` 追加 canonical v3 episode。它保存关节位置/派生速度、URDF FK EE pose/velocity、夹爪位置、真实 Cartesian command 和 quality；不会把 π0.5 的 state/action 向量当作原始事实。SDK 读回仍需容器验证。
 5. `replay.py`（已并入 `realman_recording` 包）：Rerun 从 receipt 指定的 canonical LeRobot 单 episode 读取低维数据和视频，而不是回退 raw MCAP/JPEG；它展示 canonical field，不假设某一模型的 state/action layout。

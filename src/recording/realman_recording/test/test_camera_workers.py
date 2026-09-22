@@ -39,6 +39,7 @@ def test_ros_image_archive_persists_jpeg_index(tmp_path):
     index = json.loads((tmp_path / "media-index.json").read_text(encoding="utf-8"))
     assert index["segments"][0]["format"] == "jpeg_frames"
     assert index["segments"][0]["started_wall_ns"] == 100
+    assert index["stats"]["front"] == {"accepted": 1, "dropped": 0, "errors": 0}
 
 
 def test_native_image_is_encoded_on_archive_worker_not_offer_call(tmp_path):

@@ -130,7 +130,7 @@ Service：`/recording/manage`，类型：`realman_recording_msgs/srv/ManageRecor
 ├── state.mcap
 ├── videos/
 │   ├── <camera_id>/<receipt_walltime_ns>.jpg
-│   └── media-index.json                   # 每帧 path + SYSTEM_TIME receipt
+│   └── media-index.json                   # 每帧 path/receipt + 每路 accepted/dropped/errors
 ├── metadata/robot.urdf         # 启动时快照的 FK 真值来源
 ├── metadata/camera_calibration.yaml # 可选：配置的已解算标定结果快照
 ├── manifest.partial.json       # 录制期间原子更新（含 URDF hash/feature capability）

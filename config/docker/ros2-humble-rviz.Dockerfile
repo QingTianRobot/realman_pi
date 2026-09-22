@@ -83,8 +83,13 @@ RUN cmake -S /opt/rm65_ws/src/behavior_tree_cpp -B /opt/rm65_ws/behavior_tree/bu
 
 # Install the pinned vendor API used by the real driver. Mock tests still avoid
 # importing it, while production launches can read real controller state.
+# Chinese PyPI mirrors (Tsinghua/Aliyun/USTC/Tencent/Huawei/NJU) currently only
+# carry Robotic_Arm up to 1.0.6, but this project is aligned with vendor API
+# V1.7.13 and requires 1.1.6. Fall back to official pypi.org for this single
+# pure-Python wheel; every other package still resolves from PYPI_INDEX_URL.
 RUN python3 -m pip install --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
+        --extra-index-url "https://pypi.org/simple" \
         --retries 5 \
         --timeout 60 \
         --requirement /opt/rm65_ws/config/python/realman-sdk-requirements.txt

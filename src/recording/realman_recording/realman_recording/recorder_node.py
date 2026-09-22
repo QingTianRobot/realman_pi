@@ -500,13 +500,13 @@ class RecordingRecorderNode(Node):
             }
 
     def _require_valid_preflight(self, now_wall_ns: int, *, record_cameras: bool) -> None:
-        """Enforce that a recent, camera-compatible PREPARE preceded this START."""
+        """Enforce the fresh, camera-compatible admission check run for this START."""
         if self._last_preflight is None or not self._last_preflight.ready:
-            raise RuntimeError("PREPARE must succeed before START")
+            raise RuntimeError("recording admission check did not succeed")
         if now_wall_ns > self._preflight_valid_until_wall_ns:
-            raise RuntimeError("successful PREPARE has expired; run PREPARE again")
+            raise RuntimeError("successful recording admission check has expired")
         if record_cameras and not self._prepared_cameras:
-            raise RuntimeError("START requests cameras but the successful PREPARE did not probe cameras")
+            raise RuntimeError("START requests cameras but its admission check did not probe cameras")
 
     def _preflight_payload(self) -> dict[str, Any]:
         result = self._last_preflight
@@ -807,7 +807,7 @@ class RecordingRecorderNode(Node):
         self._status_publisher.publish(status)
 
     def _remaining_sec(self) -> float:
-        """Seconds until the countdown deadline, or the frozen remainder while paused."""
+        """Seconds until the recorder-owned countdown deadline, if one is active."""
         if self._deadline_monotonic_ns is None:
             return 0.0
         return max(0.0, (self._deadline_monotonic_ns - time.monotonic_ns()) / 1e9)

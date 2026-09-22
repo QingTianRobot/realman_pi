@@ -41,12 +41,11 @@ class McapStateArchive:
     def start(self, output: Path, topic_types: dict[str, str]) -> None:
         """Create an MCAP rosbag and start its sole serialization/write worker.
 
-        Bag record time is receipt *wall-clock* nanoseconds (`time.time_ns()` at the
-        subscriber callback), which keeps rosbag2/MCAP metadata and standard readers on
-        their expected epoch-based timeline. ``SessionStore`` records paired session
-        wall/monotonic anchors, so the exporter can derive the monotonic timeline needed
-        to align independent media. Headerless messages have no source timestamp; they
-        must use receipt time rather than pretending a source-vs-receipt skew exists.
+        Bag record time is the recorder callback's ROS 2 ``SYSTEM_TIME`` receipt
+        nanoseconds, which keeps rosbag2/MCAP metadata and standard readers on their
+        expected epoch-based timeline. Headerless messages have no source timestamp;
+        they must use receipt time rather than pretending a source-vs-receipt skew
+        exists.
         """
         with self._lock:
             if self._accepting or self._thread is not None or self._writer is not None:

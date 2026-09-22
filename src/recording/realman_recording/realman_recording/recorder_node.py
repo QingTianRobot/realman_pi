@@ -232,8 +232,11 @@ class RecordingRecorderNode(Node):
                     callback_group=self._callback_group,
                 )
             )
-        # ai TODO: decide whether /tf_static and CameraInfo are required by the first
-        # LeRobot export profile; add them only when their storage/replay contract is clear.
+        # Canonical v1 records the configured calibration snapshot as immutable camera
+        # provenance.  It deliberately does not archive live CameraInfo or /tf_static:
+        # adding either requires a versioned topic contract and an exporter that proves
+        # it used the same calibration as the raw images, rather than a best-effort
+        # runtime transform lookup.
 
     def _register_camera_subscriptions(self) -> None:
         """Subscribe the driver's raw image topics without entering the state MCAP path."""

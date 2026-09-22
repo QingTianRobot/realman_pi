@@ -154,7 +154,7 @@ Usage: ./rm65 <command> [profile]
 
 Commands:
   build               Rebuild the local production driver and Web control images.
-  up [desktop|model]  Start production runtime, desktop RViz, or offline model viewer.
+  up [desktop|model|policy]  Start production runtime, desktop RViz, offline model viewer, or production + policy bridge.
   down                Stop unified runtime and ROS 2 cameras.
   status              Show camera and Docker service state.
   logs                Show recent camera and bringup logs.

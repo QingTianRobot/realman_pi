@@ -22,6 +22,8 @@ pika_default_pose:
 # active. The driver applies this per-session limit; ordinary Web and keyboard
 # sessions retain the 0.05 m/s limit from realman_motion.yaml.
 pika_velocity:
+  # Use per-arm identity WORK frames so Pika BASE-expressed vectors remain unchanged.
+  work_reference: work/pikabase
   max_linear_speed_mps: 1.0
   # Angular speed is intentionally not elevated with the linear Pika profile.
   max_angular_speed_radps: 0.25

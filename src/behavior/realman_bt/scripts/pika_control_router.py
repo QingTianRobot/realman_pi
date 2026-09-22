@@ -66,6 +66,7 @@ def _positive_float(value: Any, field: str) -> float:
 def parse_arm_profiles(
     coordinate_references: list[str],
     velocity_profiles: list[str],
+    work_reference: str,
     max_linear_speed_mps: float,
     max_angular_speed_radps: float,
 ) -> dict[str, _ArmProfile]:
@@ -75,9 +76,9 @@ def parse_arm_profiles(
         if len(parts) != 5:
             raise ValueError("coordinate reference is malformed")
         arm, logical_name, reference_type, controller_name, frame_id = parts
-        if arm in {"l", "r"} and logical_name == "default_work":
+        if arm in {"l", "r"} and logical_name == work_reference:
             if arm in references or reference_type != "1" or not controller_name or not frame_id:
-                raise ValueError(f"{arm} default WORK reference is invalid or duplicated")
+                raise ValueError(f"{arm} configured Pika WORK reference is invalid or duplicated")
             references[arm] = (controller_name, frame_id)
 
     motion: dict[str, tuple[int, int, float, float]] = {}
@@ -105,7 +106,7 @@ def parse_arm_profiles(
         )
 
     if set(references) != {"l", "r"} or set(motion) != {"l", "r"}:
-        raise ValueError("l and r default WORK references and velocity profiles are required")
+        raise ValueError("l and r configured Pika WORK references and velocity profiles are required")
     linear_limit = _positive_float(max_linear_speed_mps, "max_linear_speed_mps")
     angular_limit = _positive_float(max_angular_speed_radps, "max_angular_speed_radps")
     return {
@@ -138,6 +139,7 @@ class PikaControlRouter(Node):
         profiles = parse_arm_profiles(
             list(self.declare_parameter("coordinate_references", Parameter.Type.STRING_ARRAY).value),
             list(self.declare_parameter("cartesian_velocity_profiles", Parameter.Type.STRING_ARRAY).value),
+            self.declare_parameter("pika_velocity_work_reference", "work/pikabase").value,
             self.declare_parameter("pika_velocity_max_linear_speed_mps", 1.0).value,
             self.declare_parameter("pika_velocity_max_angular_speed_radps", 0.25).value,
         )

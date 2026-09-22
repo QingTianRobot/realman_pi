@@ -655,6 +655,10 @@ class WebControlNode(Node):
                     self._keyboard.activate(effect.client_id)
                 else:
                     self._keyboard.deactivate()
+                self._server.send_event(
+                    {"type": "keyboard_lease", "active": bool(effect.payload["active"])},
+                    effect.client_id,
+                )
             elif effect.kind == "keyboard_zero":
                 self._publish_keyboard_zeros()
             elif effect.kind == "request_safe_mode":

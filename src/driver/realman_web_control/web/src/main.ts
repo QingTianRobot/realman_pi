@@ -271,6 +271,7 @@ let velocityTimer = 0;
 const keyboardPressed: Record<KeyboardArmId, Set<string>> = { l: new Set(), r: new Set() };
 const keyboardSequence: Record<KeyboardArmId, number> = { l: 0, r: 0 };
 let keyboardHeartbeat = 0;
+let keyboardLeaseOwned = false;
 let keyboardGuideEpoch: number | undefined;
 let keyboardGuideTimer = 0;
 const coordinateStates: Partial<Record<ArmId, CoordinateState>> = {};
@@ -318,6 +319,9 @@ function keyboardModeDiscovered() {
   return Boolean(inputModeCatalog?.some((option) => option.id === "keyboard" && option.selectable));
 }
 function keyboardModeActive() {
+  return keyboardLeaseOwned && keyboardModeDiscovered() && inputModeState?.phase === "ACTIVE" && inputModeState.active_mode === "keyboard";
+}
+function keyboardModeGloballyActive() {
   return keyboardModeDiscovered() && inputModeState?.phase === "ACTIVE" && inputModeState.active_mode === "keyboard";
 }
 function keyboardWorkAvailable(arm: KeyboardArmId) {
@@ -359,7 +363,7 @@ function stopKeyboardHeartbeat() {
   keyboardHeartbeat = 0;
 }
 function releaseKeyboardInput() {
-  const shouldSend = socket?.readyState === WebSocket.OPEN;
+  const shouldSend = keyboardLeaseOwned && socket?.readyState === WebSocket.OPEN;
   keyboardPressed.l.clear();
   keyboardPressed.r.clear();
   stopKeyboardHeartbeat();
@@ -409,14 +413,15 @@ function renderKeyboardControl() {
   const moving = (["l", "r"] as const).some((arm) => [...keyboardPressed[arm]].some((code) => keyboardVelocityCodes(arm).has(code)));
   const anyAvailable = keyboardWorkAvailable("l") || keyboardWorkAvailable("r");
   const gripperAvailable = keyboardGripperAvailable("l") || keyboardGripperAvailable("r");
-  const label = !keyboardModeActive() ? "RELEASED" : !anyAvailable ? (gripperAvailable ? "GRIPPER ONLY" : "WORK UNAVAILABLE") : moving ? "MOVING" : "READY";
+  const label = !keyboardModeGloballyActive() ? "RELEASED" : !keyboardLeaseOwned ? "REMOTE" : !anyAvailable ? (gripperAvailable ? "GRIPPER ONLY" : "WORK UNAVAILABLE") : moving ? "MOVING" : "READY";
   keyboardControlState.textContent = label;
   keyboardControlState.className = `mini-state keyboard-${label.toLowerCase().replaceAll(" ", "-")}`;
 }
 function guideToKeyboardControl() {
   if (!keyboardModeActive() || inputModeState?.epoch === keyboardGuideEpoch || keyboardControlCard.hidden) return;
   keyboardGuideEpoch = inputModeState!.epoch;
-  keyboardControlCard.scrollIntoView({ behavior: "smooth", block: "start" });
+  // Keep the 3D viewer and MoveJ controls in place; the keyboard card is
+  // already visible in the controls column and only needs an active cue.
   keyboardControlCard.classList.add("keyboard-guide-active");
   if (keyboardGuideTimer) window.clearTimeout(keyboardGuideTimer);
   keyboardGuideTimer = window.setTimeout(() => {
@@ -434,7 +439,11 @@ function renderInputModeCard() {
     reconcileKeyboardControl();
     return;
   }
-  const selectedMode = inputModeState?.selected_mode ?? pendingInputModeId;
+  const remoteKeyboard = inputModeState?.phase === "ACTIVE" &&
+    inputModeState.active_mode === "keyboard" && !keyboardLeaseOwned;
+  const selectedMode = remoteKeyboard && !pendingInputModeId
+    ? ""
+    : pendingInputModeId || inputModeState?.selected_mode;
   inputModeSelect.replaceChildren(...inputModeCatalog
     .filter((option) => option.id !== "web")
     .map((option) => {
@@ -461,6 +470,7 @@ function finishInputModeRequestIfTerminal() {
   if (!activeInputModeRequest || activeInputModeExecutorRequest === undefined || !inputModeState ||
       inputModeState.request_id !== activeInputModeExecutorRequest ||
       !["ACTIVE", "FAILED"].includes(inputModeState.phase)) return;
+  inputModeSelect.blur();
   activeInputModeRequest = "";
   activeInputModeExecutorRequest = undefined;
   pendingInputModeId = "";
@@ -1097,6 +1107,10 @@ function handleMessage(message: Message) {
       pendingInputModeId = "";
     }
     renderInputModeCard();
+  } else if (message.type === "keyboard_lease") {
+    keyboardLeaseOwned = Boolean(message.active);
+    if (!keyboardLeaseOwned) releaseKeyboardInput();
+    renderInputModeCard();
   } else if (message.type === "input_mode_result") {
     const modeResult: InputModeResult = {
       request_id: String(message.request_id ?? ""),
@@ -1117,7 +1131,11 @@ function handleMessage(message: Message) {
       renderInputModeCard();
     }
   } else if (message.type === "input_mode_state") {
-    if (inputModeState && inputModeState.epoch !== Number(message.epoch)) releaseKeyboardInput();
+    const nextPhase = String(message.phase ?? "");
+    const nextActiveMode = String(message.active_mode ?? "");
+    const modeLost = (inputModeState !== undefined && inputModeState.epoch !== Number(message.epoch)) ||
+      nextPhase !== "ACTIVE" || nextActiveMode !== "keyboard";
+    if (modeLost) releaseKeyboardInput();
     inputModeState = {
       requested_mode: String(message.requested_mode ?? ""),
       selected_mode: String(message.selected_mode ?? ""),
@@ -1127,6 +1145,7 @@ function handleMessage(message: Message) {
       epoch: Number(message.epoch),
       detail: String(message.detail ?? ""),
     };
+    if (modeLost) keyboardLeaseOwned = false;
     finishInputModeRequestIfTerminal();
     renderInputModeCard();
   } else if (message.type === "gripper_list") {
@@ -1344,6 +1363,13 @@ function handleMessage(message: Message) {
     if (arm === selectedArm) actionState.textContent = status.toUpperCase();
     updateButtons();
   } else if (message.type === "error") {
+    if (message.code === "keyboard_lease" || message.code === "keyboard_inactive") {
+      keyboardLeaseOwned = false;
+      releaseKeyboardInput();
+      inputModeResultDetail = `${message.code}: ${message.message}`;
+      renderInputModeCard();
+      return;
+    }
     result.textContent = `${message.code}: ${message.message}`;
     if (message.request_id === activeInputModeRequest) {
       inputModeResultDetail = `${message.code}: ${message.message}`;
@@ -1379,6 +1405,7 @@ function handleMessage(message: Message) {
 }
 
 function connect() {
+  keyboardLeaseOwned = false;
   releaseKeyboardInput();
   socket?.close();
   const protocol = location.protocol === "https:" ? "wss" : "ws";

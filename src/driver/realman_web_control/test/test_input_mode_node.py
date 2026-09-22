@@ -274,6 +274,34 @@ def test_keyboard_disconnect_effects_publish_two_zeros_and_request_none(node):
     assert request.requester_id
 
 
+def test_cached_state_and_lease_transfer_are_targeted_to_each_browser(node):
+    activate_keyboard(node)
+    node._server.events.clear()
+    node._apply_input_mode_effects(node._input_modes.cached_events("browser-b"))
+    cached = [(event, client_id) for event, client_id in node._server.events
+              if event["type"] in {"input_mode_list", "input_mode_state", "keyboard_lease"}]
+    assert [event["type"] for event, _ in cached] == [
+        "input_mode_list", "input_mode_state", "keyboard_lease",
+    ]
+    assert all(client_id == "browser-b" for _, client_id in cached)
+    assert cached[-1][0] == {"type": "keyboard_lease", "active": False}
+
+    effects = node._input_modes.select_mode(
+        "browser-b", {"request_id": "keyboard-2", "mode_id": "keyboard"}
+    )
+    token = effects[-1].token
+    node._server.events.clear()
+    node._apply_input_mode_effects(
+        node._input_modes.selection_response(token, True, 50, "already active")
+    )
+    leases = [(event, client_id) for event, client_id in node._server.events
+              if event["type"] == "keyboard_lease"]
+    assert leases == [
+        ({"type": "keyboard_lease", "active": False}, "browser"),
+        ({"type": "keyboard_lease", "active": True}, "browser-b"),
+    ]
+
+
 @pytest.mark.parametrize("kind,goal_type", [
     ("execute_motion", "ExecuteMotion_Goal"), ("execute_trajectory", "ExecuteTrajectory_Goal"),
     ("start_cartesian_velocity", "CartesianVelocity_Goal"),

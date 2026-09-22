@@ -73,6 +73,7 @@ canvas { display: block; width: 100%; height: 100%; }
 .keyboard-binding kbd.pressed { border-color: #65d2c3; background: #24524e; color: #effffc; }
 .keyboard-binding em { font-style: normal; color: #637d7b; }
 .mini-state.keyboard-ready { color: #84dfd0; border-color: #477d79; }
+.mini-state.keyboard-remote { color: #e4b16f; border-color: #896b45; }
 .mini-state.keyboard-moving { color: #f2d48b; border-color: #967d43; }
 .mini-state.keyboard-work-unavailable { color: #ef9e94; border-color: #8c4d49; }
 .input-mode-detail { min-height: 16px; color: #c3d4d1; font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }

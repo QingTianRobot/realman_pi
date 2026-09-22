@@ -123,11 +123,16 @@ Action 取消也会丢弃匹配 arm/action 且由该浏览器拥有的排队请�
 ### 双臂键盘末端速度与夹爪
 
 只有动态目录包含可选的 `keyboard` 时，8765 页面才显示“双臂键盘速度与夹爪”卡片；切换状态必须达到
-`ACTIVE/keyboard` 后才捕获运动键。每个新的 keyboard `epoch` 首次进入活动态时，页面会自动滚动到该
-说明卡片并短暂高亮；重复状态消息不会反复跳动，刷新页面后收到当前活动态也会引导一次。浏览器使用物理
+`ACTIVE/keyboard` 后才捕获运动键。每个新的 keyboard `epoch` 首次进入活动态时，页面会短暂高亮该
+说明卡片，但不会滚动页面或移走三臂 3D、MoveJ 等工作区域；重复状态消息不会反复触发，刷新页面后收到
+当前活动态也会引导一次。只有当前页面发起的模式请求进入匹配的 `ACTIVE` 或 `FAILED` 终态时，页面才会
+释放模式选择框焦点，使操作员不必额外点击空白区域即可使用控制键；后台重复状态不会抢走焦点。浏览器使用物理
 位置稳定的 `KeyboardEvent.code`，不使用会受输入法、
 Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`select` 和 `contenteditable` 中的输入。
 自动重复、输入法组合事件，以及带 Ctrl/Alt/Meta/Shift 的快捷键不触发新控制输入。
+`ACTIVE/keyboard` 是全局行为树状态；页面还必须收到本页的 `keyboard_lease: {active: true}` 才拥有控制权。
+其他浏览器持有 lease 时显示 `REMOTE`，不发送键盘心跳；收到 `keyboard_lease` 错误也不会覆盖 MoveJ
+运行反馈，需在当前页面重新选择键盘模式取得 lease。
 左右臂按键完全独立，可同时按住：
 
 | 末端轴 | 左臂正/负 | 右臂正/负 |

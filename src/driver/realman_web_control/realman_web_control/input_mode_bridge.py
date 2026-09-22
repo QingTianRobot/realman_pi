@@ -109,6 +109,10 @@ class InputModeBridge:
             events.append(InputModeEffect("send_event", client_id, {
                 "type": "input_mode_state", **asdict(self._snapshot),
             }))
+        if client_id is not None:
+            events.append(InputModeEffect("send_event", client_id, {
+                "type": "keyboard_lease", "active": client_id == self._keyboard_owner,
+            }))
         return events
 
     def update_catalog(self, modes: tuple[InputModeOption, ...] | None, *,
@@ -201,7 +205,7 @@ class InputModeBridge:
             effects += self._discard("input_mode_rejected", message)
         else:
             self._pending = replace(pending, executor_request_id=executor_request_id)
-            effects += self._resolve()
+            effects += self._resolve(allow_current_active=True)
         return effects
 
     def update_state(self, snapshot: InputModeSnapshot) -> list[InputModeEffect]:
@@ -238,10 +242,19 @@ class InputModeBridge:
             effects += self._resolve()
         return effects
 
-    def _resolve(self) -> list[InputModeEffect]:
+    def _resolve(self, *, allow_current_active: bool = False) -> list[InputModeEffect]:
         pending, snapshot = self._pending, self._snapshot
-        if (pending is None or snapshot is None or pending.executor_request_id is None
-                or self._state_revision <= pending.state_revision):
+        if pending is None or snapshot is None or pending.executor_request_id is None:
+            return []
+        current_active_matches = (
+            allow_current_active
+            and pending.mode_id == "keyboard"
+            and pending.motion is None
+            and snapshot.phase == "ACTIVE"
+            and snapshot.active_mode == pending.mode_id
+            and snapshot.request_id == pending.executor_request_id
+        )
+        if self._state_revision <= pending.state_revision and not current_active_matches:
             return []
         if pending.failed_state is not None and pending.failed_state.request_id == pending.executor_request_id:
             return self._discard("input_mode_failed", pending.failed_state.detail or "input mode activation failed")

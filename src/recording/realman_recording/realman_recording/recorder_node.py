@@ -89,9 +89,9 @@ class RecordingRecorderNode(Node):
         self.declare_parameter("preflight_required_topics", [""])
         self.declare_parameter("camera_ids", [""])
         self.declare_parameter("camera_image_topics", [""])
-        # Per-recorder bounded queue for raw ROS image messages; frames are
-        # JPEG-encoded in the subscription callback before entering this queue.
-        # Full queues drop frames and count the loss; callbacks never wait for disk I/O.
+        # Per-recorder bounded queue for raw ROS image messages; conversion to
+        # JPEG and file I/O happen in the archive worker, never in this callback.
+        # Full queues drop frames and count the loss without blocking ROS.
         self.declare_parameter("max_camera_image_queue", 64)
         self.declare_parameter("camera_rtsp_urls", [""])
         self.declare_parameter("export_target_fps", 10.0)

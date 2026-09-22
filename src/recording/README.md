@@ -59,7 +59,7 @@ src/recording/
 flowchart LR
   D[RealMan ROS 2 驱动] -->|JointState / connected / coordinates / TF| R[recording_recorder]
   G[夹爪 ROS 2 输出] -->|position / torque / alarm| R
-  C[ROS CompressedImage topics] --> V[有界 JPEG 写入 worker]
+  C[ROS sensor_msgs/Image topics] --> V[有界 JPEG 写入 worker]
   R -->|有界队列，异步| M[(state.mcap)]
   R --> S[(manifest.json + media-index.json)]
   V --> S
@@ -77,7 +77,7 @@ flowchart LR
 
 1. ROS 回调只记录接收侧 `SYSTEM_TIME`、更新新鲜度，并尝试无阻塞地把消息放进 MCAP 队列。
 2. MCAP 序列化和磁盘写入只由 archive worker 执行；队列满时丢样本并累计计数。
-3. 原始相机从 ROS `Image` topic 进入独立有界 JPEG archive；相机失败不能让机械臂状态采集失败。旧 RTSP/ffmpeg worker 仅保留作迁移兼容，不属于当前 recorder 路径。
+3. 原始相机从 ROS `sensor_msgs/Image` topic 进入独立有界 raw-image archive；JPEG 编码和文件 I/O 在 archive worker 中执行，相机失败不能让机械臂状态采集失败。旧 RTSP/ffmpeg worker 仅保留作迁移兼容，不属于当前 recorder 路径。
 4. Web 状态只发送限频 JSON；JPEG 通过独立 endpoint 获取，不进入 MCAP 队列。
 5. Rerun 离线程序读取已完成 session，不读取 recorder 内存对象，不连接实时 ROS 图。
 
@@ -174,7 +174,7 @@ Rerun 的实时 adapter 可以保留用于调试，但默认关闭；离线 repl
 
 - [x] 有界 MCAP archive：非阻塞 enqueue、序列化 worker、关闭 writer、写错误统计。
 - [x] session manifest 原子更新和 ADOPT/DISCARD 决策。
-- [x] ROS `CompressedImage` 有界 JPEG 写入 worker（按 receipt walltime 记录每帧）。
+- [x] ROS `sensor_msgs/Image` 有界 JPEG 写入 worker（按 receipt walltime 记录每帧；编码不在 ROS 回调执行）。
 - [x] 录制前 PREPARE 设备检查。
 - [x] 预约开始在触发时后台复检。
 - [ ] 在 Humble 容器生成 ROS interface 并运行 recorder Service 集成测试。
@@ -224,13 +224,14 @@ Rerun 的实时 adapter 可以保留用于调试，但默认关闭；离线 repl
 - session store：partial/final manifest 原子性、路径遍历拒绝、ADOPT/DISCARD。
 - web protocol：运动命令、超长消息、非法时间戳必须拒绝。
 - Rerun adapter/replay：无 SDK、canonical frame、相机筛选和时间轴边界。
+- runtime probe：频率计数与 topic 去重的纯逻辑检查；真实 ROS 图探针需在 Humble/工控机运行。
 
 ### 必须在 Humble/设备环境执行的测试
 
 - `colcon build --packages-up-to realman_recording realman_recording_msgs`
 - `colcon test --packages-select realman_recording realman_recording_msgs`
 - 真实 ROS graph 下确认 3 个机械臂 topic 能持续到达。
-- 真机确认 4 路 ROS compressed image topic 逐路预检、录制、暂停/恢复和 index。
+- 真机确认 4 路 ROS image topic 逐路预检、录制、暂停/恢复和 index。
 - 用 rosbag2 重新读取 `state.mcap`，确认 topic type、时间戳和样本数量。
 - 浏览器断开、慢客户端、Rerun 关闭时确认 archive dropped 不因展示端增加。
 - 离线 Rerun 回放真实 session，确认图像、关节、夹爪时间轴一致。

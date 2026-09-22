@@ -98,16 +98,17 @@ Compose 将仓库 `recordings/` 挂载为容器 `/data/realman-recordings`，同
 
 独立 launch 会创建 `logs/YYYYMMDD_HHMMSS/` 并设置 ROS 2 官方节点日志目录；使用 rcutils 彩色输出，不应添加自定义日志重定向。
 
-## 后续实现清单
+## 实现状态与后续清单
 
-下列位置已定义了函数边界与异常约束，具体实现应直接填入相应 `# ai TODO`：
+下列核心边界已经实现；剩余条目是必须在 Humble、Rerun、LeRobot SDK 和真实设备
+环境完成的集成验证，不应通过伪造依赖标记为成功：
 
 1. `state_archive.py`（已接入）：用 `rosbag2_py` 的 `SequentialWriter` 以 `storage_id="mcap"` 建 topic、序列化消息并在收尾时关闭 writer；bag 记录时间取 receipt wall-clock 纳秒。session manifest 的成对 wall/monotonic 起始锚点供导出换算媒体时间轴；没有 `header.stamp` 的话题只可使用 receipt 时间。
 2. `camera_workers.py`（已接入）：每路 ROS `Image` 回调只把原始消息放入独立有界队列，JPEG 编码和落盘均在 archive worker 中执行；暂停产生媒体间隙并写入 `media-index.json`。低清预览使用另一个限 FPS、限分辨率、只保留最新 JPEG 的 worker。遗留 RTSP/ffmpeg helper 仅用于迁移，不是 recorder 的运行路径。
 3. `web_server.py` 与 `static/index.html`（已接入）：预览使用独立 endpoint；只读 Three.js/URDF 三臂 viewer 已实现（参考 web_control 的 urdf-loader 方案，把 `/l|m|r/joint_states` 实时套到 URDF 模型）。它只提供 `/api/layout`、`/preview/<camera>.jpg`、`/models/*` 与 `/ws`，不提供 dataset/replay API；前端源在 `web/`，经 `npm run build:recording`（Vite，`config/recording/vite.config.mjs`）构建到 `static/`。
-4. `lerobot_exporter.py`：ADOPT 后在 ROS executor 外读取 MCAP/JPEG，以固定 15Hz SYSTEM_TIME 网格对齐，使用 `lerobot==0.6.1` 追加 canonical v3 episode。它保存关节位置/派生速度、URDF FK EE pose/velocity、夹爪位置、真实 Cartesian command 和 quality；不会把 π0.5 的 state/action 向量当作原始事实。
+4. `lerobot_exporter.py`：ADOPT 后在 ROS executor 外读取 MCAP/JPEG，以配置的 SYSTEM_TIME 网格对齐，使用 `lerobot==0.6.1` 追加 canonical v3 episode。它保存关节位置/派生速度、URDF FK EE pose/velocity、夹爪位置、真实 Cartesian command 和 quality；不会把 π0.5 的 state/action 向量当作原始事实。SDK 读回仍需容器验证。
 5. `replay.py`（已并入 `realman_recording` 包）：Rerun 从 receipt 指定的 canonical LeRobot 单 episode 读取低维数据和视频，而不是回退 raw MCAP/JPEG；它展示 canonical field，不假设某一模型的 state/action layout。
-6. 完成后补充真实相机、磁盘满、WebSocket 慢客户端、暂停/恢复、崩溃恢复、Service adopt/discard 和 LeRobot 读回的端到端测试。
+6. 待完成集成验证：真实相机、磁盘满、WebSocket 慢客户端、暂停/恢复、崩溃恢复、Service adopt/discard 和 LeRobot 读回。
 
 ## LeRobot 对齐策略（以图像为基准）
 
@@ -136,3 +137,23 @@ docker compose config
 ```
 
 实现完成后应在 Humble 容器运行 `colcon build`/`colcon test`，然后确认：MCAP 可由 rosbag2 读取、视频分段与 pause manifest 一致、关闭浏览器不会增加状态队列丢失、导出的 LeRobot 数据集可被目标版本加载。
+
+## 真实 ROS 图只读探针
+
+在工控机或 Humble 容器中可用 `recording_runtime_probe` 检查录制服务是否存在、图像/机械臂/夹爪 topic 是否持续到达及其接收频率。该命令只创建订阅和 service client，从不发送 `ManageRecording` 请求，因此不会改变录制状态：
+
+```bash
+source /opt/ros/humble/setup.bash
+source /opt/rm65_ws/install/setup.bash
+ROS_DOMAIN_ID=65 recording_runtime_probe --duration-sec 5 \
+  --image-topic /camera_left/color/image_raw \
+  --image-topic /camera_middle/color/image_raw \
+  --image-topic /camera_right/color/image_raw \
+  --image-topic /camera_global/d435/color/image_raw \
+  --arm-topic /l/joint_states --arm-topic /m/joint_states --arm-topic /r/joint_states \
+  --gripper-topic /gripper_left/position \
+  --gripper-topic /gripper_mid/position \
+  --gripper-topic /gripper_right/position
+```
+
+输出为 JSON，包含 `/recording/manage` 是否可用、最近的 `RecordingStatus`、每个 topic 的样本数和接收频率；服务不可用时退出码为 `2`。实际 topic 名称应以 `ros2 topic list` 和 `config/ros/recording.yaml` 为准。该探针不能替代 PREPARE：PREPARE 仍负责新鲜度、连接状态、磁盘、MCAP backend 和配置化 `preflight_required_topics` 的准入判断。

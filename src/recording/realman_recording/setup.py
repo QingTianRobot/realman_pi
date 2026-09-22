@@ -35,6 +35,7 @@ setup(
             "recorder_node = realman_recording.recorder_node:main",
             "web_bridge_node = realman_recording.web_bridge_node:main",
             "lerobot_exporter = realman_recording.lerobot_exporter:main",
+            "recording_runtime_probe = realman_recording.runtime_probe:main",
         ],
     },
 )

@@ -1,7 +1,8 @@
 """Independent camera recording and degraded-preview worker contracts.
 
-The normal path consumes ROS image topics.  A ROS callback only offers an already
-compressed JPEG to a bounded queue; file I/O happens on this module's worker thread.
+The normal path consumes ROS image topics.  A ROS callback only offers the raw
+``sensor_msgs/Image`` object to a bounded queue; JPEG encoding and file I/O happen
+on this module's worker thread.
 The older RTSP workers remain as migration helpers, but are not used by the recorder.
 """
 from __future__ import annotations

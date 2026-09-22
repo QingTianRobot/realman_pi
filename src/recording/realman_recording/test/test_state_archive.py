@@ -102,3 +102,71 @@ def test_write_failure_is_not_reported_as_accepted(monkeypatch):
     stats = archive.stop()
 
     assert (stats.enqueued, stats.accepted, stats.write_errors) == (1, 0, 1)
+
+
+def test_start_creates_cdr_topics_writes_and_closes_a_real_writer_boundary(monkeypatch, tmp_path):
+    """Exercise the rosbag2 binding boundary without requiring a Humble installation."""
+    serialization = types.ModuleType("rclpy.serialization")
+    serialization.serialize_message = lambda message: f"cdr:{message}".encode()
+    rclpy = types.ModuleType("rclpy")
+    rclpy.serialization = serialization
+    monkeypatch.setitem(sys.modules, "rclpy", rclpy)
+    monkeypatch.setitem(sys.modules, "rclpy.serialization", serialization)
+
+    writers = []
+
+    class StorageOptions:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class ConverterOptions:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class TopicMetadata:
+        def __init__(self, **kwargs):
+            self.kwargs = kwargs
+
+    class Writer:
+        def __init__(self):
+            self.opened = None
+            self.topics = []
+            self.writes = []
+            self.closed = False
+            writers.append(self)
+
+        def open(self, storage, converter):
+            self.opened = (storage, converter)
+
+        def create_topic(self, metadata):
+            self.topics.append(metadata)
+
+        def write(self, topic, payload, timestamp):
+            self.writes.append((topic, payload, timestamp))
+
+        def close(self):
+            self.closed = True
+
+    rosbag2_py = types.ModuleType("rosbag2_py")
+    rosbag2_py.StorageOptions = StorageOptions
+    rosbag2_py.ConverterOptions = ConverterOptions
+    rosbag2_py.TopicMetadata = TopicMetadata
+    rosbag2_py.SequentialWriter = Writer
+    monkeypatch.setitem(sys.modules, "rosbag2_py", rosbag2_py)
+
+    archive = McapStateArchive(max_queue=2)
+    archive.start(tmp_path / "state.mcap", {"/joint": "sensor_msgs/msg/JointState"})
+    archive.enqueue("/joint", "sample", 42)
+    stats = archive.stop()
+
+    writer = writers[0]
+    assert writer.opened[0].kwargs == {"uri": str(tmp_path / "state.mcap"), "storage_id": "mcap"}
+    assert writer.opened[1].kwargs == {
+        "input_serialization_format": "cdr", "output_serialization_format": "cdr"
+    }
+    assert writer.topics[0].kwargs == {
+        "name": "/joint", "type": "sensor_msgs/msg/JointState", "serialization_format": "cdr"
+    }
+    assert writer.writes == [("/joint", b"cdr:sample", 42)]
+    assert writer.closed is True
+    assert (stats.enqueued, stats.accepted, stats.dropped, stats.write_errors) == (1, 1, 0, 0)

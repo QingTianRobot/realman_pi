@@ -30,6 +30,18 @@ class CanonicalFrame:
     sync_error_ns: tuple[int, ...]
 
 
+def validate_command_frame(topic: str, frame_id: str, command_topics: Sequence[str], command_frames: Sequence[str]) -> None:
+    """Reject a command whose declared reference frame differs from the profile."""
+    expected_by_topic = dict(zip(command_topics, command_frames, strict=True))
+    expected = expected_by_topic.get(topic)
+    if expected is None:
+        return
+    if not frame_id or frame_id != expected:
+        raise ValueError(
+            f"Cartesian command frame mismatch for {topic}: expected {expected!r}, got {frame_id!r}"
+        )
+
+
 def _vector(value: Any, width: int, *, name: str) -> tuple[float, ...]:
     if isinstance(value, (str, bytes)):
         raise ValueError(f"{name} must be a numeric vector")

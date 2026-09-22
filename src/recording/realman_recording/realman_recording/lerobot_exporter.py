@@ -23,7 +23,7 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 from .lerobot_align import AlignmentPolicy, TimedSample, align_streams
-from .canonical_features import materialize_canonical_frames
+from .canonical_features import materialize_canonical_frames, validate_command_frame
 from .joint_state import ordered_joint_position
 from .kinematics import UrdfKinematics
 from .lerobot_schema import LeRobotV3Schema, schema_from_parameters
@@ -277,20 +277,16 @@ class LeRobotExporter:
         topic_types = {meta.name: meta.type for meta in reader.get_all_topics_and_types()}
 
         streams: dict[str, list[TimedSample]] = {}
-        action_frames = dict(zip(schema.arm_action_topics, schema.cartesian_command_frames, strict=True))
         while reader.has_next():
             topic, data, record_ns = reader.read_next()
             message_class = type_to_class.get(topic_types.get(topic))
             if message_class is None:
                 continue
             message = deserialize_message(data, message_class)
-            if topic in action_frames:
-                frame_id = str(message.header.frame_id)
-                if frame_id != action_frames[topic]:
-                    raise ValueError(
-                        f"Cartesian command frame mismatch for {topic}: "
-                        f"expected {action_frames[topic]!r}, got {frame_id!r}"
-                    )
+            validate_command_frame(
+                topic, str(getattr(getattr(message, "header", None), "frame_id", "")),
+                schema.arm_action_topics, schema.cartesian_command_frames,
+            )
             value = self._extract_value(topic, message, schema.joint_names)
             if value is not None:
                 streams.setdefault(topic, []).append(TimedSample(timestamp_ns=record_ns, value=value))

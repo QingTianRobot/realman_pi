@@ -1,4 +1,4 @@
-from realman_recording.canonical_features import materialize_canonical_frames
+from realman_recording.canonical_features import materialize_canonical_frames, validate_command_frame
 from realman_recording.lerobot_align import AlignedFrame
 from realman_recording.lerobot_schema import schema_from_parameters
 
@@ -57,3 +57,19 @@ def test_rejects_wrong_joint_width_instead_of_silently_exporting_it():
         assert "joint" in str(error)
     else:
         raise AssertionError("wrong JointState width was accepted")
+
+
+def test_rejects_cartesian_command_in_unconfigured_frame():
+    assert validate_command_frame(
+        "/l/cartesian_velocity/command", "l/base_link",
+        ("/l/cartesian_velocity/command",), ("l/base_link",),
+    ) is None
+    try:
+        validate_command_frame(
+            "/l/cartesian_velocity/command", "l/tool/tcpgrip",
+            ("/l/cartesian_velocity/command",), ("l/base_link",),
+        )
+    except ValueError as error:
+        assert "frame mismatch" in str(error)
+    else:
+        raise AssertionError("mixed command frames were accepted")

@@ -113,8 +113,8 @@ Service：`/recording/manage`，类型：`realman_recording_msgs/srv/ManageRecor
 
 | 命令 | 作用 | 是否创建 session |
 |---|---|---:|
-| `PREPARE=4` | 检查 4 路相机、3 臂 joint state、3 夹爪 position 的话题新鲜度、机械臂连接、磁盘空间、MCAP backend；新鲜数据的较大 receipt-walltime 差只标记需要离线对齐 | 否 |
-| `START=0` | 仅使用未过期且通过健康预检的结果创建 session，打开 MCAP 和相机 JPEG archive；将对齐开关与 PREPARE 的触发结论写入 manifest | 是（预约触发时） |
+| `PREPARE=4` | 只执行诊断：默认检查 4 路相机、3 臂 joint state、3 夹爪 position 的话题新鲜度、机械臂连接、磁盘空间、MCAP backend；state-only 调用可显式 `record_cameras=false`。新鲜数据的较大 receipt-walltime 差只标记需要离线对齐 | 否 |
+| `START=0` | 每次都在服务端重新执行与请求相符的健康预检；成功后才创建 session、打开 MCAP 和相机 JPEG archive，并将对齐触发结论写入 manifest。`PREPARE` 是给上游诊断的可选调用，不是强制前置步骤 | 是（预约触发时） |
 | `STOP=1` | 停止 MCAP/JPEG archive worker，写最终 manifest | 否 |
 | `ADOPT=2` | 标记 READY session 采用，并异步提交后置 LeRobot 转换 | 否 |
 | `DISCARD=3` | 标记 READY session 舍弃，但保留原始文件审计 | 否 |

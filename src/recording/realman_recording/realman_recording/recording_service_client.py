@@ -73,9 +73,16 @@ class RecordingServiceClient(Node):
         request.session_id = session_id
         return self.call(request)
 
-    def prepare(self) -> ManageRecording.Response:
+    def prepare(self, *, record_cameras: bool = True) -> ManageRecording.Response:
+        """Run the same admission checks as START without opening a session.
+
+        Camera validation is enabled by default so a successful explicit PREPARE has
+        the same sensor coverage as the normal START path.  State-only profiles can
+        opt out deliberately rather than silently skipping camera health checks.
+        """
         request = ManageRecording.Request()
         request.command = ManageRecording.Request.PREPARE
+        request.record_cameras = record_cameras
         return self.call(request)
 
 
@@ -107,7 +114,8 @@ def main(args: list[str] | None = None) -> int:
     discard = sub.add_parser("discard", help="discard a finalized session (keeps raw data)")
     discard.add_argument("--session-id", required=True)
 
-    sub.add_parser("prepare", help="run preflight only")
+    prepare = sub.add_parser("prepare", help="run preflight only (cameras checked by default)")
+    prepare.add_argument("--no-cameras", action="store_true", help="preflight a state-only recording")
 
     parsed = parser.parse_args(args)
 
@@ -128,7 +136,7 @@ def main(args: list[str] | None = None) -> int:
         elif parsed.command == "discard":
             response = client.discard(parsed.session_id)
         else:
-            response = client.prepare()
+            response = client.prepare(record_cameras=not parsed.no_cameras)
     except Exception as error:  # noqa: BLE001 - surface a stable CLI error
         print(f"error: {error}", file=sys.stderr)
         return 1

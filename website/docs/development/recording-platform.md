@@ -53,8 +53,8 @@ ROS Image ──► bounded JPEG archive ──► videos/
 
 | 命令 | 所需字段 | 行为 |
 | --- | --- | --- |
-| `PREPARE` | 可选 `record_cameras` | 返回所有设备预检诊断；只有成功结果才会在有效期内授权 `START`。 |
-| `START` | `profile`，可选 `task`、`duration_sec`、`record_cameras`、`start_at_walltime_ns` | 需先通过 `PREPARE`；零时间戳只接受仍在有效期内的预检，非零时间戳预约到 ROS 2 `SYSTEM_TIME`，届时自动重新预检。 |
+| `PREPARE` | 可选 `record_cameras`（默认应为 `true`） | 只返回所有设备预检诊断，不创建 session；供上游在 START 前展示/诊断。 |
+| `START` | `profile`，可选 `task`、`duration_sec`、`record_cameras`、`start_at_walltime_ns` | 服务端始终自行执行与本次请求相符的预检；独立 `PREPARE` 不是强制前置。零时间戳立即开始，非零时间戳预约到 ROS 2 `SYSTEM_TIME`，届时自动重新预检。 |
 | `STOP` | 无 | 停止当前原始录制并收尾 MCAP。 |
 | `ADOPT` | `session_id` | 仅接受 `READY` 且无 MCAP 写错误的 session；立刻返回，并异步请求 LeRobot 转换。导出器完成前，该任务会明确记录失败而非伪造数据集。 |
 | `DISCARD` | `session_id` | 标记 session 为 `DISCARDED`，禁止导出；原始文件保留用于审计和人工复核。 |

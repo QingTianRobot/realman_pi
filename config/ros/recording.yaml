@@ -22,13 +22,18 @@
     # installed rm65_description share directory, hashes it, and uses it only for
     # offline FK; the recorder never invokes the RealMan SDK.
     embodiment_id: realman-rm65-b-three-arm-v1
+    urdf_package: rm65_description
     urdf_relative_path: urdf/RM65-B.urdf
+    # This is the un-namespaced link in the URDF, unlike base_frames below which
+    # identify each physical arm's external reference frame.
+    urdf_base_link: base_link
     base_frames: [l/base_link, m/base_link, r/base_link]
     ee_links: [link_6, link_6, link_6]
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
     # Cartesian commands use metres/s and radians/s.  The command header frame
     # is archived separately and must agree with this configured convention.
     cartesian_command_representation: velocity
+    cartesian_command_frames: [l/base_link, m/base_link, r/base_link]
     # Keep raw gripper topics intact; recorder assigns ROS 2 SYSTEM_TIME receipt timestamps.
     gripper_position_topics: [/gripper_left/position, /gripper_mid/position, /gripper_right/position]
     gripper_torque_topics: [/gripper_left/torque_reached, /gripper_mid/torque_reached, /gripper_right/torque_reached]

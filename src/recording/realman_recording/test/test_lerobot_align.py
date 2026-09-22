@@ -75,6 +75,19 @@ def test_align_streams_builds_anchor_frames():
     assert frames[2].values["gripper"] == 1
 
 
+def test_align_streams_reports_source_timestamp_for_quality_metrics():
+    frames = align_streams(
+        [50],
+        {
+            "arm": ([TimedSample(0, (0.0,)), TimedSample(100, (2.0,))], AlignmentPolicy.LINEAR),
+            "gripper": ([TimedSample(0, 0), TimedSample(100, 1)], AlignmentPolicy.FORWARD_FILL),
+        },
+    )
+    # LINEAR samples are derived at the anchor; the closest raw source breaks ties
+    # toward the older measurement. Forward-fill must remain causal.
+    assert frames[0].source_timestamps_ns == {"arm": 0, "gripper": 0}
+
+
 def test_rejects_empty_and_unsorted_streams():
     with pytest.raises(ValueError):
         align_series([0], [], AlignmentPolicy.LINEAR)

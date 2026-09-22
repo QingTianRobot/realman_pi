@@ -112,6 +112,12 @@ class UrdfKinematics:
 def ee_velocity(previous: tuple[float, ...], current: tuple[float, ...], dt_sec: float) -> tuple[float, float, float, float, float, float]:
     if len(previous) != 7 or len(current) != 7 or dt_sec <= 0:
         raise ValueError("poses must be xyz+xyzw and dt_sec must be positive")
+    if not all(isfinite(value) for value in (*previous, *current)):
+        raise ValueError("poses must contain finite values")
+    for quaternion in (previous[3:], current[3:]):
+        norm = sqrt(sum(value * value for value in quaternion))
+        if abs(norm - 1.0) > 1e-6:
+            raise ValueError("poses must contain unit quaternion xyzw rotations")
     linear = tuple((current[index] - previous[index]) / dt_sec for index in range(3))
     x1, y1, z1, w1 = previous[3:]
     x2, y2, z2, w2 = current[3:]

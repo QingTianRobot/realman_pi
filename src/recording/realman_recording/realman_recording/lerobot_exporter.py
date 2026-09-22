@@ -14,6 +14,7 @@ import json
 import os
 import shutil
 import subprocess
+from hashlib import sha256
 from bisect import bisect_left, bisect_right
 from dataclasses import dataclass
 from pathlib import Path
@@ -22,6 +23,9 @@ from typing import Any, Callable, Sequence
 import numpy as np
 
 from .lerobot_align import AlignmentPolicy, TimedSample, align_streams
+from .canonical_features import materialize_canonical_frames
+from .joint_state import ordered_joint_position
+from .kinematics import UrdfKinematics
 from .lerobot_schema import LeRobotV3Schema
 from .lerobot_dataset_store import dataset_lock
 
@@ -35,6 +39,9 @@ class ExportRequest:
     target_fps: float
     max_gap_sec: float
     schema: LeRobotV3Schema | None = None
+    # The recorder snapshots this into the raw session before the MCAP writer opens.
+    # An explicit path is useful for deterministic offline re-export tooling.
+    urdf_path: Path | None = None
     progress_callback: Callable[[int, int], None] | None = None
 
 
@@ -57,7 +64,7 @@ class LeRobotExporter:
 
     def _export_v3(self, request: ExportRequest, schema: LeRobotV3Schema) -> Path:
         manifest = self._load_final_manifest(request.session_dir)
-        streams = self._read_mcap_streams(request.session_dir)
+        streams = self._read_mcap_streams(request.session_dir, schema)
         _unused_anchors, camera_frames = self._read_camera_anchors(request.session_dir)
         required = self._v3_streams(streams, schema)
         anchors = self._v3_anchors(required, camera_frames, schema, request.max_gap_sec)
@@ -67,16 +74,33 @@ class LeRobotExporter:
         )
         images = self._v3_images(anchors, camera_frames, schema, self._gap_ns(request.max_gap_sec))
         image_shapes = {camera: self._jpeg_shape(frames[0][1]) for camera, frames in images.items()}
+        urdf_path = self._resolve_urdf_path(request, schema)
+        solvers = tuple(
+            UrdfKinematics(urdf_path, schema.urdf_base_link, ee_link, schema.joint_names)
+            for ee_link in schema.ee_links
+        )
+        canonical = materialize_canonical_frames(
+            aligned, schema, solvers,
+            {camera: [timestamp for timestamp, _ in frames] for camera, frames in images.items()},
+        )
         with dataset_lock(request.output_dir):
             dataset = self._open_v3_dataset(request.output_dir, schema, image_shapes)
             try:
                 task = str(manifest.get("metadata", {}).get("task") or "recording")
-                for index, frame in enumerate(aligned):
+                for index, frame in enumerate(canonical):
                     payload = {
-                        "observation.state": np.asarray(self._concat(frame.values, list(schema.arm_joint_topics) + list(schema.gripper_position_topics)), dtype=np.float32),
-                        "action": np.asarray(self._concat(frame.values, list(schema.arm_action_topics) + list(schema.gripper_action_topics)), dtype=np.float32),
+                        "observation.joint_position": np.asarray(frame.joint_position, dtype=np.float32),
+                        "observation.joint_velocity": np.asarray(frame.joint_velocity, dtype=np.float32),
+                        "observation.ee_pose_base": np.asarray(frame.ee_pose_base, dtype=np.float32),
+                        "observation.ee_velocity_base": np.asarray(frame.ee_velocity_base, dtype=np.float32),
+                        "observation.gripper_position": np.asarray(frame.gripper_position, dtype=np.float32),
+                        "action.command.cartesian_velocity": np.asarray(frame.command_cartesian_velocity, dtype=np.float32),
+                        "quality.valid": np.asarray([frame.valid], dtype=np.bool_),
+                        "quality.sync_error_ns": np.asarray(frame.sync_error_ns, dtype=np.int64),
                         "task": task,
                     }
+                    if frame.command_gripper is not None:
+                        payload["action.command.gripper"] = np.asarray(frame.command_gripper, dtype=np.float32)
                     for camera_id, selected in images.items():
                         payload[f"observation.images.{camera_id}"] = self._load_rgb(selected[index][1])
                     dataset.add_frame(payload)
@@ -91,7 +115,7 @@ class LeRobotExporter:
                 # Required by the SDK: flushes metadata/parquet footers before another
                 # adopted session calls resume().
                 dataset.finalize()
-        self._write_v3_receipt(request.session_dir, request.output_dir, manifest, schema, episode_index, anchors)
+        self._write_v3_receipt(request.session_dir, request.output_dir, manifest, schema, episode_index, anchors, urdf_path)
         self._report(request, 100, 100)
         return request.output_dir
 
@@ -177,14 +201,33 @@ class LeRobotExporter:
         if (root / "meta" / "info.json").is_file():
             return LeRobotDataset.resume(repo_id=schema.repo_id, root=root, batch_encoding_size=1)
         root.parent.mkdir(parents=True, exist_ok=True)
-        return LeRobotDataset.create(repo_id=schema.repo_id, root=root, fps=schema.fps, features=schema.features(image_shapes), robot_type="realman_rm65_three_arm", use_videos=True, batch_encoding_size=1)
+        return LeRobotDataset.create(
+            repo_id=schema.repo_id, root=root, fps=schema.fps,
+            features=schema.features(image_shapes), robot_type=schema.embodiment_id,
+            use_videos=True, batch_encoding_size=1,
+        )
 
     @staticmethod
-    def _write_v3_receipt(session_dir: Path, root: Path, manifest: dict[str, Any], schema: LeRobotV3Schema, episode_index: int, anchors: Sequence[int]) -> None:
+    def _write_v3_receipt(session_dir: Path, root: Path, manifest: dict[str, Any], schema: LeRobotV3Schema, episode_index: int, anchors: Sequence[int], urdf_path: Path) -> None:
         receipt = {"dataset_root": str(root), "repo_id": schema.repo_id, "episode_index": episode_index,
                    "schema_fingerprint": schema.fingerprint, "frame_count": len(anchors),
                    "first_walltime_ns": anchors[0], "last_walltime_ns": anchors[-1],
-                   "source_session_id": manifest.get("session_id", session_dir.name)}
+                   "source_session_id": manifest.get("session_id", session_dir.name),
+                   "canonical": {
+                       "embodiment_id": schema.embodiment_id,
+                       "joint_names": schema.joint_names,
+                       "base_frames": schema.base_frames,
+                       "ee_links": schema.ee_links,
+                       "cartesian_command": {
+                           "representation": schema.cartesian_command_representation,
+                           "frames": schema.cartesian_command_frames,
+                       },
+                       "quality_sync_source_ids": schema.sync_source_ids,
+                       "urdf_path": str(urdf_path),
+                       "urdf_sha256": sha256(urdf_path.read_bytes()).hexdigest(),
+                       "units": {"joint_position": "rad", "joint_velocity": "rad/s", "ee_position": "m", "ee_angular_velocity": "rad/s"},
+                       "generator_versions": {"joint_velocity": "finite_difference_v1", "ee_fk": "urdf_fk_v1", "ee_velocity": "quaternion_shortest_arc_v1"},
+                   }}
         (session_dir / "export" / "lerobot-v3.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
 
     # ---- loading -----------------------------------------------------------
@@ -198,7 +241,7 @@ class LeRobotExporter:
             raise ValueError("only READY sessions can be exported")
         return manifest
 
-    def _read_mcap_streams(self, session_dir: Path) -> dict[str, list[TimedSample]]:
+    def _read_mcap_streams(self, session_dir: Path, schema: LeRobotV3Schema) -> dict[str, list[TimedSample]]:
         """Read every recorded topic into ``{topic: [TimedSample]}` ordered by time."""
         from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions  # type: ignore[import-not-found]
         from rclpy.serialization import deserialize_message  # type: ignore[import-not-found]
@@ -223,28 +266,49 @@ class LeRobotExporter:
         topic_types = {meta.name: meta.type for meta in reader.get_all_topics_and_types()}
 
         streams: dict[str, list[TimedSample]] = {}
+        action_frames = dict(zip(schema.arm_action_topics, schema.cartesian_command_frames, strict=True))
         while reader.has_next():
             topic, data, record_ns = reader.read_next()
             message_class = type_to_class.get(topic_types.get(topic))
             if message_class is None:
                 continue
             message = deserialize_message(data, message_class)
-            value = self._extract_value(topic, message)
+            if topic in action_frames:
+                frame_id = str(message.header.frame_id)
+                if frame_id != action_frames[topic]:
+                    raise ValueError(
+                        f"Cartesian command frame mismatch for {topic}: "
+                        f"expected {action_frames[topic]!r}, got {frame_id!r}"
+                    )
+            value = self._extract_value(topic, message, schema.joint_names)
             if value is not None:
                 streams.setdefault(topic, []).append(TimedSample(timestamp_ns=record_ns, value=value))
         return streams
 
     @staticmethod
-    def _extract_value(topic: str, message: Any) -> Any:
+    def _extract_value(topic: str, message: Any, joint_names: Sequence[str] = ()) -> Any:
         """Pull the export-relevant value out of a deserialized message, or None to skip."""
         if topic.endswith("/joint_states"):
-            return list(message.position)
+            if not joint_names:
+                raise ValueError("JointState extraction requires configured joint_names")
+            return ordered_joint_position(message.name, message.position, joint_names)
         if "/cartesian_velocity/command" in topic:
             twist = message.twist
             return [twist.linear.x, twist.linear.y, twist.linear.z, twist.angular.x, twist.angular.y, twist.angular.z]
         if topic.startswith("/gripper_") and (topic.endswith("/position") or topic.endswith("/command")):
             return float(message.data)
         return None
+
+    @staticmethod
+    def _resolve_urdf_path(request: ExportRequest, schema: LeRobotV3Schema) -> Path:
+        """Use the session's immutable URDF snapshot, never a mutable live model."""
+        candidates = [request.urdf_path, request.session_dir / "metadata" / "robot.urdf"]
+        for candidate in candidates:
+            if candidate is not None and candidate.is_file():
+                return candidate.resolve()
+        raise ValueError(
+            "recording session has no URDF snapshot; re-record after canonical provenance is enabled"
+        )
 
     @staticmethod
     def _topic_groups(manifest: dict[str, Any]) -> tuple[list[str], list[str], list[str]]:

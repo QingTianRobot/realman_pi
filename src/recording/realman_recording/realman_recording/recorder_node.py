@@ -12,6 +12,7 @@ import json
 import shutil
 import threading
 import time
+from hashlib import sha256
 from pathlib import Path
 from typing import Any
 
@@ -66,11 +67,14 @@ class RecordingRecorderNode(Node):
         self.declare_parameter("gripper_action_topics", [""])
         self.declare_parameter("lerobot_repo_id", "realman/pi05-three-arm")
         self.declare_parameter("embodiment_id", "realman-rm65-b-three-arm-v1")
+        self.declare_parameter("urdf_package", "rm65_description")
         self.declare_parameter("urdf_relative_path", "urdf/RM65-B.urdf")
+        self.declare_parameter("urdf_base_link", "base_link")
         self.declare_parameter("base_frames", ["l/base_link", "m/base_link", "r/base_link"])
         self.declare_parameter("ee_links", ["link_6", "link_6", "link_6"])
         self.declare_parameter("joint_names", ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"])
         self.declare_parameter("cartesian_command_representation", "velocity")
+        self.declare_parameter("cartesian_command_frames", ["l/base_link", "m/base_link", "r/base_link"])
         self.declare_parameter("gripper_position_topics", [""])
         self.declare_parameter("gripper_torque_topics", [""])
         self.declare_parameter("gripper_alarm_topics", [""])
@@ -350,6 +354,34 @@ class RecordingRecorderNode(Node):
                     },
                 }
             )
+            try:
+                # FK must use the exact robot model that applied when raw data was
+                # recorded.  A later package upgrade must not silently alter export.
+                urdf_source = self._resolve_urdf_source()
+                snapshot = session.directory / "metadata" / "robot.urdf"
+                snapshot.parent.mkdir(mode=0o750)
+                shutil.copy2(urdf_source, snapshot)
+                store.update_metadata(canonical={
+                    "embodiment_id": str(self.get_parameter("embodiment_id").value),
+                    "urdf_package": str(self.get_parameter("urdf_package").value),
+                    "urdf_relative_path": str(self.get_parameter("urdf_relative_path").value),
+                    "urdf_base_link": str(self.get_parameter("urdf_base_link").value),
+                    "urdf_snapshot": "metadata/robot.urdf",
+                    "urdf_sha256": sha256(snapshot.read_bytes()).hexdigest(),
+                    "joint_names": list(self.get_parameter("joint_names").value),
+                    "base_frames": list(self.get_parameter("base_frames").value),
+                    "ee_links": list(self.get_parameter("ee_links").value),
+                    "cartesian_command_representation": str(self.get_parameter("cartesian_command_representation").value),
+                    "cartesian_command_frames": list(self.get_parameter("cartesian_command_frames").value),
+                    "capabilities": {
+                        "joint_velocity": "derived_from_position",
+                        "joint_effort": "not_recorded_by_current_driver",
+                        "action_executed": "not_available",
+                    },
+                })
+            except Exception as error:
+                store.finalize(False, reason=f"canonical URDF snapshot failed: {error}")
+                raise
             archive = McapStateArchive(int(self.get_parameter("max_state_queue").value))
             try:
                 archive.start(session.directory / "state.mcap", self._topic_types)
@@ -644,10 +676,13 @@ class RecordingRecorderNode(Node):
                         camera_ids=self.get_parameter("camera_ids").value,
                         joint_names=self.get_parameter("joint_names").value,
                         embodiment_id=str(self.get_parameter("embodiment_id").value),
+                        urdf_package=str(self.get_parameter("urdf_package").value),
                         urdf_relative_path=str(self.get_parameter("urdf_relative_path").value),
+                        urdf_base_link=str(self.get_parameter("urdf_base_link").value),
                         base_frames=self.get_parameter("base_frames").value,
                         ee_links=self.get_parameter("ee_links").value,
                         cartesian_command_representation=str(self.get_parameter("cartesian_command_representation").value),
+                        cartesian_command_frames=self.get_parameter("cartesian_command_frames").value,
                     ),
                     progress_callback=self._export_progress_callback,
                 )
@@ -670,6 +705,19 @@ class RecordingRecorderNode(Node):
                     directory,
                     export={"state": "SUCCEEDED", "result": str(result), "ended_realtime_ns": time.time_ns()},
                 )
+
+    def _resolve_urdf_source(self) -> Path:
+        """Resolve the installed description package before a session is opened."""
+        try:
+            from ament_index_python.packages import get_package_share_directory
+        except ImportError as error:
+            raise RuntimeError("ament_index_python is required to snapshot the configured URDF") from error
+        package = str(self.get_parameter("urdf_package").value)
+        relative = str(self.get_parameter("urdf_relative_path").value)
+        candidate = Path(get_package_share_directory(package)) / relative
+        if not candidate.is_file():
+            raise RuntimeError(f"configured URDF does not exist: {candidate}")
+        return candidate.resolve()
 
     def _export_progress_callback(self, done: int, total: int) -> None:
         """Relay exporter frame progress to the status publisher (and web dashboard)."""

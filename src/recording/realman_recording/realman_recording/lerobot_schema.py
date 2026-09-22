@@ -27,10 +27,13 @@ class LeRobotV3Schema:
     camera_ids: tuple[str, ...]
     joint_names: tuple[str, ...]
     embodiment_id: str
+    urdf_package: str
     urdf_relative_path: str
+    urdf_base_link: str
     base_frames: tuple[str, ...]
     ee_links: tuple[str, ...]
     cartesian_command_representation: str
+    cartesian_command_frames: tuple[str, ...]
 
     def __post_init__(self) -> None:
         if not self.repo_id or "/" not in self.repo_id:
@@ -49,10 +52,12 @@ class LeRobotV3Schema:
             raise ValueError("joint_names must be non-empty and unique")
         if len(self.base_frames) != len(self.arm_joint_topics) or len(self.ee_links) != len(self.arm_joint_topics):
             raise ValueError("each arm requires one base frame and end-effector link")
-        if not self.embodiment_id or not self.urdf_relative_path:
-            raise ValueError("embodiment_id and urdf_relative_path are required")
+        if not self.embodiment_id or not self.urdf_package or not self.urdf_relative_path or not self.urdf_base_link:
+            raise ValueError("embodiment_id and URDF source details are required")
         if self.cartesian_command_representation != "velocity":
             raise ValueError("canonical v1 only supports Cartesian velocity commands")
+        if len(self.cartesian_command_frames) != len(self.arm_action_topics) or not all(self.cartesian_command_frames):
+            raise ValueError("each Cartesian command stream requires a fixed frame")
         # Some deployments expose position feedback but no independently recorded
         # gripper command topic.  Do not fabricate an action from observation; the
         # resulting action vector is then arm-only and its exact dimension remains
@@ -134,8 +139,10 @@ class LeRobotV3Schema:
             "arm_action": self.arm_action_topics, "gripper": self.gripper_position_topics,
             "gripper_action": self.gripper_action_topics, "cameras": self.camera_ids,
             "joint_names": self.joint_names, "embodiment_id": self.embodiment_id,
-            "urdf_relative_path": self.urdf_relative_path, "base_frames": self.base_frames,
+            "urdf_package": self.urdf_package, "urdf_relative_path": self.urdf_relative_path,
+            "urdf_base_link": self.urdf_base_link, "base_frames": self.base_frames,
             "ee_links": self.ee_links, "cartesian_command_representation": self.cartesian_command_representation,
+            "cartesian_command_frames": self.cartesian_command_frames,
         }
         return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
 
@@ -144,10 +151,13 @@ def schema_from_parameters(*, repo_id: str, fps: float, arms: Iterable[str], arm
                            gripper_position_topics: Iterable[str], gripper_action_topics: Iterable[str],
                            camera_ids: Iterable[str], joint_names: Iterable[str] = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"),
                            embodiment_id: str = "realman-rm65-b-three-arm-v1",
+                           urdf_package: str = "rm65_description",
                            urdf_relative_path: str = "urdf/RM65-B.urdf",
+                           urdf_base_link: str = "base_link",
                            base_frames: Iterable[str] = ("l/base_link", "m/base_link", "r/base_link"),
                            ee_links: Iterable[str] = ("link_6", "link_6", "link_6"),
-                           cartesian_command_representation: str = "velocity") -> LeRobotV3Schema:
+                           cartesian_command_representation: str = "velocity",
+                           cartesian_command_frames: Iterable[str] = ("l/base_link", "m/base_link", "r/base_link")) -> LeRobotV3Schema:
     """Build the contract from recorder parameters while preserving declared order."""
     arm_names = tuple(str(item) for item in arms if str(item))
     if not arm_names:
@@ -163,8 +173,10 @@ def schema_from_parameters(*, repo_id: str, fps: float, arms: Iterable[str], arm
         gripper_action_topics=tuple(str(item) for item in gripper_action_topics if str(item)),
         camera_ids=tuple(str(item) for item in camera_ids if str(item)),
         joint_names=tuple(str(item) for item in joint_names if str(item)),
-        embodiment_id=str(embodiment_id), urdf_relative_path=str(urdf_relative_path),
+        embodiment_id=str(embodiment_id), urdf_package=str(urdf_package),
+        urdf_relative_path=str(urdf_relative_path), urdf_base_link=str(urdf_base_link),
         base_frames=tuple(str(item) for item in base_frames if str(item)),
         ee_links=tuple(str(item) for item in ee_links if str(item)),
         cartesian_command_representation=str(cartesian_command_representation),
+        cartesian_command_frames=tuple(str(item) for item in cartesian_command_frames if str(item)),
     )

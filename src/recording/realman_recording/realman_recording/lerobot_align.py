@@ -36,6 +36,10 @@ class AlignedFrame:
 
     timestamp_ns: int
     values: dict[str, Any]
+    # For interpolated values this is the closest contributing raw sample (older on a
+    # tie); it is provenance for quality reporting, not a claim that the value itself
+    # was sampled at that instant.  FORWARD_FILL always reports the causal source.
+    source_timestamps_ns: dict[str, int]
 
 
 def _validate_timeline(timestamps: Sequence[int], *, name: str, allow_empty: bool = False) -> None:
@@ -129,6 +133,22 @@ def _linear(samples: Sequence[TimedSample], timestamps: Sequence[int], anchor_ns
     return _lerp(lo.value, hi.value, (anchor_ns - lo.timestamp_ns) / span_ns)
 
 
+def _source_timestamp(samples: Sequence[TimedSample], timestamps: Sequence[int], anchor_ns: int,
+                      policy: AlignmentPolicy) -> int:
+    """Return the raw source timestamp used for an aligned-value quality metric."""
+    right = bisect_right(timestamps, anchor_ns)
+    if policy is AlignmentPolicy.FORWARD_FILL:
+        index = right - 1
+        if index < 0:
+            raise ValueError("forward fill requires a sample at or before the anchor")
+        return timestamps[index]
+    candidates = [candidate for candidate in (right - 1, right) if 0 <= candidate < len(samples)]
+    # ``align_series`` already validates that samples are non-empty.  Prefer the older
+    # source at equal distance to keep records deterministic.
+    index = min(candidates, key=lambda candidate: (abs(timestamps[candidate] - anchor_ns), candidate))
+    return timestamps[index]
+
+
 def align_series(
     anchors_ns: Sequence[int],
     samples: Sequence[TimedSample],
@@ -165,14 +185,19 @@ def align_streams(
 ) -> list[AlignedFrame]:
     """Align several streams to strictly increasing image wall-time anchors."""
     _validate_timeline(anchors_ns, name="anchor")
-    aligned_by_stream = {
-        name: align_series(anchors_ns, samples, policy, max_gap_ns=max_gap_ns)
-        for name, (samples, policy) in streams.items()
-    }
+    aligned_by_stream = {}
+    source_times_by_stream = {}
+    for name, (samples, policy) in streams.items():
+        aligned_by_stream[name] = align_series(anchors_ns, samples, policy, max_gap_ns=max_gap_ns)
+        timestamps = [sample.timestamp_ns for sample in samples]
+        source_times_by_stream[name] = [
+            _source_timestamp(samples, timestamps, anchor, policy) for anchor in anchors_ns
+        ]
     return [
         AlignedFrame(
             timestamp_ns=anchor_ns,
             values={name: series[index] for name, series in aligned_by_stream.items()},
+            source_timestamps_ns={name: series[index] for name, series in source_times_by_stream.items()},
         )
         for index, anchor_ns in enumerate(anchors_ns)
     ]

@@ -64,12 +64,21 @@ class SessionStore:
         self.session = RecordingSession(session_id, directory, realtime_ns, monotonic_ns)
         self.state = SessionState.COUNTDOWN
         self._manifest = {
-            "schema_version": 1,
+            "schema_version": 2,
             "session_id": session_id,
             "state": self.state.value,
             "started_realtime_ns": realtime_ns,
             "started_monotonic_ns": monotonic_ns,
             "metadata": metadata,
+            # Labels are intentionally nullable facts until an upstream evaluator
+            # writes them; RL reward/log-prob data is a separate extension.
+            "annotations": {
+                "success": None,
+                "terminated": None,
+                "truncated": None,
+                "failure_reason": None,
+                "human_intervention_count": None,
+            },
             "pause_intervals": [],
             # A finalized raw session is deliberately pending until an upstream system
             # explicitly adopts or discards it; recording never auto-exports data.
@@ -95,6 +104,16 @@ class SessionStore:
         self._manifest["pause_intervals"].append(
             {"started_monotonic_ns": started_monotonic_ns, "ended_monotonic_ns": ended_monotonic_ns}
         )
+        self._write_partial()
+
+    def update_metadata(self, **updates: Any) -> None:
+        """Atomically add immutable-source details discovered after directory creation."""
+        if self._manifest is None:
+            raise RuntimeError("no active recording session")
+        metadata = self._manifest.get("metadata")
+        if not isinstance(metadata, dict):
+            raise RuntimeError("recording metadata is malformed")
+        metadata.update(updates)
         self._write_partial()
 
     def finalize(self, success: bool, **summary: Any) -> Path:

@@ -18,6 +18,15 @@ def test_ee_velocity_uses_shortest_quaternion_arc():
     assert ee_velocity(previous, current, 1.0) == (1.0, 0.0, 0.0, 0.0, 0.0, 3.141592653589793)
 
 
+def test_ee_velocity_rejects_non_unit_quaternions():
+    try:
+        ee_velocity((0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 2.0), (0.0, 0.0, 0.0, 0.0, 0.0, 0.0, 1.0), 1.0)
+    except ValueError as error:
+        assert "unit quaternion" in str(error)
+    else:
+        raise AssertionError("non-unit quaternion was accepted")
+
+
 def test_finite_difference_uses_center_and_one_sided_boundaries():
     assert finite_difference([(0, (0.0,)), (1_000_000_000, (1.0,)), (2_000_000_000, (2.0,))]) == [
         (1.0,), (1.0,), (1.0,)

@@ -23,6 +23,8 @@ class Pi05AdapterConfig:
     include_gripper_command: bool = False
     action_representation: str = "cartesian_velocity"
     dataset_fps: int | None = None
+    # Identifies the normalization statistics/assets selected by the training job.
+    # This adapter does not normalize data itself; the OpenPI transform owns that step.
     normalizer_asset_version: str = ""
 
     def __post_init__(self) -> None:
@@ -36,6 +38,8 @@ class Pi05AdapterConfig:
             raise ValueError("π0.5 action_representation must be cartesian_velocity or cartesian_delta")
         if self.action_representation == "cartesian_delta" and (self.dataset_fps is None or self.dataset_fps <= 0):
             raise ValueError("cartesian_delta requires a positive explicit dataset_fps")
+        if not self.normalizer_asset_version.strip():
+            raise ValueError("π0.5 normalizer_asset_version must identify the training normalizer")
 
 
 def _rot6d(quaternion: tuple[float, float, float, float]) -> tuple[float, ...]:
@@ -56,6 +60,24 @@ class Pi05Adapter:
 
     def __init__(self, config: Pi05AdapterConfig) -> None:
         self.config = config
+
+    def contract(self) -> dict[str, Any]:
+        """Return serializable model-view semantics for a training run receipt.
+
+        The returned mapping belongs with the OpenPI run/configuration artifact, not in
+        the canonical recording.  In particular, the identifier says which external
+        normalizer was selected without claiming this adapter applies normalization.
+        """
+        return {
+            "adapter": "realman_recording.adapters.pi05",
+            "rotation_representation": self.config.rotation_representation,
+            "expected_state_dim": self.config.expected_state_dim,
+            "expected_action_dim": self.config.expected_action_dim,
+            "include_gripper_command": self.config.include_gripper_command,
+            "action_representation": self.config.action_representation,
+            "dataset_fps": self.config.dataset_fps,
+            "normalizer_asset_version": self.config.normalizer_asset_version,
+        }
 
     def adapt(self, frame: CanonicalFrame | Mapping[str, Any]) -> dict[str, tuple[float, ...]]:
         if isinstance(frame, Mapping):

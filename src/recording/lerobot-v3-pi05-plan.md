@@ -97,7 +97,7 @@ manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URD
 **文件：** 新增 `realman_recording/adapters/pi05.py`、`test/test_pi05_adapter.py`、训练环境文档。
 
 1. 写纯 NumPy 测试：canonical `ee_pose_base + gripper_position` 转所选 checkpoint 的 `observation.state`；canonical command 转对应 action contract。
-2. adapter 的字段选择、是否包含真实 gripper command、rot6d/delta、checkpoint state/action dimension、normalizer asset version 都显式配置；禁止训练代码猜测单位/shape。
+2. adapter 的字段选择、是否包含真实 gripper command、rot6d/delta、checkpoint state/action dimension、normalizer asset version 都显式配置；normalizer version 为空必须拒绝，并将 adapter `contract()` 与训练运行产物一起保存。adapter 不执行归一化，OpenPI transform 是唯一的归一化实现；禁止训练代码猜测单位/shape。
 3. 在 OpenPI 训练容器跑 loader + one-batch smoke；action dimension 以实际 checkpoint 为准，不预设 21/32。
 4. 提交 `feat(recording): add pi05 canonical data adapter`。
 

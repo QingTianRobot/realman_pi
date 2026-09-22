@@ -157,3 +157,13 @@ ROS_DOMAIN_ID=65 recording_runtime_probe --duration-sec 5 \
 ```
 
 输出为 JSON，包含 `/recording/manage` 是否可用、最近的 `RecordingStatus`、每个 topic 的样本数和接收频率；服务不可用时退出码为 `2`。实际 topic 名称应以 `ros2 topic list` 和 `config/ros/recording.yaml` 为准。该探针不能替代 PREPARE：PREPARE 仍负责新鲜度、连接状态、磁盘、MCAP backend 和配置化 `preflight_required_topics` 的准入判断。
+
+真机部署还必须确认运行中的节点已经切换到当前接口。执行 `ros2 node info
+/recording_recorder` 时应看到 `/recording/manage` Service，不能再看到旧的
+`/recording/manage_session` Action；若旧 Action 仍存在，表示工控机仍在运行旧的
+install，需要重新构建并 source `realman_recording` 与 `realman_recording_msgs`。
+相机健康也不能只依据 publisher 数量：应同时读取每路 Orbbec 的
+`/<camera>/device_status`，确认 `device_online=true` 且
+`color_frame_rate_cur>0`，再确认 `color/image_raw` 能收到真实帧。多路相机全部降为
+USB2 480M 时可能出现节点存在但某一路实际帧率为 0 的带宽问题；应先恢复独立 USB3
+链路，再运行 recorder PREPARE。

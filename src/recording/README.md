@@ -236,6 +236,23 @@ Rerun 的实时 adapter 可以保留用于调试，但默认关闭；离线 repl
 - 浏览器断开、慢客户端、Rerun 关闭时确认 archive dropped 不因展示端增加。
 - 离线 Rerun 回放真实 session，确认图像、关节、夹爪时间轴一致。
 
+真机验收时还要检查部署是否真的使用当前接口：
+
+```bash
+ros2 node info /recording_recorder
+```
+
+当前版本必须看到 `/recording/manage` Service，且不应再出现
+`/recording/manage_session` Action。如果旧 Action 仍存在，说明工控机运行的是旧
+install，不是当前源码；需要停止旧节点、重新 `colcon build --packages-up-to
+realman_recording realman_recording_msgs` 并重新 source/install 后再验收。
+
+相机不能只看 publisher 是否存在。对每路 Orbbec 同时检查
+`/<camera>/device_status` 的 `device_online` 与 `color_frame_rate_cur`，以及
+`color/image_raw` 是否能收到实际帧。多路设备若全部协商到同一个 USB2（480M）Hub，
+即使节点和 publisher 都存在，也可能有一路实际帧率为 0；此时应先改用独立 USB3
+主板端口/确认 `lsusb -t` 为 5000M，再进行录制验收，不能在 recorder 中复制旧帧。
+
 宿主没有 ROS 2、pytest、ffmpeg 或 Rerun SDK 时，不要通过伪造依赖声称这些运行测试通过；只报告静态检查和纯逻辑冒烟结果。
 
 ## 12. 常用验证命令

@@ -197,7 +197,7 @@ Rerun 的实时 adapter 可以保留用于调试，但默认关闭；离线 repl
 - [x] 固定 `lerobot==0.6.1`，按 receipt 的 episode index 读取 canonical frame/视频并写入 Rerun 时间轴。
 - [ ] 在 Humble + Rerun SDK 环境解码真实视频 episode（宿主没有该运行时）。
 
-> `replay.py` 的 ROS/Rerun 依赖（`rosbag2_py`、`rclpy.serialization`、`rerun-sdk`）均为惰性导入，纯逻辑（会话校验、媒体索引解析、段筛选、话题分类、发射）可在无 ROS 环境单测；端到端读取真实 `state.mcap` 仍需在 Humble/设备容器验证（见第 11 节）。
+> `replay.py` 的 LeRobot/Rerun 依赖均为惰性导入；纯逻辑（会话生命周期校验、canonical frame 发射、时间轴边界）可在无 ROS 环境单测。它刻意不读取 `state.mcap` 或原始媒体索引；端到端读取真实 LeRobot 视频 episode 仍需在 Humble/设备容器验证（见第 11 节）。
 
 ### P3：Canonical LeRobot v3 与 π0.5 view
 
@@ -223,7 +223,7 @@ Rerun 的实时 adapter 可以保留用于调试，但默认关闭；离线 repl
 - camera worker：多路隔离、pause 分段、media-index、JPEG 分帧、ffmpeg 异常退出。
 - session store：partial/final manifest 原子性、路径遍历拒绝、ADOPT/DISCARD。
 - web protocol：运动命令、超长消息、非法时间戳必须拒绝。
-- Rerun adapter/replay：无 SDK、损坏媒体、空流和时间轴边界降级。
+- Rerun adapter/replay：无 SDK、canonical frame、相机筛选和时间轴边界。
 
 ### 必须在 Humble/设备环境执行的测试
 

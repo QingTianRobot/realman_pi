@@ -30,7 +30,7 @@ from .camera_workers import CameraSource, RosImageArchive, image_to_jpeg, load_c
 from .lerobot_exporter import ExportRequest, LeRobotExporter
 from .kinematics import urdf_joint_limits
 from .lerobot_schema import schema_from_parameters
-from .preflight import PreflightChecker, PreflightRequirements, PreflightResult
+from .preflight import PreflightChecker, PreflightRequirements, PreflightResult, configured_required_topics
 from .provenance import snapshot_optional_file
 from .session_store import SessionState, SessionStore
 from .state_archive import McapStateArchive
@@ -459,14 +459,11 @@ class RecordingRecorderNode(Node):
         max_skew_sec = float(self.get_parameter("preflight_alignment_trigger_sec").value)
         if max_skew_sec < 0.0:
             raise ValueError("preflight_alignment_trigger_sec must be non-negative")
-        configured_topics = tuple(
-            str(topic) for topic in self.get_parameter("preflight_required_topics").value
-        )
-        # An empty parameter preserves safe legacy behavior for deployments which
-        # have not yet supplied a profile-specific gate configuration.
-        base_topics = configured_topics or (
+        # The declared [""] default is a type-inference sentinel, not a topic.
+        base_topics = configured_required_topics(
+            tuple(str(topic) for topic in self.get_parameter("preflight_required_topics").value),
             tuple(f"/{arm}/joint_states" for arm in self._arms)
-            + tuple(str(topic) for topic in self.get_parameter("gripper_position_topics").value)
+            + tuple(str(topic) for topic in self.get_parameter("gripper_position_topics").value if str(topic))
         )
         required_topics = base_topics + (
             tuple(source.image_topic for source in self._camera_sources()) if record_cameras else ()

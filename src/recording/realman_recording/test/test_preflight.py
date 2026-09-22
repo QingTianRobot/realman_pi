@@ -1,7 +1,19 @@
 """Contract tests for recorder preflight admission."""
 from __future__ import annotations
 
-from realman_recording.preflight import PreflightChecker, PreflightRequirements
+from realman_recording.preflight import PreflightChecker, PreflightRequirements, configured_required_topics
+
+
+def test_placeholder_required_topic_uses_profile_fallback():
+    assert configured_required_topics(("",), ("/l/joint_states", "/gripper_left/position")) == (
+        "/l/joint_states", "/gripper_left/position"
+    )
+
+
+def test_explicit_required_topics_preserve_declared_order():
+    assert configured_required_topics(("/camera/a", "", "/camera/b"), ("/fallback",)) == (
+        "/camera/a", "/camera/b"
+    )
 
 
 def test_preflight_rejects_stale_disconnected_and_unavailable_inputs():

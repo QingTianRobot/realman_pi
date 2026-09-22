@@ -11,6 +11,16 @@ from dataclasses import dataclass
 from typing import Mapping
 
 
+def configured_required_topics(values: tuple[str, ...], fallback: tuple[str, ...]) -> tuple[str, ...]:
+    """Drop ROS string-array placeholder values before selecting the fallback.
+
+    ``rclpy`` needs ``[""]`` as the declaration default to infer a string array.
+    That sentinel is not a topic and must not reach ``PreflightRequirements``.
+    """
+    configured = tuple(str(value) for value in values if str(value))
+    return configured or tuple(str(value) for value in fallback if str(value))
+
+
 @dataclass(frozen=True)
 class PreflightRequirements:
     """Inputs that must be healthy before a recording session can start."""

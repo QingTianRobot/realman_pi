@@ -8,6 +8,8 @@
 
 **技术栈：** ROS 2 Humble、rosbag2 MCAP、`lerobot==0.6.1`、NumPy、Pillow、URDF/KDL FK 后端（在 Humble 容器固定）、OpenPI data transforms。
 
+> **版本边界（2026-09-22 已核对）：** “LeRobot Dataset v3”是存储格式版本，不等于 Python 包版本。官方 v3 格式从 `lerobot >= 0.4.0` 起支持；本项目固定 `lerobot==0.6.1`，使用 `LeRobotDataset.create()` / `resume()`、`add_frame()`、`save_episode()`、`finalize()` 的 v3 writer 路径。不要因为外部提到“v3.1”而把 SDK 版本号臆改为 `3.1`；若升级 SDK，必须在 Humble 容器先跑 SDK reload、视频 decode 和 OpenPI one-batch 验收。
+
 ## 不可变原则
 
 1. recorder 只读 ROS topic；不为录制新增驱动 topic，也不向机械臂或夹爪发布命令。

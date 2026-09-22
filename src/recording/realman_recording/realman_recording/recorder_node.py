@@ -252,22 +252,13 @@ class RecordingRecorderNode(Node):
             )
 
     def _record_camera_image(self, source: CameraSource, message: Image) -> None:
-        """JPEG-encode a raw frame and queue it only while recording.
-
-        Only the small JPEG encode runs here; file I/O stays on the archive worker.
-        A frame whose encoding is unsupported is dropped rather than aborting the
-        subscription callback.
-        """
+        """Queue a raw frame only while recording; encoding and I/O stay off-callback."""
         receipt_wall_ns = self._receipt_wall_clock.now().nanoseconds
         with self._lock:
             self._last_receipt_wall_ns[source.image_topic] = receipt_wall_ns
             archive = self._camera_worker if self._state is SessionState.RECORDING else None
         if archive is not None:
-            try:
-                jpeg = image_to_jpeg(message)
-            except ValueError:
-                return
-            archive.offer(source.camera_id, receipt_wall_ns, jpeg)
+            archive.offer_image(source.camera_id, receipt_wall_ns, message)
 
     def _prepare(self, request: Any, *, preserve_scheduled_state: bool = False) -> str:
         """Run admission checks without creating a session or opening a writer."""

@@ -290,7 +290,7 @@ class RosImageArchive:
         if len({source.camera_id for source in sources}) != len(sources):
             raise ValueError("camera_ids must be unique")
         self._sources = tuple(sources)
-        self._queue: queue.Queue[tuple[str, int, bytes]] = queue.Queue(maxsize=queue_size)
+        self._queue: queue.Queue[tuple[str, int, Any, bool]] = queue.Queue(maxsize=queue_size)
         self._root: Path | None = None
         self._thread: threading.Thread | None = None
         self._running = threading.Event()
@@ -307,10 +307,20 @@ class RosImageArchive:
 
     def offer(self, camera_id: str, receipt_wall_ns: int, jpeg: bytes) -> bool:
         """Queue one JPEG without blocking; return false when overload drops it."""
-        if not self._running.is_set() or camera_id not in self._stats or receipt_wall_ns < 0 or not jpeg:
+        return self._offer(camera_id, receipt_wall_ns, jpeg, encode=False)
+
+    def offer_image(self, camera_id: str, receipt_wall_ns: int, image: Any) -> bool:
+        """Queue one native ROS Image; JPEG conversion runs only on the archive worker."""
+        return self._offer(camera_id, receipt_wall_ns, image, encode=True)
+
+    def _offer(self, camera_id: str, receipt_wall_ns: int, payload: Any, *, encode: bool) -> bool:
+        """Admit a raw image or encoded JPEG without doing CPU or filesystem work."""
+        if not self._running.is_set() or camera_id not in self._stats or receipt_wall_ns < 0:
             return False
         try:
-            self._queue.put_nowait((camera_id, receipt_wall_ns, jpeg))
+            if not payload:
+                return False
+            self._queue.put_nowait((camera_id, receipt_wall_ns, payload, encode))
         except queue.Full:
             with self._lock:
                 self._stats[camera_id]["dropped"] += 1
@@ -358,11 +368,12 @@ class RosImageArchive:
     def _write_loop(self) -> None:
         while self._running.is_set() or not self._queue.empty():
             try:
-                camera_id, wall_ns, jpeg = self._queue.get(timeout=0.1)
+                camera_id, wall_ns, payload, encode = self._queue.get(timeout=0.1)
             except queue.Empty:
                 continue
             try:
                 assert self._root is not None
+                jpeg = image_to_jpeg(payload) if encode else payload
                 relative = Path(camera_id) / f"{wall_ns}.jpg"
                 target = self._root / relative
                 target.parent.mkdir(mode=0o750, parents=True, exist_ok=True)

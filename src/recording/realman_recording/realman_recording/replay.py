@@ -211,6 +211,7 @@ class ReplayPlayer:
         except (KeyError, TypeError, ValueError) as error:
             raise ValueError("LeRobot export receipt has no valid timeline provenance") from error
         dataset = LeRobotDataset(repo_id=repo_id, root=self._dataset_root, episodes=[episode_index])
+        self._emit_summary(rerun)
         previous_walltime: int | None = None
         for index in range(len(dataset)):
             frame = dataset[index]
@@ -223,7 +224,6 @@ class ReplayPlayer:
             previous_walltime = walltime_ns
             rerun.set_time_nanos("wall_time", walltime_ns)
             self._emit_canonical_frame(rerun, frame)
-        self._emit_summary(rerun)
 
     def _emit_canonical_frame(self, rerun: Any, frame: dict[str, Any]) -> None:
         """Log one LeRobot frame without assuming a model-specific state/action vector."""

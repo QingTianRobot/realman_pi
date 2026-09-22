@@ -34,6 +34,11 @@
     # is archived separately and must agree with this configured convention.
     cartesian_command_representation: velocity
     cartesian_command_frames: [l/base_link, m/base_link, r/base_link]
+    # Point this at the immutable result from realman_camera_calibration after a
+    # solved hand-eye calibration. Empty keeps 2D data recordable but marks its
+    # geometric calibration provenance as UNAVAILABLE.
+    calibration_snapshot_path: ""
+    calibration_version: ""
     # Keep raw gripper topics intact; recorder assigns ROS 2 SYSTEM_TIME receipt timestamps.
     gripper_position_topics: [/gripper_left/position, /gripper_mid/position, /gripper_right/position]
     gripper_torque_topics: [/gripper_left/torque_reached, /gripper_mid/torque_reached, /gripper_right/torque_reached]

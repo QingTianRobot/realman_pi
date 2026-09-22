@@ -34,6 +34,8 @@ ROS CompressedImage ──► bounded JPEG archive ──► videos/
 
 持久化状态写入、原始相机录制、低清预览、浏览器 WebSocket 分别属于不同 worker。展示端只接收限频的小型状态快照；不得在 ROS 状态话题或该快照中传输 JPEG/WebP。浏览器断开、慢客户端、预览解码失败或相机单路失败均不应阻塞驱动订阅与状态归档。
 
+录制可选配置 `calibration_snapshot_path` 指向已解算的相机标定结果。配置后，START 会将该文件复制入 session metadata 并写入 SHA-256/version；未配置时 metadata 明确标为 `UNAVAILABLE`，不会把占位内参/外参当成真实几何数据。
+
 网页三维部分后续应只提取 `realman_web_control` 已有的 Three.js/URDF 实时关节模型；不得带入运动控制按钮、动作协议或 SDK 调用。
 
 ## ROS 接口

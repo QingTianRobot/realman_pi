@@ -132,12 +132,15 @@ Service：`/recording/manage`，类型：`realman_recording_msgs/srv/ManageRecor
 │   ├── <camera_id>/segment-000000.mkv
 │   └── media-index.json
 ├── metadata/robot.urdf         # 启动时快照的 FK 真值来源
+├── metadata/camera_calibration.yaml # 可选：配置的已解算标定结果快照
 ├── manifest.partial.json       # 录制期间原子更新（含 URDF hash/feature capability）
 ├── manifest.json               # STOP 后原子 rename，表示 finalized
 └── export/lerobot/             # ADOPT 后异步转换目标，当前仍后置
 ```
 
 manifest 至少包含 `schema_version`、`session_id`、`metadata.profile/task`、起止时间锚点、pause intervals、文件位置、最终 summary、`decision` 和 `export` 状态。`accepted_samples` 表示成功写给 writer 的样本；`enqueued_samples`/`dropped_samples` 用于区分队列背压和实际落盘失败。
+
+`calibration_snapshot_path` 为空时，session 的 canonical metadata 明确写入 `calibration.state=UNAVAILABLE`；这类数据可以用于纯 2D 行为克隆，但不能冒充具备可靠几何标定的数据。配置该路径后，recorder 在 START 前复制该文件到 `metadata/camera_calibration.yaml` 并保存 SHA-256 和 version；配置了不存在的路径会拒绝启动。
 
 ## 7. Web 与 3D 展示方案
 

@@ -223,6 +223,9 @@ class LeRobotExporter:
                            "frames": schema.cartesian_command_frames,
                        },
                        "quality_sync_source_ids": schema.sync_source_ids,
+                       "calibration": manifest.get("metadata", {}).get("canonical", {}).get(
+                           "calibration", {"state": "UNKNOWN"}
+                       ),
                        "urdf_path": str(urdf_path),
                        "urdf_sha256": sha256(urdf_path.read_bytes()).hexdigest(),
                        "units": {"joint_position": "rad", "joint_velocity": "rad/s", "ee_position": "m", "ee_angular_velocity": "rad/s"},

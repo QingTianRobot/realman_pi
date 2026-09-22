@@ -30,6 +30,7 @@ from .camera_workers import CameraSource, RosImageArchive, image_to_jpeg, load_c
 from .lerobot_exporter import ExportRequest, LeRobotExporter
 from .lerobot_schema import schema_from_parameters
 from .preflight import PreflightChecker, PreflightRequirements, PreflightResult
+from .provenance import snapshot_optional_file
 from .session_store import SessionState, SessionStore
 from .state_archive import McapStateArchive
 from .topic_catalog import build_topic_catalog
@@ -75,6 +76,10 @@ class RecordingRecorderNode(Node):
         self.declare_parameter("joint_names", ["joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"])
         self.declare_parameter("cartesian_command_representation", "velocity")
         self.declare_parameter("cartesian_command_frames", ["l/base_link", "m/base_link", "r/base_link"])
+        # Path to a solved, immutable calibration result. It is optional for 2D
+        # behavior-cloning capture, but must be supplied for geometric datasets.
+        self.declare_parameter("calibration_snapshot_path", "")
+        self.declare_parameter("calibration_version", "")
         self.declare_parameter("gripper_position_topics", [""])
         self.declare_parameter("gripper_torque_topics", [""])
         self.declare_parameter("gripper_alarm_topics", [""])
@@ -369,6 +374,11 @@ class RecordingRecorderNode(Node):
                 snapshot = session.directory / "metadata" / "robot.urdf"
                 snapshot.parent.mkdir(mode=0o750)
                 shutil.copy2(urdf_source, snapshot)
+                calibration = snapshot_optional_file(
+                    str(self.get_parameter("calibration_snapshot_path").value),
+                    session.directory / "metadata", "camera_calibration.yaml",
+                    version=str(self.get_parameter("calibration_version").value),
+                )
                 store.update_metadata(canonical={
                     "embodiment_id": str(self.get_parameter("embodiment_id").value),
                     "urdf_package": str(self.get_parameter("urdf_package").value),
@@ -381,6 +391,7 @@ class RecordingRecorderNode(Node):
                     "ee_links": list(self.get_parameter("ee_links").value),
                     "cartesian_command_representation": str(self.get_parameter("cartesian_command_representation").value),
                     "cartesian_command_frames": list(self.get_parameter("cartesian_command_frames").value),
+                    "calibration": calibration,
                     "capabilities": {
                         "joint_velocity": "derived_from_position",
                         "joint_effort": "not_recorded_by_current_driver",

@@ -88,7 +88,7 @@ manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URD
 
 1. 写生命周期测试：STOP 不导出；ADOPT 只追加一次 episode；重复 ADOPT 或 worker 失败不损坏 raw session。
 2. 保存真实 `TwistStamped` command 的 `header.frame_id`/控制 mode；frame 不匹配、未知语义、无 samples 时拒绝 action-supervised export。
-3. receipt 写入 schema、SDK、raw manifest、URDF、calibration hashes、对齐报告和 generator versions。
+3. receipt 写入 schema、SDK、raw manifest、URDF、calibration hashes、对齐报告和 generator versions。（已实现 optional calibration snapshot：未配置时显式 `UNAVAILABLE`。）
 4. 为 success/terminated/truncated/intervention 保留 manifest annotation block；不实现 reward/RL writer。
 5. 提交 `feat(recording): preserve canonical episode provenance`。
 

@@ -10,6 +10,7 @@ from types import SimpleNamespace
 import pytest
 
 from realman_robot_driver.coordinate_manager import CoordinateManager, CoordinatePolicy
+from realman_robot_driver.coordinate_services import CoordinateOperationResult
 
 
 NODE_PATH = (
@@ -736,6 +737,159 @@ def test_coordinate_state_replays_latest_sample_to_late_transient_subscriber():
                 executor.remove_node(node)
                 node.destroy_node()
         executor.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+@requires_ros_action_runtime
+def test_coordinate_state_is_republished_for_late_volatile_subscriber():
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.node import Node
+    from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
+    from std_msgs.msg import String
+
+    rclpy.init()
+    driver = None
+    peer = None
+    executor = SingleThreadedExecutor()
+    received = []
+    try:
+        driver = RealManDriverNode(
+            namespace="l",
+            parameter_overrides=[
+                rclpy.parameter.Parameter("robot_ip", value="127.0.0.1"),
+                rclpy.parameter.Parameter("mock_mode", value=True),
+                rclpy.parameter.Parameter("auto_connect", value=False),
+                rclpy.parameter.Parameter(
+                    "coordinate_state_publish_rate", value=20.0
+                ),
+            ],
+        )
+        driver._publish_coordinate_state()
+        peer = Node("late_volatile_coordinate_state_subscriber")
+        peer.create_subscription(
+            String,
+            "/l/coordinates/state",
+            received.append,
+            QoSProfile(
+                depth=1,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.VOLATILE,
+            ),
+        )
+        executor.add_node(driver)
+        executor.add_node(peer)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not received:
+            executor.spin_once(timeout_sec=0.02)
+
+        assert received
+        payload = json.loads(received[-1].data)
+        assert payload["arm"] == "l"
+        assert payload["type"] == "coordinate_state"
+    finally:
+        for node in (peer, driver):
+            if node is not None:
+                executor.remove_node(node)
+                node.destroy_node()
+        executor.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+@requires_ros_action_runtime
+def test_coordinate_state_republish_preserves_latest_verification_result():
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.node import Node
+    from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
+    from std_msgs.msg import String
+
+    rclpy.init()
+    driver = None
+    peer = None
+    executor = SingleThreadedExecutor()
+    received = []
+    try:
+        driver = RealManDriverNode(
+            namespace="l",
+            parameter_overrides=[
+                rclpy.parameter.Parameter("robot_ip", value="127.0.0.1"),
+                rclpy.parameter.Parameter("mock_mode", value=True),
+                rclpy.parameter.Parameter("auto_connect", value=False),
+                rclpy.parameter.Parameter(
+                    "coordinate_state_publish_rate", value=20.0
+                ),
+            ],
+        )
+        driver._publish_coordinate_state(
+            CoordinateOperationResult(
+                success=True,
+                matched=False,
+                tool_matched=True,
+                work_matched=False,
+                api2_status=0,
+                active_name="",
+                expected_tool="tcpgrip",
+                current_tool="tcpgrip",
+                expected_work="cell",
+                current_work="unexpected_work",
+                message="controller work frame does not match the desired profile",
+            )
+        )
+        peer = Node("coordinate_state_result_republish_subscriber")
+        peer.create_subscription(
+            String,
+            "/l/coordinates/state",
+            received.append,
+            QoSProfile(
+                depth=1,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.VOLATILE,
+            ),
+        )
+        executor.add_node(driver)
+        executor.add_node(peer)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not received:
+            executor.spin_once(timeout_sec=0.02)
+
+        assert received
+        payload = json.loads(received[-1].data)
+        assert payload["current_work"] == "unexpected_work"
+        assert payload["expected_work"] == "cell"
+        assert payload["work_matched"] is False
+        assert payload["message"] == (
+            "controller work frame does not match the desired profile"
+        )
+    finally:
+        for node in (peer, driver):
+            if node is not None:
+                executor.remove_node(node)
+                node.destroy_node()
+        executor.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
+@requires_ros_action_runtime
+def test_coordinate_state_publish_rate_must_be_positive():
+    rclpy.init()
+    try:
+        with pytest.raises(
+            ValueError, match="coordinate_state_publish_rate must be positive"
+        ):
+            RealManDriverNode(
+                namespace="l",
+                parameter_overrides=[
+                    rclpy.parameter.Parameter("robot_ip", value="127.0.0.1"),
+                    rclpy.parameter.Parameter("mock_mode", value=True),
+                    rclpy.parameter.Parameter("auto_connect", value=False),
+                    rclpy.parameter.Parameter(
+                        "coordinate_state_publish_rate", value=0.0
+                    ),
+                ],
+            )
+    finally:
         if rclpy.ok():
             rclpy.shutdown()
 

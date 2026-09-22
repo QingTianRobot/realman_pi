@@ -178,8 +178,10 @@ keyboard）、`GRIPPER ONLY`（WORK 均不可用但有健康夹爪）和 `WORK U
 不证明机械臂已经产生物理运动。
 
 驱动以 reliable、transient-local、depth 1 QoS 发布 `/<arm>/coordinates/state`，Web control 和
-`keyboard_control_router` 使用兼容订阅。这样 Web 或行为树晚于驱动启动时仍会收到最近一次 WORK 校验
-结果，不需要依赖再次调用 `coordinates/verify` 才解除页面的 `WORK UNAVAILABLE` 安全门。
+`keyboard_control_router` 使用兼容订阅。驱动还按 `config/ros/realman_driver.yaml` 的
+`coordinate_state_publish_rate`（生产默认 `1.0 Hz`）重发最近一次完整校验结果，保留当前/预期坐标、
+匹配状态和失败详情。这覆盖首个样本早于 DDS endpoint discovery 的启动时序；Web 或行为树晚于驱动启动
+时无需人工再次调用 `coordinates/verify`，即可解除页面的 `WORK UNAVAILABLE` 安全门。
 
 `keyup` 会立即发送该侧更新后的完整集合；松开某一臂的全部速度键只停止该臂。对应臂 WORK 失配时也只
 清空该臂速度键并发送，另一臂、健康夹爪键和活动心跳继续。夹爪离线／报警只清空该侧夹爪键。

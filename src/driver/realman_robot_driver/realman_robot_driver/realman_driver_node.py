@@ -100,6 +100,9 @@ class RealManDriverNode(Node):
             self.declare_parameter("reconnect_interval", 5.0).value
         )
         self.state_publish_rate = float(self.declare_parameter("state_publish_rate", 10.0).value)
+        self.coordinate_state_publish_rate = float(
+            self.declare_parameter("coordinate_state_publish_rate", 1.0).value
+        )
         self.coordinates_config_file = str(
             self.declare_parameter(
                 "coordinates_config_file", _config_path("realman_coordinates.yaml")
@@ -128,6 +131,8 @@ class RealManDriverNode(Node):
             )
         if self.state_publish_rate <= 0.0:
             raise ValueError("state_publish_rate must be positive")
+        if self.coordinate_state_publish_rate <= 0.0:
+            raise ValueError("coordinate_state_publish_rate must be positive")
         if self.reconnect_interval < 0.0:
             raise ValueError("reconnect_interval must not be negative")
         if not self.joint_names or any(not isinstance(name, str) or not name for name in self.joint_names):
@@ -231,6 +236,7 @@ class RealManDriverNode(Node):
                 durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
             ),
         )
+        self._last_coordinate_result: CoordinateOperationResult | None = None
         self.velocity_command_callback_group = MutuallyExclusiveCallbackGroup()
         self.execute_motion_action_server = ActionServer(
             self,
@@ -338,6 +344,10 @@ class RealManDriverNode(Node):
         ]
         period = 1.0 / self.state_publish_rate
         self.state_timer = self.create_timer(period, self._publish_state)
+        self.coordinate_state_timer = self.create_timer(
+            1.0 / self.coordinate_state_publish_rate,
+            self._publish_coordinate_state,
+        )
         self._last_state_error = 0
         self._last_joint_count_error = 0
         self._last_connect_attempt = 0.0
@@ -793,6 +803,10 @@ class RealManDriverNode(Node):
     def _publish_coordinate_state(
         self, result: CoordinateOperationResult | None = None
     ) -> None:
+        if result is not None:
+            self._last_coordinate_result = result
+        else:
+            result = self._last_coordinate_result
         profile = self.coordinate_manager.profiles[self.arm_id]
         motion_allowed = bool(self.coordinate_manager.motion_allowed(self.arm_id))
         tool_name = result.current_tool if result and result.current_tool else self._active_references[ReferenceType.TOOL]

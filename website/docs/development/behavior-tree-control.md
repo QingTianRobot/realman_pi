@@ -43,8 +43,10 @@ Pika 分支后再次进入，才会重新执行准备动作。
 [`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml) 一致。Goal 固定使用
 `CartesianVelocity.Goal.WORK`；BASE 被拒绝，也不会在 WORK 不可用时自动回退到 TOOL。
 `/<arm>/coordinates/state` 使用 reliable、transient-local、depth 1 QoS，驱动保留最近一次校验结果，
-因此晚启动的 Web control 和 `keyboard_control_router` 也能立即恢复 WORK gate；publisher/subscriber
-任一侧改回 volatile 都会破坏这个启动顺序契约。
+并按 `config/ros/realman_driver.yaml` 的 `coordinate_state_publish_rate`（生产默认 `1.0 Hz`）低频重发。
+这同时覆盖控制器连接后首个样本早于 DDS endpoint discovery 的生产启动时序，使晚启动的 Web control 和
+`keyboard_control_router` 无需人工调用 `coordinates/verify` 即可恢复 WORK gate。publisher/subscriber
+任一侧改回 volatile，或移除周期重发，都会破坏这个启动顺序契约。
 
 切换到不同模式时，选择先进入 `SWITCHING` 并选择 `none`。下一 tick 必须激活/运行这个中性分支，
 下一 tick 才选择并激活目标模式；这让 Policy/Pika 不必自行结束即可交接。重选已经 active 的模式会

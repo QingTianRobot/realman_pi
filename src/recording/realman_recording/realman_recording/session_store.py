@@ -174,6 +174,8 @@ class SessionStore:
         summary = payload.get("summary", {})
         if not isinstance(summary, dict) or int(summary.get("write_errors", 0)) != 0:
             raise RuntimeError("recording session has MCAP write errors and cannot be adopted")
+        if int(summary.get("camera_write_errors", 0)) != 0:
+            raise RuntimeError("recording session has camera write errors and cannot be adopted")
         payload.update(
             decision="ADOPTED",
             export={"state": "QUEUED", "requested_realtime_ns": requested_realtime_ns or time.time_ns()},

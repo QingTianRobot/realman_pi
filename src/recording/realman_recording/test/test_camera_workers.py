@@ -83,3 +83,16 @@ def test_archive_stop_waits_for_worker_drain_before_writing_final_index(tmp_path
 
     assert worker.timeouts == [None]
     assert (tmp_path / "media-index.json").is_file()
+
+
+def test_camera_summary_distinguishes_writer_failure_from_lossy_queue_drops():
+    from realman_recording.camera_workers import camera_summary_error_count
+
+    assert camera_summary_error_count({
+        "front": {"state": "stopped", "error": ""},
+        "wrist": {"state": "recording", "error": ""},
+    }) == 0
+    assert camera_summary_error_count({
+        "front": {"state": "error", "error": "1 JPEG write errors"},
+        "wrist": {"state": "stopped", "error": ""},
+    }) == 1

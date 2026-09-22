@@ -91,6 +91,16 @@ def test_adoption_is_atomic_and_rejects_repeat_or_write_errors(tmp_path):
     else:
         raise AssertionError("MCAP write-error session was adopted")
 
+    camera_failed = SessionStore(tmp_path)
+    bad_camera = camera_failed.create({"profile": "camera-failed"})
+    camera_failed.finalize(True, write_errors=0, camera_write_errors=1)
+    try:
+        SessionStore.adopt_final_session(bad_camera.directory)
+    except RuntimeError as error:
+        assert "camera write errors" in str(error)
+    else:
+        raise AssertionError("camera write-error session was adopted")
+
 
 def test_discard_is_atomic_and_excludes_adoption(tmp_path):
     store = SessionStore(tmp_path)

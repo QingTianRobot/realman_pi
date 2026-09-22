@@ -63,6 +63,8 @@ Service 的采用返回表示“导出任务已接受”，不是“数据集已
 
 所有 raw receipt、MCAP record time，以及 session 创建/结束、ADOPT 和导出审计字段都使用 ROS 2 `SYSTEM_TIME` epoch nanoseconds；仅倒计时使用本地单调时钟，不能用于跨传感器或离线数据对齐。
 
+相机 JPEG 有界队列的 `dropped` 是可审计的质量指标，不会阻塞采集；但 JPEG 编码或文件写入的 `errors` 是 durability failure。任一路出现该错误，STOP 会将 session 标记为 `FAILED`，因而不能 ADOPT/export。
+
 `/recording/status` (`RecordingStatus`) 是网页状态的唯一权威来源。倒计时由 recorder 的单调时钟计算，浏览器仅显示它，不能用前端定时器决定结束录制。
 
 网页控制台采用深色工业控制台布局：顶部显示连接与 session 状态，上方为低清相机网格，下方按机械臂展示连接状态与关节值。坐标状态只允许有限的数值字段进入浏览器，非法 JSON、未知字段和非有限值会被丢弃。预览图片按时间戳增量刷新，不会随每次状态快照重复重载；WebSocket 断开时只影响操作台，不影响录制节点。

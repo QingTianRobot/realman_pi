@@ -29,6 +29,17 @@ class PreviewFrame:
     jpeg: bytes
 
 
+def camera_summary_error_count(summary: dict[str, dict[str, str]]) -> int:
+    """Count terminal JPEG writer failures from a persisted/live health summary.
+
+    Queue drops are deliberately loss-aware but do not appear here: they are reported
+    separately in ``media-index.json`` and can be assessed offline.  A writer error,
+    by contrast, means the camera's accepted frame set is not durable and must make a
+    session ineligible for ADOPT.
+    """
+    return sum(1 for value in summary.values() if value.get("state") == "error")
+
+
 def load_camera_sources(node: Any) -> tuple[CameraSource, ...]:
     """Read camera ids and ROS image topics into validated sources.
 

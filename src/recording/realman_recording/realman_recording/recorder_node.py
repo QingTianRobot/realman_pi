@@ -26,7 +26,13 @@ from sensor_msgs.msg import Image
 from realman_recording_msgs.msg import RecordingStatus
 from realman_recording_msgs.srv import ManageRecording as ManageRecordingService
 
-from .camera_workers import CameraSource, RosImageArchive, image_to_jpeg, load_camera_sources
+from .camera_workers import (
+    CameraSource,
+    RosImageArchive,
+    camera_summary_error_count,
+    image_to_jpeg,
+    load_camera_sources,
+)
 from .lerobot_exporter import ExportRequest, LeRobotExporter
 from .kinematics import urdf_joint_limits
 from .lerobot_schema import schema_from_parameters
@@ -539,8 +545,12 @@ class RecordingRecorderNode(Node):
         archive_stats = archive.stop() if archive is not None else None
         camera_summary = camera_worker.stop() if camera_worker is not None else {}
         archive_write_errors = archive_stats.write_errors if archive_stats else 1
-        final_success = success and archive_write_errors == 0
-        final_reason = reason if final_success else f"{reason}; MCAP write/close errors: {archive_write_errors}"
+        camera_write_errors = camera_summary_error_count(camera_summary)
+        final_success = success and archive_write_errors == 0 and camera_write_errors == 0
+        final_reason = reason if final_success else (
+            f"{reason}; MCAP write/close errors: {archive_write_errors}; "
+            f"camera JPEG write errors: {camera_write_errors}"
+        )
         directory = store.session.directory
         store.finalize(
             final_success,
@@ -550,6 +560,7 @@ class RecordingRecorderNode(Node):
             accepted_samples=archive_stats.accepted if archive_stats else 0,
             dropped_samples=archive_stats.dropped if archive_stats else 0,
             write_errors=archive_write_errors,
+            camera_write_errors=camera_write_errors,
             cameras=camera_summary,
         )
         with self._lock:

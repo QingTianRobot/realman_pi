@@ -138,7 +138,7 @@ Service：`/recording/manage`，类型：`realman_recording_msgs/srv/ManageRecor
 └── export/lerobot/             # ADOPT 后异步转换目标，当前仍后置
 ```
 
-manifest 至少包含 `schema_version`、`session_id`、`metadata.profile/task`、起止时间锚点、文件位置、最终 summary、`decision` 和 `export` 状态。`accepted_samples` 表示成功写给 writer 的样本；`enqueued_samples`/`dropped_samples` 用于区分队列背压和实际落盘失败。
+manifest 至少包含 `schema_version`、`session_id`、`metadata.profile/task`、起止时间锚点、文件位置、最终 summary、`decision` 和 `export` 状态。`accepted_samples` 表示成功写给 writer 的样本；`enqueued_samples`/`dropped_samples` 用于区分队列背压和实际落盘失败。JPEG 队列 drop 只记录质量统计；但 `camera_write_errors>0` 表示已接收帧未能可靠落盘，session 必须进入 `FAILED`，不能 ADOPT。
 
 LeRobot 导出 receipt 会原样引用 `media-index.json` 的每路相机
 `accepted/dropped/errors` 统计；旧 session 没有该统计时 receipt 标记为

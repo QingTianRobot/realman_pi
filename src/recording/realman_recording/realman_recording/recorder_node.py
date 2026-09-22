@@ -197,7 +197,7 @@ class RecordingRecorderNode(Node):
             if request.command == ManageRecordingService.Request.PREPARE and self._last_preflight:
                 response.message = self._last_preflight.summary
             elif request.command == ManageRecordingService.Request.STOP:
-                response.message = "recording stopped; LeRobot conversion started"
+                response.message = "recording stopped; raw session is READY for ADOPT"
             else:
                 response.message = "accepted"
         except Exception as error:  # noqa: BLE001 - ROS service callers need a stable error payload

@@ -626,25 +626,12 @@ class RecordingRecorderNode(Node):
         """Mark a clean finalized session adopted and queue its exporter worker."""
         directory = self._session_directory(session_id)
         with self._decision_lock:
-            manifest = SessionStore.update_final_manifest(directory)
-            if manifest.get("state") != SessionState.READY.value:
-                raise RuntimeError("only READY recording sessions can be adopted")
-            if manifest.get("decision") != "PENDING":
-                raise RuntimeError("recording session was already adopted or discarded")
-            summary = manifest.get("summary", {})
-            if not isinstance(summary, dict) or int(summary.get("write_errors", 0)) != 0:
-                raise RuntimeError("recording session has MCAP write errors and cannot be adopted")
+            SessionStore.adopt_final_session(directory)
         self._queue_export(directory, session_id)
         return session_id
 
     def _queue_export(self, directory: Path, session_id: str) -> None:
-        """Mark a finalized session adopted and start its LeRobot export worker."""
-        with self._decision_lock:
-            SessionStore.update_final_manifest(
-                directory,
-                decision="ADOPTED",
-                export={"state": "QUEUED", "requested_realtime_ns": time.time_ns()},
-            )
+        """Start the worker after ``adopt_final_session`` has durably queued it."""
         threading.Thread(
             target=self._export_adopted_session,
             args=(directory,),
@@ -656,16 +643,7 @@ class RecordingRecorderNode(Node):
         """Logically discard a finalized session while retaining raw artifacts for audit."""
         directory = self._session_directory(session_id)
         with self._decision_lock:
-            manifest = SessionStore.update_final_manifest(directory)
-            if manifest.get("state") != SessionState.READY.value:
-                raise RuntimeError("only READY recording sessions can be discarded")
-            if manifest.get("decision") != "PENDING":
-                raise RuntimeError("recording session was already adopted or discarded")
-            SessionStore.update_final_manifest(
-                directory,
-                decision="DISCARDED",
-                discarded_realtime_ns=time.time_ns(),
-            )
+            SessionStore.discard_final_session(directory)
         return session_id
 
     def _export_adopted_session(self, directory: Path) -> None:

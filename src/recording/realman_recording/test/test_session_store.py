@@ -43,3 +43,42 @@ def test_active_session_can_persist_urdf_snapshot_provenance(tmp_path):
     store.update_metadata(canonical={"urdf_snapshot": "metadata/robot.urdf", "urdf_sha256": "abc"})
     manifest = json.loads((session.directory / "manifest.partial.json").read_text(encoding="utf-8"))
     assert manifest["metadata"]["canonical"]["urdf_snapshot"] == "metadata/robot.urdf"
+
+
+def test_adoption_is_atomic_and_rejects_repeat_or_write_errors(tmp_path):
+    store = SessionStore(tmp_path)
+    session = store.create({"profile": "default"})
+    store.finalize(True, write_errors=0)
+    adopted = SessionStore.adopt_final_session(session.directory)
+    assert adopted["decision"] == "ADOPTED"
+    assert adopted["export"]["state"] == "QUEUED"
+    try:
+        SessionStore.adopt_final_session(session.directory)
+    except RuntimeError as error:
+        assert "already" in str(error)
+    else:
+        raise AssertionError("repeated ADOPT was accepted")
+
+    rejected = SessionStore(tmp_path)
+    bad = rejected.create({"profile": "bad"})
+    rejected.finalize(True, write_errors=1)
+    try:
+        SessionStore.adopt_final_session(bad.directory)
+    except RuntimeError as error:
+        assert "write errors" in str(error)
+    else:
+        raise AssertionError("MCAP write-error session was adopted")
+
+
+def test_discard_is_atomic_and_excludes_adoption(tmp_path):
+    store = SessionStore(tmp_path)
+    session = store.create({"profile": "default"})
+    store.finalize(True, write_errors=0)
+    discarded = SessionStore.discard_final_session(session.directory, discarded_realtime_ns=123)
+    assert discarded["decision"] == "DISCARDED"
+    try:
+        SessionStore.adopt_final_session(session.directory)
+    except RuntimeError as error:
+        assert "already" in str(error)
+    else:
+        raise AssertionError("discarded session was adopted")

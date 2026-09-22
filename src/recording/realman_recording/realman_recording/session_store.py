@@ -152,3 +152,42 @@ class SessionStore:
         payload.update(updates)
         atomic_json_write(final, payload)
         return payload
+
+    @staticmethod
+    def adopt_final_session(directory: str | Path, *, requested_realtime_ns: int | None = None) -> dict[str, Any]:
+        """Atomically make one clean READY session eligible for asynchronous export."""
+        final = Path(directory).resolve() / "manifest.json"
+        if not final.is_file():
+            raise ValueError("recording session has no finalized manifest.json")
+        payload = json.loads(final.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("state") != SessionState.READY.value:
+            raise RuntimeError("only READY recording sessions can be adopted")
+        if payload.get("decision") != "PENDING":
+            raise RuntimeError("recording session was already adopted or discarded")
+        summary = payload.get("summary", {})
+        if not isinstance(summary, dict) or int(summary.get("write_errors", 0)) != 0:
+            raise RuntimeError("recording session has MCAP write errors and cannot be adopted")
+        payload.update(
+            decision="ADOPTED",
+            export={"state": "QUEUED", "requested_realtime_ns": requested_realtime_ns or time.time_ns()},
+        )
+        atomic_json_write(final, payload)
+        return payload
+
+    @staticmethod
+    def discard_final_session(directory: str | Path, *, discarded_realtime_ns: int | None = None) -> dict[str, Any]:
+        """Atomically discard one clean READY session without deleting raw artifacts."""
+        final = Path(directory).resolve() / "manifest.json"
+        if not final.is_file():
+            raise ValueError("recording session has no finalized manifest.json")
+        payload = json.loads(final.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("state") != SessionState.READY.value:
+            raise RuntimeError("only READY recording sessions can be discarded")
+        if payload.get("decision") != "PENDING":
+            raise RuntimeError("recording session was already adopted or discarded")
+        payload.update(
+            decision="DISCARDED",
+            discarded_realtime_ns=discarded_realtime_ns or time.time_ns(),
+        )
+        atomic_json_write(final, payload)
+        return payload

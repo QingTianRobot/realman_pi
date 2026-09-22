@@ -54,6 +54,8 @@ canvas { display: block; width: 100%; height: 100%; }
 .panel-section { padding: 16px; }
 .input-mode-card[hidden] { display: none; }
 .keyboard-control-card[hidden] { display: none; }
+.keyboard-control-card { scroll-margin-top: 84px; transition: border-color .2s ease, box-shadow .2s ease; }
+.keyboard-control-card.keyboard-guide-active { border-color: #65d2c3; box-shadow: 0 0 0 2px rgba(101, 210, 195, .28), 0 0 24px rgba(101, 210, 195, .16); }
 .input-mode-body { display: grid; gap: 10px; }
 .input-mode-body label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 1.25fr); gap: 10px; align-items: center; color: #8fa6a9; font-size: 10px; }
 .input-mode-body select { width: 100%; min-width: 0; padding: 7px; font-size: 11px; }

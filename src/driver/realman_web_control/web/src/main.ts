@@ -271,6 +271,8 @@ let velocityTimer = 0;
 const keyboardPressed: Record<KeyboardArmId, Set<string>> = { l: new Set(), r: new Set() };
 const keyboardSequence: Record<KeyboardArmId, number> = { l: 0, r: 0 };
 let keyboardHeartbeat = 0;
+let keyboardGuideEpoch: number | undefined;
+let keyboardGuideTimer = 0;
 const coordinateStates: Partial<Record<ArmId, CoordinateState>> = {};
 const connectionStates: Partial<Record<ArmId, boolean>> = {};
 const currentJointsByArm: Partial<Record<ArmId, number[]>> = {};
@@ -411,6 +413,17 @@ function renderKeyboardControl() {
   keyboardControlState.textContent = label;
   keyboardControlState.className = `mini-state keyboard-${label.toLowerCase().replaceAll(" ", "-")}`;
 }
+function guideToKeyboardControl() {
+  if (!keyboardModeActive() || inputModeState?.epoch === keyboardGuideEpoch || keyboardControlCard.hidden) return;
+  keyboardGuideEpoch = inputModeState!.epoch;
+  keyboardControlCard.scrollIntoView({ behavior: "smooth", block: "start" });
+  keyboardControlCard.classList.add("keyboard-guide-active");
+  if (keyboardGuideTimer) window.clearTimeout(keyboardGuideTimer);
+  keyboardGuideTimer = window.setTimeout(() => {
+    keyboardControlCard.classList.remove("keyboard-guide-active");
+    keyboardGuideTimer = 0;
+  }, 1800);
+}
 function updateInputModeSelectionDisabled() {
   inputModeSelect.disabled = !canWrite() || Boolean(activeInputModeRequest) || inputModeState?.phase === "SWITCHING" ||
     !(inputModeCatalog?.some((option) => option.id !== "web" && option.selectable));
@@ -442,6 +455,7 @@ function renderInputModeCard() {
   inputModeDetail.textContent = state?.detail || inputModeResultDetail || "等待输入模式状态";
   updateInputModeSelectionDisabled();
   reconcileKeyboardControl();
+  guideToKeyboardControl();
 }
 function finishInputModeRequestIfTerminal() {
   if (!activeInputModeRequest || activeInputModeExecutorRequest === undefined || !inputModeState ||

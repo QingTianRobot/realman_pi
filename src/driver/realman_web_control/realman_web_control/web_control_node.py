@@ -310,7 +310,11 @@ class WebControlNode(Node):
                     String,
                     f"/{arm}/coordinates/state",
                     lambda message, selected=arm: self._coordinate_state_message(selected, message),
-                    10,
+                    QoSProfile(
+                        depth=1,
+                        reliability=ReliabilityPolicy.RELIABLE,
+                        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                    ),
                     callback_group=self._callback_group,
                 )
             )

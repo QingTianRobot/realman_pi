@@ -1,8 +1,10 @@
 import ast
 import importlib
 import importlib.util
+import json
 import math
 from pathlib import Path
+import time
 from types import SimpleNamespace
 
 import pytest
@@ -683,6 +685,59 @@ def test_velocity_command_uses_dedicated_serial_qos_and_freshness_boundary():
     assert "lifespan" in source
     assert "velocity_watchdog_ms" in source
     assert "header.stamp" in source or "stamp" in source
+
+
+@requires_ros_action_runtime
+def test_coordinate_state_replays_latest_sample_to_late_transient_subscriber():
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.node import Node
+    from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
+    from std_msgs.msg import String
+
+    rclpy.init()
+    driver = None
+    peer = None
+    executor = SingleThreadedExecutor()
+    received = []
+    try:
+        driver = RealManDriverNode(
+            namespace="l",
+            parameter_overrides=[
+                rclpy.parameter.Parameter("robot_ip", value="127.0.0.1"),
+                rclpy.parameter.Parameter("mock_mode", value=True),
+                rclpy.parameter.Parameter("auto_connect", value=False),
+            ],
+        )
+        driver._publish_coordinate_state()
+        peer = Node("late_coordinate_state_subscriber")
+        peer.create_subscription(
+            String,
+            "/l/coordinates/state",
+            received.append,
+            QoSProfile(
+                depth=1,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            ),
+        )
+        executor.add_node(driver)
+        executor.add_node(peer)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not received:
+            executor.spin_once(timeout_sec=0.02)
+
+        assert received
+        payload = json.loads(received[-1].data)
+        assert payload["arm"] == "l"
+        assert payload["type"] == "coordinate_state"
+    finally:
+        for node in (peer, driver):
+            if node is not None:
+                executor.remove_node(node)
+                node.destroy_node()
+        executor.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
 
 
 @requires_ros_action_runtime

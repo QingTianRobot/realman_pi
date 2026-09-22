@@ -123,7 +123,9 @@ Action 取消也会丢弃匹配 arm/action 且由该浏览器拥有的排队请�
 ### 双臂键盘末端速度与夹爪
 
 只有动态目录包含可选的 `keyboard` 时，8765 页面才显示“双臂键盘速度与夹爪”卡片；切换状态必须达到
-`ACTIVE/keyboard` 后才捕获运动键。浏览器使用物理位置稳定的 `KeyboardEvent.code`，不使用会受输入法、
+`ACTIVE/keyboard` 后才捕获运动键。每个新的 keyboard `epoch` 首次进入活动态时，页面会自动滚动到该
+说明卡片并短暂高亮；重复状态消息不会反复跳动，刷新页面后收到当前活动态也会引导一次。浏览器使用物理
+位置稳定的 `KeyboardEvent.code`，不使用会受输入法、
 Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`select` 和 `contenteditable` 中的输入。
 自动重复、输入法组合事件，以及带 Ctrl/Alt/Meta/Shift 的快捷键不触发新控制输入。
 左右臂按键完全独立，可同时按住：
@@ -174,6 +176,10 @@ Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`s
 `READY`（活动模式下至少一侧 WORK 可用且没有速度键按下）、`MOVING`（浏览器存在速度键）、`RELEASED`（未处于活动
 keyboard）、`GRIPPER ONLY`（WORK 均不可用但有健康夹爪）和 `WORK UNAVAILABLE`（WORK 均不可用且无健康夹爪）。这些标签只描述浏览器输入状态，
 不证明机械臂已经产生物理运动。
+
+驱动以 reliable、transient-local、depth 1 QoS 发布 `/<arm>/coordinates/state`，Web control 和
+`keyboard_control_router` 使用兼容订阅。这样 Web 或行为树晚于驱动启动时仍会收到最近一次 WORK 校验
+结果，不需要依赖再次调用 `coordinates/verify` 才解除页面的 `WORK UNAVAILABLE` 安全门。
 
 `keyup` 会立即发送该侧更新后的完整集合；松开某一臂的全部速度键只停止该臂。对应臂 WORK 失配时也只
 清空该臂速度键并发送，另一臂、健康夹爪键和活动心跳继续。夹爪离线／报警只清空该侧夹爪键。

@@ -767,6 +767,7 @@ def test_real_node_discovers_services_and_transient_state_using_loaded_timing(mo
     import yaml
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+    from std_msgs.msg import String
     import realman_web_control.web_control_node as module
 
     class Server(Events):
@@ -798,6 +799,8 @@ def test_real_node_discovers_services_and_transient_state_using_loaded_timing(mo
 
     publisher = router.create_publisher(InputModeState, "/realman_bt_executor/input_mode_state", QoSProfile(
         depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+    coordinate_publisher = router.create_publisher(String, "/l/coordinates/state", QoSProfile(
+        depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
     router.create_service(ListInputModes, "/realman_bt_executor/list_input_modes", list_modes)
 
     def select_mode(request, response):
@@ -810,6 +813,11 @@ def test_real_node_discovers_services_and_transient_state_using_loaded_timing(mo
     router.create_service(SelectInputMode, "/realman_bt_executor/select_input_mode", select_mode)
     # Publish before subscription: only compatible transient-local QoS receives it.
     publisher.publish(state(40))
+    coordinate_publisher.publish(String(data=json.dumps({
+        "type": "coordinate_state", "arm": "l", "motion_allowed": True,
+        "work_matched": True, "current_work": "cell", "expected_work": "cell",
+        "work": {"name": "cell", "frame_id": "l/work/cell"},
+    })))
     web_node = None
     executor = SingleThreadedExecutor()
     try:
@@ -817,13 +825,15 @@ def test_real_node_discovers_services_and_transient_state_using_loaded_timing(mo
         executor.add_node(router)
         executor.add_node(web_node)
         deadline = time.monotonic() + 4.0
-        while time.monotonic() < deadline and not any(
-            event["type"] == "input_mode_state" for event, _ in web_node._server.events
-        ):
+        while time.monotonic() < deadline and not all((
+            any(event["type"] == "input_mode_state" for event, _ in web_node._server.events),
+            any(event["type"] == "coordinate_state" for event, _ in web_node._server.events),
+        )):
             executor.spin_once(timeout_sec=0.02)
         assert web_node._mode_discovery_timer.timer_period_ns == 125_000_000
         assert web_node._input_modes.available
         assert any(event.get("active_mode") == "web" for event, _ in web_node._server.events)
+        assert web_node._coordinate_state["l"]["motion_allowed"] is True
         web_node._dispatch("browser", {"type": "select_input_mode", "request_id": "pick-51", "mode_id": "policy"})
         while time.monotonic() < deadline and not any(
             event["type"] == "input_mode_result" for event, _ in web_node._server.events

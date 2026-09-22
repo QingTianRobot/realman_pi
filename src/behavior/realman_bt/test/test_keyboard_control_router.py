@@ -74,6 +74,58 @@ def test_profile_parser_rejects_base_or_missing_default_work():
         )
 
 
+def test_late_router_receives_latest_transient_coordinate_state():
+    from rclpy.executors import SingleThreadedExecutor
+    from rclpy.node import Node
+    from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
+    from std_msgs.msg import String
+    import rclpy
+
+    rclpy.init(args=[
+        "--ros-args",
+        "-p", "coordinate_references:=['l|default_work|1|cell|l/work/cell','r|default_work|1|cell|r/work/cell']",
+        "-p", "cartesian_velocity_profiles:=['l|20|100|0.05|0.25|0.1|0.5|10|2','r|20|100|0.05|0.25|0.1|0.5|10|2']",
+    ])
+    peer = Node("coordinate_state_replay_peer")
+    publisher = peer.create_publisher(
+        String,
+        "/l/coordinates/state",
+        QoSProfile(
+            depth=1,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+        ),
+    )
+    publisher.publish(String(data=json.dumps({
+        "motion_allowed": True,
+        "work_matched": True,
+        "current_work": "cell",
+        "expected_work": "cell",
+        "work": {"name": "cell", "frame_id": "l/work/cell"},
+    })))
+    router = None
+    executor = SingleThreadedExecutor()
+    try:
+        from keyboard_control_router import KeyboardControlRouter
+
+        router = KeyboardControlRouter()
+        executor.add_node(peer)
+        executor.add_node(router)
+        deadline = time.monotonic() + 3.0
+        while time.monotonic() < deadline and not router._arms["l"].work_available:
+            executor.spin_once(timeout_sec=0.02)
+
+        assert router._arms["l"].work_available is True
+    finally:
+        for node in (router, peer):
+            if node is not None:
+                executor.remove_node(node)
+                node.destroy_node()
+        executor.shutdown()
+        if rclpy.ok():
+            rclpy.shutdown()
+
+
 def test_late_accepted_goal_is_cancelled_after_mode_loss():
     from keyboard_control_router import KeyboardControlRouter, _ArmProfile, _ArmState
 

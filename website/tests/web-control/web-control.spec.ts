@@ -661,6 +661,36 @@ test("captures independent l/r physical keys only while keyboard is active", asy
   await page.keyboard.up("i");
 });
 
+test("guides the operator to keyboard instructions once per active epoch", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).__keyboardGuideScrolls = 0;
+    Element.prototype.scrollIntoView = function () {
+      if ((this as HTMLElement).id === "keyboard-control-card") {
+        (window as any).__keyboardGuideScrolls += 1;
+      }
+    };
+  });
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list", available: true,
+    modes: [{ id: "keyboard", label: "Web / 键盘速度控制", selectable: true }],
+  });
+  const active = {
+    type: "input_mode_state", requested_mode: "keyboard", selected_mode: "keyboard",
+    active_mode: "keyboard", phase: "ACTIVE", request_id: 61, epoch: 10, detail: "",
+  };
+  await emitWebSocketEvent(page, active);
+
+  await expect.poll(() => page.evaluate(() => (window as any).__keyboardGuideScrolls)).toBe(1);
+  await expect(page.locator("#keyboard-control-card")).toHaveClass(/keyboard-guide-active/);
+
+  await emitWebSocketEvent(page, active);
+  await expect.poll(() => page.evaluate(() => (window as any).__keyboardGuideScrolls)).toBe(1);
+
+  await emitWebSocketEvent(page, { ...active, request_id: 62, epoch: 11 });
+  await expect.poll(() => page.evaluate(() => (window as any).__keyboardGuideScrolls)).toBe(2);
+});
+
 async function activateKeyboardWithGrippers(page: any) {
   await page.goto("/");
   await expect(page.locator(".fleet-chip[data-arm='l']")).toContainText("ONLINE");

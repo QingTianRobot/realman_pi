@@ -16,7 +16,12 @@ from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallb
 from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import QoSDurabilityPolicy, QoSHistoryPolicy, QoSProfile
+from rclpy.qos import (
+    QoSDurabilityPolicy,
+    QoSHistoryPolicy,
+    QoSProfile,
+    QoSReliabilityPolicy,
+)
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from realman_msgs.action import CartesianPose, CartesianVelocity, ExecuteMotion, ExecuteTrajectory
 from realman_msgs.srv import (
@@ -219,7 +224,12 @@ class RealManDriverNode(Node):
         self._coordinate_state_publisher = self.create_publisher(
             String,
             f"/{self.arm_id}/coordinates/state",
-            10,
+            QoSProfile(
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=1,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            ),
         )
         self.velocity_command_callback_group = MutuallyExclusiveCallbackGroup()
         self.execute_motion_action_server = ActionServer(

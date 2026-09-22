@@ -16,7 +16,7 @@ from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
 from rclpy.parameter import Parameter
-from rclpy.qos import QoSDurabilityPolicy, QoSProfile
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from realman_msgs.action import CartesianVelocity
 from realman_msgs.msg import InputModeState
 from std_msgs.msg import Bool, Float32, Int32, String
@@ -181,7 +181,11 @@ class KeyboardControlRouter(Node):
                 String,
                 f"/{arm}/coordinates/state",
                 lambda message, selected=arm: self._coordinate_state(selected, message),
-                1,
+                QoSProfile(
+                    depth=1,
+                    reliability=QoSReliabilityPolicy.RELIABLE,
+                    durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+                ),
             )
         period = min(profile.control_period_ms for profile in profiles.values())
         self.create_timer(period / 1000.0, self._reconcile)

@@ -108,7 +108,7 @@ Compose 将仓库 `recordings/` 挂载为容器 `/data/realman-recordings`，同
 3. `web_server.py` 与 `static/index.html`（已接入）：预览使用独立 endpoint；只读 Three.js/URDF 三臂 viewer 已实现（参考 web_control 的 urdf-loader 方案，把 `/l|m|r/joint_states` 实时套到 URDF 模型）。它只提供 `/api/layout`、`/preview/<camera>.jpg`、`/models/*` 与 `/ws`，不提供 dataset/replay API；前端源在 `web/`，经 `npm run build:recording`（Vite，`config/recording/vite.config.mjs`）构建到 `static/`。
 4. `lerobot_exporter.py`：ADOPT 后在 ROS executor 外读取 MCAP/JPEG，以配置的 SYSTEM_TIME 网格对齐，使用 `lerobot==0.6.1` 追加 canonical v3 episode。它保存关节位置/派生速度、URDF FK EE pose/velocity、夹爪位置、真实 Cartesian command 和 quality；不会把 π0.5 的 state/action 向量当作原始事实。SDK 读回仍需容器验证。
 5. `replay.py`（已并入 `realman_recording` 包）：Rerun 从 receipt 指定的 canonical LeRobot 单 episode 读取低维数据和视频，而不是回退 raw MCAP/JPEG；它展示 canonical field，不假设某一模型的 state/action layout。
-6. 待完成集成验证：真实相机、磁盘满、WebSocket 慢客户端、暂停/恢复、崩溃恢复、Service adopt/discard 和 LeRobot 读回。
+6. 待完成集成验证：真实相机、磁盘满、WebSocket 慢客户端、STOP 收尾/崩溃恢复、Service adopt/discard 和 LeRobot 读回。
 
 ## LeRobot 对齐策略（以图像为基准）
 
@@ -116,9 +116,9 @@ Compose 将仓库 `recordings/` 挂载为容器 `/data/realman-recordings`，同
 
 | 数据种类 | 典型频率 | 对齐策略 |
 | --- | --- | --- |
-| 图像（RGB/Depth） | 30–60 Hz | 基准（anchor），导出帧时间轴 |
-| 机械臂（State/Action） | 100–1000 Hz | 线性插值；仅在相邻样本间隔不超过 `max_gap_ns` 时允许。 |
-| 夹爪（Gripper） | 20–100 Hz | 开关量默认 `FORWARD_FILL`（最后一个因果状态）；可显式选 `NEAREST`；连续力控夹爪用线性插值。 |
+| 图像（RGB） | 每路 15 Hz（当前配置） | 基准（anchor），导出帧时间轴；四路相机不会合并成 60 Hz。 |
+| 机械臂（State/Action） | 约 10 Hz（当前驱动） | 线性插值；仅在相邻样本间隔不超过 `max_gap_ns` 时允许。 |
+| 夹爪（Gripper） | 约 20 Hz（当前驱动） | 开关量默认 `FORWARD_FILL`（最后一个因果状态）；可显式选 `NEAREST`；连续力控夹爪用线性插值。 |
 
 所有 anchor 和样本时间戳均为 ROS 2 `SYSTEM_TIME` wall-time 纳秒，必须非空且严格递增；重复、乱序、非整数时间戳会拒绝导出。线性流要求每个样本具有相同的有限数值维度，避免关节向量静默截断。`max_gap_ns` 由 exporter 按数据流配置：超过间隔的插值或保持会失败，调用方必须舍弃该图像帧或把它显式标为缺失，而不能伪造训练观测。
 

@@ -13,27 +13,8 @@
   <main class="shell">
     <header class="topbar"><div class="brand"><div class="brand-mark">RM</div><div><h1>RealMan 数据录制</h1><small>只读监控 · Read-only monitoring</small></div></div><div id="connection" class="connection"><i class="dot"></i><span>WebSocket 未连接</span></div></header>
 
-    <nav class="tabs">
-      <button class="tab active" data-tab="record">录制</button>
-      <button class="tab" data-tab="replay">回放</button>
-    </nav>
-
-    <!-- 录制 tab -->
-    <section id="tab-record">
       <section class="status-hero"><div class="status-title"><i id="status-pulse" class="status-pulse"></i><div><div class="eyebrow">Session status</div><h2 id="recording">等待设备数据</h2></div></div><div class="hero-meta"><div class="metric"><strong id="elapsed">0.0s</strong><span>已录制</span></div><div class="metric"><strong id="remaining">—</strong><span>剩余时间</span></div><div class="metric"><strong id="dropped">0</strong><span>丢样本</span></div></div></section>
       <section class="panel" id="export-panel" style="display:none;margin-bottom:18px"><div class="panel-head"><h3>LeRobot 转换</h3><span id="export-state" class="count">等待录制结束</span></div><div class="export-bar"><div class="track"><div id="export-progress" class="fill"></div></div><div id="export-dir" class="dir"></div></div></section>
-    </section>
-
-    <!-- 回放 tab -->
-    <section id="tab-replay" style="display:none">
-      <section class="panel" style="margin-bottom:18px"><div class="panel-head"><h3>LeRobot 回放</h3><span id="replay-count" class="count">未选择数据集</span></div><div class="replay-controls">
-        <select id="replay-dataset"><option value="">— 选择已完成的数据集 —</option></select>
-        <button id="replay-exit" style="display:none">退出回放</button>
-        <button id="replay-play" style="display:none">▶ 播放</button>
-        <input type="range" id="replay-slider" min="0" max="0" value="0" step="1">
-        <span id="replay-frame-label" class="frame-label">— / —</span>
-      </div></section>
-    </section>
 
     <div class="layout grid-stack">
       <div class="grid-stack-item" gs-w="12" gs-h="8" gs-min-h="5"><section class="panel grid-stack-item-content" style="display:flex;flex-direction:column"><div class="panel-head"><h3>三臂 3D 姿态</h3><span class="count">URDF 实时关节</span></div><div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div></div><div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span>ROS 2 SYSTEM_TIME</span></div></section></div>

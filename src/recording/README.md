@@ -166,7 +166,7 @@ python3 -m realman_recording.replay \
 
 回放器职责：验证 session 的 `decision=ADOPTED`、`export.state=SUCCEEDED` 与 `export/lerobot/` 存在；随后读取固定版本 LeRobot dataset 的 episode/frame、state/action 和视频字段，以其数据集时间轴写入 Rerun。原始 `state.mcap` 与 `videos/` 仅供导出和审计，正式回放绝不回退读取它们。
 
-Rerun 的实时 adapter 可以保留用于调试，但默认关闭；离线 replay 才是正式的数据分析入口。
+Rerun 的实时 adapter 可以保留用于调试，但默认关闭；离线 replay 才是正式的数据分析入口。Web 仪表盘没有 dataset/replay API 或回放按钮，只负责实时只读展示。
 
 ## 9. 实施计划（按优先级）
 

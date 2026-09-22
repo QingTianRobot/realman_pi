@@ -28,7 +28,7 @@ recording_recorder ───────► sessions/<id>/state.mcap
         └── recording/status（只读）◄── recording_web_bridge ◄── 浏览器（只读展示）
 上游系统 ──► recording/manage Service ──► recording_recorder
 
-ROS CompressedImage ──► bounded JPEG archive ──► videos/
+ROS Image ──► bounded JPEG archive ──► videos/
    └─────► independent lossy preview ──► /preview/<camera>.jpg ──► 浏览器
 ```
 
@@ -36,7 +36,7 @@ ROS CompressedImage ──► bounded JPEG archive ──► videos/
 
 录制可选配置 `calibration_snapshot_path` 指向已解算的相机标定结果。配置后，START 会将该文件复制入 session metadata 并写入 SHA-256/version；未配置时 metadata 明确标为 `UNAVAILABLE`，不会把占位内参/外参当成真实几何数据。
 
-网页三维部分后续应只提取 `realman_web_control` 已有的 Three.js/URDF 实时关节模型；不得带入运动控制按钮、动作协议或 SDK 调用。
+网页三维部分只提取 `realman_web_control` 的 Three.js/URDF 实时关节模型；不得带入运动控制按钮、动作协议、SDK 调用或历史数据回放。Web bridge 仅提供实时 `/api/layout`、`/preview/<camera>.jpg`、`/models/*` 和 `/ws`；不存在 `/api/lerobot*` 或 `replay.json` Web API。正式离线回放统一执行 `python3 -m realman_recording.replay --session <session_dir>`，由 Rerun 读取成功导出的 canonical LeRobot episode。
 
 ## ROS 接口
 
@@ -103,8 +103,8 @@ Compose 将仓库 `recordings/` 挂载为容器 `/data/realman-recordings`，同
 下列位置已定义了函数边界与异常约束，具体实现应直接填入相应 `# ai TODO`：
 
 1. `state_archive.py`（已接入）：用 `rosbag2_py` 的 `SequentialWriter` 以 `storage_id="mcap"` 建 topic、序列化消息并在收尾时关闭 writer；bag 记录时间取 receipt wall-clock 纳秒。session manifest 的成对 wall/monotonic 起始锚点供导出换算媒体时间轴；没有 `header.stamp` 的话题只可使用 receipt 时间。
-2. `camera_workers.py`（已接入）：每路相机独立 ffmpeg 分段录制；暂停产生媒体间隙；低清预览使用另一个限 FPS、限分辨率、只保留最新 JPEG 的 worker。
-3. `web_server.py` 与 `static/index.html`（已接入）：预览使用独立 endpoint；只读 Three.js/URDF 三臂 viewer 已实现（参考 web_control 的 urdf-loader 方案，把 `/l|m|r/joint_states` 实时套到 URDF 模型）。`/api/layout` 与 `/models` 由 `web_server.py` 提供，前端源在 `web/`，经 `npm run build:recording`（Vite，`config/recording/vite.config.mjs`）构建到 `static/`。
+2. `camera_workers.py`（已接入）：每路 ROS `Image` 在回调中压缩为 JPEG 后进入独立有界落盘 worker；暂停产生媒体间隙并写入 `media-index.json`。低清预览使用另一个限 FPS、限分辨率、只保留最新 JPEG 的 worker。遗留 RTSP/ffmpeg helper 仅用于迁移，不是 recorder 的运行路径。
+3. `web_server.py` 与 `static/index.html`（已接入）：预览使用独立 endpoint；只读 Three.js/URDF 三臂 viewer 已实现（参考 web_control 的 urdf-loader 方案，把 `/l|m|r/joint_states` 实时套到 URDF 模型）。它只提供 `/api/layout`、`/preview/<camera>.jpg`、`/models/*` 与 `/ws`，不提供 dataset/replay API；前端源在 `web/`，经 `npm run build:recording`（Vite，`config/recording/vite.config.mjs`）构建到 `static/`。
 4. `lerobot_exporter.py`：ADOPT 后在 ROS executor 外读取 MCAP/JPEG，以固定 15Hz SYSTEM_TIME 网格对齐，使用 `lerobot==0.6.1` 追加 canonical v3 episode。它保存关节位置/派生速度、URDF FK EE pose/velocity、夹爪位置、真实 Cartesian command 和 quality；不会把 π0.5 的 state/action 向量当作原始事实。
 5. `replay.py`（已并入 `realman_recording` 包）：Rerun 从 receipt 指定的 canonical LeRobot 单 episode 读取低维数据和视频，而不是回退 raw MCAP/JPEG；它展示 canonical field，不假设某一模型的 state/action layout。
 6. 完成后补充真实相机、磁盘满、WebSocket 慢客户端、暂停/恢复、崩溃恢复、Service adopt/discard 和 LeRobot 读回的端到端测试。

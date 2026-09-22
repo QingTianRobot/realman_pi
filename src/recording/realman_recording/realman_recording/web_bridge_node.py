@@ -44,7 +44,6 @@ class RecordingWebBridgeNode(Node):
         self.declare_parameter("description_root", description_root)
         self.declare_parameter("bind_host", "127.0.0.1")
         self.declare_parameter("port", 8770)
-        self.declare_parameter("lerobot_export_dir", "/data/realman-recordings/lerobot")
         self.declare_parameter("web_state_hz", 10.0)
         self.declare_parameter("rerun_enabled", False)
         self.declare_parameter("rerun_hz", 10.0)
@@ -131,7 +130,6 @@ class RecordingWebBridgeNode(Node):
             static_root=str(self.get_parameter("static_root").value),
             manifest=self._manifest,
             description_root=self.get_parameter("description_root").value,
-            lerobot_root=self.get_parameter("lerobot_export_dir").value,
             logger=self.get_logger(),
         )
         self._server.start()

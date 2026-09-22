@@ -7,32 +7,9 @@ are dropped rather than allowed to accumulate a durable-data backlog.
 from __future__ import annotations
 
 import asyncio
-import json
 import threading
 from pathlib import Path
 from typing import Any
-
-
-def load_replay_index(dataset_dir: Path) -> dict[str, Any]:
-    """Load one browser replay index and reject paths that escape its dataset."""
-    index_path = dataset_dir / "replay.json"
-    try:
-        payload = json.loads(index_path.read_text(encoding="utf-8"))
-    except (OSError, json.JSONDecodeError) as error:
-        raise ValueError("replay index is unreadable") from error
-    if not isinstance(payload, dict) or not isinstance(payload.get("frames"), list):
-        raise ValueError("replay index has no frames")
-    for frame in payload["frames"]:
-        if not isinstance(frame, dict) or not isinstance(frame.get("timestamp_ns"), int):
-            raise ValueError("replay frame is invalid")
-        cameras = frame.get("cameras", {})
-        if not isinstance(cameras, dict):
-            raise ValueError("replay cameras are invalid")
-        for relative_path in cameras.values():
-            relative = Path(str(relative_path))
-            if relative.is_absolute() or ".." in relative.parts:
-                raise ValueError("camera path escapes dataset")
-    return payload
 
 
 class RecordingWebServer:
@@ -44,7 +21,6 @@ class RecordingWebServer:
         static_root: str | Path,
         manifest: dict[str, Any],
         description_root: str | Path,
-        lerobot_root: str | Path,
         logger: Any,
     ) -> None:
         self._bind_host = bind_host
@@ -52,7 +28,6 @@ class RecordingWebServer:
         self._static_root = Path(static_root).resolve()
         self._manifest = manifest
         self._description_root = Path(description_root).resolve()
-        self._lerobot_root = Path(lerobot_root).resolve()
         self._logger = logger
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -153,10 +128,6 @@ class RecordingWebServer:
         app.router.add_get("/ws", self._websocket)
         app.router.add_get("/preview/{camera_id}.jpg", self._preview)
         app.router.add_get("/models/{path:.*}", self._model_asset)
-        app.router.add_get("/api/lerobot", self._lerobot_list)
-        app.router.add_get("/api/lerobot/{session}/frames", self._lerobot_frames)
-        app.router.add_get("/api/lerobot/{session}/frames/{index}/cameras/{camera}", self._lerobot_camera)
-        app.router.add_get("/api/lerobot/{session}/videos/{path:.*}", self._lerobot_video)
         app.router.add_get("/{path:.*}", self._static_asset)
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
@@ -208,62 +179,6 @@ class RecordingWebServer:
         if jpeg is None:
             raise web.HTTPNotFound(text="preview is not available")
         return web.Response(body=jpeg, content_type="image/jpeg", headers={"Cache-Control": "no-store"})
-
-    async def _lerobot_list(self, _request: Any) -> Any:
-        from aiohttp import web
-        sessions = []
-        if self._lerobot_root.is_dir():
-            for child in sorted(self._lerobot_root.iterdir()):
-                if child.is_dir() and (child / "replay.json").is_file():
-                    try:
-                        replay = load_replay_index(child)
-                    except ValueError:
-                        continue
-                    sessions.append({"session_id": child.name, "frames": len(replay["frames"])})
-        return web.json_response({"sessions": sessions})
-
-    async def _lerobot_frames(self, request: Any) -> Any:
-        from aiohttp import web
-        session = Path(request.match_info["session"])
-        if session.name != str(session) or ".." in session.parts:
-            raise web.HTTPNotFound(text="invalid session")
-        dataset = self._lerobot_root / session
-        if not dataset.is_dir():
-            raise web.HTTPNotFound(text="dataset not found")
-        try:
-            return web.json_response(load_replay_index(dataset))
-        except ValueError as error:
-            raise web.HTTPNotFound(text=str(error)) from error
-
-    async def _lerobot_camera(self, request: Any) -> Any:
-        from aiohttp import web
-        session = Path(request.match_info["session"])
-        if session.name != str(session) or ".." in session.parts:
-            raise web.HTTPNotFound(text="invalid session")
-        try:
-            index = int(request.match_info["index"])
-        except ValueError as error:
-            raise web.HTTPNotFound(text="invalid frame index") from error
-        try:
-            replay = load_replay_index(self._lerobot_root / session)
-            relative = Path(str(replay["frames"][index]["cameras"][request.match_info["camera"]]))
-        except (IndexError, KeyError, ValueError):
-            raise web.HTTPNotFound(text="replay camera frame not found")
-        candidate = self._lerobot_root / session / relative
-        if not candidate.is_file():
-            raise web.HTTPNotFound(text="replay camera frame not found")
-        return web.FileResponse(candidate, headers={"Cache-Control": "no-store"})
-
-    async def _lerobot_video(self, request: Any) -> Any:
-        from aiohttp import web
-        session = Path(request.match_info["session"])
-        relative = Path(request.match_info["path"])
-        if session.name != str(session) or ".." in session.parts or relative.is_absolute() or ".." in relative.parts:
-            raise web.HTTPNotFound(text="invalid path")
-        candidate = self._lerobot_root / session / "videos" / "chunk-000" / relative
-        if not candidate.is_file():
-            raise web.HTTPNotFound(text="video not found")
-        return web.FileResponse(candidate)
 
     async def _websocket(self, request: Any) -> Any:
         from aiohttp import web

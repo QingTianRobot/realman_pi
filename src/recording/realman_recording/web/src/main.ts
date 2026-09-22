@@ -45,12 +45,6 @@ const exportPanel = $("#export-panel");
 const exportState = $("#export-state");
 const exportProgressEl = $("#export-progress");
 const exportDirEl = $("#export-dir");
-const replayCount = $("#replay-count");
-const replayDataset = $<HTMLSelectElement>("#replay-dataset");
-const replaySlider = $<HTMLInputElement>("#replay-slider");
-const replayFrameLabel = $("#replay-frame-label");
-const replayExit = $<HTMLButtonElement>("#replay-exit");
-const replayPlay = $<HTMLButtonElement>("#replay-play");
 
 function notify(message: string, error = false) {
   toast.textContent = message;
@@ -242,10 +236,6 @@ function render(payload: Snapshot) {
     exportDirEl.textContent = `数据目录: ${exportDir}`;
   }
 
-  // In replay mode the 3D viewer, arm grid and gripper grid show the selected frame,
-  // not the live subscription. The status hero and export panel stay live above.
-  if (replay) return;
-
   const arms = payload.arms ?? {};
   for (const [arm, data] of Object.entries(arms)) {
     const positions = (data as any).positions_rad;
@@ -294,151 +284,6 @@ function renderGrippers(grippers: NonNullable<Snapshot["grippers"]>) {
     .join("");
 }
 
-type ReplayFrame = {
-  frame_index: number;
-  timestamp_ns: number;
-  state: number[];
-  action: number[];
-  cameras: Record<string, string>;
-};
-
-let replay: { session: string; frames: ReplayFrame[]; index: number } | null = null;
-let replayTimer: number | undefined;
-
-async function loadReplayDatasets() {
-  try {
-    const response = await fetch("/api/lerobot");
-    const data = await response.json();
-    const sessions: { session_id: string; frames: number }[] = data.sessions ?? [];
-    replayDataset.innerHTML =
-      '<option value="">— 选择已完成的数据集 —</option>' +
-      sessions
-        .map((session) => `<option value="${session.session_id}">${session.session_id} · ${session.frames} 帧</option>`)
-        .join("");
-    replayCount.textContent = sessions.length ? `${sessions.length} 个数据集` : "暂无";
-  } catch {
-    replayCount.textContent = "回放不可用";
-  }
-}
-
-async function selectReplaySession(sessionId: string) {
-  if (!sessionId) {
-    exitReplay();
-    return;
-  }
-  try {
-    const response = await fetch(`/api/lerobot/${encodeURIComponent(sessionId)}/frames`);
-    const index = await response.json();
-    replay = { session: sessionId, frames: index.frames ?? [], index: 0 };
-    replaySlider.max = String(Math.max(0, (index.frames ?? []).length - 1));
-    replaySlider.value = "0";
-    replayExit.style.display = "";
-    replayPlay.style.display = "";
-    renderReplayFrame(0);
-  } catch (error) {
-    notify(`回放加载失败: ${String(error)}`, true);
-  }
-}
-
-function exitReplay() {
-  stopReplayPlay();
-  replay = null;
-  replayExit.style.display = "none";
-  replayPlay.style.display = "none";
-  replayDataset.value = "";
-  replaySlider.max = "0";
-  replaySlider.value = "0";
-  replayFrameLabel.textContent = "— / —";
-  previewsEl.innerHTML = "";
-  replayCount.textContent = "未选择数据集";
-}
-
-function stopReplayPlay() {
-  if (replayTimer !== undefined) {
-    clearInterval(replayTimer);
-    replayTimer = undefined;
-  }
-  replayPlay.textContent = "▶ 播放";
-}
-
-function toggleReplayPlay() {
-  if (!replay) return;
-  if (replayTimer !== undefined) {
-    stopReplayPlay();
-    return;
-  }
-  replayPlay.textContent = "⏸ 暂停";
-  replayTimer = window.setInterval(() => {
-    if (!replay) {
-      stopReplayPlay();
-      return;
-    }
-    const next = Number(replaySlider.value) + 1;
-    if (next >= replay.frames.length) {
-      stopReplayPlay();
-      replaySlider.value = String(replay.frames.length - 1);
-      renderReplayFrame(replay.frames.length - 1);
-      return;
-    }
-    replaySlider.value = String(next);
-    renderReplayFrame(next);
-  }, 500);
-}
-
-function renderReplayFrame(frameIndex: number) {
-  if (!replay) return;
-  const frame = replay.frames[frameIndex];
-  if (!frame) return;
-  replay.index = frameIndex;
-  replayFrameLabel.textContent = `${frameIndex + 1} / ${replay.frames.length}`;
-  jointStamp.textContent = `回放帧 ${frameIndex + 1} · ${new Date(frame.timestamp_ns / 1e6).toISOString()}`;
-
-  const armIds: ArmId[] = ["l", "m", "r"];
-  armsEl.innerHTML = armIds
-    .map((armId, i) => {
-      const joints = frame.state.slice(i * 6, i * 6 + 6);
-      setRobotJoints(armId, joints);
-      const rows = joints
-        .map((value, j) => `<span>J${j + 1} <b>${((value * 180) / Math.PI).toFixed(1)}°</b></span>`)
-        .join("");
-      const pose = getEndEffectorPose(armId);
-      const poseHtml = pose
-        ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font:11px ui-monospace,Menlo,monospace;color:var(--muted)">位置 <b style="color:var(--text)">${pose.pos.map((v) => v.toFixed(3)).join(" ")}</b><br>姿态 <b style="color:var(--text)">${pose.quat.map((v) => v.toFixed(3)).join(" ")}</b></div>`
-        : "";
-      return `<article class="arm-card"><h4>${armId.toUpperCase()} <span style="color:var(--blue)">REPLAY</span></h4><div class="joint-list">${rows}</div>${poseHtml}</article>`;
-    })
-    .join("");
-  $("#arm-count").textContent = `回放帧 ${frameIndex + 1}/${replay.frames.length}`;
-
-  grippersEl.innerHTML = ["left", "mid", "right"]
-    .map((name, i) => gripperBar(name, frame.state[18 + i] ?? 0))
-    .join("");
-
-  // Reuse camera cards: only add/remove when the camera set changes, and update the
-  // img src in place. Rebuilding the whole grid every frame blanks each image and
-  // reads as constant flicker when scrubbing or auto-playing.
-  const cameraIds = Object.keys(frame.cameras ?? {});
-  replayCount.textContent = cameraIds.length ? `${cameraIds.length} 路相机` : "无相机";
-  $("#camera-count").textContent = cameraIds.length ? `回放 ${cameraIds.length} 路相机` : "回放无相机";
-  previewsEl.querySelector(".empty")?.remove();
-  previewsEl.querySelectorAll<HTMLElement>(".camera-card").forEach((card) => {
-    if (!cameraIds.includes(card.dataset.camera ?? "")) card.remove();
-  });
-  cameraIds.forEach((cameraId) => {
-    let card = previewsEl.querySelector<HTMLElement>(`[data-camera="${CSS.escape(cameraId)}"]`);
-    if (!card) {
-      card = document.createElement("div");
-      card.className = "camera-card";
-      card.dataset.camera = cameraId;
-      card.innerHTML = `<img alt="${cameraId}"><span class="camera-label">${cameraId}</span>`;
-      previewsEl.append(card);
-    }
-    const img = card.querySelector("img");
-    const url = `/api/lerobot/${encodeURIComponent(replay!.session)}/frames/${frame.frame_index}/cameras/${encodeURIComponent(cameraId)}`;
-    if (img && img.getAttribute("src") !== url) img.src = url;
-  });
-}
-
 function connect() {
   socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   socket.onopen = () => {
@@ -468,14 +313,6 @@ fetch("/api/layout")
     viewerState.textContent = `布局加载失败: ${String(error)}`;
   });
 connect();
-loadReplayDatasets();
-replayDataset.addEventListener("change", () => selectReplaySession(replayDataset.value));
-replaySlider.addEventListener("input", () => {
-  stopReplayPlay();
-  renderReplayFrame(Number(replaySlider.value));
-});
-replayExit.addEventListener("click", exitReplay);
-replayPlay.addEventListener("click", toggleReplayPlay);
 
 // Draggable + resizable dashboard: each panel is a gridstack widget. The panel
 // header is the drag handle, and the export progress item starts hidden.
@@ -502,19 +339,4 @@ if (savedLayout) {
 }
 grid.on("change", () => {
   localStorage.setItem(LAYOUT_KEY, JSON.stringify(grid.save(false)));
-});
-
-// 标签页：录制 / 回放。共享的 3D/相机/机械臂/夹爪面板在下方，随当前标签切换数据。
-function switchTab(tab: "record" | "replay") {
-  document.querySelectorAll(".tab").forEach((button) => {
-    button.classList.toggle("active", button.getAttribute("data-tab") === tab);
-  });
-  const recordTab = document.querySelector<HTMLElement>("#tab-record");
-  const replayTab = document.querySelector<HTMLElement>("#tab-replay");
-  if (recordTab) recordTab.style.display = tab === "record" ? "" : "none";
-  if (replayTab) replayTab.style.display = tab === "replay" ? "" : "none";
-  if (tab === "record" && replay) exitReplay();
-}
-document.querySelectorAll(".tab").forEach((button) => {
-  button.addEventListener("click", () => switchTab((button.getAttribute("data-tab") as "record" | "replay")));
 });

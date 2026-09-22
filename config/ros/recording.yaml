@@ -4,7 +4,8 @@
   ros__parameters:
     # Runtime data volume. Override with REALMAN_RECORDING_ROOT / launch argument in Docker.
     recording_root: /data/realman-recordings
-    # LeRobot dataset output directory; the web replay reads from this same root.
+    # LeRobot dataset output directory for the recorder's asynchronous exporter.
+    # The Web bridge never reads this root; offline analysis uses the Rerun CLI.
     lerobot_export_dir: /data/realman-recordings/lerobot
     # A full queue records a drop metric instead of blocking driver subscription callbacks.
     max_state_queue: 10000

@@ -431,8 +431,9 @@ class LatestFramePreview:
             try:
                 self._on_frame(self._transform(frame) if self._transform is not None else frame)
             except Exception:
-                # ai TODO: emit a rate-limited preview-health event through the Web bridge.
-                # Preview delivery errors are intentionally not propagated to recording.
+                # Preview delivery errors intentionally drop only this lossy frame. The
+                # last successful receipt remains the health signal shown by Web; adding
+                # a synchronous error event here would couple preview to the bridge.
                 pass
 
 

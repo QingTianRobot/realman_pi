@@ -133,6 +133,8 @@ Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`s
 `ACTIVE/keyboard` 是全局行为树状态；页面还必须收到本页的 `keyboard_lease: {active: true}` 才拥有控制权。
 其他浏览器持有 lease 时显示 `REMOTE`，不发送键盘心跳；收到 `keyboard_lease` 错误也不会覆盖 MoveJ
 运行反馈，需在当前页面重新选择键盘模式取得 lease。
+键盘说明和右侧控制卡片的增减不得改变左侧三臂 3D viewer 的高度。桌面、窄屏和手机布局分别使用
+有界的 viewer 面板高度，避免 WebGL canvas 被右栏总高度拉伸后压缩相机水平视场。
 左右臂按键完全独立，可同时按住：
 
 | 末端轴 | 左臂正/负 | 右臂正/负 |

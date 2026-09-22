@@ -194,6 +194,9 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator("#viewer")).toHaveAttribute("data-live-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/, { timeout: 30_000 });
   await expect(page.locator("#viewer")).toHaveAttribute("data-shadow-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/);
   await expect(page.locator("#viewer")).toHaveAttribute("data-visualization-reference-arm", "m");
+  const viewerBounds = await page.locator("#viewer").boundingBox();
+  expect(viewerBounds?.height).toBeLessThanOrEqual(560);
+  expect(viewerBounds?.height).toBeGreaterThan(300);
   const liveCanvasBeforeFeedback = await canvasChecksum(page);
   await page.evaluate(() => {
     (window as any).__webSocket.emit("message", { data: JSON.stringify({

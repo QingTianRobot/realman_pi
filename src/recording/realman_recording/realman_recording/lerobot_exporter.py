@@ -26,7 +26,7 @@ from .lerobot_align import AlignmentPolicy, TimedSample, align_streams
 from .canonical_features import materialize_canonical_frames
 from .joint_state import ordered_joint_position
 from .kinematics import UrdfKinematics
-from .lerobot_schema import LeRobotV3Schema
+from .lerobot_schema import LeRobotV3Schema, schema_from_parameters
 from .lerobot_dataset_store import dataset_lock
 
 
@@ -683,12 +683,34 @@ def main(args: list[str] | None = None) -> int:
 
     session_dir = parsed.session_dir.expanduser().resolve()
     output_dir = (parsed.output_dir or session_dir / "export" / "lerobot").expanduser().resolve()
+    manifest = json.loads((session_dir / "manifest.json").read_text(encoding="utf-8"))
+    metadata = manifest.get("metadata", {})
+    config = metadata.get("canonical_config", {})
+    canonical = metadata.get("canonical", {})
+    schema = schema_from_parameters(
+        repo_id=str(config.get("repo_id", "realman/pi05-three-arm")), fps=parsed.target_fps,
+        arms=config.get("arms", ["l", "m", "r"]),
+        arm_action_topics=config.get("arm_action_topics", []),
+        gripper_position_topics=config.get("gripper_position_topics", []),
+        gripper_action_topics=config.get("gripper_action_topics", []),
+        camera_ids=config.get("camera_ids", []),
+        joint_names=canonical.get("joint_names", [f"joint_{index}" for index in range(1, 7)]),
+        embodiment_id=canonical.get("embodiment_id", "realman-rm65-b-three-arm-v1"),
+        urdf_package=canonical.get("urdf_package", "rm65_description"),
+        urdf_relative_path=canonical.get("urdf_relative_path", "urdf/RM65-B.urdf"),
+        urdf_base_link=canonical.get("urdf_base_link", "base_link"),
+        base_frames=canonical.get("base_frames", ["l/base_link", "m/base_link", "r/base_link"]),
+        ee_links=canonical.get("ee_links", ["link_6", "link_6", "link_6"]),
+        cartesian_command_representation=canonical.get("cartesian_command_representation", "velocity"),
+        cartesian_command_frames=canonical.get("cartesian_command_frames", ["l/base_link", "m/base_link", "r/base_link"]),
+    )
     LeRobotExporter().export(
         ExportRequest(
             session_dir=session_dir,
             output_dir=output_dir,
             target_fps=parsed.target_fps,
             max_gap_sec=parsed.max_gap_sec,
+            schema=schema,
         )
     )
     return 0

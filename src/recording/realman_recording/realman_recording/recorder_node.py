@@ -352,6 +352,14 @@ class RecordingRecorderNode(Node):
                             else "NOT_REQUIRED"
                         ),
                     },
+                    "canonical_config": {
+                        "repo_id": str(self.get_parameter("lerobot_repo_id").value),
+                        "arms": list(self._arms),
+                        "arm_action_topics": [str(item) for item in self.get_parameter("arm_action_topics").value if str(item)],
+                        "gripper_position_topics": [str(item) for item in self.get_parameter("gripper_position_topics").value if str(item)],
+                        "gripper_action_topics": [str(item) for item in self.get_parameter("gripper_action_topics").value if str(item)],
+                        "camera_ids": [str(item) for item in self.get_parameter("camera_ids").value if str(item)],
+                    },
                 }
             )
             try:

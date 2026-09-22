@@ -9,7 +9,7 @@ description: RealMan 驱动输出的隔离录制、预检、低清展示与 LeRo
 
 录制和数据集转换是两个阶段：停止时只原子收尾原始 MCAP/视频 session；上游明确采用后才会请求独立 LeRobot worker。转换占用的 CPU、GPU、视频解码或失败均不得减慢下一次 ROS 数据录制。
 
-MCAP 状态写入、ROS `CompressedImage` 有界 JPEG 录制、低清 JPEG 预览、夹爪/相机健康状态、Three.js/URDF 三臂展示、Rerun 离线逐帧回放、预检和预约控制已经接入；LeRobot 数据读取/落表仍未实现。当前 `ADOPT` 的异步导出入口会持久化任务状态，但在导出器实现前会明确标记为 `FAILED`，不会伪造成功的数据集。
+MCAP 状态写入、ROS `Image` 有界 JPEG 录制、低清 JPEG 预览、夹爪/相机健康状态、Three.js/URDF 三臂展示、预检和预约控制已经接入。`ADOPT` 会在 ROS executor 外把完成 session 异步转换为 `lerobot==0.6.1` 的 canonical v3 episode；失败会持久化为 `FAILED`，不会伪造成功的数据集。
 MCAP 的 `accepted_samples` 仅在序列化并成功交给 writer 后递增；`enqueued_samples`
 和 `dropped_samples` 留在 session manifest 的 summary 中，便于区分内存队列背压与真实落盘。
 任何 MCAP 写入或关闭错误都会使 session 进入 `FAILED`，不得作为 LeRobot 导出输入。
@@ -103,8 +103,8 @@ Compose 将仓库 `recordings/` 挂载为容器 `/data/realman-recordings`，同
 1. `state_archive.py`（已接入）：用 `rosbag2_py` 的 `SequentialWriter` 以 `storage_id="mcap"` 建 topic、序列化消息并在收尾时关闭 writer；bag 记录时间取 receipt wall-clock 纳秒。session manifest 的成对 wall/monotonic 起始锚点供导出换算媒体时间轴；没有 `header.stamp` 的话题只可使用 receipt 时间。
 2. `camera_workers.py`（已接入）：每路相机独立 ffmpeg 分段录制；暂停产生媒体间隙；低清预览使用另一个限 FPS、限分辨率、只保留最新 JPEG 的 worker。
 3. `web_server.py` 与 `static/index.html`（已接入）：预览使用独立 endpoint；只读 Three.js/URDF 三臂 viewer 已实现（参考 web_control 的 urdf-loader 方案，把 `/l|m|r/joint_states` 实时套到 URDF 模型）。`/api/layout` 与 `/models` 由 `web_server.py` 提供，前端源在 `web/`，经 `npm run build:recording`（Vite，`config/recording/vite.config.mjs`）构建到 `static/`。
-4. `lerobot_exporter.py`：ADOPT 后在 ROS executor 外读取 MCAP/JPEG，以固定 15Hz SYSTEM_TIME 网格对齐，使用 `lerobot==0.6.1` 的公开 `create/resume`、`add_frame`、`save_episode`、`finalize` API 追加一个 v3 episode。多个 adopted session 用数据集锁串行化；没有已配置的真实夹爪 command topic 时，action 保持 18D 机械臂命令，绝不从状态伪造夹爪 action。
-5. `replay.py`（已并入 `realman_recording` 包）：Rerun 是离线分析适配器，不是 ROS 包或节点。正式回放仅接受 ADOPTED 且 LeRobot 导出成功的 session，并读取 `export/lerobot/`；原始 MCAP/媒体索引永不作为回放回退源。固定 LeRobot 版本后再接入 episode/frame、state/action 与视频字段。
+4. `lerobot_exporter.py`：ADOPT 后在 ROS executor 外读取 MCAP/JPEG，以固定 15Hz SYSTEM_TIME 网格对齐，使用 `lerobot==0.6.1` 追加 canonical v3 episode。它保存关节位置/派生速度、URDF FK EE pose/velocity、夹爪位置、真实 Cartesian command 和 quality；不会把 π0.5 的 state/action 向量当作原始事实。
+5. `replay.py`（已并入 `realman_recording` 包）：Rerun 从 receipt 指定的 canonical LeRobot 单 episode 读取低维数据和视频，而不是回退 raw MCAP/JPEG；它展示 canonical field，不假设某一模型的 state/action layout。
 6. 完成后补充真实相机、磁盘满、WebSocket 慢客户端、暂停/恢复、崩溃恢复、Service adopt/discard 和 LeRobot 读回的端到端测试。
 
 ## LeRobot 对齐策略（以图像为基准）

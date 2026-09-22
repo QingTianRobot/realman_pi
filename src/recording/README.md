@@ -33,10 +33,14 @@ src/recording/
 │   │   ├── json_io.py                     # 原子 JSON 写（manifest/media-index 共用）
 │   │   ├── preflight.py                   # 设备/话题/磁盘/MCAP 预检策略
 │   │   ├── lerobot_align.py               # 后置：时间序列对齐数学
-│   │   ├── lerobot_schema.py              # LeRobot v3 特征与 topic 顺序契约
+│   │   ├── lerobot_schema.py              # canonical v1 特征、单位/坐标系与 topic 顺序契约
+│   │   ├── canonical_features.py          # 对齐 raw 数据的速度、FK 与质量字段派生
+│   │   ├── kinematics.py                  # 轻量 URDF FK / 四元数速度计算
+│   │   ├── joint_state.py                 # JointState 名称/顺序/有限值校验
 │   │   ├── lerobot_dataset_store.py       # LeRobot v3 单数据集追加锁
 │   │   ├── lerobot_exporter.py            # ADOPT 后异步写入 LeRobot v3 episode
-│   │   ├── replay.py                      # P2：Rerun 离线回放 CLI
+│   │   ├── adapters/pi05.py               # canonical → 显式 π0.5 state/action view
+│   │   ├── replay.py                      # Rerun 离线回放 canonical LeRobot episode
 │   │   ├── rerun_adapter.py               # 可选实时 Rerun 适配器（非采集依赖）
 │   │   └── static/                        # Vite 构建产物（index.html + assets/，随包安装）
 │   ├── web/                               # 前端源（index.html + src/main.ts，Vite 构建）
@@ -127,7 +131,8 @@ Service：`/recording/manage`，类型：`realman_recording_msgs/srv/ManageRecor
 ├── videos/
 │   ├── <camera_id>/segment-000000.mkv
 │   └── media-index.json
-├── manifest.partial.json       # 录制期间原子更新
+├── metadata/robot.urdf         # 启动时快照的 FK 真值来源
+├── manifest.partial.json       # 录制期间原子更新（含 URDF hash/feature capability）
 ├── manifest.json               # STOP 后原子 rename，表示 finalized
 └── export/lerobot/             # ADOPT 后异步转换目标，当前仍后置
 ```
@@ -190,13 +195,14 @@ Rerun 的实时 adapter 可以保留用于调试，但默认关闭；离线 repl
 
 > `replay.py` 的 ROS/Rerun 依赖（`rosbag2_py`、`rclpy.serialization`、`rerun-sdk`）均为惰性导入，纯逻辑（会话校验、媒体索引解析、段筛选、话题分类、发射）可在无 ROS 环境单测；端到端读取真实 `state.mcap` 仍需在 Humble/设备容器验证（见第 11 节）。
 
-### P3：LeRobot（最后）
+### P3：Canonical LeRobot v3 与 π0.5 view
 
-- [ ] 固定目标 LeRobot 版本并确认 Python/ROS Humble 兼容性。
-- [ ] 从 MCAP 和视频时间轴生成 image anchors。
-- [ ] 应用 `lerobot_align.py` 的 LINEAR/FORWARD_FILL 策略和最大 gap 约束。
-- [ ] 写 LeRobot dataset/table/video 并可被目标版本重新加载。
-- [ ] exporter 放在独立进程/worker，不阻塞 ROS executor。
+- [x] 固定 `lerobot==0.6.1` writer，ADOPT 后异步追加一个 dataset episode。
+- [x] 固定 FPS image anchor、LINEAR/FORWARD_FILL、最大 gap 拒绝和 source/image skew quality 向量。
+- [x] materialize 关节位置/差分速度、URDF FK EE pose、四元数 shortest-arc EE velocity、夹爪位置和真实 Cartesian command。
+- [x] 启动时 snapshot URDF，并将 hash、坐标系、单位、feature/generator contract 写入 manifest/receipt。
+- [x] canonical → π0.5 adapter：checkpoint 的 state/action 维度与姿态编码必须显式配置。
+- [ ] Humble 容器：用真实 episode 运行 SDK reload、Rerun decode 与 OpenPI one-batch smoke（宿主缺少该运行环境）。
 
 ## 10. TODO 规则
 

@@ -77,7 +77,8 @@ def validate_session(session_dir: Path) -> dict:
     export = manifest.get("export")
     if not isinstance(export, dict) or export.get("state") != "SUCCEEDED":
         raise ValueError("session has no successful LeRobot export")
-    dataset_root = session_dir / "export" / "lerobot"
+    result = export.get("result")
+    dataset_root = Path(result).expanduser() if isinstance(result, str) and result else session_dir / "export" / "lerobot"
     if not dataset_root.is_dir():
         raise ValueError("successful LeRobot export directory is missing")
     return manifest
@@ -171,6 +172,9 @@ class ReplayPlayer:
     def __init__(self, options: ReplayOptions, *, rerun_module: Any | None = None) -> None:
         self._options = options
         self._manifest = validate_session(options.session_dir)
+        export = self._manifest["export"]
+        result = export.get("result")
+        self._dataset_root = Path(result).expanduser() if isinstance(result, str) and result else options.session_dir / "export" / "lerobot"
         self._segments = select_segments(
             parse_media_index(options.session_dir),
             start_ns=options.start_ns,
@@ -191,17 +195,87 @@ class ReplayPlayer:
                 disconnect()
 
     def _replay_lerobot_dataset(self, rerun: Any) -> None:
-        """Replay the fixed-version LeRobot dataset, never recorder raw artifacts.
+        """Replay canonical fields through the same fixed LeRobot SDK used to write them."""
+        try:
+            from lerobot.datasets import LeRobotDataset
+        except ImportError as error:
+            raise RuntimeError("lerobot==0.6.1 is required for offline replay") from error
+        receipt_path = self._options.session_dir / "export" / "lerobot-v3.json"
+        if not receipt_path.is_file():
+            raise ValueError("session is missing its canonical LeRobot export receipt")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        try:
+            repo_id = str(receipt["repo_id"])
+            first_walltime_ns = int(receipt["first_walltime_ns"])
+            episode_index = int(receipt["episode_index"])
+        except (KeyError, TypeError, ValueError) as error:
+            raise ValueError("LeRobot export receipt has no valid timeline provenance") from error
+        dataset = LeRobotDataset(repo_id=repo_id, root=self._dataset_root, episodes=[episode_index])
+        previous_walltime: int | None = None
+        for index in range(len(dataset)):
+            frame = dataset[index]
+            walltime_ns = first_walltime_ns + round(index * 1_000_000_000 / dataset.fps)
+            if self._options.start_ns is not None and walltime_ns < self._options.start_ns:
+                continue
+            if self._options.end_ns is not None and walltime_ns > self._options.end_ns:
+                break
+            self._pace(walltime_ns, previous_walltime)
+            previous_walltime = walltime_ns
+            rerun.set_time_nanos("wall_time", walltime_ns)
+            self._emit_canonical_frame(rerun, frame)
+        self._emit_summary(rerun)
 
-        The exporter has not yet selected and written a concrete LeRobot SDK version,
-        so accepting any guessed parquet/video layout here would silently replay the
-        wrong fields. Keep this explicit until exporter and replay land as one contract.
-        """
-        del rerun
-        raise RuntimeError(
-            "LeRobot replay adapter awaits the fixed LeRobot exporter/dataset version; "
-            "raw MCAP/JPEG fallback is intentionally disabled"
+    def _emit_canonical_frame(self, rerun: Any, frame: dict[str, Any]) -> None:
+        """Log one LeRobot frame without assuming a model-specific state/action vector."""
+        scalar_features = (
+            "observation.joint_position", "observation.joint_velocity",
+            "observation.ee_pose_base", "observation.ee_velocity_base",
+            "observation.gripper_position", "action.command.cartesian_velocity",
+            "action.command.gripper", "quality.sync_error_ns",
         )
+        for feature in scalar_features:
+            if feature in frame:
+                rerun.log(f"recording/canonical/{feature.replace('.', '/')}", rerun.Scalars(self._as_list(frame[feature])))
+        if "quality.valid" in frame:
+            rerun.log("recording/canonical/quality/valid", rerun.Scalars(self._as_list(frame["quality.valid"])))
+        for key, value in frame.items():
+            if not key.startswith("observation.images."):
+                continue
+            camera = key.removeprefix("observation.images.")
+            if self._options.cameras and camera not in self._options.cameras:
+                continue
+            image = getattr(rerun, "Image", None)
+            if callable(image):
+                rerun.log(f"recording/cameras/{camera}/image", image(self._as_image(value)))
+
+    @staticmethod
+    def _as_list(value: Any) -> list[float | int | bool]:
+        """Convert tensor/ndarray/list feature values without importing a tensor stack."""
+        for name in ("detach", "cpu"):
+            method = getattr(value, name, None)
+            if callable(method):
+                value = method()
+        method = getattr(value, "tolist", None)
+        value = method() if callable(method) else value
+        if not isinstance(value, list):
+            value = [value]
+        # Feature vectors are 1-D by contract; preserve booleans for quality.valid.
+        return [item for item in value if isinstance(item, (float, int, bool))]
+
+    @staticmethod
+    def _as_image(value: Any) -> Any:
+        """Convert torch CHW outputs to image HWC only when an array API is available."""
+        for name in ("detach", "cpu", "numpy"):
+            method = getattr(value, name, None)
+            if callable(method):
+                value = method()
+        shape = getattr(value, "shape", ())
+        if len(shape) == 3 and shape[0] in {1, 3, 4}:
+            try:
+                return value.transpose(1, 2, 0)
+            except TypeError:
+                return value
+        return value
 
     def _emit_summary(self, rerun: Any) -> None:
         """Emit one-time session drop/error counters from the finalized manifest.

@@ -53,7 +53,9 @@ manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URD
 
 ## 实施任务
 
-### Task 1：Canonical schema、能力描述与配置
+> 进度（2026-09-22）：Task 1–5 的纯 Python/静态实现已完成并以失败测试覆盖；唯一未通过的验收是 Humble + `lerobot==0.6.1` + OpenPI 的真实 SDK/真机 smoke。宿主没有这些运行时依赖，不能把静态验证误报为端到端成功。
+
+### Task 1：Canonical schema、能力描述与配置（已实现）
 
 **文件：** `config/ros/recording.yaml`、`realman_recording/lerobot_schema.py`、`test/test_lerobot_schema.py`、`src/recording/README.md`。
 
@@ -62,7 +64,7 @@ manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URD
 3. 配置加入 `embodiment_id`、URDF source/version、base/EE frame、joint name order、action frame/representation、sensor capability；所有非默认值写相邻注释。
 4. 运行纯 schema 测试、YAML parser、`compileall`，提交 `feat(recording): define canonical robot schema`。
 
-### Task 2：完整 JointState 与对齐质量报告
+### Task 2：完整 JointState 与对齐质量报告（已实现）
 
 **文件：** `lerobot_exporter.py`、`lerobot_align.py`、`test/test_lerobot_export_alignment.py`。
 
@@ -71,7 +73,7 @@ manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URD
 3. 每个 camera/state/action 对齐返回 actual timestamp/skew/policy，写 `quality.valid` 与固定 shape `quality.sync_error_ns.*`。
 4. 验证四路 15Hz 不生成 60Hz timeline，提交 `feat(recording): materialize canonical joint and quality data`。
 
-### Task 3：离线 FK 与 EE pose/velocity
+### Task 3：离线 FK 与 EE pose/velocity（已实现）
 
 **文件：** 新增 `kinematics.py`，修改 exporter/schema/config，新增 `test/test_kinematics.py`。
 
@@ -80,7 +82,7 @@ manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URD
 3. 中间帧中心差分、边界帧前后向差分；角速度以 `q_next * inverse(q_prev)` 的最短轴角 rotation vector 除以 `dt`，不使用 Euler 差分。
 4. 写入 FK backend/URDF hash/velocity algorithm；验证静止、恒定平移、quaternion sign flip，提交 `feat(recording): derive end-effector pose and velocity`。
 
-### Task 4：command、annotation 与 provenance
+### Task 4：command、annotation 与 provenance（核心已实现）
 
 **文件：** `recorder_node.py`、`session_store.py`、`lerobot_dataset_store.py`、`lerobot_exporter.py`、相关测试。
 
@@ -90,7 +92,7 @@ manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URD
 4. 为 success/terminated/truncated/intervention 保留 manifest annotation block；不实现 reward/RL writer。
 5. 提交 `feat(recording): preserve canonical episode provenance`。
 
-### Task 5：π0.5 adapter 与 smoke test
+### Task 5：π0.5 adapter 与 smoke test（adapter 已实现；容器 smoke 待执行）
 
 **文件：** 新增 `realman_recording/adapters/pi05.py`、`test/test_pi05_adapter.py`、训练环境文档。
 
@@ -99,7 +101,7 @@ manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URD
 3. 在 OpenPI 训练容器跑 loader + one-batch smoke；action dimension 以实际 checkpoint 为准，不预设 21/32。
 4. 提交 `feat(recording): add pi05 canonical data adapter`。
 
-### Task 6：回放、文档与真机验证
+### Task 6：回放、文档与真机验证（回放/文档已实现；真机验收待执行）
 
 **文件：** `replay.py`、`web_server.py`、Web 前端、`website/docs/development/recording-platform.md`、`src/recording/README.md`。
 

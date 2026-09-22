@@ -194,7 +194,8 @@ Rerun 的实时 adapter 可以保留用于调试，但默认关闭；离线 repl
 
 - [x] 新增离线回放 CLI 和命令行参数（`realman_recording/replay.py`，`python3 -m realman_recording.replay`）。
 - [x] 回放入口拒绝未采用、未成功导出或缺少 LeRobot 数据目录的 session；不再回退原始数据。
-- [ ] 固定 LeRobot SDK/dataset 版本并实现 episode/frame、state/action/视频字段的 Rerun 适配器。
+- [x] 固定 `lerobot==0.6.1`，按 receipt 的 episode index 读取 canonical frame/视频并写入 Rerun 时间轴。
+- [ ] 在 Humble + Rerun SDK 环境解码真实视频 episode（宿主没有该运行时）。
 
 > `replay.py` 的 ROS/Rerun 依赖（`rosbag2_py`、`rclpy.serialization`、`rerun-sdk`）均为惰性导入，纯逻辑（会话校验、媒体索引解析、段筛选、话题分类、发射）可在无 ROS 环境单测；端到端读取真实 `state.mcap` 仍需在 Humble/设备容器验证（见第 11 节）。
 

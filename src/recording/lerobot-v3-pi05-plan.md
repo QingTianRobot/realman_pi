@@ -49,7 +49,7 @@ manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URD
 
 - ROS `SYSTEM_TIME` receipt、MCAP archive、4 路 JPEG archive、PREPARE 与 ADOPT/DISCARD 生命周期。
 - LeRobot v3 SDK writer、固定 FPS grid、相机 skew 拒绝、数据集锁、session→episode receipt。
-- 当前 exporter 仍只 materialize joint position、gripper position、Cartesian command；必须迁移至 canonical feature。
+- exporter 已 materialize canonical physical/derived feature；剩余工作是运行时验收，不得回退到 π0.5 专用向量。
 
 ## 实施任务
 

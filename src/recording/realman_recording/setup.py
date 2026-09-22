@@ -25,6 +25,9 @@ setup(
         (f"share/{package_name}/static/assets", static_asset_files),
     ],
     install_requires=["setuptools"],
+    # ament_python/colcon selects the pytest test adapter from this declaration;
+    # without it, a successful ``colcon test`` can omit this package's test/ tree.
+    tests_require=["pytest"],
     zip_safe=True,
     maintainer="RealMan maintainers",
     maintainer_email="maintainer@example.com",

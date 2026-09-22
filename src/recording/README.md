@@ -233,7 +233,7 @@ Rerun 的实时 adapter 可以保留用于调试，但默认关闭；离线 repl
 ### 必须在 Humble/设备环境执行的测试
 
 - `colcon build --packages-up-to realman_recording realman_recording_msgs`
-- `colcon test --packages-select realman_recording realman_recording_msgs`
+- `colcon test --packages-select realman_recording realman_recording_msgs`（`realman_recording` 已在 `setup.py` 声明 `tests_require=["pytest"]`，不能把零测试结果当作通过）
 - 真实 ROS graph 下确认 3 个机械臂 topic 能持续到达。
 - 真机确认 4 路 ROS image topic 逐路预检、录制、STOP 和 index。
 - 用 rosbag2 重新读取 `state.mcap`，确认 topic type、时间戳和样本数量。

@@ -29,6 +29,7 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 避免半启动状态。
 
 ```bash
+./rm65 build              # 仅重建生产 driver/Web 本地镜像，不改变容器状态
 ./rm65 up                 # 生产默认，无 RViz
 ./rm65 up desktop         # 生产图 + 本机 RViz
 ./rm65 up model           # 离线模型查看
@@ -37,6 +38,12 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 ./rm65 status
 ./rm65 logs
 ```
+
+`./rm65 build` 等价于 `docker compose build realman_bringup_remote realman_web_control`。
+它用于代码、Dockerfile、ROS 包或 8765 静态页面更新后的本地镜像重建，只执行构建，不停止、启动或重建
+正在运行的容器。要部署新镜像，先确认机器人安全并退出活动行为树，再执行 `./rm65 down`、`./rm65 build`、
+`./rm65 up`；最后按需重新运行 `./rm65 bt control`。只有根 `config/` 下的挂载 YAML 变化时，通常重启
+容器即可生效，不需要重建镜像。
 
 相机后台进程 PID 保存在 `logs/.rm65-camera.pid`，其标准输出写入 `logs/rm65-camera.log`；ROS 2
 节点仍按官方机制写入 `logs/YYYYMMDD_HHMMSS/`。

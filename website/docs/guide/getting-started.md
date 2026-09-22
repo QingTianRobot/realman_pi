@@ -34,6 +34,15 @@ export XAUTHORITY="$HOME/.Xauthority"
 
 ## Zsh 快捷函数
 
+生产镜像可直接从仓库根目录重建：
+
+```bash
+./rm65 build
+```
+
+该命令只构建 `realman_bringup_remote` 和 `realman_web_control`，不会停止或启动现有容器。更新完成后若要
+切换到新镜像，应在安全停机后依次执行 `./rm65 down`、`./rm65 build`、`./rm65 up`。
+
 根目录 `functions.zsh` 提供可选的开发与运行函数。在 Zsh 中加载一次即可从任意
 目录调用：
 

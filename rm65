@@ -104,6 +104,10 @@ down() {
   camera_stop
 }
 
+build() {
+  compose build realman_bringup_remote realman_web_control
+}
+
 status() {
   if [[ "$DRY_RUN" == "1" ]]; then
     printf '+ status camera + realman_bringup_remote + realman_web_control\n'
@@ -139,6 +143,7 @@ usage() {
 Usage: ./rm65 <command> [profile]
 
 Commands:
+  build               Rebuild the local production driver and Web control images.
   up [desktop|model]  Start production runtime, desktop RViz, or offline model viewer.
   down                Stop unified runtime and ROS 2 cameras.
   status              Show camera and Docker service state.
@@ -154,6 +159,7 @@ EOF
 command_name="${1:-help}"
 shift || true
 case "$command_name" in
+  build) build "$@" ;;
   up) up "$@" ;;
   down) down "$@" ;;
   status) status "$@" ;;

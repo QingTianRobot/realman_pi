@@ -23,6 +23,7 @@ rm65_project_help
 日常生产操作优先使用仓库根目录的 `./rm65`，它把 ROS 2 彩色相机和三臂机械臂的生命周期合并管理：
 
 ```bash
+./rm65 build              # 重建 realman_bringup_remote 与 realman_web_control；不改变容器状态
 ./rm65 up                 # ROS 2 彩色相机 + 三臂真实驱动 + Web control + 相机健康诊断，无 RViz
 ./rm65 up desktop         # 同上，并启动远程 ROS 图 RViz
 ./rm65 up model           # 离线三臂模型 + RViz，不连接真机
@@ -50,8 +51,8 @@ Action Server 后再 tick。快照轮询使用 `ETag`，序号未变化时返回
 监视器读取 schema-v2 快照，显示累计 Tick 成功/失败比例图、最近最多 200 条事件和失败节点的
 `failure_reason`；事件来源为 `ACTION`、`SERVICE`、`ROS_LOG` 或 `EXECUTOR`，其中 `/rosout` 只保留指定
 logger 的 WARN/ERROR。MoveJ 仍只经 `/<arm_id>/execute_motion` Action 执行；`/realman_bt_executor/start`
-和 `/realman_bt_executor/stop` 仅控制 executor tick，不能替代运动接口。首次修改 Dockerfile 或前端后需执行
-`docker compose build realman_bringup_remote`。只有完成安全检查后才可用
+和 `/realman_bt_executor/stop` 仅控制 executor tick，不能替代运动接口。首次修改 Dockerfile、ROS 代码或
+前端后执行 `./rm65 build`，它只重建生产 driver/Web 镜像，不停止或启动容器。只有完成安全检查后才可用
 `REALMAN_BT_DRY_RUN=false ./rm65 bt r` 发送真实 MoveJ；按 `Ctrl-C` 只清理行为树进程，
 不会停止驱动容器。默认 one-shot executor 在 `SUCCESS`/`FAILURE` 后等待 cancellation drain 清空，再让
 executor、`ros2 launch` 和只读监视器依次退出；最终快照归档到 `logs/behavior-trees/`。容器锁禁止两次

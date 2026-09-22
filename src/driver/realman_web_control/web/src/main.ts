@@ -108,7 +108,7 @@ app.innerHTML = `
       <div class="viewer-layout">
         <div id="fleet-strip" class="fleet-strip"></div>
         <div class="viewer-column">
-          <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
+          <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div><div id="keyboard-frame-legend" class="keyboard-frame-legend" hidden><strong>L WORK</strong><strong>R WORK</strong><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
           <div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span id="root-frame"></span></div>
         </div>
       </div>
@@ -218,6 +218,7 @@ const inputModeActive = $("#input-mode-active");
 const inputModeDetail = $("#input-mode-detail");
 const keyboardControlCard = $("#keyboard-control-card") as HTMLElement;
 const keyboardControlState = $("#keyboard-control-state");
+const keyboardFrameLegend = $("#keyboard-frame-legend") as HTMLElement;
 const motionMode = $("#motion-mode");
 const jointTarget = $("#joint-target") as HTMLElement;
 const poseTarget = $("#pose-target") as HTMLElement;
@@ -295,6 +296,7 @@ const activeRecordRequestByArm: Partial<Record<ArmId, string>> = {};
 const recordRequestTimerByArm: Partial<Record<ArmId, number>> = {};
 const activeRecoveryRequestByArm: Partial<Record<ArmId, string>> = {};
 const robotScenes: Partial<Record<ArmId, RobotScene>> = {};
+const keyboardWorkFrames: Partial<Record<KeyboardArmId, THREE.AxesHelper>> = {};
 let renderer: THREE.WebGLRenderer;
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
@@ -417,6 +419,50 @@ function renderKeyboardControl() {
   keyboardControlState.textContent = label;
   keyboardControlState.className = `mini-state keyboard-${label.toLowerCase().replaceAll(" ", "-")}`;
 }
+function keyboardWorkFramePose(arm: KeyboardArmId) {
+  const work = coordinateStates[arm]?.work;
+  const position = work?.xyz_m?.map(Number);
+  const quaternion = work?.quaternion_wxyz?.map(Number);
+  if (!keyboardWorkAvailable(arm) || position?.length !== 3 || quaternion?.length !== 4 ||
+      ![...position, ...quaternion].every(Number.isFinite) || Math.hypot(...quaternion) < 1e-9) return undefined;
+  return { position, quaternion };
+}
+function updateKeyboardWorkFrames() {
+  const visibleArms: KeyboardArmId[] = [];
+  for (const arm of ["l", "r"] as const) {
+    const robotScene = robotScenes[arm];
+    let axes = keyboardWorkFrames[arm];
+    if (robotScene?.live && axes?.parent !== robotScene.live) {
+      axes?.removeFromParent();
+      axes = new THREE.AxesHelper(0.18);
+      axes.name = `${arm}-keyboard-work-frame`;
+      axes.renderOrder = 20;
+      axes.traverse((object: any) => {
+        if (object.material) {
+          object.material.depthTest = false;
+          object.material.transparent = true;
+        }
+      });
+      robotScene.live.add(axes);
+      keyboardWorkFrames[arm] = axes;
+    }
+    const pose = keyboardWorkFramePose(arm);
+    const visible = Boolean(axes && keyboardModeGloballyActive() && pose);
+    if (axes) {
+      axes.visible = visible;
+      if (pose) {
+        axes.position.fromArray(pose.position);
+        axes.quaternion.set(
+          pose.quaternion[1], pose.quaternion[2], pose.quaternion[3], pose.quaternion[0],
+        ).normalize();
+        axes.updateMatrixWorld(true);
+      }
+    }
+    if (visible) visibleArms.push(arm);
+  }
+  viewer.dataset.keyboardWorkFrames = visibleArms.join(",");
+  keyboardFrameLegend.hidden = visibleArms.length === 0;
+}
 function guideToKeyboardControl() {
   if (!keyboardModeActive() || inputModeState?.epoch === keyboardGuideEpoch || keyboardControlCard.hidden) return;
   keyboardGuideEpoch = inputModeState!.epoch;
@@ -437,6 +483,7 @@ function renderInputModeCard() {
   inputModeCard.hidden = !inputModeCatalog;
   if (!inputModeCatalog) {
     reconcileKeyboardControl();
+    updateKeyboardWorkFrames();
     return;
   }
   const remoteKeyboard = inputModeState?.phase === "ACTIVE" &&
@@ -465,6 +512,7 @@ function renderInputModeCard() {
   updateInputModeSelectionDisabled();
   reconcileKeyboardControl();
   guideToKeyboardControl();
+  updateKeyboardWorkFrames();
 }
 function finishInputModeRequestIfTerminal() {
   if (!activeInputModeRequest || activeInputModeExecutorRequest === undefined || !inputModeState ||
@@ -1011,6 +1059,7 @@ async function loadFleet() {
       setRobotJoints(shadow, armTargetSnapshot(config.id));
       live.updateMatrixWorld(true);
     });
+    updateKeyboardWorkFrames();
     const selectedConfig = robotConfig(selectedArm);
     setShadowVisibility(selectedArm);
     frameScene(false);
@@ -1159,6 +1208,7 @@ function handleMessage(message: Message) {
   } else if (message.type === "coordinate_state") {
     coordinateStates[message.arm] = message as CoordinateState;
     reconcileKeyboardControl();
+    updateKeyboardWorkFrames();
     renderFleetStrip();
     if (message.arm === selectedArm) {
       renderCoordinateState();

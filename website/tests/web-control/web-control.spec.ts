@@ -637,6 +637,10 @@ test("captures independent l/r physical keys only while keyboard is active", asy
   });
   await emitWebSocketEvent(page, { type: "keyboard_lease", active: true });
   await expect(page.locator("#keyboard-control-card")).toBeVisible();
+  await expect(page.locator("#viewer")).toHaveAttribute("data-keyboard-work-frames", "l,r");
+  await expect(page.locator("#keyboard-frame-legend")).toBeVisible();
+  await expect(page.locator("#keyboard-frame-legend")).toContainText("L WORK");
+  await expect(page.locator("#keyboard-frame-legend")).toContainText("R WORK");
 
   await page.keyboard.down("w");
   await page.keyboard.down("i");
@@ -663,6 +667,13 @@ test("captures independent l/r physical keys only while keyboard is active", asy
       .at(-1)?.keys.length,
   )).toBe(0);
   await page.keyboard.up("i");
+
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state", requested_mode: "none", selected_mode: "none",
+    active_mode: "none", phase: "ACTIVE", request_id: 52, epoch: 5, detail: "",
+  });
+  await expect(page.locator("#viewer")).toHaveAttribute("data-keyboard-work-frames", "");
+  await expect(page.locator("#keyboard-frame-legend")).toBeHidden();
 });
 
 test("does not send keyboard heartbeat when another browser owns the active mode", async ({ page }) => {

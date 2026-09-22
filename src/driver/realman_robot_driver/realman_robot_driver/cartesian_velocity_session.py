@@ -46,6 +46,8 @@ class _ValidatedGoal:
     ros_frame_id: str
     control_period_ms: int
     watchdog_ms: int
+    max_linear_speed_mps: float
+    max_angular_speed_radps: float
     max_linear_accel_mps2: float
     max_angular_accel_radps2: float
     follow: bool
@@ -435,10 +437,10 @@ class CartesianVelocitySession:
                 command_age_sec = age_ns / 1_000_000_000.0
             linear_speed = math.hypot(*vector[:3])
             angular_speed = math.hypot(*vector[3:])
-            if linear_speed > self.settings.max_linear_speed_mps + 1.0e-12:
-                raise ValueError("linear speed exceeds configured limit")
-            if angular_speed > self.settings.max_angular_speed_radps + 1.0e-12:
-                raise ValueError("angular speed exceeds configured limit")
+            if linear_speed > self._goal.max_linear_speed_mps + 1.0e-12:
+                raise ValueError("linear speed exceeds session limit")
+            if angular_speed > self._goal.max_angular_speed_radps + 1.0e-12:
+                raise ValueError("angular speed exceeds session limit")
             self._command = vector
             self._command_received_at = self._monotonic() - command_age_sec
             if self._ros_time_now_ns is not None:
@@ -463,7 +465,11 @@ class CartesianVelocitySession:
                 token = self._start_token
                 dt = max(0.0, now - self._last_tick_at)
                 self._last_tick_at = now
-                target = _clip_speed(self._command, self.settings)
+                target = _clip_speed(
+                    self._command,
+                    goal.max_linear_speed_mps,
+                    goal.max_angular_speed_radps,
+                )
                 linear = limit_vector_delta(
                     self._limited_command[:3],
                     target[:3],
@@ -838,6 +844,18 @@ class CartesianVelocitySession:
         watchdog = _positive_int(_field(goal, "watchdog_ms"), "watchdog_ms")
         if watchdog > self.settings.velocity_watchdog_ms:
             raise ValueError("watchdog_ms exceeds the configured watchdog")
+        linear_speed = _session_speed_limit(
+            _field(goal, "max_linear_speed_mps"),
+            self.settings.max_linear_speed_mps,
+            self.settings.linear_speed_hard_limit_mps,
+            "linear",
+        )
+        angular_speed = _session_speed_limit(
+            _field(goal, "max_angular_speed_radps"),
+            self.settings.max_angular_speed_radps,
+            self.settings.angular_speed_hard_limit_radps,
+            "angular",
+        )
         linear_accel = _positive_float(
             _field(goal, "max_linear_accel_mps2"), "max_linear_accel_mps2"
         )
@@ -871,6 +889,8 @@ class CartesianVelocitySession:
             ros_frame_id,
             period,
             watchdog,
+            linear_speed,
+            angular_speed,
             linear_accel,
             angular_accel,
             follow,
@@ -1331,15 +1351,33 @@ def _twist_stamp_ns(command: Any) -> int | None:
     return seconds * 1_000_000_000 + nanoseconds
 
 
-def _clip_speed(vector: Sequence[float], settings: MotionSettings) -> tuple[float, ...]:
+def _clip_speed(
+    vector: Sequence[float],
+    max_linear_speed_mps: float,
+    max_angular_speed_radps: float,
+) -> tuple[float, ...]:
     linear_norm = math.hypot(*vector[:3])
     angular_norm = math.hypot(*vector[3:])
-    linear_scale = min(1.0, settings.max_linear_speed_mps / linear_norm) if linear_norm else 1.0
-    angular_scale = min(1.0, settings.max_angular_speed_radps / angular_norm) if angular_norm else 1.0
+    linear_scale = min(1.0, max_linear_speed_mps / linear_norm) if linear_norm else 1.0
+    angular_scale = min(1.0, max_angular_speed_radps / angular_norm) if angular_norm else 1.0
     return tuple(
         value * (linear_scale if index < 3 else angular_scale)
         for index, value in enumerate(vector)
     )
+
+
+def _session_speed_limit(
+    value: Any,
+    standard: float,
+    hard_limit: float,
+    axis: str,
+) -> float:
+    if value is None or value == 0:
+        return standard
+    requested = _positive_float(value, f"max_{axis}_speed")
+    if requested > hard_limit + 1.0e-12:
+        raise ValueError(f"max_{axis}_speed exceeds hard {axis} speed limit")
+    return requested
 
 
 def _field(value: Any, name: str) -> Any:

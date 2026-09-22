@@ -286,6 +286,8 @@ void CartesianVelocityForDurationNode::readCommand() {
   goal_.reference_name = reference_->controller_name;
   goal_.control_period_ms = profile_->control_period_ms;
   goal_.watchdog_ms = profile_->watchdog_ms;
+  goal_.max_linear_speed_mps = profile_->max_linear_speed_mps;
+  goal_.max_angular_speed_radps = profile_->max_angular_speed_radps;
   goal_.max_linear_accel_mps2 = profile_->max_linear_accel_mps2;
   goal_.max_angular_accel_radps2 = profile_->max_angular_accel_radps2;
   goal_.follow = true;

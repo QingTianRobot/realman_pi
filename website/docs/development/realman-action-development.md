@@ -281,6 +281,8 @@ Action goal accepted
 | `reference_type/name` | 必须对应当前已验证的 WORK 或 TOOL 坐标；速度模式拒绝 BASE |
 | `control_period_ms` | 必须等于配置周期，当前默认 20 ms |
 | `watchdog_ms` | 正数且不超过配置上限，当前默认 100 ms |
+| `max_linear_speed_mps` | 本 session 的线速度向量模长上限；`0` 使用普通默认值，正数不得超过驱动硬上限 |
+| `max_angular_speed_radps` | 本 session 的角速度向量模长上限；`0` 使用普通默认值，正数不得超过驱动硬上限 |
 | `max_linear_accel_mps2` | 正数且不超过逐臂配置上限 |
 | `max_angular_accel_radps2` | 正数且不超过逐臂配置上限 |
 | `follow` | 原样传给 `rm_movev_canfd` |
@@ -293,6 +295,11 @@ Action goal accepted
 ROS 接口的 `ReferenceType` 与厂商速度初始化枚举不是同一个数值空间。驱动必须执行显式转换：
 `TOOL -> rm_set_movev_canfd_init frame_type 0`，`WORK -> frame_type 1`。不得把 ROS 的
 `TOOL=2` 原样传入 SDK。厂商接口没有独立 BASE 值，因此速度 Goal 使用 BASE 时在初始化前拒绝。
+
+`config/ros/realman_motion.yaml` 将普通会话速度与绝对硬上限分开。`max_linear_speed_mps` 当前仍为
+`0.05`，由 Web、键盘和普通行为树客户端写入 Goal；l/r 的 `hard_max_linear_speed_mps` 为 `1.0`，
+只供 Pika 的显式逐会话请求使用。m 的两个值都保持 `0.05`。驱动按 Goal 中已验证的 session 上限
+检查和裁剪每条 `TwistStamped`，不会因为提高 l/r 硬上限而自动放宽其它客户端。
 
 速度 feedback 还会返回命令向量、经过速度/加速度限制后的向量、`command_age_ms`、
 活动坐标和 API2 status。IDL 保留 `SUCCEEDED=0`，但当前速度 session 是开放式控制，

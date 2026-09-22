@@ -152,6 +152,9 @@ l/r 的 pending goal、accepted handle、最新命令、输入时间和取消状
 `config/ros/realman_motion.yaml` 的 `20 ms` 周期刷新，而 driver 自身 `100 ms` watchdog 对命令流再次检查。
 前一层处理 Web/网络停更，后一层处理 router 到 driver 的刷新中断。`dry_run=true` 时 router 仍执行目录、
 WORK、frame、速度上限和 timeout 校验，但不发送 Action Goal，也不向 driver command topic 发布消息。
+键盘 Action goal 显式携带普通会话上限 `0.05 m/s`；Pika 单独申请 `1.0 m/s` 不会改变键盘值。
+进入 `ACTIVE/keyboard` 时，:8765 Web 页还会把 l/r 已验证 WORK 的红/绿/蓝 XYZ 轴绘制在 URDF 场景中；
+模式离开或坐标失配即隐藏。
 
 同一个 keyboard router 还接收左右夹爪的全开／全闭边沿（左 `1/2`、右 `9/0`）。它们不属于速度 session，
 不依赖 WORK，按次经 `/keyboard/l|r/gripper_command` 转发到 `/gripper_left|right/percentage/command`。

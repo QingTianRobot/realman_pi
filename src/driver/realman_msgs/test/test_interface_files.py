@@ -197,6 +197,8 @@ def test_motion_action_contracts_are_exact():
                 "string reference_name",
                 "uint32 control_period_ms",
                 "uint32 watchdog_ms",
+                "float64 max_linear_speed_mps",
+                "float64 max_angular_speed_radps",
                 "float64 max_linear_accel_mps2",
                 "float64 max_angular_accel_radps2",
                 "bool follow",

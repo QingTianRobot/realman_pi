@@ -20,7 +20,8 @@ Policy/Pika 输入叶一样保持 `RUNNING` 并记录控制权；实际键盘速
 
 选择器显示 `Pika / 位置控制`（模式 ID `pikaposition`）和 `Pika / 速度控制`（模式 ID
 `pikavelocity`）两个独立选项。Pika 生产 topic 为 `/pika/l|r/cartesian_pose`（`PoseStamped`）
-和 `/pika/l|r/cartesian_velocity`（`TwistStamped`）；位置数据是基座坐标系下的米和四元数。
+和 `/pika/l|r/cartesian_velocity`（`TwistStamped`）；位置数据是基座坐标系下的米和四元数，
+速度数据必须使用该臂当前已验证的默认 WORK frame：左臂 `l/work/cell`，右臂 `r/work/cell`。
 夹爪开合度由 `/pika/l|r/gripper_percentage`（`std_msgs/msg/Float32`）持续发布，范围是
 `0.0..1.0`（`0` 闭合，`1` 张开）。Pika 只控制 l/r，绝不订阅或发送 m 的夹爪信号。
 
@@ -83,6 +84,11 @@ Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。键盘�
 goal 会立即取消，不能成为 active session。`dry_run=true` 时仍校验模式、WORK、配置和输入，但不发送
 driver Goal，也不发布 driver command。
 
+切入 `ACTIVE/keyboard` 后，Web 控制台会在 URDF 查看区同时绘制左右臂可用的 WORK 坐标轴：
+X/Y/Z 分别为红/绿/蓝，轴的位姿来自驱动回传的 `work.xyz_m` 与 `work.quaternion_wxyz`，再叠加
+`three_robots.yaml` 中该臂的 world 安装变换。离开 keyboard 或某臂 WORK 校验失效时，对应坐标轴立即隐藏；
+画面不会用静态默认值伪装成可控制坐标。
+
 同一 keyboard 分支还支持左右夹爪的单次全开／全闭：左 `1/2`、右 `9/0`，与速度键独立。
 Web bridge 检查 lease/sequence 并识别新按下边沿，发布 `/keyboard/l|r/gripper_command`
 （`std_msgs/msg/String` JSON：`command`、`epoch`、`request_id`、`stamp_ns`）。router 只在
@@ -98,6 +104,30 @@ Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/com
 其它模式会丢弃输入，不自动开合。夹爪 command topic 是非阻塞的连续控制路径，`dry_run=true`
 （默认）时不发送机器人 Action 或夹爪 command。需要真实 Pika 运动时必须显式设置
 `REALMAN_BT_DRY_RUN=false`，并完成低速、急停和工作区检查。
+
+`pikavelocity` 是实时速度流，而不是单点位置目标。其逐会话线速度向量模长上限来自
+[`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 的
+`pika_velocity.max_linear_speed_mps`，当前为 `1.0 m/s`；角速度上限仍为 `0.25 rad/s`。
+驱动配置中的普通会话上限继续是 `0.05 m/s`，所以键盘、Web 手动速度和普通行为树速度节点不会随
+Pika 一起升速。驱动仅将 l/r 的绝对逐会话硬上限设为 `1.0 m/s`，m 仍为 `0.05 m/s`。
+
+Pika 发送端应以约 `50 Hz` 分别发布左右臂，消息字段如下；`header.stamp` 必须使用发送节点当前 ROS
+clock、非零且严格递增，不能重复使用旧消息：
+
+```yaml
+# /pika/l/cartesian_velocity
+header:
+  stamp: <node.get_clock().now().to_msg()>
+  frame_id: l/work/cell
+twist:
+  linear:  {x: 0.10, y: 0.00, z: 0.00}   # m/s
+  angular: {x: 0.00, y: 0.00, z: 0.00}   # rad/s
+```
+
+右臂只把 `frame_id` 改为 `r/work/cell` 并发布到 `/pika/r/cartesian_velocity`。线速度限制按
+`sqrt(vx^2 + vy^2 + vz^2)` 计算；例如 `(1, 1, 0)` 的模长约为 `1.414 m/s`，会被拒绝。
+输入停止超过 `100 ms` 后 driver watchdog 会零速并终止 session；正常停止也应先连续发送零向量，
+然后切换到 `none` 或其它输入模式。
 
 切入任一 Pika 模式时，行为树先用 `ThreeArmMoveJ` 将 l/m/r 移动到
 [`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 中

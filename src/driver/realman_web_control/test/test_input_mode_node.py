@@ -139,6 +139,7 @@ def node(monkeypatch):
         "joints": [{"name": f"joint_{index}", "lower_deg": -180.0, "upper_deg": 180.0} for index in range(6)],
         "frames": {"base": {"type": 0, "name": "base", "frame_id": f"{arm}/base_link"}},
         "motion": {"velocity_control_period_ms": 20, "velocity_watchdog_ms": 100,
+                   "max_linear_speed_mps": 0.05, "max_angular_speed_radps": 0.25,
                    "max_linear_accel_mps2": 0.1, "max_angular_accel_radps2": 0.5},
     } for arm in ("l", "m", "r")}
     value._motion_clients = {arm: ActionTransport() for arm in ("l", "m", "r")}
@@ -319,6 +320,9 @@ def test_dispatch_sends_generated_goal_only_after_matching_state(node, kind, goa
     node._input_mode_state(state())
     assert len(sent(node)) == 1
     assert type(sent(node)[0]).__name__ == goal_type
+    if kind == "start_cartesian_velocity":
+        assert sent(node)[0].max_linear_speed_mps == 0.05
+        assert sent(node)[0].max_angular_speed_radps == 0.25
 
 
 def test_direct_dispatch_is_preserved_without_catalog(node):

@@ -28,6 +28,8 @@ def test_router_requires_active_keyboard_and_verified_default_work():
     assert 'state.get("motion_allowed") is True' in source
     assert "CartesianVelocity.Goal.WORK" in source
     assert "CartesianVelocity.Goal.BASE" not in source
+    assert "goal.max_linear_speed_mps = profile.max_linear_speed_mps" in source
+    assert "goal.max_angular_speed_radps = profile.max_angular_speed_radps" in source
 
 
 def test_router_stops_on_timeout_mode_loss_and_shutdown():

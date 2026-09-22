@@ -129,6 +129,8 @@ def settings(
     *,
     max_linear_speed_mps=1.0,
     max_angular_speed_radps=2.0,
+    hard_max_linear_speed_mps=None,
+    hard_max_angular_speed_radps=None,
     velocity_watchdog_ms=100,
 ) -> MotionSettings:
     return MotionSettings(
@@ -141,6 +143,8 @@ def settings(
         max_angular_accel_radps2=2.0,
         joint_goal_tolerance_deg=0.25,
         stop_timeout_sec=1.0,
+        hard_max_linear_speed_mps=hard_max_linear_speed_mps,
+        hard_max_angular_speed_radps=hard_max_angular_speed_radps,
     )
 
 
@@ -171,6 +175,8 @@ def valid_goal(**changes):
         reference_name="tcpgrip",
         control_period_ms=20,
         watchdog_ms=100,
+        max_linear_speed_mps=1.0,
+        max_angular_speed_radps=2.0,
         max_linear_accel_mps2=1.0,
         max_angular_accel_radps2=2.0,
         follow=True,
@@ -414,7 +420,11 @@ def test_tick_limits_linear_and_angular_delta_norms_independently():
             velocity_watchdog_ms=2000,
         ),
     )
-    session.start(valid_goal(watchdog_ms=2000))
+    session.start(valid_goal(
+        watchdog_ms=2000,
+        max_linear_speed_mps=10.0,
+        max_angular_speed_radps=10.0,
+    ))
     session.accept_command(twist("l/tool/tcpgrip", linear=(3.0, 4.0, 0.0), angular=(0.0, 3.0, 4.0)))
 
     clock.advance(1.0)
@@ -921,6 +931,52 @@ def test_goal_safety_settings_cannot_exceed_configuration(field, value, message)
 
     with pytest.raises(ValueError, match=message):
         session.start(valid_goal(**{field: value}))
+
+    assert ownership.is_busy("l") is False
+
+
+def test_session_goal_can_request_pika_speed_up_to_the_driver_hard_limit():
+    session = make_session(
+        session_settings=settings(
+            max_linear_speed_mps=0.05,
+            hard_max_linear_speed_mps=1.0,
+        )
+    )
+
+    assert session.start(valid_goal(max_linear_speed_mps=1.0)) is True
+    assert session.accept_command(twist("l/tool/tcpgrip", linear=(0.8, 0.0, 0.0))) is True
+    with pytest.raises(ValueError, match="session limit"):
+        session.accept_command(twist("l/tool/tcpgrip", linear=(1.01, 0.0, 0.0)))
+    session.shutdown()
+
+
+def test_zero_goal_speed_uses_the_standard_session_limit():
+    session = make_session(
+        session_settings=settings(
+            max_linear_speed_mps=0.05,
+            hard_max_linear_speed_mps=1.0,
+        )
+    )
+
+    assert session.start(valid_goal(max_linear_speed_mps=0.0)) is True
+    assert session.accept_command(twist("l/tool/tcpgrip", linear=(0.05, 0.0, 0.0))) is True
+    with pytest.raises(ValueError, match="session limit"):
+        session.accept_command(twist("l/tool/tcpgrip", linear=(0.051, 0.0, 0.0)))
+    session.shutdown()
+
+
+def test_goal_speed_cannot_exceed_the_driver_hard_limit():
+    ownership = ArmOwnership()
+    session = make_session(
+        ownership=ownership,
+        session_settings=settings(
+            max_linear_speed_mps=0.05,
+            hard_max_linear_speed_mps=1.0,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="hard linear speed limit"):
+        session.start(valid_goal(max_linear_speed_mps=1.01))
 
     assert ownership.is_busy("l") is False
 

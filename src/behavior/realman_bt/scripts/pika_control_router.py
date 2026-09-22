@@ -13,6 +13,7 @@ from geometry_msgs.msg import PoseStamped, TwistStamped
 from rclpy.action import ActionClient
 from rclpy.executors import ExternalShutdownException
 from rclpy.node import Node
+from rclpy.parameter import Parameter
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
 from realman_msgs.action import CartesianPose, CartesianVelocity
 from realman_msgs.msg import InputModeState
@@ -26,17 +27,100 @@ GRIPPER_COMMAND_TOPICS = {
 
 
 @dataclass
+class _ArmProfile:
+    reference_name: str
+    frame_id: str
+    control_period_ms: int
+    watchdog_ms: int
+    max_linear_speed_mps: float
+    max_angular_speed_radps: float
+    max_linear_accel_mps2: float
+    max_angular_accel_radps2: float
+
+
+@dataclass
 class _ArmState:
     pose_client: ActionClient
     velocity_client: ActionClient
     pose_publisher: Any
     velocity_publisher: Any
     gripper_publisher: Any
+    profile: _ArmProfile
     goal_handle: Any = None
     pending_goal: Any = None
     active_kind: str = ""
     cancel_pending: Any = None
     last_input_at: float = 0.0
+
+
+def _positive_float(value: Any, field: str) -> float:
+    try:
+        parsed = float(value)
+    except (TypeError, ValueError) as error:
+        raise ValueError(f"{field} must be numeric") from error
+    if not math.isfinite(parsed) or parsed <= 0.0:
+        raise ValueError(f"{field} must be positive and finite")
+    return parsed
+
+
+def parse_arm_profiles(
+    coordinate_references: list[str],
+    velocity_profiles: list[str],
+    max_linear_speed_mps: float,
+    max_angular_speed_radps: float,
+) -> dict[str, _ArmProfile]:
+    references: dict[str, tuple[str, str]] = {}
+    for entry in coordinate_references:
+        parts = entry.split("|")
+        if len(parts) != 5:
+            raise ValueError("coordinate reference is malformed")
+        arm, logical_name, reference_type, controller_name, frame_id = parts
+        if arm in {"l", "r"} and logical_name == "default_work":
+            if arm in references or reference_type != "1" or not controller_name or not frame_id:
+                raise ValueError(f"{arm} default WORK reference is invalid or duplicated")
+            references[arm] = (controller_name, frame_id)
+
+    motion: dict[str, tuple[int, int, float, float]] = {}
+    for entry in velocity_profiles:
+        parts = entry.split("|")
+        if len(parts) != 9:
+            raise ValueError("Cartesian velocity profile is malformed")
+        arm = parts[0]
+        if arm not in {"l", "r"}:
+            continue
+        if arm in motion:
+            raise ValueError(f"duplicate Cartesian velocity profile for {arm}")
+        try:
+            period = int(parts[1])
+            watchdog = int(parts[2])
+        except ValueError as error:
+            raise ValueError(f"{arm} period/watchdog must be integers") from error
+        if period <= 0 or watchdog <= 0:
+            raise ValueError(f"{arm} period/watchdog must be positive")
+        motion[arm] = (
+            period,
+            watchdog,
+            _positive_float(parts[5], f"{arm}.max_linear_accel_mps2"),
+            _positive_float(parts[6], f"{arm}.max_angular_accel_radps2"),
+        )
+
+    if set(references) != {"l", "r"} or set(motion) != {"l", "r"}:
+        raise ValueError("l and r default WORK references and velocity profiles are required")
+    linear_limit = _positive_float(max_linear_speed_mps, "max_linear_speed_mps")
+    angular_limit = _positive_float(max_angular_speed_radps, "max_angular_speed_radps")
+    return {
+        arm: _ArmProfile(
+            references[arm][0],
+            references[arm][1],
+            motion[arm][0],
+            motion[arm][1],
+            linear_limit,
+            angular_limit,
+            motion[arm][2],
+            motion[arm][3],
+        )
+        for arm in ("l", "r")
+    }
 
 
 class PikaControlRouter(Node):
@@ -51,6 +135,12 @@ class PikaControlRouter(Node):
         self.max_angular_speed_radps = float(self.declare_parameter("max_angular_speed_radps", 0.25).value)
         self.max_linear_accel_mps2 = float(self.declare_parameter("max_linear_accel_mps2", 0.10).value)
         self.max_angular_accel_radps2 = float(self.declare_parameter("max_angular_accel_radps2", 0.50).value)
+        profiles = parse_arm_profiles(
+            list(self.declare_parameter("coordinate_references", Parameter.Type.STRING_ARRAY).value),
+            list(self.declare_parameter("cartesian_velocity_profiles", Parameter.Type.STRING_ARRAY).value),
+            self.declare_parameter("pika_velocity_max_linear_speed_mps", 1.0).value,
+            self.declare_parameter("pika_velocity_max_angular_speed_radps", 0.25).value,
+        )
         self.mode = ""
         self._arms: dict[str, _ArmState] = {}
         self._last_unavailable_log: dict[tuple[str, str], float] = {}
@@ -68,6 +158,7 @@ class PikaControlRouter(Node):
                 pose_publisher,
                 velocity_publisher,
                 gripper_publisher,
+                profiles[arm],
             )
             self.create_subscription(PoseStamped, f"/pika/{arm}/cartesian_pose", lambda message, arm=arm: self._pose(arm, message), 1)
             self.create_subscription(TwistStamped, f"/pika/{arm}/cartesian_velocity", lambda message, arm=arm: self._velocity(arm, message), 1)
@@ -107,7 +198,7 @@ class PikaControlRouter(Node):
             if not client.server_is_ready():
                 client.wait_for_server(timeout_sec=0.0)
                 continue
-            goal = self._pose_goal() if kind == "position" else self._velocity_goal()
+            goal = self._pose_goal() if kind == "position" else self._velocity_goal(state.profile)
             state.pending_goal = client.send_goal_async(goal)
             state.pending_goal.add_done_callback(lambda future, arm=arm, kind=kind: self._goal_response(arm, kind, future))
 
@@ -169,6 +260,23 @@ class PikaControlRouter(Node):
         if self.mode != "pikavelocity":
             return
         state = self._arms[arm]
+        profile = state.profile
+        linear = (message.twist.linear.x, message.twist.linear.y, message.twist.linear.z)
+        angular = (message.twist.angular.x, message.twist.angular.y, message.twist.angular.z)
+        if message.header.frame_id != profile.frame_id:
+            self.get_logger().warning(
+                f"Ignoring Pika velocity for {arm}: frame_id must be {profile.frame_id!r}"
+            )
+            return
+        if not all(math.isfinite(value) for value in (*linear, *angular)):
+            self.get_logger().warning(f"Ignoring Pika velocity for {arm}: components must be finite")
+            return
+        if math.hypot(*linear) > profile.max_linear_speed_mps + 1.0e-12:
+            self.get_logger().warning(f"Ignoring Pika velocity for {arm}: linear speed exceeds Pika session limit")
+            return
+        if math.hypot(*angular) > profile.max_angular_speed_radps + 1.0e-12:
+            self.get_logger().warning(f"Ignoring Pika velocity for {arm}: angular speed exceeds Pika session limit")
+            return
         state.last_input_at = time.monotonic()
         if not self.dry_run and state.goal_handle is not None:
             state.velocity_publisher.publish(message)
@@ -201,14 +309,17 @@ class PikaControlRouter(Node):
         goal.radio = 0
         return goal
 
-    def _velocity_goal(self) -> CartesianVelocity.Goal:
+    @staticmethod
+    def _velocity_goal(profile: _ArmProfile) -> CartesianVelocity.Goal:
         goal = CartesianVelocity.Goal()
-        goal.reference_type = CartesianVelocity.Goal.BASE
-        goal.reference_name = "base"
-        goal.control_period_ms = self.control_period_ms
-        goal.watchdog_ms = self.watchdog_ms
-        goal.max_linear_accel_mps2 = self.max_linear_accel_mps2
-        goal.max_angular_accel_radps2 = self.max_angular_accel_radps2
+        goal.reference_type = CartesianVelocity.Goal.WORK
+        goal.reference_name = profile.reference_name
+        goal.control_period_ms = profile.control_period_ms
+        goal.watchdog_ms = profile.watchdog_ms
+        goal.max_linear_speed_mps = profile.max_linear_speed_mps
+        goal.max_angular_speed_radps = profile.max_angular_speed_radps
+        goal.max_linear_accel_mps2 = profile.max_linear_accel_mps2
+        goal.max_angular_accel_radps2 = profile.max_angular_accel_radps2
         goal.follow = True
         goal.trajectory_mode = 0
         goal.radio = 0

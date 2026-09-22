@@ -1487,7 +1487,11 @@ class WebControlNode(Node):
                     f"goal.{goal_key} must equal configured {int(settings[expected_key])}",
                     message["request_id"],
                 )
+        goal_values["max_linear_speed_mps"] = settings["max_linear_speed_mps"]
+        goal_values["max_angular_speed_radps"] = settings["max_angular_speed_radps"]
         for goal_key, setting_key in (
+            ("max_linear_speed_mps", "max_linear_speed_mps"),
+            ("max_angular_speed_radps", "max_angular_speed_radps"),
             ("max_linear_accel_mps2", "max_linear_accel_mps2"),
             ("max_angular_accel_radps2", "max_angular_accel_radps2"),
         ):

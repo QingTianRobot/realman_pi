@@ -35,6 +35,17 @@ def test_pika_router_uses_both_continuous_driver_actions():
     assert 'self.mode != expected_mode' in source
 
 
+def test_pika_velocity_uses_default_work_and_per_session_speed_limits():
+    source = ROUTER.read_text(encoding="utf-8")
+
+    assert "parse_arm_profiles" in source
+    assert "CartesianVelocity.Goal.WORK" in source
+    assert "goal.max_linear_speed_mps = profile.max_linear_speed_mps" in source
+    assert "goal.max_angular_speed_radps = profile.max_angular_speed_radps" in source
+    assert "message.header.frame_id != profile.frame_id" in source
+    assert "linear speed exceeds Pika session limit" in source
+
+
 def test_pika_router_forwards_continuous_gripper_percentages_for_left_and_right():
     source = ROUTER.read_text(encoding="utf-8")
 

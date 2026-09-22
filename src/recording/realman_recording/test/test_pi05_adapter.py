@@ -47,3 +47,10 @@ def test_pi05_adapter_requires_explicit_checkpoint_dimensions():
         assert "explicit" in str(error)
     else:
         raise AssertionError("adapter guessed checkpoint dimensions")
+
+
+def test_pi05_adapter_can_explicitly_include_recorded_gripper_command():
+    frame = _frame()
+    frame = frame.__class__(**{**frame.__dict__, "command_gripper": (0.4, 0.5, 0.6)})
+    sample = Pi05Adapter(Pi05AdapterConfig(expected_state_dim=24, expected_action_dim=21, include_gripper_command=True)).adapt(frame)
+    assert sample["action"][-3:] == (0.4, 0.5, 0.6)

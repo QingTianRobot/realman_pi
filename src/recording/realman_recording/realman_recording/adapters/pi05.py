@@ -20,6 +20,7 @@ class Pi05AdapterConfig:
     rotation_representation: str = "quaternion_xyzw"
     expected_state_dim: int | None = None
     expected_action_dim: int | None = None
+    include_gripper_command: bool = False
 
     def __post_init__(self) -> None:
         if self.rotation_representation not in {"quaternion_xyzw", "rot6d"}:
@@ -63,6 +64,10 @@ class Pi05Adapter:
             state.extend(pose[3:] if self.config.rotation_representation == "quaternion_xyzw" else _rot6d(pose[3:]))
         state.extend(frame.gripper_position)
         action = tuple(float(value) for value in frame.command_cartesian_velocity)
+        if self.config.include_gripper_command:
+            if frame.command_gripper is None:
+                raise ValueError("π0.5 profile requires a recorded canonical gripper command")
+            action += tuple(float(value) for value in frame.command_gripper)
         if len(state) != self.config.expected_state_dim:
             raise ValueError(f"π0.5 state dimension {len(state)} does not match configured checkpoint dimension {self.config.expected_state_dim}")
         if len(action) != self.config.expected_action_dim:
@@ -94,5 +99,7 @@ class Pi05Adapter:
             ee_pose_base=values("observation.ee_pose_base"), ee_velocity_base=(),
             gripper_position=values("observation.gripper_position"),
             command_cartesian_velocity=values("action.command.cartesian_velocity"),
-            command_gripper=None, valid=bool(valid), sync_error_ns=(),
+            command_gripper=(
+                values("action.command.gripper") if "action.command.gripper" in features else None
+            ), valid=bool(valid), sync_error_ns=(),
         )

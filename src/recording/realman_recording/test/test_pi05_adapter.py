@@ -31,10 +31,19 @@ def test_pi05_adapter_rot6d_and_dimension_contract_are_explicit():
 
 def test_pi05_adapter_accepts_lerobot_feature_mapping():
     frame = _frame()
-    sample = Pi05Adapter(Pi05AdapterConfig()).adapt({
+    sample = Pi05Adapter(Pi05AdapterConfig(expected_state_dim=24, expected_action_dim=18)).adapt({
         "observation.ee_pose_base": frame.ee_pose_base,
         "observation.gripper_position": frame.gripper_position,
         "action.command.cartesian_velocity": frame.command_cartesian_velocity,
         "quality.valid": (True,),
     })
     assert sample["action"] == frame.command_cartesian_velocity
+
+
+def test_pi05_adapter_requires_explicit_checkpoint_dimensions():
+    try:
+        Pi05AdapterConfig()
+    except ValueError as error:
+        assert "explicit" in str(error)
+    else:
+        raise AssertionError("adapter guessed checkpoint dimensions")

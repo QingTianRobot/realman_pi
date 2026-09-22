@@ -18,12 +18,14 @@ class Pi05AdapterConfig:
     """A checkpoint's exact proprioception/action contract, never inferred."""
 
     rotation_representation: str = "quaternion_xyzw"
-    expected_state_dim: int = 24
-    expected_action_dim: int = 18
+    expected_state_dim: int | None = None
+    expected_action_dim: int | None = None
 
     def __post_init__(self) -> None:
         if self.rotation_representation not in {"quaternion_xyzw", "rot6d"}:
             raise ValueError("π0.5 rotation_representation must be quaternion_xyzw or rot6d")
+        if self.expected_state_dim is None or self.expected_action_dim is None:
+            raise ValueError("π0.5 checkpoint dimensions must be explicit")
         if self.expected_state_dim <= 0 or self.expected_action_dim <= 0:
             raise ValueError("π0.5 checkpoint dimensions must be positive")
 

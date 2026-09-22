@@ -25,6 +25,7 @@ from .joint_state import ordered_joint_position
 from .kinematics import UrdfKinematics
 from .lerobot_schema import LeRobotV3Schema, schema_from_parameters
 from .lerobot_dataset_store import dataset_lock
+from .json_io import atomic_json_write
 from .provenance import verify_optional_snapshot
 
 
@@ -256,7 +257,7 @@ class LeRobotExporter:
                        "units": {"joint_position": "rad", "joint_velocity": "rad/s", "ee_position": "m", "ee_angular_velocity": "rad/s"},
                        "generator_versions": {"joint_velocity": "finite_difference_v1", "ee_fk": "urdf_fk_v1", "ee_velocity": "quaternion_shortest_arc_v1"},
                    }}
-        (session_dir / "export" / "lerobot-v3.json").write_text(json.dumps(receipt, indent=2), encoding="utf-8")
+        atomic_json_write(session_dir / "export" / "lerobot-v3.json", receipt)
 
     @staticmethod
     def _camera_archive_quality(session_dir: Path) -> dict[str, Any]:

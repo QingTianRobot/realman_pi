@@ -33,3 +33,27 @@ def test_camera_archive_quality_reads_persisted_queue_stats(tmp_path: Path):
         "state": "AVAILABLE",
         "stats": {"front": {"accepted": 10, "dropped": 2, "errors": 1}},
     }
+
+
+def test_v3_receipt_is_written_as_a_complete_json_document(tmp_path: Path):
+    schema = schema_from_parameters(
+        repo_id="realman/pi05-three-arm", fps=15.0, arms=["l"],
+        arm_action_topics=["/l/cartesian_velocity/command"],
+        gripper_position_topics=["/gripper_left/position"],
+        gripper_action_topics=[], camera_ids=["front"],
+        base_frames=["l/base_link"], ee_links=["link_6"],
+        cartesian_command_frames=["l/base_link"],
+    )
+    (tmp_path / "export").mkdir()
+    urdf = tmp_path / "robot.urdf"
+    urdf.write_text("<robot name='test'/>", encoding="utf-8")
+
+    LeRobotExporter._write_v3_receipt(
+        tmp_path, tmp_path / "dataset", {"session_id": "session-1"}, schema,
+        3, [100, 200], urdf, {"state": "UNAVAILABLE"},
+    )
+
+    receipt = __import__("json").loads((tmp_path / "export" / "lerobot-v3.json").read_text(encoding="utf-8"))
+    assert receipt["episode_index"] == 3
+    assert receipt["first_walltime_ns"] == 100
+    assert receipt["canonical"]["camera_archive_quality"] == {"state": "UNAVAILABLE"}

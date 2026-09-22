@@ -28,6 +28,7 @@ from .joint_state import ordered_joint_position
 from .kinematics import UrdfKinematics
 from .lerobot_schema import LeRobotV3Schema, schema_from_parameters
 from .lerobot_dataset_store import dataset_lock
+from .provenance import verify_optional_snapshot
 
 
 @dataclass(frozen=True)
@@ -64,6 +65,12 @@ class LeRobotExporter:
 
     def _export_v3(self, request: ExportRequest, schema: LeRobotV3Schema) -> Path:
         manifest = self._load_final_manifest(request.session_dir)
+        verify_optional_snapshot(
+            request.session_dir,
+            manifest.get("metadata", {}).get("canonical", {}).get(
+                "calibration", {"state": "UNAVAILABLE"}
+            ),
+        )
         streams = self._read_mcap_streams(request.session_dir, schema)
         _unused_anchors, camera_frames = self._read_camera_anchors(request.session_dir)
         required = self._v3_streams(streams, schema)

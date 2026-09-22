@@ -25,7 +25,6 @@ class SessionState(str, Enum):
     SCHEDULED = "SCHEDULED"
     COUNTDOWN = "COUNTDOWN"
     RECORDING = "RECORDING"
-    PAUSED = "PAUSED"
     FINALIZING = "FINALIZING"
     EXPORTING = "EXPORTING"
     EXPORTED = "EXPORTED"
@@ -79,7 +78,6 @@ class SessionStore:
                 "failure_reason": None,
                 "human_intervention_count": None,
             },
-            "pause_intervals": [],
             # A finalized raw session is deliberately pending until an upstream system
             # explicitly adopts or discards it; recording never auto-exports data.
             "decision": "PENDING",
@@ -94,16 +92,6 @@ class SessionStore:
         self.state = target
         self._manifest["state"] = target.value
         self._manifest.update(updates)
-        self._write_partial()
-
-    def add_pause_interval(self, started_monotonic_ns: int, ended_monotonic_ns: int) -> None:
-        if self._manifest is None:
-            raise RuntimeError("no active recording session")
-        if ended_monotonic_ns < started_monotonic_ns:
-            raise ValueError("pause interval ends before it starts")
-        self._manifest["pause_intervals"].append(
-            {"started_monotonic_ns": started_monotonic_ns, "ended_monotonic_ns": ended_monotonic_ns}
-        )
         self._write_partial()
 
     def update_metadata(self, **updates: Any) -> None:

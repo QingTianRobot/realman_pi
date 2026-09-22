@@ -27,7 +27,7 @@ src/recording/
 │   │   ├── web_server.py                  # aiohttp 静态页/WS/预览 + /api/layout + /models
 │   │   ├── layout_manifest.py             # 三臂展示 manifest（读 three_robots.yaml）
 │   │   ├── topic_catalog.py               # 录制 topic→消息类型/类型名 的单一事实来源
-│   │   ├── camera_workers.py              # 原始相机分段与低清预览 worker
+│   │   ├── camera_workers.py              # 原始相机 JPEG 帧归档与低清预览 worker
 │   │   ├── state_archive.py               # 有界队列 + rosbag2 MCAP 写入
 │   │   ├── session_store.py               # session 目录、manifest 原子更新
 │   │   ├── json_io.py                     # 原子 JSON 写（manifest/media-index 共用）
@@ -129,8 +129,8 @@ Service：`/recording/manage`，类型：`realman_recording_msgs/srv/ManageRecor
 <recording_root>/<session_id>/
 ├── state.mcap
 ├── videos/
-│   ├── <camera_id>/segment-000000.mkv
-│   └── media-index.json
+│   ├── <camera_id>/<receipt_walltime_ns>.jpg
+│   └── media-index.json                   # 每帧 path + SYSTEM_TIME receipt
 ├── metadata/robot.urdf         # 启动时快照的 FK 真值来源
 ├── metadata/camera_calibration.yaml # 可选：配置的已解算标定结果快照
 ├── manifest.partial.json       # 录制期间原子更新（含 URDF hash/feature capability）
@@ -138,7 +138,7 @@ Service：`/recording/manage`，类型：`realman_recording_msgs/srv/ManageRecor
 └── export/lerobot/             # ADOPT 后异步转换目标，当前仍后置
 ```
 
-manifest 至少包含 `schema_version`、`session_id`、`metadata.profile/task`、起止时间锚点、pause intervals、文件位置、最终 summary、`decision` 和 `export` 状态。`accepted_samples` 表示成功写给 writer 的样本；`enqueued_samples`/`dropped_samples` 用于区分队列背压和实际落盘失败。
+manifest 至少包含 `schema_version`、`session_id`、`metadata.profile/task`、起止时间锚点、文件位置、最终 summary、`decision` 和 `export` 状态。`accepted_samples` 表示成功写给 writer 的样本；`enqueued_samples`/`dropped_samples` 用于区分队列背压和实际落盘失败。
 
 `calibration_snapshot_path` 为空时，session 的 canonical metadata 明确写入 `calibration.state=UNAVAILABLE`；这类数据可以用于纯 2D 行为克隆，但不能冒充具备可靠几何标定的数据。配置该路径后，recorder 在 START 前复制该文件到 `metadata/camera_calibration.yaml` 并保存 SHA-256 和 version；配置了不存在的路径会拒绝启动。
 
@@ -150,7 +150,7 @@ Web 只做实时只读展示，不放录制控制按钮。页面组件建议保�
 2. 相机组件：按配置动态生成 4 个卡片；低清 JPEG 通过独立 URL 获取。
 3. 机械臂组件：动态生成 3 个 arm 卡片，显示连接、6 个关节和坐标摘要。
 4. 3D 组件：复用 `src/driver/realman_web_control/web/src/main.ts` 的 Three.js + `urdf-loader` 思路，加载三臂 URDF 和 `three_robots.yaml` 的位姿，将 `/l|m|r/joint_states` 映射到模型。
-5. 录制状态组件：显示 PREPARE/RECORDING/PAUSED/READY/FAILED、elapsed、remaining、drop count。
+5. 录制状态组件：显示 PREPARE/RECORDING/FINALIZING/READY/FAILED、elapsed、remaining、drop count。
 
 不要直接复用完整 Web Control bundle，因为它包含运动控制、Action、MOVEJ/MOVEL 等不属于录制页面的功能。应抽取只读 3D viewer 或建立独立前端构建入口。
 
@@ -220,7 +220,7 @@ Rerun 的实时 adapter 可以保留用于调试，但默认关闭；离线 repl
 - 在 `src/recording/realman_recording` 目录运行 `python3 setup.py build_py`。
 - preflight：新鲜/过期话题、连接状态、磁盘和 MCAP 可用性。
 - state archive：队列满丢弃、停止 no-op、写入成功/失败计数、writer close。
-- camera worker：多路隔离、pause 分段、media-index、JPEG 分帧、ffmpeg 异常退出。
+- camera worker：多路隔离、有界队列丢帧、media-index、JPEG 分帧和写入错误统计。
 - session store：partial/final manifest 原子性、路径遍历拒绝、ADOPT/DISCARD。
 - web protocol：运动命令、超长消息、非法时间戳必须拒绝。
 - Rerun adapter/replay：无 SDK、canonical frame、相机筛选和时间轴边界。
@@ -231,7 +231,7 @@ Rerun 的实时 adapter 可以保留用于调试，但默认关闭；离线 repl
 - `colcon build --packages-up-to realman_recording realman_recording_msgs`
 - `colcon test --packages-select realman_recording realman_recording_msgs`
 - 真实 ROS graph 下确认 3 个机械臂 topic 能持续到达。
-- 真机确认 4 路 ROS image topic 逐路预检、录制、暂停/恢复和 index。
+- 真机确认 4 路 ROS image topic 逐路预检、录制、STOP 和 index。
 - 用 rosbag2 重新读取 `state.mcap`，确认 topic type、时间戳和样本数量。
 - 浏览器断开、慢客户端、Rerun 关闭时确认 archive dropped 不因展示端增加。
 - 离线 Rerun 回放真实 session，确认图像、关节、夹爪时间轴一致。

@@ -10,15 +10,19 @@ def test_session_store_creates_minimal_layout_and_finalizes(tmp_path):
     store = SessionStore(tmp_path)
     session = store.create({"profile": "default"})
     store.transition(SessionState.RECORDING)
-    store.add_pause_interval(10, 20)
     final = store.finalize(True, accepted_samples=3)
 
     manifest = json.loads(final.read_text(encoding="utf-8"))
     assert manifest["state"] == "READY"
     assert manifest["annotations"]["success"] is None
-    assert manifest["pause_intervals"] == [{"started_monotonic_ns": 10, "ended_monotonic_ns": 20}]
+    assert "pause_intervals" not in manifest
     assert (session.directory / "videos").is_dir()
     assert (session.directory / "export" / "lerobot").is_dir()
+
+
+def test_session_lifecycle_exposes_only_service_reachable_states():
+    """PAUSED is not a ManageRecording command and must not leak into manifests."""
+    assert not hasattr(SessionState, "PAUSED")
 
 
 def test_finalized_manifest_accepts_atomic_adoption_decision(tmp_path):

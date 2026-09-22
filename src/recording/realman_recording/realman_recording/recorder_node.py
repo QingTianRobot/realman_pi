@@ -47,7 +47,6 @@ _STATUS_CODE = {
     SessionState.SCHEDULED: RecordingStatus.SCHEDULED,
     SessionState.COUNTDOWN: RecordingStatus.COUNTDOWN,
     SessionState.RECORDING: RecordingStatus.RECORDING,
-    SessionState.PAUSED: RecordingStatus.PAUSED,
     SessionState.FINALIZING: RecordingStatus.FINALIZING,
     SessionState.EXPORTING: RecordingStatus.EXPORTING,
     SessionState.EXPORTED: RecordingStatus.EXPORTED,
@@ -118,8 +117,6 @@ class RecordingRecorderNode(Node):
         self._cameras_requested = False
         self._state = SessionState.IDLE
         self._deadline_monotonic_ns: int | None = None
-        self._paused_remaining_sec: float | None = None
-        self._pause_started_monotonic_ns: int | None = None
         self._recorded_topics: set[str] = set()
         # Keep a completed session visible to status consumers after ownership of
         # its writers has been released.  This is metadata only, never a writer.
@@ -418,8 +415,6 @@ class RecordingRecorderNode(Node):
                 if goal.duration_sec > 0
                 else None
             )
-            self._paused_remaining_sec = None
-            self._pause_started_monotonic_ns = None
             self._scheduled_goal = None
             self._scheduled_start_wall_ns = 0
             self._scheduled_starting = False
@@ -514,38 +509,6 @@ class RecordingRecorderNode(Node):
     def _diagnostics_json(self) -> str:
         return json.dumps(self._preflight_payload(), separators=(",", ":"))
 
-    def _pause_session(self) -> str:
-        """Freeze the countdown and close camera segments without finalizing the session."""
-        with self._lock:
-            self._require_state(SessionState.RECORDING)
-            self._paused_remaining_sec = self._remaining_sec()
-            self._pause_started_monotonic_ns = time.monotonic_ns()
-            self._deadline_monotonic_ns = None
-            self._state = SessionState.PAUSED
-            assert self._store and self._store.session
-            self._store.transition(self._state)
-            if self._camera_worker is not None:
-                self._camera_worker.pause()
-            return self._store.session.session_id
-
-    def _resume_session(self) -> str:
-        """Record a pause interval, restore the countdown, and reopen camera segments."""
-        with self._lock:
-            self._require_state(SessionState.PAUSED)
-            now = time.monotonic_ns()
-            assert self._store and self._store.session
-            if self._pause_started_monotonic_ns is not None:
-                self._store.add_pause_interval(self._pause_started_monotonic_ns, now)
-            if self._paused_remaining_sec is not None:
-                self._deadline_monotonic_ns = now + int(self._paused_remaining_sec * 1e9)
-            self._paused_remaining_sec = None
-            self._pause_started_monotonic_ns = None
-            self._state = SessionState.RECORDING
-            self._store.transition(self._state)
-            if self._camera_worker is not None:
-                self._camera_worker.resume(self._store.session.directory / "videos")
-            return self._store.session.session_id
-
     def _stop_session(self, *, success: bool, reason: str) -> str | None:
         """Finalize the session: stop archive/camera writers and write the final manifest.
 
@@ -558,16 +521,12 @@ class RecordingRecorderNode(Node):
             if store is None or store.session is None:
                 return None
             session_id = store.session.session_id
-            if self._state is SessionState.PAUSED and self._pause_started_monotonic_ns is not None:
-                store.add_pause_interval(self._pause_started_monotonic_ns, time.monotonic_ns())
             self._state = SessionState.FINALIZING
             store.transition(self._state)
             self._store = None
             self._archive = None
             self._camera_worker = None
             self._deadline_monotonic_ns = None
-            self._paused_remaining_sec = None
-            self._pause_started_monotonic_ns = None
         archive_stats = archive.stop() if archive is not None else None
         camera_summary = camera_worker.stop() if camera_worker is not None else {}
         archive_write_errors = archive_stats.write_errors if archive_stats else 1
@@ -822,8 +781,6 @@ class RecordingRecorderNode(Node):
 
     def _remaining_sec(self) -> float:
         """Seconds until the countdown deadline, or the frozen remainder while paused."""
-        if self._paused_remaining_sec is not None:
-            return self._paused_remaining_sec
         if self._deadline_monotonic_ns is None:
             return 0.0
         return max(0.0, (self._deadline_monotonic_ns - time.monotonic_ns()) / 1e9)

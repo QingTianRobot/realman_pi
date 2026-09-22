@@ -7,7 +7,7 @@ description: RealMan 驱动输出的隔离录制、预检、低清展示与 LeRo
 
 `realman_recording` 是一个独立 ROS 2 节点组：它只订阅已有的驱动与夹爪输出，不创建 `Robotic_Arm`/RealMan SDK 客户端，也不发布机械臂运动命令。网页端是只读展示，不发起任何录制控制；上游系统通过 `/recording/manage` Service 控制录制生命周期，不能复用或代理 `realman_web_control` 的运动面板。
 
-录制和数据集转换是两个阶段：停止时只原子收尾原始 MCAP/视频 session；上游明确采用后才会请求独立 LeRobot worker。转换占用的 CPU、GPU、视频解码或失败均不得减慢下一次 ROS 数据录制。
+录制和数据集转换是两个阶段：停止时只原子收尾原始 MCAP/JPEG 帧 session；上游明确采用后才会请求独立 LeRobot worker。转换占用的 CPU、GPU、图像解码或失败均不得减慢下一次 ROS 数据录制。
 
 MCAP 状态写入、ROS `Image` 有界 JPEG 录制、低清 JPEG 预览、夹爪/相机健康状态、Three.js/URDF 三臂展示、预检和预约控制已经接入。`ADOPT` 会在 ROS executor 外把完成 session 异步转换为 `lerobot==0.6.1` 的 canonical v3 episode；失败会持久化为 `FAILED`，不会伪造成功的数据集。
 MCAP 的 `accepted_samples` 仅在序列化并成功交给 writer 后递增；`enqueued_samples`
@@ -104,7 +104,7 @@ Compose 将仓库 `recordings/` 挂载为容器 `/data/realman-recordings`，同
 环境完成的集成验证，不应通过伪造依赖标记为成功：
 
 1. `state_archive.py`（已接入）：用 `rosbag2_py` 的 `SequentialWriter` 以 `storage_id="mcap"` 建 topic、序列化消息并在收尾时关闭 writer；bag 记录时间取 receipt wall-clock 纳秒。session manifest 的成对 wall/monotonic 起始锚点供导出换算媒体时间轴；没有 `header.stamp` 的话题只可使用 receipt 时间。
-2. `camera_workers.py`（已接入）：每路 ROS `Image` 回调只把原始消息放入独立有界队列，JPEG 编码和落盘均在 archive worker 中执行；暂停产生媒体间隙并写入 `media-index.json`。低清预览使用另一个限 FPS、限分辨率、只保留最新 JPEG 的 worker。遗留 RTSP/ffmpeg helper 仅用于迁移，不是 recorder 的运行路径。
+2. `camera_workers.py`（已接入）：每路 ROS `Image` 回调只把原始消息放入独立有界队列，JPEG 编码和落盘均在 archive worker 中执行；STOP 时按每帧 receipt 写入 `media-index.json`。低清预览使用另一个限 FPS、限分辨率、只保留最新 JPEG 的 worker。遗留 RTSP/ffmpeg helper 仅用于迁移，不是 recorder 的运行路径。
 3. `web_server.py` 与 `static/index.html`（已接入）：预览使用独立 endpoint；只读 Three.js/URDF 三臂 viewer 已实现（参考 web_control 的 urdf-loader 方案，把 `/l|m|r/joint_states` 实时套到 URDF 模型）。它只提供 `/api/layout`、`/preview/<camera>.jpg`、`/models/*` 与 `/ws`，不提供 dataset/replay API；前端源在 `web/`，经 `npm run build:recording`（Vite，`config/recording/vite.config.mjs`）构建到 `static/`。
 4. `lerobot_exporter.py`：ADOPT 后在 ROS executor 外读取 MCAP/JPEG，以配置的 SYSTEM_TIME 网格对齐，使用 `lerobot==0.6.1` 追加 canonical v3 episode。它保存关节位置/派生速度、URDF FK EE pose/velocity、夹爪位置、真实 Cartesian command 和 quality；不会把 π0.5 的 state/action 向量当作原始事实。SDK 读回仍需容器验证。
 5. `replay.py`（已并入 `realman_recording` 包）：Rerun 从 receipt 指定的 canonical LeRobot 单 episode 读取低维数据和视频，而不是回退 raw MCAP/JPEG；它展示 canonical field，不假设某一模型的 state/action layout。
@@ -136,7 +136,7 @@ python3 -m pytest src/recording/realman_recording/test
 docker compose config
 ```
 
-实现完成后应在 Humble 容器运行 `colcon build`/`colcon test`，然后确认：MCAP 可由 rosbag2 读取、视频分段与 pause manifest 一致、关闭浏览器不会增加状态队列丢失、导出的 LeRobot 数据集可被目标版本加载。
+实现完成后应在 Humble 容器运行 `colcon build`/`colcon test`，然后确认：MCAP 可由 rosbag2 读取、JPEG 帧与 media-index receipt 一致、关闭浏览器不会增加状态队列丢失、导出的 LeRobot 数据集可被目标版本加载。
 
 ## 真实 ROS 图只读探针
 

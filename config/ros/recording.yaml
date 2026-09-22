@@ -47,13 +47,11 @@
     # PREPARE gates only these task-critical observations. Do not add optional
     # torque/alarm/action streams here unless the selected task truly needs them.
     preflight_required_topics: [/l/joint_states, /m/joint_states, /r/joint_states, /gripper_left/position, /gripper_mid/position, /gripper_right/position]
-    # Subscribe directly to the camera image_raw ROS topics. This removes the
-    # RTSP relay buffer and keeps camera receipt timestamps in the ROS 2 SYSTEM_TIME
-    # domain used by the state archive. Topic names must be confirmed with `ros2 topic list`.
+    # Subscribe directly to camera image_raw ROS topics and keep receipt timestamps
+    # in the ROS 2 SYSTEM_TIME domain used by the state archive. Topic names must be
+    # confirmed with `ros2 topic list`.
     camera_ids: [orbbec-left, orbbec-middle, orbbec-right, d435]
     camera_image_topics: [/camera_left/color/image_raw, /camera_middle/color/image_raw, /camera_right/color/image_raw, /camera_global/d435/color/image_raw]
-    # Retained empty for one release so old launch overrides parse; recorder never uses RTSP.
-    camera_rtsp_urls: ['']
     max_camera_image_queue: 64
     export_target_fps: 15.0
     # Frames with a state/action/camera gap larger than this are rejected during export.
@@ -95,7 +93,6 @@
     preview_fps: 5.0
     camera_ids: [orbbec-left, orbbec-middle, orbbec-right, d435]
     camera_image_topics: [/camera_left/color/image_raw, /camera_middle/color/image_raw, /camera_right/color/image_raw, /camera_global/d435/color/image_raw]
-    camera_rtsp_urls: ['']
     arm_namespaces: [l, m, r]
     gripper_position_topics: [/gripper_left/position, /gripper_mid/position, /gripper_right/position]
     gripper_torque_topics: [/gripper_left/torque_reached, /gripper_mid/torque_reached, /gripper_right/torque_reached]

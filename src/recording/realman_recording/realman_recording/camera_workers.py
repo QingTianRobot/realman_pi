@@ -3,14 +3,11 @@
 The normal path consumes ROS image topics.  A ROS callback only offers the raw
 ``sensor_msgs/Image`` object to a bounded queue; JPEG encoding and file I/O happen
 on this module's worker thread.
-The older RTSP workers remain as migration helpers, but are not used by the recorder.
 """
 from __future__ import annotations
 
 import queue
-import subprocess
 import threading
-import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Callable, Sequence
@@ -21,17 +18,7 @@ from .json_io import atomic_json_write
 @dataclass(frozen=True)
 class CameraSource:
     camera_id: str
-    rtsp_url: str = ""
-    image_topic: str = ""
-
-
-@dataclass
-class _ActiveSegment:
-    camera_id: str
-    path: Path
-    started_wall_ns: int
-    started_monotonic_ns: int
-    process: Any
+    image_topic: str
 
 
 @dataclass(frozen=True)
@@ -42,236 +29,20 @@ class PreviewFrame:
     jpeg: bytes
 
 
-_FFMPEG_COMMON_FLAGS = ["-hide_banner", "-loglevel", "warning", "-rtsp_transport", "tcp"]
-
-
 def load_camera_sources(node: Any) -> tuple[CameraSource, ...]:
     """Read camera ids and ROS image topics into validated sources.
 
-    The recorder and the Web bridge both need the same id↔url pairing with equal
+    The recorder and the Web bridge both need the same id↔topic pairing with equal
     length; this helper keeps the two nodes from re-implementing the check (and from
     disagreeing on its error type).
     """
     ids = [str(item) for item in node.get_parameter("camera_ids").value if str(item)]
     topics = [str(item) for item in node.get_parameter("camera_image_topics").value if str(item)]
-    # Kept solely so an older deployment can still parse its parameter file.  Recording
-    # nodes require image topics and never silently fall back to delayed RTSP capture.
-    # The [""] type placeholder (empty-list defaults are parsed as byte arrays) is
-    # dropped here so an absent RTSP list stays empty.
-    urls = [str(item) for item in node.get_parameter("camera_rtsp_urls").value if str(item)]
     if len(ids) != len(topics):
         raise ValueError("camera_ids and camera_image_topics must have equal length")
-    if urls and len(ids) != len(urls):
-        raise ValueError("camera_rtsp_urls must be empty or match camera_ids")
     if any(not topic.startswith("/") for topic in topics):
         raise ValueError("camera_image_topics must contain absolute ROS topic names")
-    return tuple(
-        CameraSource(camera_id, urls[index] if urls else "", topic)
-        for index, (camera_id, topic) in enumerate(zip(ids, topics))
-    )
-
-
-def extract_jpeg_frames(buffer: bytes) -> tuple[list[bytes], bytes]:
-    """Split complete JPEGs from an ffmpeg image2pipe buffer without retaining old bytes."""
-    frames: list[bytes] = []
-    while True:
-        start = buffer.find(b"\xff\xd8")
-        if start < 0:
-            return frames, buffer[-1:]
-        end = buffer.find(b"\xff\xd9", start + 2)
-        if end < 0:
-            return frames, buffer[start:]
-        frames.append(buffer[start : end + 2])
-        buffer = buffer[end + 2 :]
-
-
-class CameraRecordingWorker:
-    """Own a source-quality, best-effort RTSP-to-file worker for one session."""
-
-    def __init__(
-        self,
-        sources: tuple[CameraSource, ...],
-        *,
-        popen: Callable[..., Any] = subprocess.Popen,
-        wall_clock_ns: Callable[[], int] = time.time_ns,
-        monotonic_clock_ns: Callable[[], int] = time.monotonic_ns,
-    ) -> None:
-        if len({source.camera_id for source in sources}) != len(sources):
-            raise ValueError("camera_ids must be unique")
-        if any(not source.camera_id or not source.rtsp_url for source in sources):
-            raise ValueError("camera source requires non-empty id and RTSP URL")
-        self._sources = sources
-        self._popen = popen
-        self._wall_clock_ns = wall_clock_ns
-        self._monotonic_clock_ns = monotonic_clock_ns
-        self._active: dict[str, _ActiveSegment] = {}
-        self._segments: list[dict[str, Any]] = []
-        self._errors: dict[str, str] = {}
-        self._video_root: Path | None = None
-        self._next_segment = 0
-        self._lock = threading.RLock()
-
-    def start(self, video_root: Path) -> None:
-        """Start one isolated source-copy MKV segment per camera.
-
-        ffmpeg remains a child of this worker, not a ROS callback. Stderr inherits the
-        node process so standard ROS launch logging owns it; no hidden log files are
-        created. A camera that fails to start is recorded in the index but does not
-        abort state recording or other camera workers.
-        """
-        video_root.mkdir(mode=0o750, parents=True, exist_ok=True)
-        self._video_root = video_root
-        for source in self._sources:
-            if source.camera_id in self._active:
-                continue
-            self._start_source(source)
-
-    def pause(self) -> None:
-        """Close each active segment so a pause remains an explicit media gap."""
-        self._stop_active("paused")
-
-    def resume(self, video_root: Path) -> None:
-        """Start subsequent segments after pause without inventing continuity."""
-        self.start(video_root)
-
-    def stop(self) -> dict[str, Any]:
-        """Stop only camera worker processes and report health; never raise into the writer."""
-        self._collect_exited_processes()
-        self._stop_active("stopped")
-        if self._video_root is not None:
-            atomic_json_write(
-                self._video_root / "media-index.json",
-                {"segments": self._segments, "errors": self._errors},
-            )
-        return self.health_summary(stopped=True)
-
-    @property
-    def healthy(self) -> bool:
-        """True only while every configured source has an active recording process."""
-        self._collect_exited_processes()
-        with self._lock:
-            return bool(self._sources) and not self._errors and len(self._active) == len(self._sources)
-
-    def health_summary(self, *, stopped: bool = False) -> dict[str, dict[str, str]]:
-        """Return current camera health, polling children without blocking ROS callbacks."""
-        self._collect_exited_processes()
-        with self._lock:
-            return {
-                source.camera_id: {
-                    "state": "error" if source.camera_id in self._errors else (
-                        "stopped" if stopped else "recording"
-                    ),
-                    "error": self._errors.get(source.camera_id, ""),
-                }
-                for source in self._sources
-            }
-
-    @staticmethod
-    def probe_sources(
-        sources: Sequence[CameraSource], *, timeout_sec: float, run: Callable[..., Any] = subprocess.run
-    ) -> dict[str, bool]:
-        """Require ffprobe to identify a video stream before recording is armed."""
-        if timeout_sec <= 0:
-            raise ValueError("camera probe timeout must be positive")
-        results: dict[str, bool] = {}
-        for source in sources:
-            try:
-                completed = run(
-                    [
-                        "ffprobe", "-v", "error", "-rtsp_transport", "tcp",
-                        "-select_streams", "v:0", "-show_entries", "stream=codec_type",
-                        "-of", "default=noprint_wrappers=1:nokey=1", source.rtsp_url,
-                    ],
-                    stdin=subprocess.DEVNULL,
-                    stdout=subprocess.PIPE,
-                    stderr=subprocess.PIPE,
-                    text=True,
-                    timeout=timeout_sec,
-                    check=False,
-                )
-                results[source.camera_id] = completed.returncode == 0 and "video" in completed.stdout
-            except (OSError, subprocess.TimeoutExpired):
-                results[source.camera_id] = False
-        return results
-
-    def _start_source(self, source: CameraSource) -> None:
-        assert self._video_root is not None
-        directory = self._video_root / source.camera_id
-        directory.mkdir(mode=0o750, parents=True, exist_ok=True)
-        path = directory / f"segment-{self._next_segment:06d}.mkv"
-        self._next_segment += 1
-        command = [
-            "ffmpeg", *_FFMPEG_COMMON_FLAGS,
-            "-i", source.rtsp_url, "-map", "0:v:0", "-c", "copy", "-f", "matroska", str(path),
-        ]
-        started_wall_ns = self._wall_clock_ns()
-        started_monotonic_ns = self._monotonic_clock_ns()
-        try:
-            process = self._popen(command, stdin=subprocess.DEVNULL)
-            if process.poll() is not None:
-                self._errors[source.camera_id] = "ffmpeg exited during startup"
-                return
-        except OSError as error:
-            self._errors[source.camera_id] = str(error)
-            return
-        self._active[source.camera_id] = _ActiveSegment(
-            source.camera_id, path, started_wall_ns, started_monotonic_ns, process
-        )
-
-    def _stop_active(self, reason: str) -> None:
-        for camera_id, active in list(self._active.items()):
-            ended_wall_ns = self._wall_clock_ns()
-            ended_monotonic_ns = self._monotonic_clock_ns()
-            process = active.process
-            try:
-                process.terminate()
-                exit_code = process.wait(timeout=5.0)
-            except Exception as error:  # noqa: BLE001 - child failure is isolated per source
-                self._errors[camera_id] = str(error)
-                kill = getattr(process, "kill", None)
-                if callable(kill):
-                    try:
-                        kill()
-                    except Exception:
-                        pass
-                exit_code = None
-            self._segments.append(
-                {
-                    "camera_id": camera_id,
-                    "path": str(active.path.relative_to(self._video_root)) if self._video_root else str(active.path),
-                    "started_wall_ns": active.started_wall_ns,
-                    "ended_wall_ns": ended_wall_ns,
-                    "started_monotonic_ns": active.started_monotonic_ns,
-                    "ended_monotonic_ns": ended_monotonic_ns,
-                    "reason": reason,
-                    "exit_code": exit_code,
-                }
-            )
-            del self._active[camera_id]
-
-    def _collect_exited_processes(self) -> None:
-        """Move unexpectedly exited children into the media index exactly once."""
-        with self._lock:
-            exited = [
-                (camera_id, active, active.process.poll())
-                for camera_id, active in self._active.items()
-                if active.process.poll() is not None
-            ]
-            for camera_id, active, exit_code in exited:
-                self._errors[camera_id] = f"ffmpeg exited unexpectedly with code {exit_code}"
-                self._segments.append(
-                    {
-                        "camera_id": camera_id,
-                        "path": str(active.path.relative_to(self._video_root)) if self._video_root else str(active.path),
-                        "started_wall_ns": active.started_wall_ns,
-                        "ended_wall_ns": self._wall_clock_ns(),
-                        "started_monotonic_ns": active.started_monotonic_ns,
-                        "ended_monotonic_ns": self._monotonic_clock_ns(),
-                        "reason": "ffmpeg exited unexpectedly",
-                        "exit_code": exit_code,
-                    }
-                )
-                del self._active[camera_id]
+    return tuple(CameraSource(camera_id, topic) for camera_id, topic in zip(ids, topics))
 
 
 class RosImageArchive:
@@ -507,92 +278,3 @@ def image_to_jpeg(image: Any, *, quality: int = 90, width: int | None = None, he
     if not ok:
         raise ValueError("JPEG encode failed for raw image frame")
     return encoded.tobytes()
-
-
-class LowQualityPreviewWorker:
-    """Lossy RTSP decoder that owns no recording state or raw-media files."""
-
-    def __init__(
-        self,
-        sources: tuple[CameraSource, ...],
-        on_frame: Callable[[PreviewFrame], None],
-        *,
-        width: int,
-        height: int,
-        fps: float,
-        popen: Callable[..., Any] = subprocess.Popen,
-        wall_clock_ns: Callable[[], int] = time.time_ns,
-        monotonic_clock_ns: Callable[[], int] = time.monotonic_ns,
-    ) -> None:
-        if width < 1 or height < 1 or fps <= 0:
-            raise ValueError("preview width, height and fps must be positive")
-        self._sources = sources
-        self._on_frame = on_frame
-        self._width, self._height, self._fps = width, height, fps
-        self._popen = popen
-        self._wall_clock_ns = wall_clock_ns
-        self._monotonic_clock_ns = monotonic_clock_ns
-        self._running = threading.Event()
-        self._processes: dict[str, Any] = {}
-        self._threads: list[threading.Thread] = []
-
-    def start(self) -> None:
-        if self._running.is_set():
-            return
-        self._running.set()
-        for source in self._sources:
-            thread = threading.Thread(
-                target=self._decode_source,
-                args=(source,),
-                name=f"recording-preview-{source.camera_id}",
-                daemon=True,
-            )
-            self._threads.append(thread)
-            thread.start()
-
-    def stop(self) -> None:
-        self._running.clear()
-        for process in list(self._processes.values()):
-            try:
-                process.terminate()
-            except Exception:
-                pass
-        for thread in self._threads:
-            thread.join(timeout=2.0)
-        self._threads.clear()
-        self._processes.clear()
-
-    def _decode_source(self, source: CameraSource) -> None:
-        command = [
-            "ffmpeg", *_FFMPEG_COMMON_FLAGS, "-i", source.rtsp_url,
-            "-vf", f"fps={self._fps},scale={self._width}:{self._height}:force_original_aspect_ratio=decrease",
-            "-q:v", "8", "-f", "image2pipe", "-vcodec", "mjpeg", "pipe:1",
-        ]
-        try:
-            process = self._popen(command, stdin=subprocess.DEVNULL, stdout=subprocess.PIPE)
-        except OSError:
-            return
-        self._processes[source.camera_id] = process
-        try:
-            stream = process.stdout
-            if stream is None:
-                return
-            buffer = b""
-            while self._running.is_set():
-                chunk = stream.read(65_536)
-                if not chunk:
-                    return
-                frames, buffer = extract_jpeg_frames(buffer + chunk)
-                for jpeg in frames:
-                    if not self._running.is_set():
-                        return
-                    self._on_frame(
-                        PreviewFrame(
-                            camera_id=source.camera_id,
-                            capture_monotonic_ns=self._monotonic_clock_ns(),
-                            capture_wall_ns=self._wall_clock_ns(),
-                            jpeg=jpeg,
-                        )
-                    )
-        finally:
-            self._processes.pop(source.camera_id, None)

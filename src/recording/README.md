@@ -77,7 +77,7 @@ flowchart LR
 
 1. ROS 回调只记录接收侧 `SYSTEM_TIME`、更新新鲜度，并尝试无阻塞地把消息放进 MCAP 队列。
 2. MCAP 序列化和磁盘写入只由 archive worker 执行；队列满时丢样本并累计计数。
-3. 原始相机从 ROS `sensor_msgs/Image` topic 进入独立有界 raw-image archive；JPEG 编码和文件 I/O 在 archive worker 中执行，相机失败不能让机械臂状态采集失败。旧 RTSP/ffmpeg worker 仅保留作迁移兼容，不属于当前 recorder 路径。
+3. 原始相机从 ROS `sensor_msgs/Image` topic 进入独立有界 raw-image archive；JPEG 编码和文件 I/O 在 archive worker 中执行，相机失败不能让机械臂状态采集失败。录制平台不再支持 RTSP/ffmpeg 输入。
 4. Web 状态只发送限频 JSON；JPEG 通过独立 endpoint 获取，不进入 MCAP 队列。
 5. Rerun 离线程序读取已完成 session，不读取 recorder 内存对象，不连接实时 ROS 图。
 
@@ -263,7 +263,7 @@ recording_runtime_probe --duration-sec 5 \
   --device-status-topic /camera_right/device_status
 ```
 
-宿主没有 ROS 2、pytest、ffmpeg 或 Rerun SDK 时，不要通过伪造依赖声称这些运行测试通过；只报告静态检查和纯逻辑冒烟结果。
+宿主没有 ROS 2、pytest、OpenCV 或 Rerun SDK 时，不要通过伪造依赖声称这些运行测试通过；只报告静态检查和纯逻辑冒烟结果。
 
 ## 12. 常用验证命令
 

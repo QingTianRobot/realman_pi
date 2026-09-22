@@ -92,7 +92,6 @@ class RecordingRecorderNode(Node):
         # JPEG and file I/O happen in the archive worker, never in this callback.
         # Full queues drop frames and count the loss without blocking ROS.
         self.declare_parameter("max_camera_image_queue", 64)
-        self.declare_parameter("camera_rtsp_urls", [""])
         self.declare_parameter("export_target_fps", 10.0)
         self.declare_parameter("export_max_gap_sec", 2.0)
         self.declare_parameter("preflight_max_age_sec", 2.0)
@@ -481,7 +480,7 @@ class RecordingRecorderNode(Node):
         return shutil.disk_usage(candidate).free
 
     def _probe_cameras(self) -> dict[str, bool]:
-        """Use recent ROS image receipts as camera readiness; never open an RTSP client."""
+        """Use recent ROS image receipts as camera readiness."""
         now_wall_ns = self._receipt_wall_clock.now().nanoseconds
         max_age_ns = int(float(self.get_parameter("preflight_max_age_sec").value) * 1e9)
         with self._lock:
@@ -512,7 +511,7 @@ class RecordingRecorderNode(Node):
     def _stop_session(self, *, success: bool, reason: str) -> str | None:
         """Finalize the session: stop archive/camera writers and write the final manifest.
 
-        The durable writers are stopped outside the lock so a slow ffmpeg/rosbag close
+        The durable writers are stopped outside the lock so a slow archive/rosbag close
         cannot block subscription callbacks.  The final READY/FAILED state reflects both
         the requested ``success`` and whether the archive reported write errors.
         """

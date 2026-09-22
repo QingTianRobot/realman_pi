@@ -57,7 +57,6 @@ class RecordingWebBridgeNode(Node):
         self.declare_parameter("preview_fps", 5.0)
         self.declare_parameter("camera_ids", [""])
         self.declare_parameter("camera_image_topics", [""])
-        self.declare_parameter("camera_rtsp_urls", [""])
         self.declare_parameter("arm_namespaces", ["l", "m", "r"])
         self.declare_parameter("gripper_position_topics", [""])
         self.declare_parameter("gripper_torque_topics", [""])

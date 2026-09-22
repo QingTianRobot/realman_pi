@@ -355,7 +355,9 @@ class RecordingRecorderNode(Node):
                         "gripper_action_topics": [str(item) for item in self.get_parameter("gripper_action_topics").value if str(item)],
                         "camera_ids": [str(item) for item in self.get_parameter("camera_ids").value if str(item)],
                     },
-                }
+                },
+                started_realtime_ns=now_wall_ns,
+                started_monotonic_ns=time.monotonic_ns(),
             )
             try:
                 # FK must use the exact robot model that applied when raw data was
@@ -392,7 +394,11 @@ class RecordingRecorderNode(Node):
                     },
                 })
             except Exception as error:
-                store.finalize(False, reason=f"canonical URDF snapshot failed: {error}")
+                store.finalize(
+                    False,
+                    ended_realtime_ns=self._receipt_wall_clock.now().nanoseconds,
+                    reason=f"canonical URDF snapshot failed: {error}",
+                )
                 raise
             archive = McapStateArchive(int(self.get_parameter("max_state_queue").value))
             try:
@@ -400,7 +406,11 @@ class RecordingRecorderNode(Node):
             except Exception as error:
                 # Session creation precedes bag opening, so close its manifest on a
                 # storage/plugin/permission failure instead of leaving COUNTDOWN data.
-                store.finalize(False, reason=f"MCAP archive startup failed: {error}")
+                store.finalize(
+                    False,
+                    ended_realtime_ns=self._receipt_wall_clock.now().nanoseconds,
+                    reason=f"MCAP archive startup failed: {error}",
+                )
                 raise
             self._store = store
             self._archive = archive
@@ -431,6 +441,7 @@ class RecordingRecorderNode(Node):
                     archive_stats = archive.stop()
                     store.finalize(
                         False,
+                        ended_realtime_ns=self._receipt_wall_clock.now().nanoseconds,
                         reason=f"camera writer startup failed: {error}",
                         enqueued_samples=archive_stats.enqueued,
                         accepted_samples=archive_stats.accepted,
@@ -533,6 +544,7 @@ class RecordingRecorderNode(Node):
         directory = store.session.directory
         store.finalize(
             final_success,
+            ended_realtime_ns=self._receipt_wall_clock.now().nanoseconds,
             reason=final_reason,
             enqueued_samples=archive_stats.enqueued if archive_stats else 0,
             accepted_samples=archive_stats.accepted if archive_stats else 0,
@@ -574,7 +586,10 @@ class RecordingRecorderNode(Node):
         """Mark a clean finalized session adopted and queue its exporter worker."""
         directory = self._session_directory(session_id)
         with self._decision_lock:
-            SessionStore.adopt_final_session(directory)
+            SessionStore.adopt_final_session(
+                directory,
+                requested_realtime_ns=self._receipt_wall_clock.now().nanoseconds,
+            )
         self._queue_export(directory, session_id)
         return session_id
 
@@ -591,7 +606,10 @@ class RecordingRecorderNode(Node):
         """Logically discard a finalized session while retaining raw artifacts for audit."""
         directory = self._session_directory(session_id)
         with self._decision_lock:
-            SessionStore.discard_final_session(directory)
+            SessionStore.discard_final_session(
+                directory,
+                discarded_realtime_ns=self._receipt_wall_clock.now().nanoseconds,
+            )
         return session_id
 
     def _export_adopted_session(self, directory: Path) -> None:
@@ -606,7 +624,10 @@ class RecordingRecorderNode(Node):
             self._export_error = ""
             SessionStore.update_final_manifest(
                 directory,
-                export={"state": "RUNNING", "started_realtime_ns": time.time_ns()},
+                export={
+                    "state": "RUNNING",
+                    "started_realtime_ns": self._receipt_wall_clock.now().nanoseconds,
+                },
             )
         try:
             result = LeRobotExporter().export(
@@ -642,7 +663,11 @@ class RecordingRecorderNode(Node):
                 self._export_error = str(error)
                 SessionStore.update_final_manifest(
                     directory,
-                    export={"state": "FAILED", "message": str(error), "ended_realtime_ns": time.time_ns()},
+                    export={
+                        "state": "FAILED",
+                        "message": str(error),
+                        "ended_realtime_ns": self._receipt_wall_clock.now().nanoseconds,
+                    },
                 )
             self.get_logger().error(f"LeRobot export failed for {directory.name}: {error}")
         else:
@@ -652,7 +677,11 @@ class RecordingRecorderNode(Node):
                 self._export_error = ""
                 SessionStore.update_final_manifest(
                     directory,
-                    export={"state": "SUCCEEDED", "result": str(result), "ended_realtime_ns": time.time_ns()},
+                    export={
+                        "state": "SUCCEEDED",
+                        "result": str(result),
+                        "ended_realtime_ns": self._receipt_wall_clock.now().nanoseconds,
+                    },
                 )
 
     def _resolve_urdf_source(self) -> Path:

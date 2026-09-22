@@ -119,7 +119,7 @@ Service：`/recording/manage`，类型：`realman_recording_msgs/srv/ManageRecor
 | `ADOPT=2` | 标记 READY session 采用，并异步提交后置 LeRobot 转换 | 否 |
 | `DISCARD=3` | 标记 READY session 舍弃，但保留原始文件审计 | 否 |
 
-时间戳约定：所有接收时间使用 ROS 2 `SYSTEM_TIME`（epoch nanoseconds）；MCAP bag record time 使用回调接收时间；消息自身的 `header.stamp` 若存在必须原样保留；浏览器倒计时只显示 `/recording/status`，不能决定停止时刻；预约开始在触发时重新执行预检。
+时间戳约定：所有接收时间、session 创建/结束时间和 ADOPT/导出审计时间均使用 ROS 2 `SYSTEM_TIME`（epoch nanoseconds）；MCAP bag record time 使用回调接收时间；消息自身的 `header.stamp` 若存在必须原样保留。仅录制时长的本地计时使用单调时钟；浏览器倒计时只显示 `/recording/status`，不能决定停止时刻；预约开始在触发时重新执行预检。
 
 `/recording/manage` 是唯一的会话控制入口；录制平台不再提供 `recording/manage_session` Action。Web 保持纯只读，不创建任何控制客户端。
 

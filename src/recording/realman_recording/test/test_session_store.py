@@ -20,6 +20,23 @@ def test_session_store_creates_minimal_layout_and_finalizes(tmp_path):
     assert (session.directory / "export" / "lerobot").is_dir()
 
 
+def test_session_store_accepts_explicit_ros_walltime_for_auditable_manifest_timestamps(tmp_path):
+    """The recorder, not the filesystem helper, owns the ROS SYSTEM_TIME clock."""
+    store = SessionStore(tmp_path)
+    session = store.create(
+        {"profile": "default"},
+        started_realtime_ns=1_700_000_000_123_456_789,
+        started_monotonic_ns=456,
+    )
+    final = store.finalize(True, ended_realtime_ns=1_700_000_001_123_456_789)
+
+    manifest = json.loads(final.read_text(encoding="utf-8"))
+    assert session.started_realtime_ns == 1_700_000_000_123_456_789
+    assert session.started_monotonic_ns == 456
+    assert manifest["started_realtime_ns"] == 1_700_000_000_123_456_789
+    assert manifest["ended_realtime_ns"] == 1_700_000_001_123_456_789
+
+
 def test_session_lifecycle_exposes_only_service_reachable_states():
     """PAUSED is not a ManageRecording command and must not leak into manifests."""
     assert not hasattr(SessionState, "PAUSED")
@@ -53,9 +70,10 @@ def test_adoption_is_atomic_and_rejects_repeat_or_write_errors(tmp_path):
     store = SessionStore(tmp_path)
     session = store.create({"profile": "default"})
     store.finalize(True, write_errors=0)
-    adopted = SessionStore.adopt_final_session(session.directory)
+    adopted = SessionStore.adopt_final_session(session.directory, requested_realtime_ns=123)
     assert adopted["decision"] == "ADOPTED"
     assert adopted["export"]["state"] == "QUEUED"
+    assert adopted["export"]["requested_realtime_ns"] == 123
     try:
         SessionStore.adopt_final_session(session.directory)
     except RuntimeError as error:

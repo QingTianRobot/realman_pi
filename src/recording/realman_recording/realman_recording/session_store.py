@@ -49,12 +49,27 @@ class SessionStore:
         self.state = SessionState.IDLE
         self._manifest: dict[str, Any] | None = None
 
-    def create(self, metadata: dict[str, Any]) -> RecordingSession:
+    def create(
+        self,
+        metadata: dict[str, Any],
+        *,
+        started_realtime_ns: int | None = None,
+        started_monotonic_ns: int | None = None,
+    ) -> RecordingSession:
+        """Create a session using recorder-supplied clocks when available.
+
+        Production callers pass ROS 2 ``SYSTEM_TIME`` for the epoch timestamp and
+        ``time.monotonic_ns`` for duration accounting.  The local fallbacks retain
+        this class's standalone filesystem-test usability; they must not be used by
+        the recorder's data path.
+        """
         if self.session is not None:
             raise RuntimeError("a recording session is already active")
         self.root.mkdir(mode=0o750, parents=True, exist_ok=True)
-        realtime_ns = time.time_ns()
-        monotonic_ns = time.monotonic_ns()
+        realtime_ns = time.time_ns() if started_realtime_ns is None else int(started_realtime_ns)
+        monotonic_ns = time.monotonic_ns() if started_monotonic_ns is None else int(started_monotonic_ns)
+        if realtime_ns < 0 or monotonic_ns < 0:
+            raise ValueError("session timestamps must be non-negative nanoseconds")
         session_id = f"{time.strftime('%Y%m%dT%H%M%SZ', time.gmtime(realtime_ns / 1e9))}-{uuid.uuid4().hex[:10]}"
         directory = self.root / session_id
         directory.mkdir(mode=0o750)
@@ -104,13 +119,17 @@ class SessionStore:
         metadata.update(updates)
         self._write_partial()
 
-    def finalize(self, success: bool, **summary: Any) -> Path:
+    def finalize(self, success: bool, *, ended_realtime_ns: int | None = None, **summary: Any) -> Path:
+        """Seal the manifest, preserving the recorder's ROS wall-time if supplied."""
         if self.session is None or self._manifest is None:
             raise RuntimeError("no active recording session")
         self.state = SessionState.READY if success else SessionState.FAILED
+        ended_ns = time.time_ns() if ended_realtime_ns is None else int(ended_realtime_ns)
+        if ended_ns < 0:
+            raise ValueError("session end timestamp must be non-negative nanoseconds")
         self._manifest.update(
             state=self.state.value,
-            ended_realtime_ns=time.time_ns(),
+            ended_realtime_ns=ended_ns,
             summary=summary,
         )
         self._write_partial()

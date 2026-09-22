@@ -60,3 +60,26 @@ def test_native_image_is_encoded_on_archive_worker_not_offer_call(tmp_path):
         assert (tmp_path / "front" / "101.jpg").read_bytes() == b"encoded.jpg"
     finally:
         workers.image_to_jpeg = original
+
+
+def test_archive_stop_waits_for_worker_drain_before_writing_final_index(tmp_path):
+    """A READY session must never race an active JPEG writer and its index."""
+    from realman_recording.camera_workers import RosImageArchive
+
+    class DrainThread:
+        def __init__(self):
+            self.timeouts = []
+
+        def join(self, timeout=None):
+            self.timeouts.append(timeout)
+
+    archive = RosImageArchive((CameraSource("front", image_topic="/front/image_raw"),))
+    worker = DrainThread()
+    archive._root = tmp_path
+    archive._running.set()
+    archive._thread = worker
+
+    archive.stop()
+
+    assert worker.timeouts == [None]
+    assert (tmp_path / "media-index.json").is_file()

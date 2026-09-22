@@ -102,9 +102,17 @@ class RosImageArchive:
         return True
 
     def stop(self) -> dict[str, dict[str, str]]:
+        """Close admission and drain the sole JPEG writer before sealing its index.
+
+        This intentionally waits without a timeout, just like ``McapStateArchive``:
+        returning a finalized session while its image worker can still append frames
+        would make ``media-index.json`` non-authoritative.  STOP can therefore take
+        as long as the outstanding bounded image queue and filesystem require, but
+        no ROS subscription callback waits on that work.
+        """
         self._running.clear()
         if self._thread is not None:
-            self._thread.join(timeout=10.0)
+            self._thread.join()
         if self._root is not None:
             with self._lock:
                 segments = [

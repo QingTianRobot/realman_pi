@@ -153,10 +153,16 @@ ROS_DOMAIN_ID=65 recording_runtime_probe --duration-sec 5 \
   --arm-topic /l/joint_states --arm-topic /m/joint_states --arm-topic /r/joint_states \
   --gripper-topic /gripper_left/position \
   --gripper-topic /gripper_mid/position \
-  --gripper-topic /gripper_right/position
+  --gripper-topic /gripper_right/position \
+  --device-status-topic /camera_left/device_status \
+  --device-status-topic /camera_middle/device_status \
+  --device-status-topic /camera_right/device_status
 ```
 
 输出为 JSON，包含 `/recording/manage` 是否可用、最近的 `RecordingStatus`、每个 topic 的样本数和接收频率；服务不可用时退出码为 `2`。实际 topic 名称应以 `ros2 topic list` 和 `config/ros/recording.yaml` 为准。该探针不能替代 PREPARE：PREPARE 仍负责新鲜度、连接状态、磁盘、MCAP backend 和配置化 `preflight_required_topics` 的准入判断。
+
+`--device-status-topic` 仅用于 Orbbec 的可选诊断，输出每路 `device_online`、
+`connection_type` 和 `color_frame_rate_cur`；D435 不提供该消息时不要传此参数。
 
 真机部署还必须确认运行中的节点已经切换到当前接口。执行 `ros2 node info
 /recording_recorder` 时应看到 `/recording/manage` Service，不能再看到旧的

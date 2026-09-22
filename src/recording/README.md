@@ -253,6 +253,16 @@ realman_recording realman_recording_msgs` 并重新 source/install 后再验收�
 即使节点和 publisher 都存在，也可能有一路实际帧率为 0；此时应先改用独立 USB3
 主板端口/确认 `lsusb -t` 为 5000M，再进行录制验收，不能在 recorder 中复制旧帧。
 
+`recording_runtime_probe` 可选订阅 Orbbec 状态 topic，在 JSON 的
+`device_status` 段直接输出上述三个字段；D435 不提供该消息类型时不要传入该参数：
+
+```bash
+recording_runtime_probe --duration-sec 5 \
+  --device-status-topic /camera_left/device_status \
+  --device-status-topic /camera_middle/device_status \
+  --device-status-topic /camera_right/device_status
+```
+
 宿主没有 ROS 2、pytest、ffmpeg 或 Rerun SDK 时，不要通过伪造依赖声称这些运行测试通过；只报告静态检查和纯逻辑冒烟结果。
 
 ## 12. 常用验证命令

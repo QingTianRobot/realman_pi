@@ -8,6 +8,7 @@ The Three.js visualization should reuse only the existing Web Control live URDF 
 from __future__ import annotations
 
 import os
+import json
 import threading
 import time
 from pathlib import Path
@@ -27,6 +28,7 @@ from .camera_workers import LatestFramePreview, PreviewFrame, downscale_jpeg, im
 from .layout_manifest import build_recording_manifest
 from .rerun_adapter import RerunVisualizationAdapter
 from .web_server import RecordingWebServer
+from .web_protocol import safe_coordinate_subset
 
 
 # rclpy infers an empty Python list default as a byte_array parameter, so these
@@ -228,10 +230,8 @@ class RecordingWebBridgeNode(Node):
         self._connections[arm] = bool(message.data)
 
     def _coordinates_message(self, arm: str, message: String) -> None:
-        """Cache the driver coordinate-state JSON for display (schema is not final)."""
-        # ai TODO: define a stable browser-safe subset of coordinate state instead of
-        # forwarding arbitrary driver JSON after its schema is finalized.
-        self._coordinates[arm] = {"raw": message.data}
+        """Cache only the documented numeric coordinate subset for read-only display."""
+        self._coordinates[arm] = safe_coordinate_subset(message.data)
 
     def _gripper_value(self, topic: str, field: str, value: Any) -> None:
         self._gripper.setdefault(topic, {})[field] = value

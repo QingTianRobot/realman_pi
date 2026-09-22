@@ -77,7 +77,7 @@ flowchart LR
 
 1. ROS 回调只记录接收侧 `SYSTEM_TIME`、更新新鲜度，并尝试无阻塞地把消息放进 MCAP 队列。
 2. MCAP 序列化和磁盘写入只由 archive worker 执行；队列满时丢样本并累计计数。
-3. 原始相机使用独立 ffmpeg 进程，按相机和 pause/resume 分段；相机失败不能让机械臂状态采集失败。
+3. 原始相机从 ROS `Image` topic 进入独立有界 JPEG archive；相机失败不能让机械臂状态采集失败。旧 RTSP/ffmpeg worker 仅保留作迁移兼容，不属于当前 recorder 路径。
 4. Web 状态只发送限频 JSON；JPEG 通过独立 endpoint 获取，不进入 MCAP 队列。
 5. Rerun 离线程序读取已完成 session，不读取 recorder 内存对象，不连接实时 ROS 图。
 

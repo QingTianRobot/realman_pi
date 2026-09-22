@@ -101,7 +101,6 @@ class RecordingRecorderNode(Node):
         self.declare_parameter("alignment_enabled", True)
         self.declare_parameter("preflight_valid_sec", 10.0)
         self.declare_parameter("min_free_space_bytes", 5_000_000_000)
-        self.declare_parameter("camera_probe_timeout_sec", 3.0)
 
         self._root = Path(str(self.get_parameter("recording_root").value)).expanduser().resolve()
         # Explicit SYSTEM_TIME ignores simulated ROS time: bag records have one stable

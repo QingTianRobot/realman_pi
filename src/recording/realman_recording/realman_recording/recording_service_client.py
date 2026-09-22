@@ -1,8 +1,9 @@
 """Operator-facing client for the read-only recording lifecycle service.
 
-``/recording/manage`` is the single service that owns recording lifecycle. This
-module wraps the connect → send → receive cycle so callers do not hand-type
-``ros2 service call`` and can drive START/STOP/ADOPT/DISCARD/PREPARE from Python.
+    ``/recording/manage`` is the single service that owns recording lifecycle. This
+    module wraps the connect → send → receive cycle so callers do not hand-type
+    ``ros2 service call`` and can drive START/STOP/ADOPT/DISCARD/PREPARE from Python.
+    STOP only finalizes the raw session; ADOPT is the explicit conversion decision.
 
 Usage (inside the ROS workspace environment)::
 
@@ -97,7 +98,7 @@ def main(args: list[str] | None = None) -> int:
     start.add_argument("--task", default="", help="task label stored in the session manifest")
     start.add_argument("--profile", default="", help="profile label")
 
-    stop = sub.add_parser("stop", help="stop and finalize, then queue LeRobot conversion")
+    stop = sub.add_parser("stop", help="stop and finalize the raw session; ADOPT queues conversion")
     stop.add_argument("--session-id", required=True, help="session id returned by start")
 
     adopt = sub.add_parser("adopt", help="adopt a finalized session and queue conversion")

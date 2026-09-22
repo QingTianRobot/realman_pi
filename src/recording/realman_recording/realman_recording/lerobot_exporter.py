@@ -305,7 +305,14 @@ class LeRobotExporter:
         candidates = [request.urdf_path, request.session_dir / "metadata" / "robot.urdf"]
         for candidate in candidates:
             if candidate is not None and candidate.is_file():
-                return candidate.resolve()
+                resolved = candidate.resolve()
+                manifest = json.loads((request.session_dir / "manifest.json").read_text(encoding="utf-8"))
+                expected = manifest.get("metadata", {}).get("canonical", {}).get("urdf_sha256")
+                if expected:
+                    actual = sha256(resolved.read_bytes()).hexdigest()
+                    if actual != expected:
+                        raise ValueError("recording URDF snapshot hash does not match manifest provenance")
+                return resolved
         raise ValueError(
             "recording session has no URDF snapshot; re-record after canonical provenance is enabled"
         )

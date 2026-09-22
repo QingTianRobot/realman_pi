@@ -145,6 +145,10 @@ LeRobot 导出 receipt 会原样引用 `media-index.json` 的每路相机
 `accepted/dropped/errors` 统计；旧 session 没有该统计时 receipt 标记为
 `UNAVAILABLE`，不会编造质量数据。
 
+`manifest*.json`、`videos/media-index.json` 与 `export/lerobot-v3.json` 均通过同一
+原子 JSON 写入器落盘：进程中断时应保留旧的完整文件或新的完整文件，不能留下可被
+回放器误读的截断 receipt。
+
 `calibration_snapshot_path` 为空时，session 的 canonical metadata 明确写入 `calibration.state=UNAVAILABLE`；这类数据可以用于纯 2D 行为克隆，但不能冒充具备可靠几何标定的数据。配置该路径后，recorder 在 START 前复制该文件到 `metadata/camera_calibration.yaml` 并保存 SHA-256 和 version；配置了不存在的路径会拒绝启动。
 
 ## 7. Web 与 3D 展示方案

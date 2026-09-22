@@ -54,3 +54,11 @@ def test_pi05_adapter_can_explicitly_include_recorded_gripper_command():
     frame = frame.__class__(**{**frame.__dict__, "command_gripper": (0.4, 0.5, 0.6)})
     sample = Pi05Adapter(Pi05AdapterConfig(expected_state_dim=24, expected_action_dim=21, include_gripper_command=True)).adapt(frame)
     assert sample["action"][-3:] == (0.4, 0.5, 0.6)
+
+
+def test_pi05_adapter_converts_velocity_to_explicit_policy_step_delta():
+    sample = Pi05Adapter(Pi05AdapterConfig(
+        expected_state_dim=24, expected_action_dim=18,
+        action_representation="cartesian_delta", dataset_fps=10,
+    )).adapt(_frame())
+    assert sample["action"][:3] == (0.0, 0.1, 0.2)

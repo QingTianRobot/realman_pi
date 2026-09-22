@@ -21,6 +21,9 @@ class Pi05AdapterConfig:
     expected_state_dim: int | None = None
     expected_action_dim: int | None = None
     include_gripper_command: bool = False
+    action_representation: str = "cartesian_velocity"
+    dataset_fps: int | None = None
+    normalizer_asset_version: str = ""
 
     def __post_init__(self) -> None:
         if self.rotation_representation not in {"quaternion_xyzw", "rot6d"}:
@@ -29,6 +32,10 @@ class Pi05AdapterConfig:
             raise ValueError("π0.5 checkpoint dimensions must be explicit")
         if self.expected_state_dim <= 0 or self.expected_action_dim <= 0:
             raise ValueError("π0.5 checkpoint dimensions must be positive")
+        if self.action_representation not in {"cartesian_velocity", "cartesian_delta"}:
+            raise ValueError("π0.5 action_representation must be cartesian_velocity or cartesian_delta")
+        if self.action_representation == "cartesian_delta" and (self.dataset_fps is None or self.dataset_fps <= 0):
+            raise ValueError("cartesian_delta requires a positive explicit dataset_fps")
 
 
 def _rot6d(quaternion: tuple[float, float, float, float]) -> tuple[float, ...]:
@@ -68,6 +75,9 @@ class Pi05Adapter:
             if frame.command_gripper is None:
                 raise ValueError("π0.5 profile requires a recorded canonical gripper command")
             action += tuple(float(value) for value in frame.command_gripper)
+        if self.config.action_representation == "cartesian_delta":
+            assert self.config.dataset_fps is not None
+            action = tuple(value / self.config.dataset_fps for value in action)
         if len(state) != self.config.expected_state_dim:
             raise ValueError(f"π0.5 state dimension {len(state)} does not match configured checkpoint dimension {self.config.expected_state_dim}")
         if len(action) != self.config.expected_action_dim:

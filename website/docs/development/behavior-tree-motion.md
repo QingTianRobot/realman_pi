@@ -161,6 +161,31 @@ WORK、frame、速度上限和 timeout 校验，但不发送 Action Goal，也�
 模式、epoch/request、时效、夹爪健康和 dry-run 都在 router 检查；松键不撤销已提交目标，不发送“零值停止夹爪”。
 详细键位、JSON 契约和验证见[键盘双夹爪](./gripper-control#键盘双夹爪全开-全闭)。
 
+## Pika rosbag replay 边界
+
+独立的 `pika_realman_replay` 项目只连接已经运行的 ROS 图，不启动 driver 或行为树。bag 速度记录的
+坐标是 `l/base_link`、`r/base_link`，桥接后只进入 `/pika/l/cartesian_velocity` 和
+`/pika/r/cartesian_velocity`；夹爪记录只进入 `/pika/l/gripper_percentage` 和
+`/pika/r/gripper_percentage`，类型为 `std_msgs/msg/Float32`，归一化值 `0` 表示闭合、`1` 表示打开。
+RealMan 速度模式没有 BASE 初始化选项，所以 replay 在执行前选择 identity WORK aliases
+`l/work/pikabase`、`r/work/pikabase`，并将速度消息 frame 改为相应的 `l/work/pikabase`、
+`r/work/pikabase`。这条身份坐标只服务于 rosbag replay；键盘、Web 手动速度和普通行为树会话继续
+使用 `l/work/cell`、`r/work/cell`。
+
+Replay 的 Pika 会话上限为 `1.0 m/s` 线速度和 `0.25 rad/s` 角速度。桥接器按 bag 顺序发布新时间戳，
+结束或任何运行时安全条件失败时先向左右速度 ingress 发送零向量，等待超过 `100 ms` watchdog，再将
+已选择的 WORK 恢复为 `cell`（`l/work/cell`、`r/work/cell`）。恢复失败时保持控制树在中性模式，检查
+`/<arm>/coordinates/state` 后通过 `/<arm>/coordinates/select_work`（`realman_msgs/srv/SelectFrame`，
+`{name: cell}`）人工恢复并重新验证。
+
+操作员必须先运行 `./rm65 bt control`，在 Web 控制页手动选择 **Pika / 速度控制** 并等待 `ACTIVE`，
+再执行独立项目的 `./replay.sh run <bag>` 只读预检；只有明确输入 `--execute` 才会选择 `pikabase` 并
+发布真实 ingress。生产 control router 必须以 `REALMAN_BT_DRY_RUN=false` 运行。自动化测试只做
+`inspect`、构建和 no-motion preflight，永远不调用 `--execute`。
+
+该 replay 使用内部 `ReplayNode.spin_once()` 处理 ROS 回调和时间调度；这是组合 API 的实现细节，
+操作者只使用独立项目的 `replay.sh` 命令，不直接运行 Python 节点。
+
 ## 构建
 
 在 ROS 2 Humble 工作区根目录执行：

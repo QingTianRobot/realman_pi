@@ -20,10 +20,10 @@ Policy/Pika 输入叶一样保持 `RUNNING` 并记录控制权；实际键盘速
 
 选择器显示 `Pika / 位置控制`（模式 ID `pikaposition`）和 `Pika / 速度控制`（模式 ID
 `pikavelocity`）两个独立选项。Pika 生产 topic 为 `/pika/l|r/cartesian_pose`（`PoseStamped`）
-和 `/pika/l|r/cartesian_velocity`（`TwistStamped`）；位置数据是基座坐标系下的米和四元数，
-速度数据必须使用该臂当前已验证的默认 WORK frame：左臂 `l/work/cell`，右臂 `r/work/cell`。
-夹爪开合度由 `/pika/l|r/gripper_percentage`（`std_msgs/msg/Float32`）持续发布，范围是
-`0.0..1.0`（`0` 闭合，`1` 张开）。Pika 只控制 l/r，绝不订阅或发送 m 的夹爪信号。
+和 `/pika/l|r/cartesian_velocity`（`TwistStamped`）；键盘、Web 手动速度和默认 Pika 会话使用已验证的
+`l/work/cell`、`r/work/cell`。夹爪开合度由 `/pika/l|r/gripper_percentage`
+（`std_msgs/msg/Float32`）持续发布，范围是 `0.0..1.0`（`0` 闭合，`1` 张开）。Pika 只控制
+l/r，绝不订阅或发送 m 的夹爪信号。
 
 `InputModeGuard` 的 `mode`、`label`、`selectable` 字面量在 XML 构造时注册目录，
 因此新增模式只改 XML 和相应叶注册，不能在 Web 或 Python 写静态枚举。路由根节点必须保留
@@ -110,6 +110,20 @@ Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/com
 `pika_velocity.max_linear_speed_mps`，当前为 `1.0 m/s`；角速度上限仍为 `0.25 rad/s`。
 驱动配置中的普通会话上限继续是 `0.05 m/s`，所以键盘、Web 手动速度和普通行为树速度节点不会随
 Pika 一起升速。驱动仅将 l/r 的绝对逐会话硬上限设为 `1.0 m/s`，m 仍为 `0.05 m/s`。
+
+独立的 Pika rosbag replay 项目把 bag 中的 `l/base_link`、`r/base_link` 速度记录送入同名
+`/pika/l|r/cartesian_velocity` ingress。RealMan 的速度初始化没有 BASE 选项，因此 replay 在发送前
+选择 identity WORK aliases `l/work/pikabase`、`r/work/pikabase`，并将 `header.frame_id` 改为相应的
+`l/work/pikabase` 或 `r/work/pikabase`；这个桥接只属于 replay 项目，键盘和默认会话仍使用 `cell`。
+Replay 只发布 `/pika/l|r/cartesian_velocity` 与 `/pika/l|r/gripper_percentage`，夹爪值是
+`Float32` 的归一化百分比（`0` 闭合、`1` 张开），Pika 限制为 `1.0 m/s` 和 `0.25 rad/s`。
+每次结束或失败会向两路速度 ingress 发送终端零向量，等待 watchdog 后把已选坐标恢复为 `cell`；
+恢复失败必须先人工确认 `/<arm>/coordinates/state`，再调用 `/<arm>/coordinates/select_work` 选择 `cell`。
+
+Replay 不替 control tree 选择模式。操作员先启动 `./rm65 bt control`，在 Web 页面手动选择
+`Pika / 速度控制` 并等待 `ACTIVE`，再运行独立项目的 `./replay.sh run <bag>` 只读预检，最后才由
+操作员显式添加 `--execute`。真实 replay 要求 `REALMAN_BT_DRY_RUN=false`；自动验证和 `inspect`
+永远不添加该选项。独立项目的 `ReplayNode.spin_once()` 只在内部调度，操作员入口始终是 `replay.sh`。
 
 Pika 发送端应以约 `50 Hz` 分别发布左右臂，消息字段如下；`header.stamp` 必须使用发送节点当前 ROS
 clock、非零且严格递增，不能重复使用旧消息：

@@ -28,6 +28,7 @@ from realman_recording_msgs.srv import ManageRecording as ManageRecordingService
 
 from .camera_workers import CameraSource, RosImageArchive, image_to_jpeg, load_camera_sources
 from .lerobot_exporter import ExportRequest, LeRobotExporter
+from .kinematics import urdf_joint_limits
 from .lerobot_schema import schema_from_parameters
 from .preflight import PreflightChecker, PreflightRequirements, PreflightResult
 from .provenance import snapshot_optional_file
@@ -387,6 +388,9 @@ class RecordingRecorderNode(Node):
                     "urdf_snapshot": "metadata/robot.urdf",
                     "urdf_sha256": sha256(snapshot.read_bytes()).hexdigest(),
                     "joint_names": list(self.get_parameter("joint_names").value),
+                    "joint_limits": urdf_joint_limits(
+                        snapshot, self.get_parameter("joint_names").value
+                    ),
                     "base_frames": list(self.get_parameter("base_frames").value),
                     "ee_links": list(self.get_parameter("ee_links").value),
                     "cartesian_command_representation": str(self.get_parameter("cartesian_command_representation").value),

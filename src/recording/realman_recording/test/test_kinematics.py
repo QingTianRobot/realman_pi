@@ -1,6 +1,6 @@
 from pathlib import Path
 
-from realman_recording.kinematics import UrdfKinematics, ee_velocity, finite_difference
+from realman_recording.kinematics import UrdfKinematics, ee_velocity, finite_difference, urdf_joint_limits
 
 
 def test_urdf_fk_resolves_revolute_chain_and_returns_xyzw(tmp_path: Path):
@@ -30,4 +30,13 @@ def test_ee_velocity_rejects_non_unit_quaternions():
 def test_finite_difference_uses_center_and_one_sided_boundaries():
     assert finite_difference([(0, (0.0,)), (1_000_000_000, (1.0,)), (2_000_000_000, (2.0,))]) == [
         (1.0,), (1.0,), (1.0,)
+    ]
+
+
+def test_urdf_joint_limits_keep_configured_joint_order(tmp_path: Path):
+    urdf = tmp_path / "limits.urdf"
+    urdf.write_text('''<robot name="test"><joint name="joint_2" type="revolute"><limit lower="-2" upper="2" effort="3" velocity="4"/></joint><joint name="joint_1" type="revolute"><limit lower="-1" upper="1" effort="5" velocity="6"/></joint></robot>''')
+    assert urdf_joint_limits(urdf, ("joint_1", "joint_2")) == [
+        {"name": "joint_1", "lower": -1.0, "upper": 1.0, "effort": 5.0, "velocity": 6.0},
+        {"name": "joint_2", "lower": -2.0, "upper": 2.0, "effort": 3.0, "velocity": 4.0},
     ]

@@ -109,6 +109,28 @@ class UrdfKinematics:
         return (transform[0][3], transform[1][3], transform[2][3], *quaternion)
 
 
+def urdf_joint_limits(path: Path, joint_names: Iterable[str]) -> list[dict[str, float | str]]:
+    """Return configured revolute-joint limits in the canonical vector order."""
+    expected = tuple(joint_names)
+    if not expected or len(set(expected)) != len(expected):
+        raise ValueError("joint_names must be non-empty and unique")
+    by_name = {node.attrib.get("name", ""): node for node in ET.parse(path).getroot().findall("joint")}
+    result = []
+    for name in expected:
+        node = by_name.get(name)
+        limit = node.find("limit") if node is not None else None
+        if node is None or node.attrib.get("type") not in {"revolute", "prismatic"} or limit is None:
+            raise ValueError(f"URDF joint {name!r} has no finite limit declaration")
+        try:
+            values = {key: float(limit.attrib[key]) for key in ("lower", "upper", "effort", "velocity")}
+        except (KeyError, ValueError) as error:
+            raise ValueError(f"URDF joint {name!r} has malformed limits") from error
+        if not all(isfinite(value) for value in values.values()) or values["lower"] >= values["upper"]:
+            raise ValueError(f"URDF joint {name!r} has invalid limits")
+        result.append({"name": name, **values})
+    return result
+
+
 def ee_velocity(previous: tuple[float, ...], current: tuple[float, ...], dt_sec: float) -> tuple[float, float, float, float, float, float]:
     if len(previous) != 7 or len(current) != 7 or dt_sec <= 0:
         raise ValueError("poses must be xyz+xyzw and dt_sec must be positive")

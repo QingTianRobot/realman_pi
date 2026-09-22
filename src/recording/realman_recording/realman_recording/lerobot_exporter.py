@@ -216,6 +216,7 @@ class LeRobotExporter:
                    "canonical": {
                        "embodiment_id": schema.embodiment_id,
                        "joint_names": schema.joint_names,
+                       "joint_limits": manifest.get("metadata", {}).get("canonical", {}).get("joint_limits", []),
                        "base_frames": schema.base_frames,
                        "ee_links": schema.ee_links,
                        "cartesian_command": {

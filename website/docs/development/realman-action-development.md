@@ -66,6 +66,8 @@ motion_coordinator.py                 cartesian_velocity_session.py
 | `/l/execute_trajectory` | `realman_msgs/action/ExecuteTrajectory` | 一次提交并监督整条连接轨迹 |
 | `/l/cartesian_velocity` | `realman_msgs/action/CartesianVelocity` | 建立并监督六轴速度 session |
 | `/l/cartesian_velocity/command` | `geometry_msgs/msg/TwistStamped` | 更新活动速度 session 的最新命令 |
+| `/l/cartesian_pose` | `realman_msgs/action/CartesianPose` | 建立并监督绝对笛卡尔位姿 session |
+| `/l/cartesian_pose/command` | `geometry_msgs/msg/PoseStamped` | 更新活动位姿 session 的最新基座位姿 |
 | `/l/stop` | `std_srvs/srv/Trigger` | 抢占当前 arm 并执行最快受控停止 |
 | `/l/recover_motion` | `realman_msgs/srv/RecoverMotion` | 取消后显式重建被隔离的 SDK 事件通道 |
 | `/l/coordinates/verify` | `realman_msgs/srv/VerifyCoordinates` | 只读回查工具/工作坐标 |
@@ -74,8 +76,8 @@ motion_coordinator.py                 cartesian_velocity_session.py
 | `/l/coordinates/select_work` | `realman_msgs/srv/SelectFrame` | 选择配置内工作坐标并回读 |
 
 Action 名称没有 `l/realman_driver` 前缀，因为节点已经运行在 `/l` namespace 下。发布
-`ros2 action list` 时应看到九个 Action：每个 arm 各一个 `execute_motion`、
-`execute_trajectory` 和 `cartesian_velocity`。
+`ros2 action list` 时应看到十二个 Action：每个 arm 各一个 `execute_motion`、
+`execute_trajectory`、`cartesian_velocity` 和 `cartesian_pose`。
 
 ## ExecuteMotion 契约
 
@@ -276,7 +278,7 @@ Action goal accepted
 
 | 字段 | 单位/约束 |
 | --- | --- |
-| `reference_type/name` | 必须对应当前已验证的 BASE/WORK/TOOL 坐标 |
+| `reference_type/name` | 必须对应当前已验证的 WORK 或 TOOL 坐标；速度模式拒绝 BASE |
 | `control_period_ms` | 必须等于配置周期，当前默认 20 ms |
 | `watchdog_ms` | 正数且不超过配置上限，当前默认 100 ms |
 | `max_linear_accel_mps2` | 正数且不超过逐臂配置上限 |
@@ -287,6 +289,10 @@ Action goal accepted
 `TwistStamped.twist` 的前三项是 `vx, vy, vz`（m/s），后三项是 `wx, wy, wz`（rad/s）。
 实现只处理速度向量，不把角速度拆成 Euler 角，也不会在速度 session 内维护一个姿态
 四元数。四元数只属于位姿 Action 和坐标配置边界。
+
+ROS 接口的 `ReferenceType` 与厂商速度初始化枚举不是同一个数值空间。驱动必须执行显式转换：
+`TOOL -> rm_set_movev_canfd_init frame_type 0`，`WORK -> frame_type 1`。不得把 ROS 的
+`TOOL=2` 原样传入 SDK。厂商接口没有独立 BASE 值，因此速度 Goal 使用 BASE 时在初始化前拒绝。
 
 速度 feedback 还会返回命令向量、经过速度/加速度限制后的向量、`command_age_ms`、
 活动坐标和 API2 status。IDL 保留 `SUCCEEDED=0`，但当前速度 session 是开放式控制，
@@ -301,7 +307,7 @@ Action goal accepted
 - 使用当前节点 ROS clock，不能晚于当前时间；
 - 不早于本 session 的启动 epoch；
 - 同一 session 内严格晚于上一条已接受命令；
-- `header.frame_id` 与目标坐标一致，例如 `/l` 的 BASE 使用 `l/base_link`。
+- `header.frame_id` 与目标坐标一致，例如左臂默认工具使用 `l/tool/tcpgrip`。
 
 无效命令在进入 SDK 前拒绝，并以 DEBUG 记录，避免高频输入刷屏。control worker 每个
 周期最多一次 `rm_movev_canfd`；如果 SDK 调用超过周期，下一次 tick 从调用完成时间
@@ -316,8 +322,56 @@ Action goal accepted
 - `/stop`：抢占 ownership，使用最快的 `rm_set_arm_stop()`，不会被普通 cancel 覆盖。
 - `shutdown`/`disconnect`：先停止速度 session，再停止普通运动，最后才 disconnect SDK。
 
+### 行为树定时速度调用
+
+`realman_bt` 注册了 `CartesianVelocityForDuration` 叶节点，用同一个
+`CartesianVelocity` Action 和 `cartesian_velocity/command` 话题完成有限时长运动。调用方只给出逻辑
+`reference`、六轴速度和时长；节点根据 `config/ros/realman_coordinates.yaml` 同时解析驱动的
+`reference_type/reference_name` 与 ROS `frame_id`，并从 `config/ros/realman_motion.yaml` 读取刷新周期、
+watchdog、速度/加速度限制和停止超时。这样 XML 中不会出现彼此不一致的坐标字段。
+
+该叶节点的终态还要求可观测的真机状态变化。它在开始发布速度前和 Action 取消完成后分别调用
+`/<arm>/get_current_pose`，比较末端平移、四元数角距离和最大关节角变化。平移 `>=0.001 m`、旋转
+`>=0.5°` 或任一关节变化 `>=0.1°` 任一成立才返回 `SUCCESS`；否则返回 `FAILURE`，并把三个差值写入
+runtime diagnostics。Action 的 `CANCELED` 仅表示开放式 session 按请求停止，不再单独作为运动成功证据。
+
+沿左臂默认工具 +X 方向运动的示例为 `config/behavior-trees/tool_x.xml`；插件的完整端口、停止/取消
+语义和 dry-run 启动方式见[行为树机械臂移动 Demo](./behavior-tree-motion#定时笛卡尔速度节点)。
+
 后续若加入新的连续控制 Action，必须复用这个 ownership 和停止顺序，不能为每个接口
 单独建立“看起来空闲”的布尔变量。
+
+## CartesianPose 契约
+
+位姿控制与速度控制一样是两阶段 session。先建立 `CartesianPose` Action，再以固定周期发布
+`PoseStamped`：
+
+```text
+Action goal accepted
+        │  claim ArmOwnership, validate base frame and limits
+        ▼
+/l/cartesian_pose/command  --latest target--> control worker --rm_movep_canfd-->
+        │                                               │
+        └── no fresh target ---------------------- watchdog -> slow-stop
+```
+
+Pika 使用 `/pika/l/cartesian_pose` 和 `/pika/r/cartesian_pose`；Web 选择
+`Pika / 位置控制` 后由 `pika_control_router` 转发到上面的 driver topic。`m` 不创建 Pika
+session。
+
+夹爪连续控制使用 `/pika/l/gripper_percentage` 和 `/pika/r/gripper_percentage`
+（`std_msgs/msg/Float32`，`0.0` 闭合、`1.0` 张开），由同一 router 转发到
+`/gripper_left/percentage/command` 和 `/gripper_right/percentage/command`。这些 command topic
+是非阻塞的持续目标；一次性 Web 操作仍使用同步的 `/<name>/percentage` service。
+
+`PoseStamped.header.frame_id` 必须是对应基座 frame（例如 `l/base_link`），位置单位是米，
+姿态是 ROS 四元数（驱动内部使用 WXYZ 语义）。时间戳必须非零、不早于 session epoch、严格
+递增且不超过 watchdog。驱动会归一化四元数，并按配置的线速度、角速度上限限制每个周期的
+位姿变化；无效消息不会进入 SDK。
+
+默认周期和 watchdog 与速度 session 相同（20 ms / 100 ms），位姿 Action 的 `follow=true`
+使用 `rm_movep_canfd` 进行连续透传。取消、切换模式、显式 `/stop`、断开和关闭都会停止
+session 并释放 arm ownership。
 
 ## 坐标与 motion gate
 
@@ -390,7 +444,7 @@ verify，并在可读失配时自动 apply/select 后回读。恢复坐标失败
 | 坐标安全 | `test_coordinate_manager.py` | 读取匹配、mismatch gate、apply/select、写后回读、ownership 和四元数容差 |
 | SDK 适配器 | `test_realman_sdk_adapter.py` | vendor 参数、原始 status、回调指针、句柄/断线、stop 和 mock 事件 |
 | ROS node/launch | `test_realman_driver_node.py` | ActionServer 注册、topic/QoS、配置透传、停止顺序、服务响应和 shutdown |
-| mock graph | `test_system_launch.py` 及驱动测试 | 三臂 namespaces、9 Action、坐标/恢复 services、3 command topics、TF 数据链路 |
+| mock graph | `test_system_launch.py` 及驱动测试 | 三臂 namespaces、12 Action、坐标/恢复 services、4 command topics、TF 数据链路 |
 | 真机验收 | 现场清单 | SDK 版本、网络、verify、低速目标、cancel、watchdog、断线和急停 |
 
 ### 推荐的最小回归集

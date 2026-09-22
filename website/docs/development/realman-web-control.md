@@ -63,7 +63,7 @@ watchdog 和 lockout，不会直接调用 SDK。
 
 输入路由器是可选的独立进程：`./rm65 up` 启动长期 driver 与本服务，但**不会**启动它。要启用
 全局路由，在 driver 容器已运行后执行 `./rm65 bt control`；它加载
-[`config/behavior-trees/control_router.xml`](../../../config/behavior-trees/control_router.xml)，并在 Ctrl-C
+[`config/behavior-trees/control.xml`](../../../config/behavior-trees/control.xml)，并在 Ctrl-C
 前保持 executor 和 :8080 只读监视器运行。Ctrl-C 不会停止 driver 或本服务，`./rm65 down` 才停止
 统一运行时。路由和本服务必须使用同一个 `ROS_DOMAIN_ID`。
 
@@ -82,7 +82,8 @@ transient-local 订阅 `/realman_bt_executor/input_mode_state`。同一 YAML 的
 `request_id`、`epoch`、`detail`。
 
 目录完全由 XML 的字面 `InputModeGuard` 项发现，浏览器不会维护模式名单。当前 picker 显示一个
-“GLOBAL INPUT / 输入模式”卡片，带一个动态 select：`none`、`policy`、`pika` 都可选；`web` 虽会由
+“GLOBAL INPUT / 输入模式”卡片，带一个动态 select：`none`、`keyboard`、`policy`、`pikaposition`、
+`pikavelocity` 都可选；`web` 虽会由
 状态显示为 active，却保持隐藏且不可选。没有正在运行的路由器或 discovery 不健康时，卡片隐藏；
 既有直接 Action 控制继续兼容，仅在两项 router service 都确认为不可用时启用。服务只短暂失联或
 catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返回 `input_mode_unavailable`，而不是绕过仲裁。
@@ -105,7 +106,8 @@ catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返
 `software_stop` 绕过路由；夹爪、恢复、标定、运动学、位姿和记录操作均是 mode-neutral（包括
 `gripper_command`、`recover_motion`、`capture_calibration_sample`、`solve_calibration`、
 `get_current_pose`、`solve_ik`、`list_joint_records`、`save_joint_record`、`delete_joint_record` 与
-`apply_joint_record`）。Policy 与 Pika 目前只是 RUNNING 占位，不产生任何 robot goal。
+`apply_joint_record`）。Policy 输入叶目前只是 RUNNING 占位；Pika 和 keyboard 输入叶记录行为树控制权，
+实际 robot session 分别由 `pika_control_router` 和 `keyboard_control_router` 管理。
 排查卡片缺失或停留在 SWITCHING 时，先检查 router 是否显式运行、三个 ROS 名称是否在同一 domain，
 以及 `input_mode_state.detail` 或 `type: "error"` 事件的 `code` 字段
 （`input_mode_timeout` / `input_mode_failed`）；这些 code 不是独立事件类型。不要添加硬编码选项。
@@ -117,6 +119,83 @@ Action 取消也会丢弃匹配 arm/action 且由该浏览器拥有的排队请�
 后端通过状态发布者的 ROS endpoint identity 识别路由器重启，即使两次探测之间 service
 一直显示 ready，也会清空旧目录、状态和请求关联并重新订阅。`FAILED` 后同一 request ID
 的更高 epoch 回退状态可以刷新页面，但不会恢复已失败的原运动请求。
+
+### 双臂键盘末端速度与夹爪
+
+只有动态目录包含可选的 `keyboard` 时，8765 页面才显示“双臂键盘速度与夹爪”卡片；切换状态必须达到
+`ACTIVE/keyboard` 后才捕获运动键。每个新的 keyboard `epoch` 首次进入活动态时，页面会短暂高亮该
+说明卡片，但不会滚动页面或移走三臂 3D、MoveJ 等工作区域；重复状态消息不会反复触发，刷新页面后收到
+当前活动态也会引导一次。只有当前页面发起的模式请求进入匹配的 `ACTIVE` 或 `FAILED` 终态时，页面才会
+释放模式选择框焦点，使操作员不必额外点击空白区域即可使用控制键；后台重复状态不会抢走焦点。浏览器使用物理
+位置稳定的 `KeyboardEvent.code`，不使用会受输入法、
+Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`select` 和 `contenteditable` 中的输入。
+自动重复、输入法组合事件，以及带 Ctrl/Alt/Meta/Shift 的快捷键不触发新控制输入。
+`ACTIVE/keyboard` 是全局行为树状态；页面还必须收到本页的 `keyboard_lease: {active: true}` 才拥有控制权。
+其他浏览器持有 lease 时显示 `REMOTE`，不发送键盘心跳；收到 `keyboard_lease` 错误也不会覆盖 MoveJ
+运行反馈，需在当前页面重新选择键盘模式取得 lease。
+键盘说明和右侧控制卡片的增减不得改变左侧三臂 3D viewer 的高度。桌面、窄屏和手机布局分别使用
+有界的 viewer 面板高度，避免 WebGL canvas 被右栏总高度拉伸后压缩相机水平视场。
+左右臂按键完全独立，可同时按住：
+
+| 末端轴 | 左臂正/负 | 右臂正/负 |
+| --- | --- | --- |
+| X | `W` / `S` | `I` / `K` |
+| Y | `A` / `D` | `J` / `L` |
+| Z | `R` / `F` | `U` / `O` |
+| RX | `Q` / `E` | `Y` / `P` |
+| RY | `Z` / `C` | `N` / `M` |
+| RZ | `X` / `V` | `B` / `G` |
+
+| 夹爪单次目标 | 左夹爪 | 右夹爪 |
+| --- | --- | --- |
+| 全开 | `1`（`Digit1`） | `9`（`Digit9`） |
+| 全闭 | `2`（`Digit2`） | `0`（`Digit0`） |
+
+数字键使用主键盘物理码，不是小键盘 `Numpad*`。每侧显示独立的 `READY`、`OFFLINE` 或 `ALARM`。
+夹爪只要求连接正常且无报警，不依赖 WORK；机械臂 WORK 不可用时，健康夹爪仍可使用。
+夹爪按一次提交一次目标，长按／心跳不重复发送；同侧开闭键同时按下不发送，必须全部松开后才重新接收。
+**松键、失焦、离开模式和断网只阻止新夹爪目标，不撤销已提交的全开／全闭动作。**
+目标沿 keyboard router 转发，`dry_run=true` 不输出夹爪命令；键盘路径没有到位完成回执，按键高亮不代表物理完成。
+完整数据流和端点语义见[夹爪控制](./gripper-control#键盘双夹爪全开-全闭)。
+
+浏览器对每臂发送完整按键集合，而不是单独的 keydown/keyup 边沿：
+
+```json
+{"type":"keyboard_state","arm":"l","keys":["KeyW","KeyQ","Digit1"],"sequence":42}
+```
+
+`arm` 只能是 `l` 或 `r`；`keys` 最多 14 项，只能包含该侧配置的、互不重复的 `KeyA`..`KeyZ` 或 `Digit0`..`Digit9` 物理码；`sequence`
+必须在每臂范围内严格递增。成功进入 keyboard 后，一个 WebSocket 获得独占 lease，竞争连接、旧 sequence、
+未知键、重复键和 m 输入均被拒绝。同一 owner 重选 keyboard 不重置 sequence 或夹爪按键边沿。
+外部模式切换、epoch 改变、目录移除 keyboard 也会释放旧 lease，不能靠缓存控制权继续发送。
+每 `50 ms` 心跳都会发送左右臂各自的完整集合，包括空集合；
+后端 `150 ms` 未收到该臂新输入就清零并取消该臂 session。
+
+键位、`50 ms` 心跳、`150 ms` Web 输入超时和 `0.4` 速度比例来自
+[`config/ros/keyboard_control.yaml`](../../../config/ros/keyboard_control.yaml)。比例乘以
+[`config/ros/realman_motion.yaml`](../../../config/ros/realman_motion.yaml) 的逐臂上限；当前 l/r 都派生为
+`0.02 m/s` 线速度和 `0.10 rad/s` 角速度。WORK 名称和 frame ID 仍来自
+[`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml)，键盘配置不会复制
+运动上限或坐标定义。`grippers.l|r.open|close` 定义夹爪物理键；全部机械臂和夹爪键码必须全局唯一。
+实际全开／全闭位置仍只由 `config/ros/gripper.yaml` 管理。
+
+每臂速度必须独立满足默认 WORK gate；一侧失配只清空该侧速度键，不清除健康夹爪键。卡片状态含义是：
+`READY`（活动模式下至少一侧 WORK 可用且没有速度键按下）、`MOVING`（浏览器存在速度键）、`RELEASED`（未处于活动
+keyboard）、`GRIPPER ONLY`（WORK 均不可用但有健康夹爪）和 `WORK UNAVAILABLE`（WORK 均不可用且无健康夹爪）。这些标签只描述浏览器输入状态，
+不证明机械臂已经产生物理运动。
+
+驱动以 reliable、transient-local、depth 1 QoS 发布 `/<arm>/coordinates/state`，Web control 和
+`keyboard_control_router` 使用兼容订阅。驱动还按 `config/ros/realman_driver.yaml` 的
+`coordinate_state_publish_rate`（生产默认 `1.0 Hz`）重发最近一次完整校验结果，保留当前/预期坐标、
+匹配状态和失败详情。这覆盖首个样本早于 DDS endpoint discovery 的启动时序；Web 或行为树晚于驱动启动
+时无需人工再次调用 `coordinates/verify`，即可解除页面的 `WORK UNAVAILABLE` 安全门。
+
+`keyup` 会立即发送该侧更新后的完整集合；松开某一臂的全部速度键只停止该臂。对应臂 WORK 失配时也只
+清空该臂速度键并发送，另一臂、健康夹爪键和活动心跳继续。夹爪离线／报警只清空该侧夹爪键。
+窗口 `blur`、页面隐藏、目录不再包含 keyboard 或离开
+`ACTIVE/keyboard` 时，浏览器清空两臂并停止心跳；WebSocket 已关闭时不能再发送消息，因此服务端通过
+disconnect 处理释放 lease、发布两臂零值并请求 `none`。服务端输入超时和 driver watchdog 是浏览器事件
+之外的独立保护，不能用前端状态替代。
 
 以下验证不访问输入设备或真实机械臂：
 
@@ -138,7 +217,7 @@ RM65_DRY_RUN=1 ./rm65 bt control
 | `joint_state` | `arm`, `positions_rad`, `stamp_ns` | 各 arm 的实体 URDF 姿态唯一来源，以及未编辑时的滑轨值 |
 | `connection` | `arm`, `connected` | 控制器在线状态 |
 | `coordinate_state` | `arm`, `motion_allowed`, `preferred_reference`, `tool`, `work` | 各 arm 的激活坐标、可运动状态和默认参考系 |
-| `action_state` | `action`, `request_id`, `state` | submitting/accepted/canceling |
+| `action_state` | `action`, `request_id`, `state` | submitting/accepted/canceling；`stopped` 表示 Action 结果通道在运动中断后不可用 |
 | `action_feedback` | `feedback` | 原 Action feedback 的 JSON 映射 |
 | `action_result` | `status`, `result` | 原 Action result 和 rclpy 状态 |
 | `software_stop_result` | `success`, `message` | `/arm/stop` 的结果 |
@@ -184,6 +263,10 @@ degree 并固定为三位小数，例如 `[5.730, 11.459, 17.189, 22.918, 28.648
 feedback”。如果 8 秒内没有收到任何该请求的 Action feedback，页面会提示“运行状态未知”，但仍
 保持发送按钮禁用、保留取消/软件停止路径；这不会自动重发命令。此时应检查 `/{arm}/execute_motion`
 Action 服务和驱动日志，确认轨迹是否仍在控制器中运行。
+如果控制柜物理急停使 ROS Action 服务端先于客户端清理 goal，结果回调可能收到
+`Goal handle is not known to this client`。Web 后端会把这个传输层异常记录到 ROS 日志，但对浏览器发送
+`action_state` 的 `state=stopped`、`code=goal_handle_unknown`，并显示“运动已中断，请检查急停状态并恢复机械臂”；
+不会把底层英文异常作为用户提示，也会释放该 Web Action 的占用。这个状态不代表急停已经解除，恢复后仍需按现场流程确认控制柜状态。
 驱动对非阻塞 MOVEL/MOVEJ_P 会保留“提交调用返回前就到达”的成功事件；因此极短位姿运动不会因回调竞态被误判为超时。MOVEJ 仍要求提交返回后再接受事件，以避免复用旧轨迹回调。
 在没有人工改动目标之前，右侧滑条会跟随该 arm 的实时 `joint_state`；一旦人工拖动滑条，该 arm
 的目标值就会保持用户输入，直到再次切换或重置。

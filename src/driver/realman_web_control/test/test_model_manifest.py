@@ -13,6 +13,7 @@ def paths():
         ROOT / "config/ros/three_robots.yaml",
         ROOT / "config/ros/realman_motion.yaml",
         ROOT / "config/ros/realman_coordinates.yaml",
+        ROOT / "config/ros/keyboard_control.yaml",
         ROOT / "src/rm65_description",
     )
 
@@ -27,22 +28,31 @@ def test_manifest_reuses_layout_frames_motion_and_urdf_limits():
     assert left["motion"]["velocity_control_period_ms"] == 20
     assert left["joints"][0]["lower_rad"] == pytest.approx(-3.106)
     assert left["urdf_url"] == "/models/urdf/RM65-B.urdf"
+    assert manifest["keyboard_control"]["heartbeat_period_ms"] == 50
+    assert set(manifest["keyboard_control"]["arms"]) == {"l", "r"}
+    assert manifest["keyboard_control"]["arms"]["l"]["work_frame_id"] == "l/work/cell"
+    assert manifest["keyboard_control"]["arms"]["l"]["bindings"]["vx"] == {
+        "positive": "KeyW",
+        "negative": "KeyS",
+    }
 
 
 def test_model_asset_resolution_rejects_path_traversal():
-    _, _, _, description = paths()
+    _, _, _, _, description = paths()
     assert resolve_model_asset(description, "urdf/RM65-B.urdf").is_file()
     with pytest.raises(ValueError):
         resolve_model_asset(description, "../package.xml")
 
 
 def test_manifest_accepts_symlink_installed_description_root(tmp_path):
-    layout, motion, coordinates, source_description = paths()
+    layout, motion, coordinates, keyboard, source_description = paths()
     installed_description = tmp_path / "rm65_description_share"
     installed_description.mkdir()
     (installed_description / "urdf").symlink_to(source_description / "urdf", target_is_directory=True)
 
-    manifest = build_manifest(layout, motion, coordinates, installed_description)
+    manifest = build_manifest(
+        layout, motion, coordinates, keyboard, installed_description
+    )
 
     assert manifest["robots"][0]["model"] == "RM65-B"
     assert resolve_model_asset(installed_description, "urdf/RM65-B.urdf").is_file()

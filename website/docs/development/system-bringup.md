@@ -17,7 +17,7 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 | RealMan 状态回读 | Include `three_realman_drivers.launch.py` | `config/ros/realman_driver.yaml` |
 | Xbox 设备读取 | 创建 `joy/game_controller_node` | `config/ros/xbox_controller.yaml` |
 | 按键边沿处理 | 创建 `xbox_controller_node` | `xbox_controller_driver` |
-| 持久输入路由 | 不随 Bringup 自动创建；由 `./rm65 bt control` 显式启动 | `config/behavior-trees/control_router.xml`、`config/ros/behavior_tree.yaml` |
+| 持久输入路由 | 不随 Bringup 自动创建；由 `./rm65 bt control` 显式启动 executor、Pika router 和 keyboard router | `config/behavior-trees/control.xml`、`config/ros/behavior_tree.yaml`、`config/ros/keyboard_control.yaml` |
 | RViz 2 | 透传 `use_rviz` 给三臂 launch | `config/rviz/three_robots.rviz` |
 | 运行日志 | 创建时间目录并设置 ROS 2 环境变量 | `REALMAN_LOG_ROOT`、`ROS_LOG_DIR` |
 
@@ -29,6 +29,7 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 避免半启动状态。
 
 ```bash
+./rm65 build              # 仅重建生产 driver/Web 本地镜像，不改变容器状态
 ./rm65 up                 # 生产默认，无 RViz
 ./rm65 up desktop         # 生产图 + 本机 RViz
 ./rm65 up model           # 离线模型查看
@@ -38,13 +39,24 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 ./rm65 logs
 ```
 
+`./rm65 build` 等价于 `docker compose build realman_bringup_remote realman_web_control`。
+它用于代码、Dockerfile、ROS 包或 8765 静态页面更新后的本地镜像重建，只执行构建，不停止、启动或重建
+正在运行的容器。要部署新镜像，先确认机器人安全并退出活动行为树，再执行 `./rm65 down`、`./rm65 build`、
+`./rm65 up`；最后按需重新运行 `./rm65 bt control`。只有根 `config/` 下的挂载 YAML 变化时，通常重启
+容器即可生效，不需要重建镜像。
+
 相机后台进程 PID 保存在 `logs/.rm65-camera.pid`，其标准输出写入 `logs/rm65-camera.log`；ROS 2
 节点仍按官方机制写入 `logs/YYYYMMDD_HHMMSS/`。
 
-`bt control` 必须在 `up` 后单独运行：它加入同一 ROS domain，保持 :8080 只读监视器和
-`realman_bt_executor` 到 Ctrl-C，而 `up` 继续拥有长期 driver 与 :8765 Web control。停止 router 不会
-停止这些服务；使用 `./rm65 down` 才终止统一运行时。当前 XML registry 提供可选的 `none`、`policy`、
-`pika` 和粘性、非可选的 Web override；详见[行为树控制权与 Mock 测试](./behavior-tree-control)。
+`bt control` 必须在 `up` 后单独运行：它加入同一 ROS domain，保持 :8080 只读监视器、
+`realman_bt_executor`、`pika_control_router` 和 `keyboard_control_router` 到 Ctrl-C，而 `up` 继续拥有长期
+driver 与 :8765 Web control。停止 router 不会停止这些服务；使用 `./rm65 down` 才终止统一运行时。
+
+`./rm65 up` 会加载键盘配置并在 8765 静态页面中提供键盘卡片代码，但不会自行声明 `keyboard` 输入模式。
+只有运行中的 `control.xml` 目录通过 ROS 暴露可选的 `keyboard` 后，页面才显示并启用双臂键盘卡片；切到
+`ACTIVE/keyboard` 后才能发送 l/r 独立按键。当前 XML registry 还提供可选的 `none`、`policy`、
+`pikaposition`/`pikavelocity` 和粘性、非可选的 Web override；详见
+[行为树控制权与 Mock 测试](./behavior-tree-control)。
 
 ## 启动入口
 
@@ -206,7 +218,7 @@ Compose 默认通过国内镜像加速首次构建，具体值都以 Docker buil
 | `UBUNTU_APT_MIRROR` | `https://mirrors.aliyun.com/ubuntu` | amd64 Ubuntu Jammy 软件包 |
 | `UBUNTU_PORTS_APT_MIRROR` | `https://mirrors.aliyun.com/ubuntu-ports` | arm64 Ubuntu Jammy 软件包 |
 | `ROS2_APT_MIRROR` | `https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu` | ROS 2 Humble 软件包 |
-| `PYPI_INDEX_URL` | `https://pypi.tuna.tsinghua.edu.cn/simple` | `Robotic_Arm` Python SDK |
+| `PYPI_INDEX_URL` | `https://pypi.tuna.tsinghua.edu.cn/simple` | `Robotic_Arm` 之外的 Python 依赖（例如夹爪）|
 
 镜像 URL 不要带末尾 `/`。若某个公共镜像暂时不可用，可只覆盖该项；需要完全使用官方源时：
 
@@ -218,6 +230,13 @@ ROS2_APT_MIRROR=http://packages.ros.org/ros2/ubuntu \
 PYPI_INDEX_URL=https://pypi.org/simple \
 docker compose build realman_bringup
 ```
+
+`Robotic_Arm==1.1.6` 是特例：目前清华、阿里、USTC、腾讯、华为、南大等国内 PyPI 镜像都
+只索引到 `1.0.6`，而项目按厂商 API `V1.7.13` 语义锁死 `1.1.6`。因此 Dockerfile 中安装
+`config/python/realman-sdk-requirements.txt` 的那一步会额外附加
+`--extra-index-url https://pypi.org/simple`，仅让这个纯 Python 小包回落到官方 PyPI；
+其它依赖仍然走 `PYPI_INDEX_URL`。若企业环境完全阻断 pypi.org，请预先把 wheel 缓存到内部
+仓库，然后通过 `PYPI_INDEX_URL` 指向该仓库。
 
 这些变量只影响镜像构建，不进入机械臂运行配置。公共镜像属于第三方基础设施；发布到生产前
 应核对最终基础镜像 digest，或改用组织内部已审计的 registry/软件仓库。

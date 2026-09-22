@@ -2,6 +2,7 @@
 """Launch the standalone MoveJ behavior-tree demo."""
 
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
 
@@ -11,16 +12,19 @@ from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from coordinate_reference_registry import load_runtime_registries  # noqa: E402
+
 
 def _default_tree_file() -> str:
     """Prefer the repository config mount, then use the installed tree."""
     config_root = os.environ.get("REALMAN_CONFIG_ROOT")
     if config_root:
-        candidate = Path(config_root) / "behavior-trees" / "arm_move.xml"
+        candidate = Path(config_root) / "behavior-trees" / "move.xml"
         if candidate.is_file():
             return str(candidate)
     package_share = Path(get_package_share_directory("realman_bt"))
-    return str(package_share / "behavior-trees" / "arm_move.xml")
+    return str(package_share / "behavior-trees" / "move.xml")
 
 
 def _log_directory() -> Path:
@@ -36,6 +40,11 @@ def _default_runtime_snapshot_file() -> str:
 
 
 def generate_launch_description():
+    config_root = Path(os.environ.get("REALMAN_CONFIG_ROOT", "/opt/rm65_ws/config"))
+    coordinate_references, velocity_profiles = load_runtime_registries(
+        config_root / "ros" / "realman_coordinates.yaml",
+        config_root / "ros" / "realman_motion.yaml",
+    )
     tree_file = DeclareLaunchArgument(
         "tree_file",
         default_value=_default_tree_file(),
@@ -93,6 +102,8 @@ def generate_launch_description():
                 "stop_on_terminal": LaunchConfiguration("stop_on_terminal"),
                 "exit_on_terminal": LaunchConfiguration("exit_on_terminal"),
                 "runtime_snapshot_file": LaunchConfiguration("runtime_snapshot_file"),
+                "coordinate_references": coordinate_references,
+                "cartesian_velocity_profiles": velocity_profiles,
             }
         ],
     )

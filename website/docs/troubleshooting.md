@@ -111,6 +111,12 @@ ros2 run tf2_ros tf2_echo world link_6
 需要隔离运行图；仅释放叶节点 client 或将 UNKNOWN 当作成功无法解决问题。检查命令、其他可能原因和
 `.env` 域切换流程见[行为树诊断](./development/behavior-tree-motion#重复执行与-unknown-排查)。
 
+`CartesianVelocityForDuration` 的 Action 正常取消不代表真机一定运动。当前节点会比较运行前后的
+`/<arm>/get_current_pose`：若平移、旋转和关节角变化均低于容差，树会以
+`no observable robot motion` 返回 `FAILURE`。在归档 `runtime.json` 中查看
+`translation_m`、`rotation_rad` 和 `max_joint_change_deg`，不要仅凭 `goal_accepted` 或
+`velocity session canceled` 判断真机成功。
+
 ## 网格无法加载
 
 URDF 中的 `package://rm65_description/...` 路径依赖 ament 索引。进行本地构建后必须 source 当前工作空间：

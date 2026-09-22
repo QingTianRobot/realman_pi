@@ -67,6 +67,9 @@ class FakeRobot:
             "rm_movev_canfd", cartesian_velocity, follow, trajectory_mode, radio
         )
 
+    def rm_movep_canfd(self, pose, follow, trajectory_mode, radio):
+        return self._call("rm_movep_canfd", pose, follow, trajectory_mode, radio)
+
     def rm_get_current_tool_frame(self):
         return self._call("rm_get_current_tool_frame")
 
@@ -155,6 +158,18 @@ def test_velocity_vector_is_not_converted_to_euler(adapter, fake_robot):
     assert adapter.movev([0.1, 0, 0, 0, 0.2, 0], True, 0, 0) == 0
     assert fake_robot.calls[-1][0] == "rm_movev_canfd"
     assert fake_robot.calls[-1][1] == [0.1, 0, 0, 0, 0.2, 0]
+
+
+def test_pose_transmission_converts_wxyz_to_vendor_euler(adapter, fake_robot):
+    pose = [0.1, 0.2, 0.3, math.sqrt(0.5), 0.0, 0.0, math.sqrt(0.5)]
+    assert adapter.movep(pose, True, 0, 0) == 0
+    assert fake_robot.calls[-1] == (
+        "rm_movep_canfd",
+        pytest.approx([0.1, 0.2, 0.3, 0.0, 0.0, math.pi / 2.0]),
+        True,
+        0,
+        0,
+    )
 
 
 @pytest.mark.parametrize(

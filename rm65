@@ -114,6 +114,10 @@ down() {
   camera_stop
 }
 
+build() {
+  compose build realman_bringup_remote realman_web_control
+}
+
 status() {
   if [[ "$DRY_RUN" == "1" ]]; then
     printf '+ status camera + realman_bringup_remote + realman_web_control\n'
@@ -149,13 +153,14 @@ usage() {
 Usage: ./rm65 <command> [profile]
 
 Commands:
-  up [desktop|model|policy]  Start production runtime, desktop RViz, offline model viewer, or production + policy bridge.
+  build               Rebuild the local production driver and Web control images.
+  up [desktop|model]  Start production runtime, desktop RViz, or offline model viewer.
   down                Stop unified runtime and ROS 2 cameras.
   status              Show camera and Docker service state.
   logs                Show recent camera and bringup logs.
   camera              Run the legacy RTSP/TCP camera helper.
   bt-test build|mock|web|all  Build, run, or validate isolated behavior-tree scenarios.
-  bt [l|m|r|three]    Run a one-shot behavior tree; executor and :8080 monitor exit at terminal state.
+  bt [tree-name|l|m|r|three|control]  Run a behavior tree from config/behavior-trees; .xml may be omitted.
   bt control          Run the persistent input router and :8080 monitor until Ctrl-C.
   sync                Synchronize the clean main branch to production.
 EOF
@@ -164,6 +169,7 @@ EOF
 command_name="${1:-help}"
 shift || true
 case "$command_name" in
+  build) build "$@" ;;
   up) up "$@" ;;
   down) down "$@" ;;
   status) status "$@" ;;

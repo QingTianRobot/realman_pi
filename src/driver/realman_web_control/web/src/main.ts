@@ -4,6 +4,7 @@ import URDFLoader from "urdf-loader";
 import "./style.css";
 
 type ArmId = "l" | "m" | "r";
+type KeyboardArmId = "l" | "r";
 type Frame = { type: number; name: string; frame_id: string };
 type Joint = { name: string; lower_rad: number; upper_rad: number; lower_deg: number; upper_deg: number };
 type FrameState = {
@@ -48,6 +49,18 @@ type Manifest = {
   root_frame: string;
   default_joint_position_rad: number;
   robots: Robot[];
+  keyboard_control: {
+    heartbeat_period_ms: number;
+    input_timeout_ms: number;
+    grippers: Record<KeyboardArmId, { open: string; close: string }>;
+    arms: Record<KeyboardArmId, {
+      bindings: Record<string, { positive: string; negative: string }>;
+      linear_speed_mps: number;
+      angular_speed_radps: number;
+      work_reference_name: string;
+      work_frame_id: string;
+    }>;
+  };
 };
 type MotionCommand = 0 | 1 | 2;
 type Message = Record<string, any> & { type: string };
@@ -104,6 +117,14 @@ app.innerHTML = `
       <section id="input-mode-card" class="panel panel-section input-mode-card" hidden>
         <div class="panel-heading compact"><div><span class="eyebrow">GLOBAL INPUT</span><h2>输入模式</h2></div><span id="input-mode-active" class="mini-state">WAIT</span></div>
         <div class="input-mode-body"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div></div>
+      </section>
+      <section id="keyboard-control-card" class="panel panel-section keyboard-control-card" hidden>
+        <div class="panel-heading compact"><div><span class="eyebrow">KEYBOARD / L + R</span><h2>双臂键盘速度与夹爪</h2></div><span id="keyboard-control-state" class="mini-state">RELEASED</span></div>
+        <p class="keyboard-help">切换到“Web / 键盘速度控制”后：机械臂按住运动，松键、失焦或通信超时停止；夹爪按一次全开／全闭，松键不撤销已提交目标。仅在在线且无报警时接收新夹爪指令。</p>
+        <div class="keyboard-arm-grid">
+          <div id="keyboard-left" class="keyboard-arm" data-arm="l"></div>
+          <div id="keyboard-right" class="keyboard-arm" data-arm="r"></div>
+        </div>
       </section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><div class="coordinate-actions"><button id="copy-current-joints" class="button ghost" type="button" disabled>复制当前角度</button><span id="coordinate-state" class="mini-state">WAIT</span></div></div><div id="coordinate-summary" class="coordinate-summary"></div><div id="joint-copy-status" class="joint-copy-status" aria-live="polite">等待有效 joint_states</div></section>
       <section class="panel panel-section motion-panel">
@@ -195,6 +216,8 @@ const inputModeCard = $("#input-mode-card") as HTMLElement;
 const inputModeSelect = $("#input-mode-select") as HTMLSelectElement;
 const inputModeActive = $("#input-mode-active");
 const inputModeDetail = $("#input-mode-detail");
+const keyboardControlCard = $("#keyboard-control-card") as HTMLElement;
+const keyboardControlState = $("#keyboard-control-state");
 const motionMode = $("#motion-mode");
 const jointTarget = $("#joint-target") as HTMLElement;
 const poseTarget = $("#pose-target") as HTMLElement;
@@ -245,6 +268,12 @@ let activeMotionRequest = "";
 let motionFeedbackTimer = 0;
 let activeVelocityRequest = "";
 let velocityTimer = 0;
+const keyboardPressed: Record<KeyboardArmId, Set<string>> = { l: new Set(), r: new Set() };
+const keyboardSequence: Record<KeyboardArmId, number> = { l: 0, r: 0 };
+let keyboardHeartbeat = 0;
+let keyboardLeaseOwned = false;
+let keyboardGuideEpoch: number | undefined;
+let keyboardGuideTimer = 0;
 const coordinateStates: Partial<Record<ArmId, CoordinateState>> = {};
 const connectionStates: Partial<Record<ArmId, boolean>> = {};
 const currentJointsByArm: Partial<Record<ArmId, number[]>> = {};
@@ -286,14 +315,135 @@ function canWrite() { return !readOnly && socket?.readyState === WebSocket.OPEN;
 function inputModeLabel(modeId: string) {
   return inputModeCatalog?.find((option) => option.id === modeId)?.label ?? modeId;
 }
+function keyboardModeDiscovered() {
+  return Boolean(inputModeCatalog?.some((option) => option.id === "keyboard" && option.selectable));
+}
+function keyboardModeActive() {
+  return keyboardLeaseOwned && keyboardModeDiscovered() && inputModeState?.phase === "ACTIVE" && inputModeState.active_mode === "keyboard";
+}
+function keyboardModeGloballyActive() {
+  return keyboardModeDiscovered() && inputModeState?.phase === "ACTIVE" && inputModeState.active_mode === "keyboard";
+}
+function keyboardWorkAvailable(arm: KeyboardArmId) {
+  const settings = manifest?.keyboard_control?.arms[arm];
+  const state = coordinateStates[arm];
+  return Boolean(settings && state?.motion_allowed === true && state.work_matched === true &&
+    state.current_work === settings.work_reference_name && state.expected_work === settings.work_reference_name &&
+    state.work?.name === settings.work_reference_name && state.work?.frame_id === settings.work_frame_id);
+}
+function keyboardGripperAvailable(arm: KeyboardArmId) {
+  const state = gripperStates[arm === "l" ? "gripper_left" : "gripper_right"];
+  return state?.connected === true && state.alarm === 0;
+}
+function keyboardVelocityCodes(arm: KeyboardArmId) {
+  const bindings = manifest?.keyboard_control?.arms[arm]?.bindings ?? {};
+  return new Set(Object.values(bindings).flatMap((binding) => [binding.positive, binding.negative]));
+}
+function keyboardGripperCodes(arm: KeyboardArmId) {
+  return new Set(Object.values(manifest?.keyboard_control?.grippers?.[arm] ?? {}));
+}
+function keyboardCodeReady(arm: KeyboardArmId, code: string) {
+  return keyboardModeActive() && canWrite() && !document.hidden &&
+    (keyboardGripperCodes(arm).has(code) ? keyboardGripperAvailable(arm) : keyboardWorkAvailable(arm));
+}
+function keyboardArmForCode(code: string): KeyboardArmId | undefined {
+  for (const arm of ["l", "r"] as const) {
+    if (keyboardVelocityCodes(arm).has(code) || keyboardGripperCodes(arm).has(code)) return arm;
+  }
+  return undefined;
+}
+function sendKeyboardState(arm: KeyboardArmId) {
+  send({ type: "keyboard_state", arm, keys: [...keyboardPressed[arm]].sort(), sequence: ++keyboardSequence[arm] });
+}
+function sendKeyboardStates() {
+  for (const arm of ["l", "r"] as const) sendKeyboardState(arm);
+}
+function stopKeyboardHeartbeat() {
+  if (keyboardHeartbeat) window.clearInterval(keyboardHeartbeat);
+  keyboardHeartbeat = 0;
+}
+function releaseKeyboardInput() {
+  const shouldSend = keyboardLeaseOwned && socket?.readyState === WebSocket.OPEN;
+  keyboardPressed.l.clear();
+  keyboardPressed.r.clear();
+  stopKeyboardHeartbeat();
+  if (shouldSend) sendKeyboardStates();
+  renderKeyboardControl();
+}
+function reconcileKeyboardControl() {
+  if (!keyboardModeActive() || !canWrite()) {
+    releaseKeyboardInput();
+    return;
+  }
+  for (const arm of ["l", "r"] as const) {
+    let changed = false;
+    for (const code of keyboardPressed[arm]) {
+      if (!keyboardCodeReady(arm, code)) {
+        keyboardPressed[arm].delete(code);
+        changed = true;
+      }
+    }
+    if (changed) sendKeyboardState(arm);
+  }
+  if (!keyboardHeartbeat) {
+    sendKeyboardStates();
+    keyboardHeartbeat = window.setInterval(sendKeyboardStates, manifest!.keyboard_control.heartbeat_period_ms);
+  }
+  renderKeyboardControl();
+}
+function renderKeyboardArm(arm: KeyboardArmId) {
+  const host = $(arm === "l" ? "#keyboard-left" : "#keyboard-right");
+  const settings = manifest?.keyboard_control?.arms[arm];
+  if (!settings) { host.replaceChildren(); return; }
+  const axisLabels: Record<string, string> = { vx: "X", vy: "Y", vz: "Z", wx: "RX", wy: "RY", wz: "RZ" };
+  const keyLabel = (code: string) => escapeHtml(code.replace(/^(Key|Digit)/, ""));
+  const gripper = manifest?.keyboard_control?.grippers?.[arm];
+  const health = gripperStates[arm === "l" ? "gripper_left" : "gripper_right"];
+  const gripperStatus = health?.connected !== true ? "OFFLINE" : health.alarm !== 0 ? "ALARM" : "READY";
+  host.innerHTML = `<div class="keyboard-arm-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span>${escapeHtml(settings.work_frame_id)}</span></div><div class="keyboard-bindings ${keyboardWorkAvailable(arm) ? "" : "unavailable"}">${Object.entries(settings.bindings).map(([axis, binding]) => `
+    <div class="keyboard-binding"><span>${axisLabels[axis] ?? axis}</span><kbd data-code="${escapeHtml(binding.positive)}">${keyLabel(binding.positive)}</kbd><em>+</em><kbd data-code="${escapeHtml(binding.negative)}">${keyLabel(binding.negative)}</kbd><em>−</em></div>`).join("")}</div>
+    ${gripper ? `<div class="keyboard-gripper ${keyboardGripperAvailable(arm) ? "" : "unavailable"}"><div class="keyboard-arm-heading"><strong>夹爪 / 单次目标</strong><span>${gripperStatus}</span></div><div class="keyboard-binding gripper-binding"><kbd data-code="${escapeHtml(gripper.open)}">${keyLabel(gripper.open)}</kbd><span>全开</span><kbd data-code="${escapeHtml(gripper.close)}">${keyLabel(gripper.close)}</kbd><span>全闭</span></div></div>` : ""}`;
+  host.querySelectorAll<HTMLElement>("kbd[data-code]").forEach((key) => key.classList.toggle("pressed", keyboardPressed[arm].has(key.dataset.code ?? "")));
+}
+function renderKeyboardControl() {
+  keyboardControlCard.hidden = !keyboardModeDiscovered() || !manifest?.keyboard_control;
+  if (keyboardControlCard.hidden) return;
+  renderKeyboardArm("l");
+  renderKeyboardArm("r");
+  const moving = (["l", "r"] as const).some((arm) => [...keyboardPressed[arm]].some((code) => keyboardVelocityCodes(arm).has(code)));
+  const anyAvailable = keyboardWorkAvailable("l") || keyboardWorkAvailable("r");
+  const gripperAvailable = keyboardGripperAvailable("l") || keyboardGripperAvailable("r");
+  const label = !keyboardModeGloballyActive() ? "RELEASED" : !keyboardLeaseOwned ? "REMOTE" : !anyAvailable ? (gripperAvailable ? "GRIPPER ONLY" : "WORK UNAVAILABLE") : moving ? "MOVING" : "READY";
+  keyboardControlState.textContent = label;
+  keyboardControlState.className = `mini-state keyboard-${label.toLowerCase().replaceAll(" ", "-")}`;
+}
+function guideToKeyboardControl() {
+  if (!keyboardModeActive() || inputModeState?.epoch === keyboardGuideEpoch || keyboardControlCard.hidden) return;
+  keyboardGuideEpoch = inputModeState!.epoch;
+  // Keep the 3D viewer and MoveJ controls in place; the keyboard card is
+  // already visible in the controls column and only needs an active cue.
+  keyboardControlCard.classList.add("keyboard-guide-active");
+  if (keyboardGuideTimer) window.clearTimeout(keyboardGuideTimer);
+  keyboardGuideTimer = window.setTimeout(() => {
+    keyboardControlCard.classList.remove("keyboard-guide-active");
+    keyboardGuideTimer = 0;
+  }, 1800);
+}
 function updateInputModeSelectionDisabled() {
   inputModeSelect.disabled = !canWrite() || Boolean(activeInputModeRequest) || inputModeState?.phase === "SWITCHING" ||
     !(inputModeCatalog?.some((option) => option.id !== "web" && option.selectable));
 }
 function renderInputModeCard() {
   inputModeCard.hidden = !inputModeCatalog;
-  if (!inputModeCatalog) return;
-  const selectedMode = inputModeState?.selected_mode ?? pendingInputModeId;
+  if (!inputModeCatalog) {
+    reconcileKeyboardControl();
+    return;
+  }
+  const remoteKeyboard = inputModeState?.phase === "ACTIVE" &&
+    inputModeState.active_mode === "keyboard" && !keyboardLeaseOwned;
+  const selectedMode = remoteKeyboard && !pendingInputModeId
+    ? ""
+    : pendingInputModeId || inputModeState?.selected_mode;
   inputModeSelect.replaceChildren(...inputModeCatalog
     .filter((option) => option.id !== "web")
     .map((option) => {
@@ -313,11 +463,14 @@ function renderInputModeCard() {
   inputModeActive.className = `mini-state ${state?.phase.toLowerCase() ?? ""}`;
   inputModeDetail.textContent = state?.detail || inputModeResultDetail || "等待输入模式状态";
   updateInputModeSelectionDisabled();
+  reconcileKeyboardControl();
+  guideToKeyboardControl();
 }
 function finishInputModeRequestIfTerminal() {
   if (!activeInputModeRequest || activeInputModeExecutorRequest === undefined || !inputModeState ||
       inputModeState.request_id !== activeInputModeExecutorRequest ||
       !["ACTIVE", "FAILED"].includes(inputModeState.phase)) return;
+  inputModeSelect.blur();
   activeInputModeRequest = "";
   activeInputModeExecutorRequest = undefined;
   pendingInputModeId = "";
@@ -954,6 +1107,10 @@ function handleMessage(message: Message) {
       pendingInputModeId = "";
     }
     renderInputModeCard();
+  } else if (message.type === "keyboard_lease") {
+    keyboardLeaseOwned = Boolean(message.active);
+    if (!keyboardLeaseOwned) releaseKeyboardInput();
+    renderInputModeCard();
   } else if (message.type === "input_mode_result") {
     const modeResult: InputModeResult = {
       request_id: String(message.request_id ?? ""),
@@ -974,6 +1131,11 @@ function handleMessage(message: Message) {
       renderInputModeCard();
     }
   } else if (message.type === "input_mode_state") {
+    const nextPhase = String(message.phase ?? "");
+    const nextActiveMode = String(message.active_mode ?? "");
+    const modeLost = (inputModeState !== undefined && inputModeState.epoch !== Number(message.epoch)) ||
+      nextPhase !== "ACTIVE" || nextActiveMode !== "keyboard";
+    if (modeLost) releaseKeyboardInput();
     inputModeState = {
       requested_mode: String(message.requested_mode ?? ""),
       selected_mode: String(message.selected_mode ?? ""),
@@ -983,6 +1145,7 @@ function handleMessage(message: Message) {
       epoch: Number(message.epoch),
       detail: String(message.detail ?? ""),
     };
+    if (modeLost) keyboardLeaseOwned = false;
     finishInputModeRequestIfTerminal();
     renderInputModeCard();
   } else if (message.type === "gripper_list") {
@@ -990,10 +1153,12 @@ function handleMessage(message: Message) {
   } else if (message.type === "gripper_state") {
     gripperStates[String(message.name)] = message;
     renderGripperState();
+    reconcileKeyboardControl();
   } else if (message.type === "gripper_result") {
     if (message.message) $("#gripper-feedback").textContent = String(message.message);
   } else if (message.type === "coordinate_state") {
     coordinateStates[message.arm] = message as CoordinateState;
+    reconcileKeyboardControl();
     renderFleetStrip();
     if (message.arm === selectedArm) {
       renderCoordinateState();
@@ -1139,7 +1304,7 @@ function handleMessage(message: Message) {
     actionState.textContent = String(message.state).toUpperCase();
     actionState.className = `mini-state ${message.state}`;
     if (message.action === "cartesian_velocity") velocityState.textContent = String(message.state).toUpperCase();
-    if (["rejected", "error"].includes(message.state)) {
+    if (["rejected", "error", "stopped"].includes(message.state)) {
       if (message.action === "execute_motion") {
         window.clearTimeout(motionFeedbackTimer);
         motionFeedbackTimer = 0;
@@ -1198,6 +1363,13 @@ function handleMessage(message: Message) {
     if (arm === selectedArm) actionState.textContent = status.toUpperCase();
     updateButtons();
   } else if (message.type === "error") {
+    if (message.code === "keyboard_lease" || message.code === "keyboard_inactive") {
+      keyboardLeaseOwned = false;
+      releaseKeyboardInput();
+      inputModeResultDetail = `${message.code}: ${message.message}`;
+      renderInputModeCard();
+      return;
+    }
     result.textContent = `${message.code}: ${message.message}`;
     if (message.request_id === activeInputModeRequest) {
       inputModeResultDetail = `${message.code}: ${message.message}`;
@@ -1233,11 +1405,17 @@ function handleMessage(message: Message) {
 }
 
 function connect() {
+  keyboardLeaseOwned = false;
+  releaseKeyboardInput();
   socket?.close();
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   socket = new WebSocket(`${protocol}://${location.host}/ws`);
-  socket.addEventListener("open", () => setConnection(true));
+  socket.addEventListener("open", () => {
+    setConnection(true);
+    updateButtons();
+  });
   socket.addEventListener("close", () => {
+    releaseKeyboardInput();
     setConnection(false);
     activeInputModeRequest = "";
     activeInputModeExecutorRequest = undefined;
@@ -1270,6 +1448,7 @@ function updateButtons() {
 
 function loadManifest(next: Manifest) {
   manifest = next;
+  renderKeyboardControl();
   selectedArm = armSelect.value as ArmId;
   next.robots.forEach((item) => {
     const initial = item.joints.map(() => next.default_joint_position_rad);
@@ -1298,6 +1477,32 @@ function loadManifest(next: Manifest) {
   loadFleet();
   updateButtons();
 }
+
+window.addEventListener("keydown", (event) => {
+  const target = event.target as HTMLElement | null;
+  if (event.repeat || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.isComposing) return;
+  if (target?.closest("input, textarea, select") || target?.isContentEditable) return;
+  const arm = keyboardArmForCode(event.code);
+  if (!arm || !keyboardCodeReady(arm, event.code)) return;
+  event.preventDefault();
+  if (!keyboardPressed[arm].has(event.code)) {
+    keyboardPressed[arm].add(event.code);
+    reconcileKeyboardControl();
+    sendKeyboardStates();
+    renderKeyboardControl();
+  }
+});
+window.addEventListener("keyup", (event) => {
+  const arm = keyboardArmForCode(event.code);
+  if (!arm || !keyboardPressed[arm].delete(event.code)) return;
+  event.preventDefault();
+  sendKeyboardStates();
+  renderKeyboardControl();
+});
+window.addEventListener("blur", releaseKeyboardInput);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) releaseKeyboardInput();
+});
 
 resetPreviewButton.addEventListener("click", () => {
   targetJoints = [...currentJoints];

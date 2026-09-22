@@ -6,7 +6,7 @@ ROOT = Path(__file__).parents[4]
 
 
 def test_arm_move_tree_has_single_safe_movej():
-    root = ET.parse(ROOT / "config/behavior-trees/arm_move.xml").getroot()
+    root = ET.parse(ROOT / "config/behavior-trees/move.xml").getroot()
     assert root.attrib["main_tree_to_execute"] == "MainTree"
     tree = root.find("BehaviorTree")
     assert tree is not None and tree.attrib["ID"] == "MainTree"

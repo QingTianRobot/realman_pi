@@ -1,86 +1,81 @@
-# ROS 2 Orbbec bringup defaults for the three cameras on the production rig.
-# Select by serial number because USB bus paths can change after re-plugging.
-cameras:
-  left:
-    # Physical left camera. This mapping was verified after the initial
-    # installation had left and right serials reversed.
-    serial: "CV2L36000037"
+# ============================================================================
+# 腕部相机族:三台 Orbbec Gemini 305,装在左/中/右机械臂腕部。
+# 驱动 = orbbec_camera/gemini305.launch.py,参数模型 width/height/fps/format。
+# 本族的 streams / mode / sync 是共享默认,只作用于这三台,不影响 global_camera。
+#
+# 现场覆盖:同目录下可选的 cameras_ros2.local.yaml(已 .gitignore)会深合并覆盖
+# 本文件的任意叶子字段(最典型的是各相机 serial),换现场无需改动本文件。
+# 优先级:cameras_ros2.local.yaml > cameras_ros2.yaml;local 不存在时用本文件即可正常启动。
+# ============================================================================
+wrist_cameras:
+  # 本族全局默认 profile,三台共享;可在 devices.<side>.streams 里按叶子键覆盖。
+  streams:
     color:
-      # The glossy calibration board clips under auto exposure in this view.
-      # Gemini 305 exposure units are 0.1 ms, so 30 is a fixed 3 ms exposure.
-      auto_exposure: false
-      exposure: 30
-  middle:
-    serial: "CV2T661000DC"
-  right:
-    # Physical right camera; keep this aligned with camera_stream/orbbec.yaml.
-    serial: "CV2L360000HS"
+      width: 640
+      height: 480
+      fps: 15
+      format: YUYV          # 非压缩,规避 Gemini 305 的 MJPEG 撕裂
+    depth:
+      width: 640
+      height: 480
+      fps: 15
+      format: Y16
+      decimation_factor: 2   # 硬件抽采样,实际发布 320x240
 
-# Gemini 305 devices share the USB2 bus on the production host. These profiles
-# keep all three devices within the available bandwidth.
-streams:
-  color:
-    width: 640
-    height: 480
-    # Uncompressed YUYV avoids persistent MJPEG frame tearing on the right
-    # Gemini 305. At 640x480@10, all three streams remain within USB2 headroom.
-    fps: 10
-    format: YUYV
-  depth:
-    # Gemini 305 interprets these as the sensor profile before hardware
-    # decimation. 640x480 with factor 2 publishes 320x240 depth images.
-    width: 640
-    height: 480
-    fps: 15
-    format: Y16
-    decimation_factor: 2
+  # 彩色/深度互斥:本 USB 拓扑下每台一次只能可靠出一路->屎山。自己理去吧。
+  mode: color
 
-# ROS2 bringup defaults to color-only. The wrapper can publish color or depth
-# reliably on this USB2 topology, but not both streams from one camera at once.
-mode: color
+  # 三台各自独立;关掉官方帧同步/软触发,避免"有 publisher 无帧"。
+  sync:
+    enable_frame_sync: false
+    trigger_out_enabled: false
+    software_trigger_enabled: false
 
-# Host prerequisite: all production cameras share a USB2 root hub. Set
-# /sys/module/usbcore/parameters/usbfs_memory_mb to at least 256 MB before
-# starting all three streams. The launch does not change kernel settings.
+  # 逐台设备。streams 段可选,与上面的全局 streams 深合并:
+  #   - 只写要改的叶子键,其余继承全局默认;
+  #   - 可覆盖任意叶子(width/height/fps/format/auto_exposure/exposure ...)。
+  # serial 为兜底默认;现场实际串号建议写进 cameras_ros2.local.yaml 覆盖。
+  devices:
+    left:
+      serial: "CV2L36000037"     # 兜底默认;现场值见 cameras_ros2.local.yaml
+      streams:
+        color:
+          # 叶子覆盖示例(如需改档位,取消注释并确认传感器支持该 profile):
+          # width: 1280
+          # height: 720
+          fps: 30
+          # format: MJPG
+    middle:
+      serial: "CV2T661000DC"     # 无 streams 覆盖 → 完全继承全局默认
+    right:
+      serial: "CV2L360000HS"     # 与 camera_stream/orbbec.yaml 保持一致
 
-# Each camera is independent on this USB2 topology.  The wrapper's default
-# frame-sync/software-trigger settings can leave later devices with a live
-# publisher but no frames, so keep hardware/software triggering disabled.
-sync:
-  enable_frame_sync: false
-  trigger_out_enabled: false
-  software_trigger_enabled: false
-
-# Global RealSense D435, published through the native realsense2_camera node so
-# the ROS 2 image topics stay the single source of truth for calibration/RViz.
-# The driver lives in the src/sensor/realsense submodules; when they are not
-# built, rm65_camera_ros2 auto-degrades to use_realsense:=false and the three
-# Orbbec streams still start.
+# ============================================================================
+# 全局相机:单台 RealSense D435,固定俯视全场。
+# 驱动 = realsense_d435.launch.py → rs_launch.py,参数模型 "WxHxFPS" profile 字符串。
+# 与腕部族独立,不继承 wrist_cameras.streams(两族参数模型/档位集不同)。
+# serial_no 等字段同样可被 cameras_ros2.local.yaml 覆盖。
+# ============================================================================
 global_camera:
   enabled: true
   device_type: d435
-  # Production D435 serial; keep aligned with camera_stream/realsense.yaml.
+  # 兜底默认;现场值建议写进 cameras_ros2.local.yaml。
+  # 纯数字串号,launch 会外层加单引号,防被 YAML 推断成整数导致节点崩溃。
   serial_no: "346222072431"
   namespace: camera_global
   camera_name: d435
   color:
-    # USB2 topology limit; raise to 1280x720x30 after moving to a USB3 port.
-    width: 424
-    height: 240
-    fps: 15
+    width: 1920
+    height: 1080
+    fps: 30
   depth:
-    # D435 cannot stream depth alongside three Orbbec devices on USB2 today.
-    enable: false
+    enable: false              # D435 深度当前关闭
     width: 480
     height: 270
     fps: 15
   align_depth: false
   pointcloud: false
-  # Mount pose of the D435 in the shared `world` frame. Placeholder identity
-  # until the global-camera extrinsic is measured; edit after installation.
-  # The static TF connects world -> <child_frame> so the D435 joins the same
-  # tree as the Orbbec optical frames.
-  tf:
+  tf:                          # D435 在共享 world 系下的安装位姿(占位,待实测)
     parent_frame: world
     child_frame: d435_link
     x: 0.0

@@ -7,7 +7,8 @@ description: 使用 vendored BehaviorTree.CPP-X 执行单臂或三臂同步分�
 
 realman_bt 提供一个独立的 ROS 2 C++ 执行器，用于从 XML 加载行为树并执行关节移动。它参考
 third_party/behavior_tree_cpp 的 NodeFactory -> XmlParser -> Tree::tickOnce() 链路，注册
-Sequence、MoveJ 和 ThreeArmMoveJ，不替换生产 ./rm65 up 编排，也不会自动启动机械臂驱动。
+Sequence、MoveJ、ThreeArmMoveJ 和 CartesianVelocityForDuration，不替换生产 ./rm65 up 编排，也不会
+自动启动机械臂驱动。
 
 同一执行器还支持持久输入路由树，但不与本页的 one-shot MoveJ 生命周期混淆：`./rm65 up` 后另行执行
 `./rm65 bt control`，它持续到 Ctrl-C。其 XML 目录、Web override 和无硬件验证见
@@ -17,12 +18,15 @@ Sequence、MoveJ 和 ThreeArmMoveJ，不替换生产 ./rm65 up 编排，也不�
 
     arm_move.launch.py
       -> realman_bt_executor
-           -> arm_move.xml: Sequence -> MoveJ
-           -> three_arm_staged_move.xml: Sequence -> ThreeArmMoveJ -> ThreeArmMoveJ
+           -> move.xml: Sequence -> MoveJ
+           -> three.xml: Sequence -> ThreeArmMoveJ -> ThreeArmMoveJ
+           -> tool_x.xml: Sequence -> CartesianVelocityForDuration
            -> /l|m|r/execute_motion (realman_msgs/action/ExecuteMotion)
+           -> /l|m|r/cartesian_velocity (realman_msgs/action/CartesianVelocity)
+              + /l|m|r/cartesian_velocity/command (geometry_msgs/msg/TwistStamped)
 
 `./rm65 bt` 使用 one-shot 生命周期。执行器到达 `SUCCESS` 或 `FAILURE` 后停止 tick、halt 树，并等待
-所有 cancellation drain 成功提交取消请求；随后写出最终快照、退出 executor，`ros2 launch` 和只读
+所有 cancellation drain 成功提交取消请求；快照中的 `pending_cancellations` 归零后，随后写出最终快照、退出 executor，`ros2 launch` 和只读
 监视器也随之退出。三臂 driver 及其 RealMan SDK 连接不退出，下一棵行为树继续复用原有 Action Server。
 
 MoveJ 使用 command=MOVEJ、reference_type=BASE，joint_degrees 为六个角度（单位：度），
@@ -30,8 +34,8 @@ velocity_percent 和 blend_radius_percent 的范围分别为 1..100 和 0..100�
 0,0,0,0,0,0，速度为 10%，单次 Action 超时为 120 秒；仍需按实际 RM65 安装姿态和工作空间
 确认该目标是否安全。
 
-单臂权威树文件为 config/behavior-trees/arm_move.xml，其中 arm_id 和 dry_run 通过黑板重映射，能被
-launch 参数覆盖。三臂权威树文件为 config/behavior-trees/three_arm_staged_move.xml；每个
+单臂权威树文件为 config/behavior-trees/move.xml，其中 arm_id 和 dry_run 通过黑板重映射，能被
+launch 参数覆盖。三臂权威树文件为 config/behavior-trees/three.xml；每个
 ThreeArmMoveJ 叶节点先确认三路 Action Server 都可用，在同一行为树 tick 中依次提交 l/m/r 三个异步
 goal，并在三路都成功后返回 SUCCESS。任一路失败或超时会使叶节点失败，并取消或移交仍未完成的 goal。
 
@@ -51,6 +55,108 @@ goal，并在三路都成功后返回 SUCCESS。任一路失败或超时会使�
 `dry_run`、`velocity_percent`、`blend_radius_percent`、`timeout_sec` 默认分别为 `true`、`10`、`0`、
 `120`。成功要求三路 Action 均返回 `SUCCEEDED`，且每个结果消息的 `success=true`。超时从节点初始化
 开始计算，包含等待服务器就绪的时间。
+
+## 定时笛卡尔速度节点
+
+`CartesianVelocityForDuration` 用于“沿指定坐标方向以固定速度运动一段时间”。XML 只使用统一的逻辑
+坐标名，不同时暴露容易冲突的 `reference_type`、`reference_name` 和 `frame_id`：
+
+```xml
+<CartesianVelocityForDuration
+    arm_id="l"
+    dry_run="{dry_run}"
+    reference="default_tool"
+    linear_velocity_mps="0.02,0,0"
+    angular_velocity_radps="0,0,0"
+    duration_sec="0.5"/>
+```
+
+该示例表示左臂沿默认工具坐标系的 +X 方向以 `0.02 m/s` 运行 `0.5 s`。完整示例位于
+`config/behavior-trees/tool_x.xml`，可用文件名直接启动：
+
+```bash
+./rm65 bt tool_x
+```
+
+树根的 `realman_required_actions="cartesian_velocity"` 会让容器入口等待
+`/l/cartesian_velocity`，而不是沿用 MoveJ 默认的 `/l/execute_motion`。未声明时默认仍为
+`execute_motion`；可用逗号同时声明 `execute_motion,cartesian_velocity`。该元数据和
+`realman_required_arms` 共同确定启动前只读就绪检查，不会由节点名做隐式猜测。
+
+默认仍为 dry-run，只校验引用、速度和时长，不创建 Action client，也不发布速度。真机命令必须在清空
+工作区、确认工具方向和速度、急停可达后显式执行：
+
+```bash
+REALMAN_BT_DRY_RUN=false ./rm65 bt tool_x
+```
+
+`reference` 的权威映射来自 `config/ros/realman_coordinates.yaml`：
+
+| 逻辑名称 | 含义 |
+| --- | --- |
+| `base` | 当前臂的 BASE；定时笛卡尔速度不支持该引用，会在发送 Goal 前失败。 |
+| `default_tool` | 当前臂配置的默认工具。 |
+| `default_work` | 当前臂配置的默认工作坐标。 |
+| `tool/<key>` | `tools` 中指定配置键，例如 `tool/tcpgrip`。 |
+| `work/<key>` | `work_frames` 中指定配置键，例如 `work/cell`。 |
+
+例如左臂的 `default_tool` 当前映射为驱动目标 `reference_type=TOOL`、
+`reference_name=tcpgrip` 和话题帧 `l/tool/tcpgrip`。控制周期、watchdog、线/角速度上限、线/角加速度
+上限以及停止超时统一读取 `config/ros/realman_motion.yaml`，XML 不能绕过这些逐臂限制。
+
+驱动不会把项目内部的 `BASE=0 / WORK=1 / TOOL=2` 数值直接传入厂商接口。
+`rm_set_movev_canfd_init` 使用独立枚举：`TOOL` 显式映射为厂商 `frame_type=0`，`WORK`
+映射为 `frame_type=1`。厂商速度初始化没有独立 BASE 选项，因此 `reference="base"` 会被明确拒绝，
+调用方应选择已配置的工具坐标或工作坐标。
+
+节点在 Action 接受后通过独立 ROS timer 按配置周期发布 `TwistStamped`，因此命令刷新频率不依赖行为树
+tick 频率。publisher 使用 `KEEP_LAST=1`、`VOLATILE`，DDS lifespan 等于配置 watchdog；每条消息使用
+ROS clock 的新时间戳以及映射后的 `frame_id`。时长到达后节点进入停止等待状态：立即请求取消开放式
+`CartesianVelocity` session，并继续按控制周期刷新零速度，直到 Action 返回终态或超过配置的停止超时。
+这样取消处理即使超过一个 watchdog 周期，也不会把正常的定时停止误报为
+`velocity command watchdog expired`；非零速度刷新意外中断时，驱动 watchdog 仍会执行故障停止。节点会在
+发布任何速度前通过 `/<arm>/get_current_pose` 保存真机关节角和
+末端位姿，并在驱动返回预期的 `CANCELED` 终态后再次读取。只有平移至少 `0.001 m`、旋转至少
+`0.5°`，或任一关节变化至少 `0.1°` 时才返回 `SUCCESS`。三项变化都低于阈值时返回 `FAILURE`，事件中
+记录 `translation_m`、`rotation_rad` 和 `max_joint_change_deg`；因此 Action 正常取消不再等同于真机运动
+成功。前后状态读取失败或超时、Action 提前结束、引用未知、输入超限或停止超时也都会返回
+`FAILURE` 并保留诊断。
+
+树被 `/stop`、分支切换或 Ctrl-C halt 时，节点先停止周期 timer 并发布一次零速度，再把 pending goal
+response 或 accepted goal 移交给 executor 的 cancellation drain。`pending_cancellations` 同时统计 MoveJ
+和笛卡尔速度 session；one-shot executor 要等两类 drain 都完成取消提交后才退出。
+
+## 键盘连续速度 session
+
+`control.xml` 的 `keyboard` 分支不直接发送机器人命令；`KeyboardVelocityInput` 只是长驻控制权叶节点，
+同一 `control_router.launch.py` 中的 `keyboard_control_router` 分别拥有 l/r 两个连续速度 session：
+
+```text
+:8765 keyboard_state
+  -> /keyboard/l|r/cartesian_velocity
+  -> keyboard_control_router
+  -> /l|r/cartesian_velocity Action
+     + /l|r/cartesian_velocity/command
+```
+
+l/r 的 pending goal、accepted handle、最新命令、输入时间和取消状态完全独立，m 不参与键盘控制。
+某一侧按键为空、WORK 不可用或超时，只发布并取消该侧的 session；另一侧可以继续按自己的按键和状态运行。
+
+每个 Goal 固定使用 `CartesianVelocity.Goal.WORK`，名称和 frame ID 必须匹配该臂已验证的
+`default_work`。BASE 不允许，WORK 不可用时也不会自动改用 TOOL。模式离开 keyboard、坐标失配、按键释放、
+输入超时或节点关闭时，router 先对已接受 session 发布零速度，再提交取消。如果 goal response 尚未返回，
+`cancel_after_accept` 会阻止迟到接受的 goal 成为 active session，并立即对其发起取消。
+
+失效保护分两层：浏览器按 `config/ros/keyboard_control.yaml` 每 `50 ms` 发送完整按键集合，keyboard router
+在 `150 ms` 没有新输入时释放该臂；已接受 session 的 driver command 按
+`config/ros/realman_motion.yaml` 的 `20 ms` 周期刷新，而 driver 自身 `100 ms` watchdog 对命令流再次检查。
+前一层处理 Web/网络停更，后一层处理 router 到 driver 的刷新中断。`dry_run=true` 时 router 仍执行目录、
+WORK、frame、速度上限和 timeout 校验，但不发送 Action Goal，也不向 driver command topic 发布消息。
+
+同一个 keyboard router 还接收左右夹爪的全开／全闭边沿（左 `1/2`、右 `9/0`）。它们不属于速度 session，
+不依赖 WORK，按次经 `/keyboard/l|r/gripper_command` 转发到 `/gripper_left|right/percentage/command`。
+模式、epoch/request、时效、夹爪健康和 dry-run 都在 router 检查；松键不撤销已提交目标，不发送“零值停止夹爪”。
+详细键位、JSON 契约和验证见[键盘双夹爪](./gripper-control#键盘双夹爪全开-全闭)。
 
 ## 构建
 
@@ -153,7 +259,7 @@ python3 docker/bt_runtime_result.py logs/behavior-trees/<run-id>/runtime.json
 显式关闭 dry-run 后，容器启动日志会再次打印安全警告，执行器才会发送真实 `ExecuteMotion` goal。
 可用 `REALMAN_BT_ARM_ID=l|m|r`、`BT_SERVER_PORT` 和
 `BT_PUBLIC_HOST` 覆盖默认参数；运行监视器只读，容器临时 workspace 和快照不会覆盖
-`config/behavior-trees/arm_move.xml`。
+`config/behavior-trees/move.xml`。
 
 执行器发布根节点状态：
 
@@ -238,7 +344,7 @@ ROS timer，因此应在可用时让 cancel 提交完成并确认运行快照；
 
 launch 每次运行都会在 REALMAN_LOG_ROOT（未设置时为当前目录下的 logs/）创建
 YYYYMMDD_HHMMSS/，并启用彩色 ROS 2 日志。设置 REALMAN_CONFIG_ROOT 后，若其中存在
-behavior-trees/arm_move.xml，launch 会优先使用该配置。
+behavior-trees/move.xml，launch 会优先使用该配置。
 
 ## 真机执行
 
@@ -316,7 +422,7 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 
 | 参数 | 默认值 | 说明 |
 | --- | --- | --- |
-| tree_file | 安装后的 behavior-trees/arm_move.xml | XML 绝对路径；`three` 入口改用 three_arm_staged_move.xml |
+| tree_file | 安装后的 behavior-trees/move.xml | XML 绝对路径；`three` 入口改用 three.xml |
 | arm_id | r | 只能是 l、m 或 r |
 | dry_run | true | true 只校验；false 发真实 goal |
 | tick_rate_hz | 20.0 | 行为树 tick 频率（Hz） |
@@ -324,15 +430,24 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 | stop_on_terminal | true | SUCCESS/FAILURE 后停止 timer |
 | exit_on_terminal | true | 终态且 cancellation drain 清空后退出 executor；false 保留 Service 常驻模式 |
 
-当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ，以及 `control_router.xml` 的
-`SelectInputMode`、`InputModeGuard`、`ActivateInputMode` 和输入叶。新增节点仍须在执行器中显式
+当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ、定时笛卡尔速度，以及 `control.xml` 的
+`SelectInputMode`、`InputModeGuard`、`ActivateInputMode`、`KeyboardVelocityInput` 和其它输入叶。切入
+`keyboard` 时，ReactiveFallback 激活键盘叶并由独立 router 管理 l/r WORK 速度 session；切入
+`pikaposition` 或 `pikavelocity` 时，输入树会先执行一次有状态 Sequence 中的三臂 ThreeArmMoveJ 默认姿态准备动作，
+成功后才激活 Pika；该姿态来自 `config/ros/pika_config.yaml` 的 `joint_degrees`，由
+`control_router.launch.py` 启动时注入，不是每次切换时动态读取。Pika 分支保持运行时，
+准备动作不会被 ReactiveSequence 的后续 tick 重复执行；离开后重新进入才会再次准备。新增节点仍须在执行器中显式
 注册，并同步更新 XML 契约测试。控制路由的 reactive 交接规则见
 [行为树控制权与 Mock 测试](./behavior-tree-control)。节点、端口、Action/Service 接入、取消所有权或运行诊断变更时，
 遵守项目 [行为树开发 Skill](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/developing-realman-behavior-trees/SKILL.md) 的 dry-run
 边界和验证顺序。
 
-`./rm65 bt` 接受 `l|m|r|three|control`，不接受 XML 路径；选择其他树时使用上述 ROS launch 的
-`tree_file:=<XML绝对路径>`，或显式配置容器 `bt-start` 的 `BT_TREE_FILE` 和 `BT_REQUIRED_ARMS`。
+`./rm65 bt <tree-name>` 接受 `config/behavior-trees/` 下的简单 XML 文件名，`.xml` 后缀可省略；例如
+`./rm65 bt move`、`./rm65 bt three`、`./rm65 bt control` 或 `./rm65 bt custom_tree.xml`。
+新建树只需将 XML 放入该目录，并在 `<root>` 上声明 `realman_arm_id`、`realman_required_arms`、
+`realman_launch`、`realman_stop_on_terminal` 和 `realman_exit_on_terminal`。缺省值依次为 `r`、当前 arm、
+`arm_move`、`true`、`true`；`realman_launch` 只允许 `arm_move` 或 `control_router`，不会执行 XML 中的任意 shell 命令。
+旧入口 `arm_move.xml`、`three_arm_staged_move.xml` 和 `control_router.xml` 仍映射到新短名，便于已有脚本迁移。
 直接 ROS launch 不包含容器入口提供的单实例锁、监视器和归档功能。
 
 ## 在 Codex 中复用行为树 Skill

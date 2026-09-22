@@ -207,6 +207,7 @@ BASE 的 ROS frame 由驱动固定为 `l/base_link`（中、右臂对应 `m/base
 | `auto_connect` | `true` | 启动时连接并开始回读；设为 `false` 可手动调用 `connect` |
 | `reconnect_interval` | `5.0` 秒 | 连接失败、断线或事件通道隔离后的重连/恢复周期；`0.0` 禁用 |
 | `state_publish_rate` | `10.0` Hz | 必须大于零；后续应按网络和控制器能力测定 |
+| `coordinate_state_publish_rate` | `1.0` Hz | 必须大于零；低频重发最近一次完整坐标校验结果，覆盖首个样本早于 DDS endpoint discovery 的启动时序 |
 | `joint_names` | `joint_1` 到 `joint_6` | 数量必须与 SDK 返回的自由度一致 |
 | `coordinates_config_file` | `config/ros/realman_coordinates.yaml` | 工具/工作坐标和启动验证策略的权威配置 |
 | `motion_config_file` | `config/ros/realman_motion.yaml` | 每臂速度、加速度、控制周期、watchdog 和停止超时的权威配置 |

@@ -23,6 +23,9 @@
     reconnect_interval: 5.0
     # State publication period in Hz. Must be greater than zero.
     state_publish_rate: 10.0
+    # Republish the latest coordinate safety state so late DDS consumers recover
+    # even when the startup sample preceded endpoint discovery. Unit: Hz; > 0.
+    coordinate_state_publish_rate: 1.0
     # JointState names must match the unprefixed RM65-B URDF joint names.
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
 
@@ -37,6 +40,7 @@
     auto_connect: true
     reconnect_interval: 5.0
     state_publish_rate: 10.0
+    coordinate_state_publish_rate: 1.0
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
 
 /r/realman_driver:
@@ -50,4 +54,5 @@
     auto_connect: true
     reconnect_interval: 5.0
     state_publish_rate: 10.0
+    coordinate_state_publish_rate: 1.0
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]

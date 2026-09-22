@@ -845,7 +845,7 @@ rm65_project_help() {
   print -r -- "  ./rm65 up                 一键启动 ROS2 彩色相机和 headless 三臂真机"
   print -r -- "  ./rm65 up desktop         一键启动生产图并显示 RViz"
   print -r -- "  ./rm65 up model           只显示离线三臂模型"
-  print -r -- "  ./rm65 bt [l|m|r|three]   单次运行行为树；终态后执行器和 :8080 监视器自动退出"
+  print -r -- "  ./rm65 bt [tree-name|l|m|r|three|control]   从 config/behavior-trees 启动行为树；.xml 可省略"
   print -r -- "  ./rm65 bt control         常驻运行全局输入路由；按 Ctrl-C 后执行器和 :8080 监视器退出"
   print -r -- "启动入口索引: website/docs/development/startup-entries.md"
   print -r -- "每次修改 helper、Compose 服务或 launch 参数时，同步更新网站索引。"

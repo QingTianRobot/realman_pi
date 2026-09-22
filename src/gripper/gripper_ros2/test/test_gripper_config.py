@@ -24,6 +24,7 @@ class GripperConfigTest(unittest.TestCase):
     def test_interfaces_preserve_existing_service_paths(self):
         names = interface_names("gripper_left")
         self.assertEqual(names["percentage"], "/gripper_left/percentage")
+        self.assertEqual(names["percentage_command"], "/gripper_left/percentage/command")
         self.assertEqual(names["position"], "/gripper_left/position")
 
     def test_percentage_maps_closed_zero_and_open_one(self):

@@ -2,7 +2,7 @@
 set -euo pipefail
 
 TEST_ROOT="/tmp/realman-bt-entrypoint-test-$$"
-TREE_FILE="/opt/rm65_ws/config/behavior-trees/arm_move.xml"
+TREE_FILE="/opt/rm65_ws/config/behavior-trees/move.xml"
 mkdir -p "$TEST_ROOT"
 
 ros2() {
@@ -50,7 +50,7 @@ run_bt() {
 FAKE_BT_RESULT=SUCCESS run_bt success 18110
 grep -q 'archived final runtime snapshot' "$TEST_ROOT/success.log"
 test -n "$(find "$TEST_ROOT/success/archive" -name runtime.json -type f -print -quit)"
-test -n "$(find "$TEST_ROOT/success/archive" -name arm_move.xml -type f -print -quit)"
+test -n "$(find "$TEST_ROOT/success/archive" -name move.xml -type f -print -quit)"
 
 set +e
 FAKE_BT_RESULT=FAILURE run_bt failure 18111

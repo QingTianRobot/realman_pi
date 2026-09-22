@@ -10,6 +10,7 @@
 #include "bt_nodes/control/reactive_fallback_node.hpp"
 #include "bt_nodes/control/reactive_sequence_node.hpp"
 #include "bt_nodes/control/sequence_node.hpp"
+#include "realman_bt/cartesian_velocity_for_duration_node.hpp"
 #include "realman_bt/input_mode_nodes.hpp"
 #include "realman_bt/move_j_node.hpp"
 #include "realman_bt/three_arm_move_j_node.hpp"
@@ -31,6 +32,17 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   const std::string tree_file = declare_parameter<std::string>("tree_file", "");
   const std::string arm_id = declare_parameter<std::string>("arm_id", "r");
   const bool dry_run = declare_parameter<bool>("dry_run", true);
+  const std::string pika_l_joint_degrees = declare_parameter<std::string>(
+      "pika_l_joint_degrees", "");
+  const std::string pika_m_joint_degrees = declare_parameter<std::string>(
+      "pika_m_joint_degrees", "");
+  const std::string pika_r_joint_degrees = declare_parameter<std::string>(
+      "pika_r_joint_degrees", "");
+  const auto coordinate_references = declare_parameter<std::vector<std::string>>(
+      "coordinate_references", std::vector<std::string>{});
+  const auto cartesian_velocity_profiles =
+      declare_parameter<std::vector<std::string>>(
+          "cartesian_velocity_profiles", std::vector<std::string>{});
   const std::string runtime_snapshot_file = declare_parameter<std::string>(
       "runtime_snapshot_file", "/tmp/realman-bt-workspace/runtime.json");
   tick_rate_hz_ = declare_parameter<double>("tick_rate_hz", 20.0);
@@ -46,6 +58,11 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   if (runtime_snapshot_file.empty()) throw std::invalid_argument("runtime_snapshot_file must be set");
   if (switch_timeout_ms <= 0) throw std::invalid_argument("switch_timeout_ms must be positive");
 
+  coordinate_reference_registry_ =
+      CoordinateReferenceRegistry(coordinate_references);
+  cartesian_velocity_profile_registry_ =
+      CartesianVelocityProfileRegistry(cartesian_velocity_profiles);
+
   // Guards populate the registry while XML is constructed. The observer runs
   // inline in ActivateInputMode, before the following input subtree can tick.
   input_mode_coordinator_ = std::make_unique<InputModeCoordinator>(
@@ -58,13 +75,29 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
                                          input_mode_coordinator_.get());
   blackboard_->set<std::string>("arm_id", arm_id);
   blackboard_->set<bool>("dry_run", dry_run);
+  if (!pika_l_joint_degrees.empty()) {
+    blackboard_->set<std::string>("pika_l_joint_degrees", pika_l_joint_degrees);
+    blackboard_->set<std::string>("pika_m_joint_degrees", pika_m_joint_degrees);
+    blackboard_->set<std::string>("pika_r_joint_degrees", pika_r_joint_degrees);
+  }
   blackboard_->set<rclcpp::Node*>(kRosNodeBlackboardKey, this);
   blackboard_->set<RuntimeDiagnostics*>(kRuntimeDiagnosticsBlackboardKey,
                                         &diagnostics_);
+  blackboard_->set<CoordinateReferenceRegistry*>(
+      kCoordinateReferenceRegistryBlackboardKey,
+      &coordinate_reference_registry_);
+  blackboard_->set<CartesianVelocityProfileRegistry*>(
+      kCartesianVelocityProfileRegistryBlackboardKey,
+      &cartesian_velocity_profile_registry_);
   blackboard_->set<MoveJCancellationDrainSink>(
       kMoveJCancellationDrainSinkBlackboardKey,
       [this](std::shared_ptr<MoveJCancellationDrain> drain) {
         enqueueCancellationDrain(std::move(drain));
+      });
+  blackboard_->set<CartesianVelocityCancellationDrainSink>(
+      kCartesianVelocityCancellationDrainSinkBlackboardKey,
+      [this](std::shared_ptr<CartesianVelocityCancellationDrain> drain) {
+        enqueueCartesianVelocityCancellationDrain(std::move(drain));
       });
   factory_.registerNodeType<bt_nodes::SequenceNode>("Sequence");
   factory_.registerNodeType<bt_nodes::ReactiveSequenceNode>("ReactiveSequence");
@@ -74,10 +107,15 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   factory_.registerNodeType<ActivateInputModeNode>("ActivateInputMode");
   factory_.registerNodeType<WebInputStubNode>("WebInputStub");
   factory_.registerNodeType<PolicyInputStubNode>("PolicyInputStub");
+  factory_.registerNodeType<KeyboardVelocityInputNode>("KeyboardVelocityInput");
   factory_.registerNodeType<PikaInputStubNode>("PikaInputStub");
+  factory_.registerNodeType<PikaPositionInputNode>("PikaPositionInput");
+  factory_.registerNodeType<PikaVelocityInputNode>("PikaVelocityInput");
   factory_.registerNodeType<IdleInputNode>("IdleInput");
   factory_.registerNodeType<MoveJNode>("MoveJ");
   factory_.registerNodeType<ThreeArmMoveJNode>("ThreeArmMoveJ");
+  factory_.registerNodeType<CartesianVelocityForDurationNode>(
+      "CartesianVelocityForDuration");
   bt_core::XmlParser parser(factory_);
   auto tree = parser.loadFromFile(tree_file, blackboard_);
   tree_ = std::make_unique<bt_core::Tree>(std::move(tree));
@@ -144,7 +182,14 @@ RealmanBtExecutorNode::~RealmanBtExecutorNode() {
                 "releasing %zu pending MoveJ cancellation drain(s) during shutdown",
                 cancellation_drains_.size());
   }
+  if (!cartesian_velocity_cancellation_drains_.empty()) {
+    RCLCPP_WARN(
+        get_logger(),
+        "releasing %zu pending Cartesian velocity cancellation drain(s) during shutdown",
+        cartesian_velocity_cancellation_drains_.size());
+  }
   cancellation_drains_.clear();
+  cartesian_velocity_cancellation_drains_.clear();
 }
 
 void RealmanBtExecutorNode::start() {
@@ -315,7 +360,8 @@ void RealmanBtExecutorNode::flushSnapshot() {
   if (!snapshot_writer_ || !tree_) return;
   ++snapshot_sequence_;
   try {
-    snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_);
+    snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_,
+                            pendingCancellationCount());
   } catch (const std::exception& error) {
     RCLCPP_ERROR(get_logger(), "failed to write behavior tree snapshot: %s", error.what());
   }
@@ -325,6 +371,15 @@ void RealmanBtExecutorNode::enqueueCancellationDrain(
     std::shared_ptr<MoveJCancellationDrain> drain) {
   if (!drain) return;
   cancellation_drains_.push_back(std::move(drain));
+  if (cancellation_drain_timer_) return;
+  cancellation_drain_timer_ = create_wall_timer(
+      std::chrono::milliseconds(50), [this]() { drainCancellationQueue(); });
+}
+
+void RealmanBtExecutorNode::enqueueCartesianVelocityCancellationDrain(
+    std::shared_ptr<CartesianVelocityCancellationDrain> drain) {
+  if (!drain) return;
+  cartesian_velocity_cancellation_drains_.push_back(std::move(drain));
   if (cancellation_drain_timer_) return;
   cancellation_drain_timer_ = create_wall_timer(
       std::chrono::milliseconds(50), [this]() { drainCancellationQueue(); });
@@ -340,16 +395,33 @@ void RealmanBtExecutorNode::drainCancellationQueue() {
     }
   }
   cancellation_drains_.erase(remaining, cancellation_drains_.end());
+  auto velocity_remaining = cartesian_velocity_cancellation_drains_.begin();
+  for (auto current = cartesian_velocity_cancellation_drains_.begin();
+       current != cartesian_velocity_cancellation_drains_.end(); ++current) {
+    if (!(*current)->drainOnce()) {
+      if (velocity_remaining != current) {
+        *velocity_remaining = std::move(*current);
+      }
+      ++velocity_remaining;
+    }
+  }
+  cartesian_velocity_cancellation_drains_.erase(
+      velocity_remaining, cartesian_velocity_cancellation_drains_.end());
   flushSnapshot();
-  if (cancellation_drains_.empty() && cancellation_drain_timer_) {
+  if (pendingCancellationCount() == 0 && cancellation_drain_timer_) {
     cancellation_drain_timer_->cancel();
     cancellation_drain_timer_.reset();
   }
   requestProcessExitIfReady();
 }
 
+std::size_t RealmanBtExecutorNode::pendingCancellationCount() const {
+  return cancellation_drains_.size() +
+         cartesian_velocity_cancellation_drains_.size();
+}
+
 void RealmanBtExecutorNode::requestProcessExitIfReady() {
-  if (!terminal_exit_policy_.shouldExit(cancellation_drains_.size())) return;
+  if (!terminal_exit_policy_.shouldExit(pendingCancellationCount())) return;
   flushSnapshot();
   RCLCPP_INFO(get_logger(), "terminal cleanup complete; exiting behavior-tree executor");
   get_node_base_interface()->get_context()->shutdown(

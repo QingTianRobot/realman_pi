@@ -3,7 +3,7 @@ import xml.etree.ElementTree as ET
 
 
 ROOT = Path(__file__).parents[4]
-TREE = ROOT / "config/behavior-trees/three_arm_staged_move.xml"
+TREE = ROOT / "config/behavior-trees/three.xml"
 
 
 def test_three_arm_tree_waits_for_all_zero_moves_before_target_moves():

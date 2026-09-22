@@ -1,3 +1,7 @@
 # Pin the vendor SDK used by the realman_robot_driver adapter.
 # The package provides Robotic_Arm.rm_robot_interface and supports Python 3.9+.
+# NOTE: only official pypi.org hosts 1.1.x; Chinese mirrors (Tsinghua/Aliyun/USTC/
+# Tencent/Huawei/NJU) top out at 1.0.6, so the Dockerfile adds pypi.org as an
+# --extra-index-url fallback for this wheel. Keep the pin aligned with the vendor
+# API snapshot under doc/ (currently V1.7.13).
 Robotic_Arm==1.1.6

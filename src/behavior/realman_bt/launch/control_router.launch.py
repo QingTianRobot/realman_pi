@@ -1,14 +1,21 @@
 #!/usr/bin/env python3
 """Launch the persistent, configuration-driven input-mode router."""
 
+import math
 import os
+import sys
 from datetime import datetime
 from pathlib import Path
+
+import yaml
 
 from launch import LaunchDescription
 from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
+
+sys.path.insert(0, str(Path(__file__).resolve().parent))
+from coordinate_reference_registry import load_runtime_registries  # noqa: E402
 
 
 def _config_root() -> Path:
@@ -27,11 +34,63 @@ def _default_runtime_snapshot_file() -> str:
     return os.environ.get("BT_TREE_WORKSPACE", "/tmp/realman-bt-workspace") + "/runtime.json"
 
 
+def _load_pika_joint_defaults(config_file: Path) -> dict[str, str]:
+    """Load the production Pika schema and expose only its joint angles."""
+    with config_file.open("r", encoding="utf-8") as stream:
+        document = yaml.safe_load(stream) or {}
+    pose = document.get("pika_default_pose")
+    if not isinstance(pose, dict):
+        raise ValueError(f"missing pika_default_pose in {config_file}")
+
+    values: dict[str, str] = {}
+    for config_name, blackboard_name in (
+        ("left", "pika_l_joint_degrees"),
+        ("middle", "pika_m_joint_degrees"),
+        ("right", "pika_r_joint_degrees"),
+    ):
+        arm = pose.get(config_name)
+        joints = arm.get("joint_degrees") if isinstance(arm, dict) else None
+        if not isinstance(joints, list) or len(joints) != 6:
+            raise ValueError(
+                f"{config_file}: pika_default_pose.{config_name}.joint_degrees must contain six values"
+            )
+        if any(
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            for value in joints
+        ):
+            raise ValueError(
+                f"{config_file}: pika_default_pose.{config_name}.joint_degrees must be finite numbers"
+            )
+        values[blackboard_name] = ",".join(format(float(value), ".15g") for value in joints)
+    return values
+
+
+def _load_keyboard_input_timeout(config_file: Path) -> int:
+    with config_file.open("r", encoding="utf-8") as stream:
+        document = yaml.safe_load(stream) or {}
+    value = document.get("input_timeout_ms")
+    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+        raise ValueError(f"{config_file}: input_timeout_ms must be a positive integer")
+    return value
+
+
 def generate_launch_description():
     config_root = _config_root()
+    pika_joint_defaults = _load_pika_joint_defaults(
+        config_root / "ros" / "pika_config.yaml"
+    )
+    coordinate_references, velocity_profiles = load_runtime_registries(
+        config_root / "ros" / "realman_coordinates.yaml",
+        config_root / "ros" / "realman_motion.yaml",
+    )
+    keyboard_input_timeout_ms = _load_keyboard_input_timeout(
+        config_root / "ros" / "keyboard_control.yaml"
+    )
     tree_file = DeclareLaunchArgument(
         "tree_file",
-        default_value=str(config_root / "behavior-trees" / "control_router.xml"),
+        default_value=str(config_root / "behavior-trees" / "control.xml"),
         description="Absolute path to the persistent control-router XML file.",
     )
     arm_id = DeclareLaunchArgument(
@@ -75,8 +134,32 @@ def generate_launch_description():
                 "stop_on_terminal": LaunchConfiguration("stop_on_terminal"),
                 "exit_on_terminal": LaunchConfiguration("exit_on_terminal"),
                 "runtime_snapshot_file": LaunchConfiguration("runtime_snapshot_file"),
+                **pika_joint_defaults,
+                "coordinate_references": coordinate_references,
+                "cartesian_velocity_profiles": velocity_profiles,
             },
         ],
+    )
+
+    pika_router = Node(
+        package="realman_bt",
+        executable="pika_control_router",
+        name="pika_control_router",
+        output="screen",
+        parameters=[{"dry_run": LaunchConfiguration("dry_run")}],
+    )
+
+    keyboard_router = Node(
+        package="realman_bt",
+        executable="keyboard_control_router",
+        name="keyboard_control_router",
+        output="screen",
+        parameters=[{
+            "dry_run": LaunchConfiguration("dry_run"),
+            "input_timeout_ms": keyboard_input_timeout_ms,
+            "coordinate_references": coordinate_references,
+            "cartesian_velocity_profiles": velocity_profiles,
+        }],
     )
 
     return LaunchDescription(
@@ -90,5 +173,7 @@ def generate_launch_description():
             exit_on_terminal,
             runtime_snapshot_file,
             executor,
+            pika_router,
+            keyboard_router,
         ]
     )

@@ -22,8 +22,10 @@ from realman_msgs.msg import InputModeState
 from realman_msgs.srv import ListInputModes, SelectInputMode
 
 from realman_web_control.action_bridge import ActionRecord
-from realman_web_control.input_mode_bridge import InputModeBridge, InputModeOption, InputModeSnapshot
-from realman_web_control.protocol import parse_message
+from realman_web_control.input_mode_bridge import InputModeBridge, InputModeEffect, InputModeOption, InputModeSnapshot
+from realman_web_control.keyboard_control import load_keyboard_control_config
+from realman_web_control.keyboard_control_bridge import KeyboardControlBridge
+from realman_web_control.protocol import ProtocolError, parse_message
 from realman_web_control.web_control_node import WebControlNode
 
 
@@ -71,6 +73,14 @@ class ActionTransport:
         return future
 
 
+class Publisher:
+    def __init__(self):
+        self.messages = []
+
+    def publish(self, message):
+        self.messages.append(message)
+
+
 class GoalHandle:
     accepted = True
 
@@ -102,6 +112,18 @@ def node(monkeypatch):
     value._server = Events()
     value._actions = {}
     value._coordinate_state = {}
+    value._keyboard_config = load_keyboard_control_config(
+        Path(__file__).parents[4] / "config/ros/keyboard_control.yaml",
+        Path(__file__).parents[4] / "config/ros/realman_motion.yaml",
+        Path(__file__).parents[4] / "config/ros/realman_coordinates.yaml",
+    )
+    value._keyboard = KeyboardControlBridge(value._keyboard_config)
+    value._keyboard_publishers = {arm: Publisher() for arm in ("l", "r")}
+    value._keyboard_gripper_publishers = {arm: Publisher() for arm in ("l", "r")}
+    value._gripper_states = {
+        name: {"connected": True, "alarm": 0}
+        for name in ("gripper_left", "gripper_right")
+    }
     value._input_modes = InputModeBridge(web_override_timeout_sec=5.0)
     value._mode_discovery_period = 0.25
     value._mode_list_future = None
@@ -148,6 +170,136 @@ def state(request_id=41):
 def sent(node):
     return [goal for clients in (node._motion_clients, node._trajectory_clients, node._velocity_clients)
             for client in clients.values() for goal, _ in client.goals]
+
+
+def activate_keyboard(node):
+    node._input_modes.update_catalog((*CATALOG, InputModeOption("keyboard", "Keyboard", True)))
+    effects = node._input_modes.select_mode("browser", {"request_id": "keyboard", "mode_id": "keyboard"})
+    node._input_modes.selection_response(effects[-1].token, True, 50, "accepted")
+    node._apply_input_mode_effects(node._input_modes.update_state(
+        InputModeSnapshot("keyboard", "keyboard", "keyboard", "ACTIVE", 50, 2)))
+
+
+def test_keyboard_grippers_publish_edges_without_work_and_do_not_repeat(node):
+    activate_keyboard(node)
+    for arm, key in (("l", "Digit1"), ("r", "Digit0")):
+        for sequence in (1, 2):
+            node._dispatch("browser", {"type": "keyboard_state", "arm": arm,
+                                      "keys": [key], "sequence": sequence})
+    for arm, action in (("l", "open"), ("r", "close")):
+        messages = node._keyboard_gripper_publishers[arm].messages
+        assert len(messages) == 1
+        event = json.loads(messages[0].data)
+        assert event["command"] == action
+        assert event["epoch"] == 2
+        assert event["request_id"] == 50
+        assert event["stamp_ns"] > 0
+    assert set(node._keyboard_gripper_publishers) == {"l", "r"}
+
+
+def test_healthy_gripper_edge_survives_simultaneous_invalid_work_velocity(node):
+    activate_keyboard(node)
+    with pytest.raises(ProtocolError, match="WORK"):
+        node._dispatch("browser", {"type": "keyboard_state", "arm": "l",
+                                  "keys": ["KeyW", "Digit1"], "sequence": 1})
+    assert len(node._keyboard_gripper_publishers["l"].messages) == 1
+    assert not any(msg.twist.linear.x for msg in node._keyboard_publishers["l"].messages)
+
+
+@pytest.mark.parametrize("health", [{"connected": False, "alarm": 0}, {"connected": True, "alarm": 1}, {}])
+def test_keyboard_rejects_unhealthy_gripper_without_delayed_replay(node, health):
+    activate_keyboard(node)
+    node._gripper_states["gripper_left"] = health
+    with pytest.raises(ProtocolError, match="gripper"):
+        node._dispatch("browser", {"type": "keyboard_state", "arm": "l",
+                                  "keys": ["Digit1"], "sequence": 1})
+    node._gripper_states["gripper_left"] = {"connected": True, "alarm": 0}
+    node._dispatch("browser", {"type": "keyboard_state", "arm": "l",
+                              "keys": ["Digit1"], "sequence": 2})
+    assert node._keyboard_gripper_publishers["l"].messages == []
+
+
+def test_keyboard_stale_lease_cannot_submit_after_external_mode_loss(node):
+    activate_keyboard(node)
+    node._apply_input_mode_effects(node._input_modes.update_state(
+        InputModeSnapshot("none", "none", "none", "ACTIVE", 51, 3)))
+    with pytest.raises(ProtocolError):
+        node._dispatch("browser", {"type": "keyboard_state", "arm": "l",
+                                  "keys": ["Digit1"], "sequence": 1})
+    assert node._keyboard_gripper_publishers["l"].messages == []
+
+
+def test_keyboard_owner_publishes_only_verified_default_work_commands(node):
+    activate_keyboard(node)
+    node._coordinate_state["l"] = {
+        "motion_allowed": True,
+        "work_matched": True,
+        "current_work": "cell",
+        "expected_work": "cell",
+        "work": {"name": "cell", "frame_id": "l/work/cell"},
+    }
+    node._dispatch("browser", {
+        "type": "keyboard_state", "arm": "l", "keys": ["KeyW"], "sequence": 1,
+    })
+    message = node._keyboard_publishers["l"].messages[-1]
+    assert message.header.frame_id == "l/work/cell"
+    assert message.twist.linear.x == pytest.approx(0.02)
+
+
+def test_keyboard_rejects_unverified_work_and_never_constructs_middle_publisher(node):
+    activate_keyboard(node)
+    node._coordinate_state["l"] = {
+        "motion_allowed": False,
+        "work_matched": False,
+        "current_work": "other",
+        "expected_work": "cell",
+    }
+    with pytest.raises(ProtocolError, match="WORK"):
+        node._dispatch("browser", {
+            "type": "keyboard_state", "arm": "l", "keys": ["KeyW"], "sequence": 1,
+        })
+    assert set(node._keyboard_publishers) == {"l", "r"}
+
+
+def test_keyboard_disconnect_effects_publish_two_zeros_and_request_none(node):
+    node._keyboard.activate("browser")
+    node._apply_input_mode_effects([
+        InputModeEffect("keyboard_zero", "browser", {}),
+        InputModeEffect("keyboard_lease", "browser", {"active": False}),
+        InputModeEffect("request_safe_mode", None, {"mode_id": "none"}),
+    ])
+    assert all(len(publisher.messages) == 1 for publisher in node._keyboard_publishers.values())
+    request, _future = node._mode_select_client.calls[-1]
+    assert request.mode_id == "none"
+    assert request.requester_id
+
+
+def test_cached_state_and_lease_transfer_are_targeted_to_each_browser(node):
+    activate_keyboard(node)
+    node._server.events.clear()
+    node._apply_input_mode_effects(node._input_modes.cached_events("browser-b"))
+    cached = [(event, client_id) for event, client_id in node._server.events
+              if event["type"] in {"input_mode_list", "input_mode_state", "keyboard_lease"}]
+    assert [event["type"] for event, _ in cached] == [
+        "input_mode_list", "input_mode_state", "keyboard_lease",
+    ]
+    assert all(client_id == "browser-b" for _, client_id in cached)
+    assert cached[-1][0] == {"type": "keyboard_lease", "active": False}
+
+    effects = node._input_modes.select_mode(
+        "browser-b", {"request_id": "keyboard-2", "mode_id": "keyboard"}
+    )
+    token = effects[-1].token
+    node._server.events.clear()
+    node._apply_input_mode_effects(
+        node._input_modes.selection_response(token, True, 50, "already active")
+    )
+    leases = [(event, client_id) for event, client_id in node._server.events
+              if event["type"] == "keyboard_lease"]
+    assert leases == [
+        ({"type": "keyboard_lease", "active": False}, "browser"),
+        ({"type": "keyboard_lease", "active": True}, "browser-b"),
+    ]
 
 
 @pytest.mark.parametrize("kind,goal_type", [
@@ -396,6 +548,23 @@ def test_result_transport_failure_does_not_drop_unsent_cancellation(node):
     assert ("l", "execute_motion") not in node._actions
 
 
+def test_unknown_goal_handle_after_emergency_stop_is_reported_as_stopped(node):
+    record = ActionRecord("l", "execute_motion", "owner", "request")
+    handle = GoalHandle(node.log, "goal")
+    record.goal_handle = handle
+    node._actions[("l", "execute_motion")] = record
+
+    handle.result_future.set_exception(RuntimeError("Goal handle is not known to this client"))
+    node._action_result(record, handle.result_future)
+
+    assert ("l", "execute_motion") not in node._actions
+    event = node._server.events[-1][0]
+    assert event["type"] == "action_state"
+    assert event["state"] == "stopped"
+    assert event["code"] == "goal_handle_unknown"
+    assert "Goal handle is not known" not in event["message"]
+
+
 def test_cancel_failure_marks_and_attempts_remaining_goals_but_does_not_select(node):
     node._input_modes.update_catalog(CATALOG)
     node._input_modes.update_state(InputModeSnapshot("web", "web", "web", "ACTIVE", 40, 1))
@@ -626,6 +795,7 @@ def test_real_node_discovers_services_and_transient_state_using_loaded_timing(mo
     import yaml
     from rclpy.executors import SingleThreadedExecutor
     from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+    from std_msgs.msg import String
     import realman_web_control.web_control_node as module
 
     class Server(Events):
@@ -657,6 +827,8 @@ def test_real_node_discovers_services_and_transient_state_using_loaded_timing(mo
 
     publisher = router.create_publisher(InputModeState, "/realman_bt_executor/input_mode_state", QoSProfile(
         depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
+    coordinate_publisher = router.create_publisher(String, "/l/coordinates/state", QoSProfile(
+        depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL))
     router.create_service(ListInputModes, "/realman_bt_executor/list_input_modes", list_modes)
 
     def select_mode(request, response):
@@ -669,6 +841,11 @@ def test_real_node_discovers_services_and_transient_state_using_loaded_timing(mo
     router.create_service(SelectInputMode, "/realman_bt_executor/select_input_mode", select_mode)
     # Publish before subscription: only compatible transient-local QoS receives it.
     publisher.publish(state(40))
+    coordinate_publisher.publish(String(data=json.dumps({
+        "type": "coordinate_state", "arm": "l", "motion_allowed": True,
+        "work_matched": True, "current_work": "cell", "expected_work": "cell",
+        "work": {"name": "cell", "frame_id": "l/work/cell"},
+    })))
     web_node = None
     executor = SingleThreadedExecutor()
     try:
@@ -676,13 +853,15 @@ def test_real_node_discovers_services_and_transient_state_using_loaded_timing(mo
         executor.add_node(router)
         executor.add_node(web_node)
         deadline = time.monotonic() + 4.0
-        while time.monotonic() < deadline and not any(
-            event["type"] == "input_mode_state" for event, _ in web_node._server.events
-        ):
+        while time.monotonic() < deadline and not all((
+            any(event["type"] == "input_mode_state" for event, _ in web_node._server.events),
+            any(event["type"] == "coordinate_state" for event, _ in web_node._server.events),
+        )):
             executor.spin_once(timeout_sec=0.02)
         assert web_node._mode_discovery_timer.timer_period_ns == 125_000_000
         assert web_node._input_modes.available
         assert any(event.get("active_mode") == "web" for event, _ in web_node._server.events)
+        assert web_node._coordinate_state["l"]["motion_allowed"] is True
         web_node._dispatch("browser", {"type": "select_input_mode", "request_id": "pick-51", "mode_id": "policy"})
         while time.monotonic() < deadline and not any(
             event["type"] == "input_mode_result" for event, _ in web_node._server.events

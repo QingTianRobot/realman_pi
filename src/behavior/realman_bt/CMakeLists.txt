@@ -8,6 +8,7 @@ find_package(rcl_interfaces REQUIRED)
 find_package(realman_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
+find_package(geometry_msgs REQUIRED)
 
 set(BT_VENDOR_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../../../third_party/behavior_tree_cpp")
 if(NOT TARGET bt::core)
@@ -36,6 +37,7 @@ target_link_libraries(input_mode_nodes PUBLIC
   input_mode runtime_snapshot bt::core)
 
 add_library(move_j_nodes
+  src/cartesian_velocity_for_duration_node.cpp
   src/move_j_node.cpp
   src/three_arm_move_j_node.cpp)
 target_include_directories(move_j_nodes PUBLIC
@@ -44,7 +46,7 @@ target_include_directories(move_j_nodes PUBLIC
 target_compile_features(move_j_nodes PUBLIC cxx_std_17)
 target_link_libraries(move_j_nodes runtime_snapshot bt::core)
 ament_target_dependencies(move_j_nodes
-  rclcpp rclcpp_action realman_msgs)
+  geometry_msgs rclcpp rclcpp_action realman_msgs)
 
 install(TARGETS input_mode runtime_snapshot input_mode_nodes
   EXPORT export_${PROJECT_NAME})
@@ -64,16 +66,29 @@ target_link_libraries(realman_bt_executor input_mode_nodes)
 ament_target_dependencies(realman_bt_executor
   rclcpp rclcpp_action rcl_interfaces realman_msgs std_msgs std_srvs)
 install(TARGETS realman_bt_executor DESTINATION lib/${PROJECT_NAME})
+install(PROGRAMS scripts/pika_control_router.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME pika_control_router)
+install(PROGRAMS scripts/keyboard_control_router.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME keyboard_control_router)
 install(TARGETS move_j_nodes
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME} FILES_MATCHING PATTERN "*.py")
 install(FILES
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/arm_move.xml"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/control_router.xml"
-  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/three_arm_staged_move.xml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/move.xml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/control.xml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/three.xml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/tool_x.xml"
   DESTINATION share/${PROJECT_NAME}/behavior-trees)
+install(FILES
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/ros/realman_coordinates.yaml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/ros/realman_motion.yaml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/ros/pika_config.yaml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/ros/keyboard_control.yaml"
+  DESTINATION share/${PROJECT_NAME}/config/ros)
 
 if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
@@ -116,6 +131,14 @@ if(BUILD_TESTING)
   ament_target_dependencies(test_three_arm_move_j_node rclcpp rclcpp_action realman_msgs)
   add_test(NAME test_three_arm_move_j_node COMMAND test_three_arm_move_j_node)
 
+  add_executable(test_cartesian_velocity_for_duration_node
+    test/test_cartesian_velocity_for_duration_node.cpp)
+  target_link_libraries(test_cartesian_velocity_for_duration_node move_j_nodes)
+  ament_target_dependencies(test_cartesian_velocity_for_duration_node
+    rclcpp rclcpp_action realman_msgs geometry_msgs)
+  add_test(NAME test_cartesian_velocity_for_duration_node
+    COMMAND test_cartesian_velocity_for_duration_node)
+
   add_executable(test_terminal_exit_policy test/test_terminal_exit_policy.cpp)
   target_include_directories(test_terminal_exit_policy PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include")
@@ -132,6 +155,17 @@ if(BUILD_TESTING)
 
   ament_add_pytest_test(test_tree_contract test/test_tree_contract.py)
   ament_add_pytest_test(test_control_router_tree test/test_control_router_tree.py)
+  ament_add_pytest_test(test_pika_control_router test/test_pika_control_router.py)
+  ament_add_pytest_test(test_keyboard_control_router
+    test/test_keyboard_control_router.py)
+  ament_add_pytest_test(test_pika_config test/test_pika_config.py)
+  ament_add_pytest_test(test_coordinate_reference_registry
+    test/test_coordinate_reference_registry.py)
+  ament_add_pytest_test(test_cartesian_velocity_tree
+    test/test_cartesian_velocity_tree.py)
+  ament_add_pytest_test(test_launch_module_imports
+    test/test_launch_module_imports.py)
+  ament_add_pytest_test(test_tree_startup_metadata test/test_tree_startup_metadata.py)
   ament_add_pytest_test(test_arm_move_tree test/test_arm_move_tree.py)
   ament_add_pytest_test(test_three_arm_move_tree test/test_three_arm_move_tree.py)
 endif()

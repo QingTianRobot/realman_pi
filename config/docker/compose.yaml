@@ -40,7 +40,9 @@ x-realman-common: &realman-common
     BT_RUNTIME_SNAPSHOT: ${BT_RUNTIME_SNAPSHOT:-/tmp/realman-bt-workspace/runtime.json}
     # CLI runs are one-shot and mutually exclusive inside the shared driver
     # container. Final snapshots are archived through the host logs mount.
-    BT_EXIT_ON_TERMINAL: ${BT_EXIT_ON_TERMINAL:-true}
+    # Empty means bt-start uses the behavior tree's XML metadata. The CLI
+    # can still pass BT_EXIT_ON_TERMINAL explicitly as an override.
+    BT_EXIT_ON_TERMINAL: ${BT_EXIT_ON_TERMINAL:-}
     BT_RUNTIME_ARCHIVE_ROOT: ${BT_RUNTIME_ARCHIVE_ROOT:-/opt/rm65_ws/logs/behavior-trees}
     BT_EDITOR_DIST: /opt/rm65_ws/behavior_tree/editor-dist
     # The launch file scans this path/glob and waits when it is not present.

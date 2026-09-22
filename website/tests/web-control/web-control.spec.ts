@@ -194,6 +194,9 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator("#viewer")).toHaveAttribute("data-live-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/, { timeout: 30_000 });
   await expect(page.locator("#viewer")).toHaveAttribute("data-shadow-meshes", /^(2[1-9]|[3-9][0-9]|[1-9][0-9]{2,})$/);
   await expect(page.locator("#viewer")).toHaveAttribute("data-visualization-reference-arm", "m");
+  const viewerBounds = await page.locator("#viewer").boundingBox();
+  expect(viewerBounds?.height).toBeLessThanOrEqual(560);
+  expect(viewerBounds?.height).toBeGreaterThan(300);
   const liveCanvasBeforeFeedback = await canvasChecksum(page);
   await page.evaluate(() => {
     (window as any).__webSocket.emit("message", { data: JSON.stringify({
@@ -584,6 +587,378 @@ test("unlocks input mode selection when reconnect loses its result", async ({ pa
   await expect(page.locator("#input-mode-select")).toHaveValue("policy");
 });
 
+test("enables input mode selection when the socket opens after catalog discovery", async ({ page }) => {
+  await page.goto("/");
+  await expect.poll(() => page.evaluate(() =>
+    (window as any).__webSocket?.readyState,
+  )).toBe(1);
+  await page.evaluate(() => {
+    const socket = (window as any).__webSocket;
+    socket.readyState = 0;
+    socket.emit("message", { data: JSON.stringify({
+      type: "input_mode_list",
+      available: true,
+      modes: [
+        { id: "web", label: "Web", selectable: false },
+        { id: "policy", label: "Policy", selectable: true },
+      ],
+    }) });
+  });
+  await expect(page.locator("#input-mode-select")).toBeDisabled();
+
+  await page.evaluate(() => {
+    const socket = (window as any).__webSocket;
+    socket.readyState = 1;
+    socket.emit("open", {});
+  });
+  await expect(page.locator("#input-mode-select")).toBeEnabled();
+});
+
+test("captures independent l/r physical keys only while keyboard is active", async ({ page }) => {
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list",
+    available: true,
+    modes: [
+      { id: "web", label: "Web", selectable: false },
+      { id: "keyboard", label: "Web / 键盘速度控制", selectable: true },
+      { id: "none", label: "无输入", selectable: true },
+    ],
+  });
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state",
+    requested_mode: "keyboard",
+    selected_mode: "keyboard",
+    active_mode: "keyboard",
+    phase: "ACTIVE",
+    request_id: 51,
+    epoch: 4,
+    detail: "keyboard active",
+  });
+  await emitWebSocketEvent(page, { type: "keyboard_lease", active: true });
+  await expect(page.locator("#keyboard-control-card")).toBeVisible();
+
+  await page.keyboard.down("w");
+  await page.keyboard.down("i");
+  await expect.poll(() => page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state")
+      .some((message) => message.arm === "l" && message.keys.includes("KeyW")),
+  )).toBe(true);
+  await expect.poll(() => page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state")
+      .some((message) => message.arm === "r" && message.keys.includes("KeyI")),
+  )).toBe(true);
+  await expect(page.locator('#keyboard-left [data-code="KeyW"]')).toHaveClass(/pressed/);
+  await expect(page.locator('#keyboard-right [data-code="KeyI"]')).toHaveClass(/pressed/);
+
+  await page.keyboard.up("w");
+  await expect.poll(() => page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state" && message.arm === "l")
+      .at(-1)?.keys.length,
+  )).toBe(0);
+  await page.keyboard.up("i");
+});
+
+test("does not send keyboard heartbeat when another browser owns the active mode", async ({ page }) => {
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list", available: true,
+    modes: [{ id: "keyboard", label: "Web / 键盘速度控制", selectable: true }],
+  });
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state", requested_mode: "keyboard", selected_mode: "keyboard",
+    active_mode: "keyboard", phase: "ACTIVE", request_id: 60, epoch: 10, detail: "",
+  });
+  await emitWebSocketEvent(page, { type: "keyboard_lease", active: false });
+  await page.waitForTimeout(180);
+  expect(await page.evaluate(() =>
+    ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state").length,
+  )).toBe(0);
+  await expect(page.locator("#keyboard-control-state")).toHaveText("REMOTE");
+  await emitWebSocketEvent(page, {
+    type: "error", code: "keyboard_lease", message: "client does not own keyboard control lease",
+    request_id: "movej-remote",
+  });
+  await expect(page.locator("#result")).not.toContainText("keyboard_lease");
+});
+
+test("highlights keyboard instructions without scrolling away from the work area", async ({ page }) => {
+  await page.addInitScript(() => {
+    (window as any).__keyboardGuideScrolls = 0;
+    Element.prototype.scrollIntoView = function () {
+      if ((this as HTMLElement).id === "keyboard-control-card") {
+        (window as any).__keyboardGuideScrolls += 1;
+      }
+    };
+  });
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list", available: true,
+    modes: [{ id: "keyboard", label: "Web / 键盘速度控制", selectable: true }],
+  });
+  const active = {
+    type: "input_mode_state", requested_mode: "keyboard", selected_mode: "keyboard",
+    active_mode: "keyboard", phase: "ACTIVE", request_id: 61, epoch: 10, detail: "",
+  };
+  await emitWebSocketEvent(page, active);
+  await emitWebSocketEvent(page, { type: "keyboard_lease", active: true });
+
+  await expect.poll(() => page.evaluate(() => (window as any).__keyboardGuideScrolls)).toBe(0);
+  await expect(page.locator("#keyboard-control-card")).toHaveClass(/keyboard-guide-active/);
+
+  await emitWebSocketEvent(page, active);
+  await expect.poll(() => page.evaluate(() => (window as any).__keyboardGuideScrolls)).toBe(0);
+
+  await emitWebSocketEvent(page, { ...active, request_id: 62, epoch: 11 });
+  await expect.poll(() => page.evaluate(() => (window as any).__keyboardGuideScrolls)).toBe(0);
+});
+
+test("blurs the input mode selector after keyboard activation so motion keys are available", async ({ page }) => {
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list", available: true,
+    modes: [
+      { id: "keyboard", label: "Web / 键盘速度控制", selectable: true },
+      { id: "none", label: "无输入", selectable: true },
+    ],
+  });
+  await page.locator("#input-mode-select").selectOption("keyboard");
+  const browserRequestId = await page.evaluate(() =>
+    ((window as any).__webMessages as string[]).map(JSON.parse)
+      .findLast((message) => message.type === "select_input_mode")?.request_id,
+  );
+  await emitWebSocketEvent(page, {
+    type: "input_mode_result", request_id: browserRequestId,
+    executor_request_id: 63, accepted: true, message: "accepted",
+  });
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state", requested_mode: "keyboard", selected_mode: "keyboard",
+    active_mode: "keyboard", phase: "ACTIVE", request_id: 63, epoch: 12, detail: "",
+  });
+  await emitWebSocketEvent(page, { type: "keyboard_lease", active: true });
+  await expect(page.locator("#input-mode-select")).not.toBeFocused();
+});
+
+test("keeps the mode selector focused during repeated active-state replay", async ({ page }) => {
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list", available: true,
+    modes: [
+      { id: "keyboard", label: "Web / 键盘速度控制", selectable: true },
+      { id: "none", label: "无输入", selectable: true },
+    ],
+  });
+  const active = {
+    type: "input_mode_state", requested_mode: "none", selected_mode: "none",
+    active_mode: "none", phase: "ACTIVE", request_id: 64, epoch: 13, detail: "",
+  };
+  await emitWebSocketEvent(page, active);
+  await page.locator("#input-mode-select").focus();
+  await emitWebSocketEvent(page, active);
+  await expect(page.locator("#input-mode-select")).toBeFocused();
+});
+
+test("lets a remote page request the already-active keyboard mode", async ({ page }) => {
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list", available: true,
+    modes: [
+      { id: "keyboard", label: "Web / 键盘速度控制", selectable: true },
+      { id: "none", label: "无输入", selectable: true },
+    ],
+  });
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state", requested_mode: "keyboard", selected_mode: "keyboard",
+    active_mode: "keyboard", phase: "ACTIVE", request_id: 65, epoch: 14, detail: "",
+  });
+  await emitWebSocketEvent(page, { type: "keyboard_lease", active: false });
+  await expect(page.locator("#input-mode-select")).toHaveValue("");
+  await page.locator("#input-mode-select").selectOption("keyboard");
+  await expect.poll(() => page.evaluate(() =>
+    ((window as any).__webMessages as string[]).map(JSON.parse)
+      .some((message) => message.type === "select_input_mode" && message.mode_id === "keyboard"),
+  )).toBe(true);
+});
+
+async function activateKeyboardWithGrippers(page: any) {
+  await page.goto("/");
+  await expect(page.locator(".fleet-chip[data-arm='l']")).toContainText("ONLINE");
+  await emitWebSocketEvent(page, { type: "input_mode_list", available: true,
+    modes: [{ id: "keyboard", label: "Keyboard", selectable: true }] });
+  await emitWebSocketEvent(page, { type: "input_mode_state", requested_mode: "keyboard",
+    selected_mode: "keyboard", active_mode: "keyboard", phase: "ACTIVE", request_id: 55, epoch: 8 });
+  await emitWebSocketEvent(page, { type: "keyboard_lease", active: true });
+  for (const name of ["gripper_left", "gripper_right"]) {
+    await emitWebSocketEvent(page, { type: "gripper_state", name, connected: true, alarm: 0,
+      position: 0, speed: 0, current: 0, torque_reached: false });
+  }
+}
+
+async function latestKeys(page: any, arm: string) {
+  return page.evaluate((id: string) => ((window as any).__webMessages as string[]).map(JSON.parse)
+    .findLast((msg) => msg.type === "keyboard_state" && msg.arm === id)?.keys ?? [], arm);
+}
+
+test("keyboard grippers use independent full-target keys alongside arm velocity", async ({ page }) => {
+  await activateKeyboardWithGrippers(page);
+  await expect(page.locator("#keyboard-control-card")).toContainText("松键不撤销");
+  await expect(page.locator('#keyboard-left [data-code="Digit1"]')).toHaveText("1");
+  await expect(page.locator('#keyboard-right [data-code="Digit0"]')).toHaveText("0");
+  await page.keyboard.down("w");
+  await page.keyboard.down("1");
+  await page.keyboard.down("0");
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["Digit1", "KeyW"]);
+  await expect.poll(() => latestKeys(page, "r")).toEqual(["Digit0"]);
+  await page.keyboard.up("1");
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["KeyW"]);
+  await page.keyboard.up("w");
+  await page.keyboard.up("0");
+  await page.keyboard.down("2");
+  await page.keyboard.down("9");
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["Digit2"]);
+  await expect.poll(() => latestKeys(page, "r")).toEqual(["Digit9"]);
+});
+
+test("keyboard gripper readiness is independent from WORK and blocks alarms", async ({ page }) => {
+  await activateKeyboardWithGrippers(page);
+  await page.keyboard.down("w");
+  await page.keyboard.down("1");
+  await emitWebSocketEvent(page, { type: "coordinate_state", arm: "l", motion_allowed: false,
+    work_matched: false, current_work: "other", expected_work: "cell" });
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["Digit1"]);
+  await page.keyboard.up("1");
+  await page.keyboard.down("2");
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["Digit2"]);
+  await emitWebSocketEvent(page, { type: "gripper_state", name: "gripper_left", connected: true, alarm: 1 });
+  await expect.poll(() => latestKeys(page, "l")).toEqual([]);
+  await expect(page.locator("#keyboard-left .keyboard-gripper")).toContainText("ALARM");
+  await page.keyboard.up("2");
+  await page.keyboard.down("1");
+  await expect.poll(() => latestKeys(page, "l")).toEqual([]);
+  await page.keyboard.down("9");
+  await expect.poll(() => latestKeys(page, "r")).toEqual(["Digit9"]);
+});
+
+test("keyboard grippers ignore repeats after blur, modifiers and editable targets", async ({ page }) => {
+  await activateKeyboardWithGrippers(page);
+  await page.keyboard.down("1");
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["Digit1"]);
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await page.keyboard.down("1"); // Physical key is still down: repeat=true.
+  await expect.poll(() => latestKeys(page, "l")).toEqual([]);
+  await page.keyboard.up("1");
+  await page.keyboard.press("Control+2");
+  await expect.poll(() => latestKeys(page, "l")).toEqual([]);
+  await page.locator("input[data-joint-index='0']").focus();
+  await page.keyboard.press("1");
+  await expect.poll(() => latestKeys(page, "l")).toEqual([]);
+  await page.locator("input[data-joint-index='0']").blur();
+  await page.keyboard.down("2");
+  await expect.poll(() => latestKeys(page, "l")).toEqual(["Digit2"]);
+  await emitWebSocketEvent(page, { type: "input_mode_state", requested_mode: "none", selected_mode: "none",
+    active_mode: "none", phase: "ACTIVE", request_id: 56, epoch: 9 });
+  await expect.poll(() => latestKeys(page, "l")).toEqual([]);
+});
+
+test("keyboard safety events release both arms and stop heartbeat", async ({ page }) => {
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list", available: true,
+    modes: [{ id: "keyboard", label: "Web / 键盘速度控制", selectable: true }],
+  });
+  await emitWebSocketEvent(page, { type: "keyboard_lease", active: true });
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state", requested_mode: "keyboard", selected_mode: "keyboard",
+    active_mode: "keyboard", phase: "ACTIVE", request_id: 52, epoch: 5, detail: "",
+  });
+  await page.keyboard.down("w");
+  await page.keyboard.down("i");
+  await expect.poll(() => page.evaluate(() =>
+    ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state").length,
+  )).toBeGreaterThan(0);
+
+  await page.evaluate(() => window.dispatchEvent(new Event("blur")));
+  await expect.poll(() => page.evaluate(() => {
+    const messages = ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state");
+    return ["l", "r"].every((arm) => messages.findLast((message) => message.arm === arm)?.keys.length === 0);
+  })).toBe(true);
+  const afterBlur = await page.evaluate(() =>
+    ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state").length,
+  );
+  await page.waitForTimeout(180);
+  expect(await page.evaluate(() =>
+    ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state").length,
+  )).toBe(afterBlur);
+
+  await emitWebSocketEvent(page, { type: "input_mode_list", available: false, modes: [] });
+  await expect(page.locator("#keyboard-control-card")).toBeHidden();
+});
+
+test("keyboard releases an unavailable arm and both arms on mode or visibility loss", async ({ page }) => {
+  await page.goto("/");
+  const catalog = {
+    type: "input_mode_list", available: true,
+    modes: [{ id: "keyboard", label: "Web / 键盘速度控制", selectable: true }],
+  };
+  const active = {
+    type: "input_mode_state", requested_mode: "keyboard", selected_mode: "keyboard",
+    active_mode: "keyboard", phase: "ACTIVE", request_id: 53, epoch: 6, detail: "",
+  };
+  await emitWebSocketEvent(page, catalog);
+  await emitWebSocketEvent(page, active);
+  await emitWebSocketEvent(page, { type: "keyboard_lease", active: true });
+  await page.keyboard.down("w");
+  await page.keyboard.down("i");
+  await emitWebSocketEvent(page, {
+    type: "coordinate_state", arm: "l", motion_allowed: false,
+    work_matched: false, current_work: "other", expected_work: "cell",
+    work: { type: 1, name: "other", frame_id: "l/work/other" },
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const messages = ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state");
+    return messages.findLast((message) => message.arm === "l")?.keys.length;
+  })).toBe(0);
+  await expect.poll(() => page.evaluate(() => {
+    const messages = ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state");
+    return messages.findLast((message) => message.arm === "r")?.keys.includes("KeyI");
+  })).toBe(true);
+
+  await emitWebSocketEvent(page, {
+    type: "input_mode_state", requested_mode: "none", selected_mode: "none",
+    active_mode: "none", phase: "ACTIVE", request_id: 54, epoch: 7, detail: "",
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const messages = ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state");
+    return ["l", "r"].every((arm) => messages.findLast((message) => message.arm === arm)?.keys.length === 0);
+  })).toBe(true);
+
+  await emitWebSocketEvent(page, active);
+  await page.keyboard.down("i");
+  await page.evaluate(() => {
+    Object.defineProperty(document, "hidden", { configurable: true, value: true });
+    document.dispatchEvent(new Event("visibilitychange"));
+  });
+  await expect.poll(() => page.evaluate(() => {
+    const messages = ((window as any).__webMessages as string[]).map(JSON.parse)
+      .filter((message) => message.type === "keyboard_state");
+    return ["l", "r"].every((arm) => messages.findLast((message) => message.arm === arm)?.keys.length === 0);
+  })).toBe(true);
+});
+
 test("clears MOVEL waiting feedback placeholder when the action is rejected", async ({ page }) => {
   await page.goto("/");
   await page.locator("button[data-motion-command=\"1\"]").click();
@@ -606,6 +981,33 @@ test("clears MOVEL waiting feedback placeholder when the action is rejected", as
   }, requestId);
   await expect(page.locator("#feedback")).toContainText("driver rejected motion goal");
   await expect(page.locator("#feedback")).not.toContainText("等待 feedback");
+});
+
+test("reports an emergency-stop action result transport loss without exposing the ROS exception", async ({ page }) => {
+  await page.goto("/");
+  await page.locator("button[data-motion-command=\"1\"]").click();
+  await page.locator("#pose-x").fill("0.4");
+  await page.locator("#pose-y").fill("0.1");
+  await page.locator("#pose-z").fill("0.5");
+  await expect(page.locator("#execute-motion")).toBeEnabled();
+  await page.locator("#execute-motion").click();
+  await expect(page.locator("#feedback")).toContainText("等待 feedback");
+  const requestId = await page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map((value) => JSON.parse(value))
+      .findLast((item) => item.type === "execute_motion").request_id,
+  );
+  await page.evaluate((id) => {
+    (window as any).__webSocket.emit("message", { data: JSON.stringify({
+      type: "action_state", arm: "l", action: "execute_motion", request_id: id,
+      state: "stopped", code: "goal_handle_unknown",
+      message: "运动已中断，Action 结果不可用；请检查急停状态并恢复机械臂",
+    }) });
+  }, requestId);
+  await expect(page.locator("#feedback")).toContainText("请检查急停状态并恢复机械臂");
+  await expect(page.locator("#feedback")).not.toContainText("Goal handle is not known");
+  await expect(page.locator("#execute-motion")).toBeEnabled();
+  await expect(page.locator("#cancel-motion")).toBeDisabled();
 });
 
 test("warns when MOVEL has no feedback without permitting a second motion", async ({ page }) => {

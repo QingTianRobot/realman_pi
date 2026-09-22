@@ -119,7 +119,7 @@ void RuntimeSnapshotWriter::writeIdle(std::string tree_id,
   json << "{\"schema_version\":2,";
   appendStringField(json, "tree_id", tree_id);
   json << "\"sequence\":0,\"timestamp_ms\":" << timestampMilliseconds()
-       << ",\"root_status\":\"IDLE\"";
+       << ",\"root_status\":\"IDLE\",\"pending_cancellations\":0";
   appendDiagnostics(json, diagnostics);
   json << ",\"nodes\":[]}";
   writeAtomically(json.str());
@@ -133,6 +133,13 @@ void RuntimeSnapshotWriter::write(const bt_core::Tree& tree, std::string tree_id
 void RuntimeSnapshotWriter::write(const bt_core::Tree& tree, std::string tree_id,
                                   std::uint64_t sequence,
                                   const RuntimeDiagnostics* diagnostics) {
+  write(tree, std::move(tree_id), sequence, diagnostics, 0);
+}
+
+void RuntimeSnapshotWriter::write(const bt_core::Tree& tree, std::string tree_id,
+                                  std::uint64_t sequence,
+                                  const RuntimeDiagnostics* diagnostics,
+                                  std::size_t pending_cancellations) {
   std::string root_failure_reason;
   tree.visitNodes([&](const bt_core::TreeNode::Ptr& node, int) {
     if (root_failure_reason.empty() && node->status() == bt_core::NodeStatus::FAILURE &&
@@ -147,7 +154,7 @@ void RuntimeSnapshotWriter::write(const bt_core::Tree& tree, std::string tree_id
        << ",\"timestamp_ms\":" << timestampMilliseconds()
        << ",\"root_status\":\""
        << escapeJson(tree.root() ? bt_core::toStr(tree.root()->status()) : "IDLE")
-       << "\"";
+       << "\",\"pending_cancellations\":" << pending_cancellations;
 
   if (!root_failure_reason.empty()) {
     json << ",\"failure_reason\":\"" << escapeJson(root_failure_reason) << "\"";

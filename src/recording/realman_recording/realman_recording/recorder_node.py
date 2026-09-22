@@ -723,8 +723,8 @@ class RecordingRecorderNode(Node):
             archive = self._archive
             should_record = self._state is SessionState.RECORDING and topic in self._recorded_topics
         if archive is not None and should_record:
-            # MCAP/rosbag2 record time is epoch-based receipt time. Paired session
-            # wall/monotonic anchors let the LeRobot exporter derive media alignment.
+            # MCAP/rosbag2 record time is the same epoch-based ROS SYSTEM_TIME receipt
+            # domain used by the JPEG archive and LeRobot exporter alignment.
             archive.enqueue(topic, message, receipt_wall_ns)
 
     def _tick(self) -> None:

@@ -70,10 +70,10 @@ def test_adoption_is_atomic_and_rejects_repeat_or_write_errors(tmp_path):
     store = SessionStore(tmp_path)
     session = store.create({"profile": "default"})
     store.finalize(True, write_errors=0)
-    adopted = SessionStore.adopt_final_session(session.directory, requested_realtime_ns=123)
+    adopted = SessionStore.adopt_final_session(session.directory, requested_realtime_ns=0)
     assert adopted["decision"] == "ADOPTED"
     assert adopted["export"]["state"] == "QUEUED"
-    assert adopted["export"]["requested_realtime_ns"] == 123
+    assert adopted["export"]["requested_realtime_ns"] == 0
     try:
         SessionStore.adopt_final_session(session.directory)
     except RuntimeError as error:
@@ -114,3 +114,15 @@ def test_discard_is_atomic_and_excludes_adoption(tmp_path):
         assert "already" in str(error)
     else:
         raise AssertionError("discarded session was adopted")
+
+
+def test_decision_timestamps_reject_negative_values(tmp_path):
+    store = SessionStore(tmp_path)
+    session = store.create({"profile": "default"})
+    store.finalize(True, write_errors=0)
+    try:
+        SessionStore.adopt_final_session(session.directory, requested_realtime_ns=-1)
+    except ValueError as error:
+        assert "non-negative" in str(error)
+    else:
+        raise AssertionError("negative ADOPT timestamp was accepted")

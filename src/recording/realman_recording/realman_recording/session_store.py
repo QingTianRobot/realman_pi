@@ -18,6 +18,15 @@ from typing import Any
 from .json_io import atomic_json_write
 
 
+def _timestamp_or_now(value: int | None, *, name: str) -> int:
+    """Return an explicit epoch timestamp, preserving zero and rejecting ambiguity."""
+    if value is None:
+        return time.time_ns()
+    if not isinstance(value, int) or isinstance(value, bool) or value < 0:
+        raise ValueError(f"{name} must be non-negative integer nanoseconds")
+    return value
+
+
 class SessionState(str, Enum):
     IDLE = "IDLE"
     PREPARING = "PREPARING"
@@ -178,7 +187,12 @@ class SessionStore:
             raise RuntimeError("recording session has camera write errors and cannot be adopted")
         payload.update(
             decision="ADOPTED",
-            export={"state": "QUEUED", "requested_realtime_ns": requested_realtime_ns or time.time_ns()},
+            export={
+                "state": "QUEUED",
+                "requested_realtime_ns": _timestamp_or_now(
+                    requested_realtime_ns, name="requested_realtime_ns"
+                ),
+            },
         )
         atomic_json_write(final, payload)
         return payload
@@ -196,7 +210,9 @@ class SessionStore:
             raise RuntimeError("recording session was already adopted or discarded")
         payload.update(
             decision="DISCARDED",
-            discarded_realtime_ns=discarded_realtime_ns or time.time_ns(),
+            discarded_realtime_ns=_timestamp_or_now(
+                discarded_realtime_ns, name="discarded_realtime_ns"
+            ),
         )
         atomic_json_write(final, payload)
         return payload

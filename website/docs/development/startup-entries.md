@@ -149,7 +149,7 @@ Ctrl-C。`./rm65 up` 不会替它启动 executor；Ctrl-C 也只停止 router/:8
 | `rm65_camera_stop` | 调用 `stop_streaming.sh` 停止相机流相关进程。 | 停止 Orbbec/RealSense 推流、`ros2_bridge` 和仓库 `bin/mediamtx`。 | 释放 USB 相机、修改配置或切换到其他相机节点前。 | `src/camera_stream/scripts/stop_streaming.sh` |
 | `rm65_camera_status` | 打印配置路径、匹配的进程和监听端口。 | 只读检查相机进程、`mediamtx`、`ros2_bridge`，以及 RTSP `8554`/深度 `8100-8103`。 | 启动后确认服务是否真正监听，或排查端口/残留进程。 | `src/camera_stream/scripts/start_streaming.sh` |
 | `rm65_camera_logs [-f] [component]` | 查看最近 100 行，或用 `-f` 持续跟踪 `src/camera_stream/log/*.log`。 | `all`、`mediamtx`、`orbbec_left`、`orbbec_middle`、`orbbec_right`、`realsense_stream`、`ros2_bridge`。 | 排查 SDK 初始化、串号不匹配、USB 带宽和推流错误。 | `src/camera_stream/log/` |
-| `rm65_camera_ros2 [color|depth] [rviz]` | 停止 SDK 推流后，按串号启动三台 Orbbec 的单一 ROS2 图像流，并在 24s 错峰后启动全局 RealSense D435；默认 `color`，传入 `depth` 切换深度流，传入 `rviz` 时额外启动 RViz2。缺少 `realsense2_camera` 时直接失败（`./rm65 up` 同步中止），禁止降级为仅 Orbbec。 | `sensor_bringup/cameras_ros2.launch.py`、`orbbec_camera/gemini305.launch.py`、`sensor_bringup/realsense_d435.launch.py`（薄包装 `realsense2_camera/rs_launch.py`）；发布所选 Image、CameraInfo 和 TF（含 `world→d435_link` 静态 TF）；`ROS_DOMAIN_ID` 和 `ROS_LOCALHOST_ONLY` 来自 `.env` 或当前环境。 | 需要原生 ROS image topic、`image_view` 或 RViz2 调试时；生产端无 GUI 时省略 `rviz`。 | `.env`、`config/ros/cameras_ros2.yaml`（含 `global_camera` 段）、`config/rviz/cameras.rviz` |
+| `rm65_camera_ros2 [color|depth] [rviz]` | 停止 SDK 推流后，按串号启动三台 Orbbec 的单一 ROS2 图像流，并在 24s 错峰后启动全局 RealSense D435；默认 `color`，传入 `depth` 切换深度流，传入 `rviz` 时额外启动 RViz2。缺少 `realsense2_camera` 时直接失败（`./rm65 up` 同步中止），禁止降级为仅 Orbbec。 | `sensor_bringup/cameras_ros2.launch.py`、`orbbec_camera/gemini305.launch.py`、`sensor_bringup/realsense_d435.launch.py`（薄包装 `realsense2_camera/rs_launch.py`）；发布所选 Image、CameraInfo 和 TF（含 `world→d435_link` 静态 TF）；`ROS_DOMAIN_ID` 和 `ROS_LOCALHOST_ONLY` 来自 `.env` 或当前环境。 | 需要原生 ROS image topic、`image_view` 或 RViz2 调试时；生产端无 GUI 时省略 `rviz`。 | `.env`、`config/ros/cameras_ros2.yaml`（`wrist_cameras` + `global_camera` 两段）、可选本地覆盖 `config/ros/cameras_ros2.local.yaml`、`config/rviz/cameras.rviz` |
 | `rm65_camera_ros2_stop` | 停止 ROS2 相机 launch、Orbbec 组件容器和 `realsense2_camera_node`。 | 释放三台 Orbbec 与 D435 USB 设备；不会启动或停止 RealMan 驱动。 | 在切回 `rm65_camera_start` SDK 推流或重新构建前。 | `src/sensor_bringup/launch/cameras_ros2.launch.py` |
 | `rm65_camera_ros2_status` | 查看 ROS2 相机 launch、Orbbec 节点和日志根目录。 | 只读检查，不改变运行状态。 | 排查节点是否仍占用 USB 或确认 headless 启动是否成功。 | `logs/<timestamp>/` |
 | `rm65_camera_ros2_logs` | 查看最近一次 ROS2 相机运行目录中的官方 ROS 日志。 | 读取 `ROS_LOG_DIR` 下节点日志，不做 shell 重定向。 | 排查串号匹配、depth profile 和 DDS 发现问题。 | `logs/<timestamp>/` |
@@ -201,15 +201,27 @@ RealSense 深度、更高分辨率和 Orbbec 的 `640x400@30` 深度档。
 ### ROS2 图像节点与 RViz2
 
 `rm65_camera_ros2` 使用官方 `orbbec_camera` ROS2 驱动，不使用旧 USB port 路径，而是从
-`config/ros/cameras_ros2.yaml` 读取三台 Gemini 305 的串号。默认彩色档为 `640x480@10 YUYV`，
+`config/ros/cameras_ros2.yaml` 的 `wrist_cameras.devices.<side>.serial` 读取三台 Gemini 305 的串号
+（现场串号差异建议写进被 `.gitignore` 忽略的 `config/ros/cameras_ros2.local.yaml`，见下文）。默认彩色档为 `640x480@10 YUYV`，
 深度档使用 `640x480@15 Y16` 原始 profile 和硬件抽取系数 `2`，实际发布
 `320x240@15`，并关闭点云以适应生产机 USB2 总线。三台相机按独立设备运行，配置默认关闭
 `enable_frame_sync`、`trigger_out_enabled` 和 `software_trigger_enabled`；官方默认同步参数会导致
 后启动的设备只有 publisher 而没有图像帧。默认只打开彩色流，每次启动都会创建
 `logs/YYYYMMDD_HHMMSS/` 并设置 `ROS_LOG_DIR`，节点日志由 rcutils 官方机制生成。
 左侧相机在反光标定板下使用固定彩色曝光 `30`（3 ms）并关闭自动曝光；该值由
-`cameras_ros2.yaml` 的 `cameras.left.color` 管理。若更换光源或相机位置，应先通过
+`cameras_ros2.yaml` 的 `wrist_cameras.devices.left.streams.color` 管理。若更换光源或相机位置，应先通过
 `/camera_left/get_color_exposure` 验证画面，再调整该值，不能为了通过采样降低 ChArUco 角点门槛。
+
+`cameras_ros2.yaml` 按设备族分两段：`wrist_cameras`（三台 Orbbec Gemini 305，含共享的
+`streams`/`mode`/`sync` 与逐台 `devices`）与 `global_camera`（单台 RealSense D435，独立自包含，
+参数模型为 `WxHxFPS` profile 字符串）。两族参数模型不同，`global_camera` 不继承 `wrist_cameras.streams`。
+每台腕部相机的最终 profile = 全局 `wrist_cameras.streams` 深合并本台 `devices.<side>.streams`
+（只写要改的叶子键，例如 `left` 仅覆盖曝光）；未知叶子键会打印 WARNING 而非静默失效。
+现场差异（最典型是各相机串号）写进被 `.gitignore` 忽略的 `config/ros/cameras_ros2.local.yaml`：
+它与 base 深合并，优先级 `local > base`，逐叶子覆盖且保留 base 独有键；该文件缺失时仅用 base 正常启动。
+`--symlink-install` 构建下 launch 通过解析符号链接直接在源码 `config/ros/` 发现该文件，改完无需 rebuild；
+也可用环境变量 `RM65_CAMERAS_LOCAL_CONFIG=<绝对路径>` 临时指定覆盖文件。
+
 三台 Orbbec 与 D435 共用一条 USB2 root hub 时，生产机的
 `/sys/module/usbcore/parameters/usbfs_memory_mb` 应至少为 `256`；函数会在低于该值时告警。
 临时修复和持久化设置分别为：

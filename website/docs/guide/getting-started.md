@@ -163,8 +163,10 @@ D435；宿主机缺少 `realsense2_camera` 驱动时 `rm65_camera_ros2` / `start
 软件触发；启用 wrapper 默认同步参数会导致后启动的 USB2 设备只有 publisher 而没有图像帧。
 三台 Orbbec 与 D435 共用 USB2 root hub 时，还需将生产机 `usbfs_memory_mb` 调到至少 `256`；
 启动函数会检查该值并在过小时打印临时和持久化修复命令。
-`cameras.left.color` 固定左侧相机为 3 ms 曝光，以避免反光标定板在自动曝光下过曝；当现场光照
-改变时应调整该配置，而不是降低 ChArUco 的最小角点数。
+`wrist_cameras.devices.left.streams.color` 固定左侧相机为 3 ms 曝光，以避免反光标定板在自动曝光下过曝；当现场光照
+改变时应调整该配置，而不是降低 ChArUco 的最小角点数。现场串号等差异可写进被 `.gitignore` 忽略的
+`config/ros/cameras_ros2.local.yaml`（与 base 深合并、优先级 `local > base`，详见
+[开发者手册](../development/startup-entries.md#ros2-图像节点与-rviz2)）。
 生产机的 Orbbec 工作区与 Docker 镜像可能使用不同的 Fast DDS 补丁版本；项目默认从 `.env`
 加载 `FASTDDS_BUILTIN_TRANSPORTS=UDPv4`，避免 DDS 发现到 topic 后选择不兼容的同机共享内存。
 不要将它改回 `DEFAULT`，除非已验证宿主与容器能稳定互收 Image 和 `CameraInfo`。

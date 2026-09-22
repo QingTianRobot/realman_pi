@@ -4,13 +4,14 @@
 
 ## 1. 当前目标和边界
 
-平台的核心目标是：从 RealMan ROS 2 驱动和现有相机推流中只读采集数据，可靠地保存本地原始数据，并提供实时监控、离线回放和后续 LeRobot 转换能力。
+平台的核心目标是：作为**按需启动的测试/数据采集组件**，从 RealMan ROS 2 驱动和现有相机推流中只读采集数据，可靠地保存本地原始数据，并提供录制期间的独立监控、离线回放和后续 LeRobot 转换能力。它不属于默认生产展示栈。
 
 ### 必须保持的边界
 
 - `recording_recorder` 只订阅驱动输出，不创建 `Robotic_Arm`、不直接调用 RealMan SDK、不发布机械臂运动命令。
 - 采集路径不能依赖浏览器、Rerun、Three.js、视频解码或 LeRobot；这些组件异常时不能阻塞 MCAP 写入。
 - Web 页面只读展示，不提供开始/暂停/停止录制按钮，也不代理机械臂运动控制。
+- 默认 `rm65 up` 的实时展示仍由 `realman_web_control` 提供；只有需要录制测试时才单独启动 `realman_recording`，不得为展示目的要求启动 recording。
 - 上游通过 ROS 2 Service 控制录制生命周期；Service 是唯一的录制控制入口。
 - Rerun 用于离线回放和离线分析，不作为采集链路的必要依赖。
 - LeRobot canonical 转换和 π0.5 adapter 已实现；必须在 Humble/真实 SDK 环境验证前保持失败可见，不能伪造端到端成功。

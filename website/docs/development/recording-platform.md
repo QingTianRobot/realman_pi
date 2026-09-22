@@ -5,7 +5,7 @@ description: RealMan 驱动输出的隔离录制、预检、低清展示与 LeRo
 
 # 独立数据录制平台
 
-`realman_recording` 是一个独立 ROS 2 节点组：它只订阅已有的驱动与夹爪输出，不创建 `Robotic_Arm`/RealMan SDK 客户端，也不发布机械臂运动命令。网页端是只读展示，不发起任何录制控制；上游系统通过 `/recording/manage` Service 控制录制生命周期，不能复用或代理 `realman_web_control` 的运动面板。
+`realman_recording` 是一个**按需启动的测试/数据采集** ROS 2 节点组：它只订阅已有的驱动与夹爪输出，不创建 `Robotic_Arm`/RealMan SDK 客户端，也不发布机械臂运动命令。它不属于默认 `rm65 up` 生产展示栈；正常实时展示继续由 `realman_web_control` 提供。recording 自带网页仅用于录制测试期间的只读监控，不发起任何录制控制；上游系统通过 `/recording/manage` Service 控制录制生命周期，不能复用或代理 `realman_web_control` 的运动面板。
 
 录制和数据集转换是两个阶段：停止时只原子收尾原始 MCAP/JPEG 帧 session；上游明确采用后才会请求独立 LeRobot worker。转换占用的 CPU、GPU、图像解码或失败均不得减慢下一次 ROS 数据录制。
 
@@ -84,7 +84,7 @@ Service 的采用返回表示“导出任务已接受”，不是“数据集已
 - `preview_*` 是 Web 独立预览限制，`preview_enabled=true` 才启动低清 JPEG 重压缩 worker；
 - Rerun 离线回放使用 `python3 -m realman_recording.replay --session ...`，不依赖 Web bridge 或实时 ROS 节点。
 
-在已运行的驱动 ROS 图中单独启动：
+仅在需要录制测试、且已有驱动 ROS 图运行时单独启动：
 
 ```bash
 source install/setup.bash

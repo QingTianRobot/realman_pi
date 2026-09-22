@@ -27,3 +27,14 @@ def test_pi05_adapter_rot6d_and_dimension_contract_are_explicit():
         assert "state dimension" in str(error)
     else:
         raise AssertionError("adapter accepted a checkpoint-incompatible state dimension")
+
+
+def test_pi05_adapter_accepts_lerobot_feature_mapping():
+    frame = _frame()
+    sample = Pi05Adapter(Pi05AdapterConfig()).adapt({
+        "observation.ee_pose_base": frame.ee_pose_base,
+        "observation.gripper_position": frame.gripper_position,
+        "action.command.cartesian_velocity": frame.command_cartesian_velocity,
+        "quality.valid": (True,),
+    })
+    assert sample["action"] == frame.command_cartesian_velocity

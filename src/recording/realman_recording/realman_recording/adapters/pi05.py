@@ -8,6 +8,7 @@ from __future__ import annotations
 
 from dataclasses import dataclass
 from math import isfinite, sqrt
+from typing import Any, Mapping
 
 from ..canonical_features import CanonicalFrame
 
@@ -46,7 +47,9 @@ class Pi05Adapter:
     def __init__(self, config: Pi05AdapterConfig) -> None:
         self.config = config
 
-    def adapt(self, frame: CanonicalFrame) -> dict[str, tuple[float, ...]]:
+    def adapt(self, frame: CanonicalFrame | Mapping[str, Any]) -> dict[str, tuple[float, ...]]:
+        if isinstance(frame, Mapping):
+            frame = self._from_feature_mapping(frame)
         if not frame.valid:
             raise ValueError("invalid canonical frame cannot become a π0.5 training example")
         if len(frame.ee_pose_base) % 7 or len(frame.gripper_position) != len(frame.ee_pose_base) // 7:
@@ -63,3 +66,31 @@ class Pi05Adapter:
         if len(action) != self.config.expected_action_dim:
             raise ValueError(f"π0.5 action dimension {len(action)} does not match configured checkpoint dimension {self.config.expected_action_dim}")
         return {"observation.state": tuple(state), "action": action}
+
+    @staticmethod
+    def _from_feature_mapping(features: Mapping[str, Any]) -> CanonicalFrame:
+        """Adapt the dictionary returned by ``LeRobotDataset[index]``."""
+        def values(name: str) -> tuple[float, ...]:
+            value = features.get(name)
+            for method_name in ("detach", "cpu"):
+                method = getattr(value, method_name, None)
+                if callable(method):
+                    value = method()
+            method = getattr(value, "tolist", None)
+            value = method() if callable(method) else value
+            if value is None:
+                raise ValueError(f"canonical LeRobot feature is missing: {name}")
+            return tuple(float(item) for item in value)
+
+        valid = features.get("quality.valid", (True,))
+        method = getattr(valid, "tolist", None)
+        valid = method() if callable(method) else valid
+        if isinstance(valid, (list, tuple)):
+            valid = valid[0] if valid else False
+        return CanonicalFrame(
+            joint_position=(), joint_velocity=(),
+            ee_pose_base=values("observation.ee_pose_base"), ee_velocity_base=(),
+            gripper_position=values("observation.gripper_position"),
+            command_cartesian_velocity=values("action.command.cartesian_velocity"),
+            command_gripper=None, valid=bool(valid), sync_error_ns=(),
+        )

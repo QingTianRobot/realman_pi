@@ -1,0 +1,7 @@
+# Transport deps for the vendored OpenPI policy client used by policy_bridge.
+# The client (src/policy_bridge/policy_bridge/inference/openpi_client) speaks the
+# OpenPI WebsocketPolicyServer protocol: msgpack carrying raw NumPy bytes.
+# numpy comes from the ROS python3-numpy dep; it is NOT pinned <2 here because
+# the vendored msgpack_numpy round-trips correctly on numpy 2.x.
+msgpack>=1.0.5
+websockets>=11.0

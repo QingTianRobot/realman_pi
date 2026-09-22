@@ -89,18 +89,28 @@ up() {
         return 1
       fi
       ;;
+    policy)
+      # Production graph plus the VLA policy bridge container. The bridge is a
+      # pure publish layer; it stays idle until the router selects policy mode
+      # and /policy/activate is called.
+      camera_start
+      if ! compose up -d realman_bringup_remote realman_web_control policy_bridge; then
+        camera_stop
+        return 1
+      fi
+      ;;
     model)
       compose run --rm rm65_three_rviz
       ;;
     *)
-      printf 'usage: rm65 up [desktop|model]\n' >&2
+      printf 'usage: rm65 up [desktop|model|policy]\n' >&2
       return 2
       ;;
   esac
 }
 
 down() {
-  compose stop realman_bringup_remote realman_web_control realman_remote_rviz || true
+  compose stop realman_bringup_remote realman_web_control realman_remote_rviz policy_bridge || true
   camera_stop
 }
 
@@ -118,7 +128,7 @@ status() {
   else
     printf 'camera: stopped\n'
   fi
-  compose ps realman_bringup_remote realman_web_control realman_remote_rviz
+  compose ps realman_bringup_remote realman_web_control realman_remote_rviz policy_bridge
 }
 
 logs() {
@@ -127,7 +137,7 @@ logs() {
     return 0
   fi
   [[ -f "$LOG_ROOT/rm65-camera.log" ]] && tail -n 100 "$LOG_ROOT/rm65-camera.log" || true
-  compose logs --tail=100 realman_bringup_remote realman_web_control
+  compose logs --tail=100 realman_bringup_remote realman_web_control policy_bridge
 }
 
 sync_repo() {

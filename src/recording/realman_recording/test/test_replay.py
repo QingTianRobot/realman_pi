@@ -151,12 +151,11 @@ class _Msg:
 
 
 def test_emit_summary_logs_drop_error_counters(tmp_path):
-    (tmp_path / "manifest.json").write_text(
-        json.dumps({
-            "state": "READY", "decision": "PENDING", "started_realtime_ns": 1000,
-            "summary": {"accepted_samples": 10, "dropped_samples": 2, "write_errors": 0},
-        })
-    )
+    _write_manifest(tmp_path)
+    manifest_path = tmp_path / "manifest.json"
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    manifest.update(started_realtime_ns=1000, summary={"accepted_samples": 10, "dropped_samples": 2, "write_errors": 0})
+    manifest_path.write_text(json.dumps(manifest), encoding="utf-8")
     player = ReplayPlayer(ReplayOptions(tmp_path))
     rerun = _FakeRerun()
     player._emit_summary(rerun)

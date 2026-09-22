@@ -386,6 +386,8 @@ Pika rosbag replay 是独立部署在 `$HOME/pika_realman_replay` 的 operator b
 RealMan driver，也不选择 input mode；control tree 必须由操作员以 `REALMAN_BT_DRY_RUN=false`
 显式启动，并在 Web 中手动选择 `Pika / 速度控制`，等待 `/realman_bt_executor/input_mode_state`
 报告 `pikavelocity` 的 `ACTIVE` 状态。
+该手动选择会先执行三臂 Pika 准备运动；现场放行必须发生在选择之前。独立项目只复用 ROS 图，不加入
+或重启生产 Compose 服务。
 
 bag 的左右速度 frame 是 `l/base_link`、`r/base_link`，但 RealMan velocity 初始化不支持 BASE。
 Replay 因此选择 identity WORK aliases `l/work/pikabase`、`r/work/pikabase`，再把消息 frame 映射为
@@ -398,16 +400,24 @@ Replay 因此选择 identity WORK aliases `l/work/pikabase`、`r/work/pikabase`�
 | left gripper | `/pika/l/gripper_percentage` | `Float32`, `0` closed, `1` open |
 | right gripper | `/pika/r/gripper_percentage` | `Float32`, `0` closed, `1` open |
 
-Replay 使用 `1.0 m/s` 线速度和 `0.25 rad/s` 角速度上限。键盘、Web 手动速度和普通行为树客户端
-仍使用各自的 `cell` WORK 与 `0.05 m/s` 普通会话上限，不会因 Pika replay 的逐会话上限而改变。
-Replay 结束或检测到 mode、坐标、时间戳或订阅者失效时，先发送左右速度终端零向量并等待驱动
-`100 ms` watchdog，再把已选择的工作坐标恢复为 `cell`（`l/work/cell`、`r/work/cell`）。若恢复失败，
+Pika router 的权威引用是
+[`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 中的
+`pika_velocity.work_reference: work/pikabase`；单位 WORK 的配置来自
+[`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml)。Replay 使用
+`1.0 m/s` 线速度和 `0.25 rad/s` 角速度向量模长上限。键盘保留 `cell` WORK，其它客户端保留各自的
+引用；键盘、Web 手动速度和普通行为树速度客户端仍为 `0.05 m/s` 普通会话上限。
+Replay 执行尝试选择坐标后，结束或检测到 mode、坐标、时间戳或订阅者失效时，先发送左右速度终端零
+向量并等待超过驱动 `100 ms` watchdog，再把已选择或可能已选择的工作坐标恢复为 `cell`
+（`l/work/cell`、`r/work/cell`）。夹爪不发送零值作为停止，因为 `0` 是闭合目标。若恢复失败，
 停止操作并通过 `/<arm>/coordinates/select_work`（`SelectFrame`，`{name: cell}`）人工恢复，确认
 `coordinates/state` 的 `work_matched` 与 `motion_allowed` 后才可重试。
 
-独立项目的 `./replay.sh run <bag>` 默认只做读取图预检；只有操作员明确加上 `--execute` 才会选择
-`pikabase` 并发布 ingress。自动化测试、`inspect` 和部署后的验证绝不执行 `--execute`。Replay 的
+独立项目的 `./replay.sh run <bag>` 默认只做只读图预检，不选择坐标、不发送命令或 cleanup 零速；
+只有操作员明确加上 `--execute` 才会选择 `pikabase` 并发布 ingress。自动化测试、`inspect` 和部署后的
+验证绝不运行真实 `--execute`；执行分支测试使用 fake 节点。Replay 的
 `ReplayNode.spin_once()` 仅供内部调度器使用，公开 operator API 是 `replay.sh`。
+完整操作顺序见 [Pika rosbag replay](./behavior-tree-control#pika-rosbag-replay)，
+生命周期边界见 [Pika replay 边界](./behavior-tree-motion#pika-rosbag-replay-边界)。
 
 ## 坐标与 motion gate
 

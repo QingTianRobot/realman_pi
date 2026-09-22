@@ -169,22 +169,28 @@ WORK、frame、速度上限和 timeout 校验，但不发送 Action Goal，也�
 `/pika/r/gripper_percentage`，类型为 `std_msgs/msg/Float32`，归一化值 `0` 表示闭合、`1` 表示打开。
 RealMan 速度模式没有 BASE 初始化选项，所以 replay 在执行前选择 identity WORK aliases
 `l/work/pikabase`、`r/work/pikabase`，并将速度消息 frame 改为相应的 `l/work/pikabase`、
-`r/work/pikabase`。这条身份坐标只服务于 rosbag replay；键盘、Web 手动速度和普通行为树会话继续
-使用 `l/work/cell`、`r/work/cell`。
+`r/work/pikabase`。Pika router 的 `pika_velocity.work_reference` 固定引用这组单位 WORK；键盘与默认
+WORK 会话继续使用 `l/work/cell`、`r/work/cell`，其它客户端保留各自的配置引用。
 
 Replay 的 Pika 会话上限为 `1.0 m/s` 线速度和 `0.25 rad/s` 角速度。桥接器按 bag 顺序发布新时间戳，
-结束或任何运行时安全条件失败时先向左右速度 ingress 发送零向量，等待超过 `100 ms` watchdog，再将
-已选择的 WORK 恢复为 `cell`（`l/work/cell`、`r/work/cell`）。恢复失败时保持控制树在中性模式，检查
+执行尝试选择 WORK 之后，结束或任何运行时安全条件失败时先向左右速度 ingress 发送零向量，等待超过
+`100 ms` watchdog，再将已选择或可能已选择的 WORK 恢复为 `cell`（`l/work/cell`、`r/work/cell`）。
+只读预检不会改坐标或发送 cleanup 零速；夹爪的 `0` 是闭合指令，不能用作停止。
+恢复失败时保持控制树在中性模式，检查
 `/<arm>/coordinates/state` 后通过 `/<arm>/coordinates/select_work`（`realman_msgs/srv/SelectFrame`，
 `{name: cell}`）人工恢复并重新验证。
 
-操作员必须先运行 `./rm65 bt control`，在 Web 控制页手动选择 **Pika / 速度控制** 并等待 `ACTIVE`，
+操作员必须先运行 `REALMAN_BT_DRY_RUN=false ./rm65 bt control`，在 Web 控制页手动选择
+**Pika / 速度控制** 并等待 `ACTIVE`。该选择会执行三臂准备动作，必须先确认工作区和急停。
 再执行独立项目的 `./replay.sh run <bag>` 只读预检；只有明确输入 `--execute` 才会选择 `pikabase` 并
 发布真实 ingress。生产 control router 必须以 `REALMAN_BT_DRY_RUN=false` 运行。自动化测试只做
-`inspect`、构建和 no-motion preflight，永远不调用 `--execute`。
+`inspect`、构建、隔离 fake 测试和 no-motion preflight，永远不启动真实 `--execute`。
 
 该 replay 使用内部 `ReplayNode.spin_once()` 处理 ROS 回调和时间调度；这是组合 API 的实现细节，
 操作者只使用独立项目的 `replay.sh` 命令，不直接运行 Python 节点。
+项目部署到独立的 `$HOME/pika_realman_replay`，不复用生产 Compose project，也不重启生产容器。
+模式与帧配置见 [Pika rosbag replay](./behavior-tree-control#pika-rosbag-replay)，
+接口映射见 [ingress 与坐标桥接](./realman-action-development#pika-rosbag-replay-的-ingress-与坐标桥接)。
 
 ## 构建
 

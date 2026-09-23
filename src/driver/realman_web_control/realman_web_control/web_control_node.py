@@ -26,7 +26,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from realman_msgs.action import CartesianVelocity, ExecuteMotion, ExecuteTrajectory
-from realman_msgs.msg import InputModeState, MotionWaypoint
+from realman_msgs.msg import CartesianVelocityState, InputModeState, MotionWaypoint
 from realman_msgs.srv import (
     CaptureCalibrationSample,
     ForwardKinematics,
@@ -167,6 +167,7 @@ class WebControlNode(Node):
         self._joint_degrees: dict[str, list[float]] = {}
         self._last_joint_stamp_ns: dict[str, int] = {}
         self._has_nonzero_joint_state: set[str] = set()
+        self._cartesian_velocity_states: dict[str, dict[str, Any]] = {}
         self._joint_records = JointRecordStore(joint_record_dir)
         self._callback_group = ReentrantCallbackGroup()
         # Node owns its own _subscriptions collection; never append to it twice.
@@ -323,6 +324,17 @@ class WebControlNode(Node):
                     Bool,
                     f"/{arm}/connected",
                     lambda message, selected=arm: self._connection(selected, message),
+                    10,
+                    callback_group=self._callback_group,
+                )
+            )
+            self._web_subscriptions.append(
+                self.create_subscription(
+                    CartesianVelocityState,
+                    f"/{arm}/cartesian_velocity/state",
+                    lambda message, selected=arm: self._cartesian_velocity_state_message(
+                        selected, message
+                    ),
                     10,
                     callback_group=self._callback_group,
                 )
@@ -1318,6 +1330,42 @@ class WebControlNode(Node):
         self._coordinate_state[arm] = payload
         self._server.send_event(payload)
 
+    def _cartesian_velocity_state_message(
+        self, arm: str, message: CartesianVelocityState
+    ) -> None:
+        state = {
+            "session_active": bool(message.session_active),
+            "reference_type": int(message.reference_type),
+            "reference_name": str(message.reference_name),
+            "command_frame_id": str(message.command_frame_id),
+            "commanded_linear_velocity_mps": [
+                float(value) for value in message.commanded_linear_velocity_mps
+            ],
+            "commanded_angular_velocity_radps": [
+                float(value) for value in message.commanded_angular_velocity_radps
+            ],
+            "limited_linear_velocity_mps": [
+                float(value) for value in message.limited_linear_velocity_mps
+            ],
+            "limited_angular_velocity_radps": [
+                float(value) for value in message.limited_angular_velocity_radps
+            ],
+            "measured_frame_id": str(message.measured_frame_id),
+            "measured_linear_velocity_mps": [
+                float(value) for value in message.measured_linear_velocity_mps
+            ],
+            "measured_angular_velocity_radps": [
+                float(value) for value in message.measured_angular_velocity_radps
+            ],
+            "measured_valid": bool(message.measured_valid),
+            "command_age_ms": int(message.command_age_ms),
+            "measured_age_ms": int(message.measured_age_ms),
+        }
+        self._cartesian_velocity_states[arm] = state
+        self._server.send_event(
+            {"type": "cartesian_velocity_state", "arm": arm, "state": state}
+        )
+
     def _camera_health_message(self, message: String) -> None:
         try:
             payload = json.loads(message.data)
@@ -1340,6 +1388,16 @@ class WebControlNode(Node):
             state = self._coordinate_state.get(arm)
             if state is not None:
                 self._server.send_event(state, client_id)
+            velocity_state = self._cartesian_velocity_states.get(arm)
+            if velocity_state is not None:
+                self._server.send_event(
+                    {
+                        "type": "cartesian_velocity_state",
+                        "arm": arm,
+                        "state": velocity_state,
+                    },
+                    client_id,
+                )
             self._send_joint_records(client_id, arm)
         self._send_tf_frames(client_id)
 

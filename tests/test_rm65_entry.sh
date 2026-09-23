@@ -47,3 +47,18 @@ echo "rm65 entry tests passed"
 
 # Production bringup must publish camera health consumed by Web control.
 grep -Fq "start_camera_calibration:=true" "$ROOT/config/docker/compose.yaml"
+
+# The production graph must refuse to start beside the legacy local-driver
+# RViz service, which would create duplicate realman_driver nodes.
+grep -Fq 'com.docker.compose.service=realman_driver_rviz' "$ROOT/rm65"
+grep -Fq 'refusing to start while realman_driver_rviz is running' "$ROOT/rm65"
+
+# A running legacy driver/RViz container must block startup before camera or
+# production services are touched. The exported shell function stands in for
+# `docker ps` without connecting to a Docker daemon.
+conflict_output="$({
+  docker() { printf 'legacy-driver-rviz-id\n'; }
+  export -f docker
+  bash -c 'source "$0"; check_driver_rviz_conflict' "$ROOT/rm65"
+} 2>&1 || true)"
+grep -Fq 'refusing to start while realman_driver_rviz is running' <<<"$conflict_output"

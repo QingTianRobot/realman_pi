@@ -18,7 +18,7 @@ pytest.importorskip("rclpy")
 from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 import rclpy
-from realman_msgs.msg import InputModeState
+from realman_msgs.msg import CartesianVelocityState, InputModeState
 from realman_msgs.srv import ListInputModes, SelectInputMode
 
 from realman_web_control.action_bridge import ActionRecord
@@ -112,6 +112,7 @@ def node(monkeypatch):
     value._server = Events()
     value._actions = {}
     value._coordinate_state = {}
+    value._cartesian_velocity_states = {}
     value._keyboard_config = load_keyboard_control_config(
         Path(__file__).parents[4] / "config/ros/keyboard_control.yaml",
         Path(__file__).parents[4] / "config/ros/realman_motion.yaml",
@@ -171,6 +172,49 @@ def state(request_id=41):
 def sent(node):
     return [goal for clients in (node._motion_clients, node._trajectory_clients, node._velocity_clients)
             for client in clients.values() for goal, _ in client.goals]
+
+
+def test_cartesian_velocity_state_is_forwarded_with_frames_and_validity(node):
+    message = CartesianVelocityState()
+    message.session_active = True
+    message.reference_type = CartesianVelocityState.WORK
+    message.reference_name = "cell"
+    message.command_frame_id = "l/work/cell"
+    message.commanded_linear_velocity_mps = [0.4, 0.0, 0.0]
+    message.commanded_angular_velocity_radps = [0.0, 0.1, 0.0]
+    message.limited_linear_velocity_mps = [0.2, 0.0, 0.0]
+    message.limited_angular_velocity_radps = [0.0, 0.05, 0.0]
+    message.measured_frame_id = "l/base_link"
+    message.measured_linear_velocity_mps = [0.18, 0.0, 0.0]
+    message.measured_angular_velocity_radps = [0.0, 0.04, 0.0]
+    message.measured_valid = True
+    message.command_age_ms = 20
+    message.measured_age_ms = 10
+
+    node._cartesian_velocity_state_message("l", message)
+
+    event, client_id = node._server.events[-1]
+    assert client_id is None
+    assert event == {
+        "type": "cartesian_velocity_state",
+        "arm": "l",
+        "state": {
+            "session_active": True,
+            "reference_type": CartesianVelocityState.WORK,
+            "reference_name": "cell",
+            "command_frame_id": "l/work/cell",
+            "commanded_linear_velocity_mps": [0.4, 0.0, 0.0],
+            "commanded_angular_velocity_radps": [0.0, 0.1, 0.0],
+            "limited_linear_velocity_mps": [0.2, 0.0, 0.0],
+            "limited_angular_velocity_radps": [0.0, 0.05, 0.0],
+            "measured_frame_id": "l/base_link",
+            "measured_linear_velocity_mps": [0.18, 0.0, 0.0],
+            "measured_angular_velocity_radps": [0.0, 0.04, 0.0],
+            "measured_valid": True,
+            "command_age_ms": 20,
+            "measured_age_ms": 10,
+        },
+    }
 
 
 def activate_keyboard(node):

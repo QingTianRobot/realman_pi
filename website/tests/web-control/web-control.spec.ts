@@ -418,6 +418,45 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await page.screenshot({ path: test.info().outputPath("web-control.png"), fullPage: true });
 });
 
+test("falls back to a live Canvas 2D arm preview when WebGL is unavailable", async ({ page }) => {
+  await page.addInitScript(() => {
+    const originalGetContext = HTMLCanvasElement.prototype.getContext;
+    HTMLCanvasElement.prototype.getContext = function getContext(
+      contextId: string,
+      options?: any,
+    ) {
+      if (["webgl", "webgl2", "experimental-webgl"].includes(contextId)) return null;
+      return originalGetContext.call(this, contextId as any, options);
+    } as typeof HTMLCanvasElement.prototype.getContext;
+  });
+
+  await page.goto("/");
+
+  await expect(page.locator("#viewer")).toHaveAttribute("data-renderer", "canvas2d");
+  await expect(page.locator("#viewer-state")).toContainText("2D");
+  await expect(page.locator(".fleet-chip")).toHaveCount(3);
+  const initialChecksum = await page.locator("#canvas").evaluate((element: HTMLCanvasElement) => {
+    const context = element.getContext("2d");
+    if (!context) return 0;
+    return context.getImageData(0, 0, element.width, element.height).data
+      .reduce((sum, value, index) => (sum + value * ((index % 7) + 1)) % 1000000007, 0);
+  });
+  expect(initialChecksum).toBeGreaterThan(0);
+
+  await emitWebSocketEvent(page, {
+    type: "joint_state",
+    arm: "r",
+    positions_rad: [0.8, -0.6, 0.5, -0.4, 0.3, -0.2],
+    stamp_ns: 200,
+  });
+  await expect.poll(() => page.locator("#canvas").evaluate((element: HTMLCanvasElement) => {
+    const context = element.getContext("2d");
+    if (!context) return 0;
+    return context.getImageData(0, 0, element.width, element.height).data
+      .reduce((sum, value, index) => (sum + value * ((index % 7) + 1)) % 1000000007, 0);
+  })).not.toBe(initialChecksum);
+});
+
 test("copies the selected arm current joint angles as degree array", async ({ page }) => {
   await page.context().grantPermissions(["clipboard-read", "clipboard-write"], { origin: "http://127.0.0.1:4174" });
   await page.goto("/");
@@ -539,6 +578,60 @@ test("renders the server-discovered global input mode and sends selections", asy
 
   await emitWebSocketEvent(page, { type: "input_mode_list", available: false, modes: [] });
   await expect(page.locator("#input-mode-card")).toBeHidden();
+});
+
+test("renders command and measured Cartesian velocity telemetry for both arms", async ({ page }) => {
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "cartesian_velocity_state",
+    arm: "l",
+    state: {
+      session_active: true,
+      reference_type: 1,
+      reference_name: "cell",
+      command_frame_id: "l/work/cell",
+      commanded_linear_velocity_mps: [0.4, 0, 0],
+      commanded_angular_velocity_radps: [0, 0.1, 0],
+      limited_linear_velocity_mps: [0.2, 0, 0],
+      limited_angular_velocity_radps: [0, 0.05, 0],
+      measured_frame_id: "l/base_link",
+      measured_linear_velocity_mps: [0.18, 0, 0],
+      measured_angular_velocity_radps: [0, 0.04, 0],
+      measured_valid: true,
+      command_age_ms: 20,
+      measured_age_ms: 10,
+    },
+  });
+  await emitWebSocketEvent(page, {
+    type: "cartesian_velocity_state",
+    arm: "r",
+    state: {
+      session_active: false,
+      reference_type: 1,
+      reference_name: "cell",
+      command_frame_id: "r/work/cell",
+      commanded_linear_velocity_mps: [0, 0, 0],
+      commanded_angular_velocity_radps: [0, 0, 0],
+      limited_linear_velocity_mps: [0, 0, 0],
+      limited_angular_velocity_radps: [0, 0, 0],
+      measured_frame_id: "r/base_link",
+      measured_linear_velocity_mps: [0, 0, 0],
+      measured_angular_velocity_radps: [0, 0, 0],
+      measured_valid: false,
+      command_age_ms: 200,
+      measured_age_ms: 999,
+    },
+  });
+
+  await expect(page.locator("#velocity-telemetry-panel")).toBeVisible();
+  await expect(page.locator("#velocity-telemetry-l")).toContainText("l/work/cell");
+  await expect(page.locator("#velocity-telemetry-l")).toContainText("命令线速度");
+  await expect(page.locator("#velocity-telemetry-l")).toContainText("0.400");
+  await expect(page.locator("#velocity-telemetry-l")).toContainText("l/base_link");
+  await expect(page.locator("#velocity-telemetry-l")).toContainText("VALID");
+  await expect(page.locator("#velocity-telemetry-r")).toContainText("r/work/cell");
+  await expect(page.locator("#velocity-telemetry-r")).toContainText("r/base_link");
+  await expect(page.locator("#velocity-telemetry-r")).toContainText("STALE / NO DATA");
 });
 
 test("unlocks input mode selection when reconnect loses its result", async ({ page }) => {

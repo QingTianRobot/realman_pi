@@ -365,7 +365,9 @@ class KeyboardControlRouter(Node):
         goal.max_angular_speed_radps = profile.max_angular_speed_radps
         goal.max_linear_accel_mps2 = profile.max_linear_accel_mps2
         goal.max_angular_accel_radps2 = profile.max_angular_accel_radps2
-        goal.follow = True
+        # Web/DDS keyboard input is not a <=10 ms real-time stream. Use the
+        # SDK low-follow mode for the configured 20 ms control period.
+        goal.follow = False
         goal.trajectory_mode = 0
         goal.radio = 0
         return goal

@@ -88,6 +88,22 @@ type InputModeResult = {
   accepted: boolean;
   message: string;
 };
+type CartesianVelocityTelemetry = {
+  session_active: boolean;
+  reference_type: number;
+  reference_name: string;
+  command_frame_id: string;
+  commanded_linear_velocity_mps: number[];
+  commanded_angular_velocity_radps: number[];
+  limited_linear_velocity_mps: number[];
+  limited_angular_velocity_radps: number[];
+  measured_frame_id: string;
+  measured_linear_velocity_mps: number[];
+  measured_angular_velocity_radps: number[];
+  measured_valid: boolean;
+  command_age_ms: number;
+  measured_age_ms: number;
+};
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -183,6 +199,7 @@ app.innerHTML = `
         <button id="execute-motion" class="button primary full" type="button" disabled>发送 MOVEJ</button>
       </section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">CARTESIAN</span><h2>末端速度</h2></div><span id="velocity-state" class="mini-state">IDLE</span></div><div class="form-grid"><label>参考系<select id="velocity-frame"></select></label><label>周期 (ms)<input id="velocity-period" type="number" min="1" step="1" /></label><label>看门狗 (ms)<input id="velocity-watchdog" type="number" min="1" step="1" /></label><label>线加速度<input id="linear-accel" type="number" min="0.001" step="0.01" /></label><label>角加速度<input id="angular-accel" type="number" min="0.001" step="0.01" /></label></div><div id="velocity-inputs" class="velocity-inputs"></div><div class="inline-actions"><button id="start-velocity" class="button secondary" type="button" disabled>启动速度 Action</button><button id="cancel-velocity" class="button ghost" type="button" disabled>取消</button></div></section>
+      <section id="velocity-telemetry-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">VELOCITY TELEMETRY</span><h2>命令与实际末端速度</h2></div><span class="mini-state">L + R</span></div><p class="telemetry-help">命令值来自当前速度控制 session；实际值由驱动根据状态位姿差分估计。两者坐标系和数据年龄始终单独标注。</p><div id="velocity-telemetry-grid" class="velocity-telemetry-grid"></div></section>
       <section id="gripper-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">GRIPPER</span><h2>夹爪控制</h2></div><span id="gripper-state" class="mini-state">WAIT</span></div><div class="form-grid"><label>设备<select id="gripper-select"></select></label><label>开合度 (0=闭合)<input id="gripper-percentage" type="range" min="0" max="1" step="0.01" value="1" /></label></div><div class="inline-actions"><button id="gripper-open" class="button secondary" type="button">打开</button><button id="gripper-close" class="button secondary" type="button">闭合</button><button id="gripper-enable" class="button ghost" type="button">使能</button><button id="gripper-reset" class="button danger" type="button">复位</button></div><div id="gripper-feedback" class="feedback">等待夹爪状态</div></section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">ACTION MONITOR</span><h2>运行反馈</h2></div><span id="action-state" class="mini-state">IDLE</span></div><div class="progress-track"><div id="progress" class="progress-bar"></div></div><div id="feedback" class="feedback">尚未发送 Action</div><pre id="result" class="result" aria-live="polite">等待结果…</pre></section>
     </aside>
@@ -219,6 +236,7 @@ const inputModeDetail = $("#input-mode-detail");
 const keyboardControlCard = $("#keyboard-control-card") as HTMLElement;
 const keyboardControlState = $("#keyboard-control-state");
 const keyboardFrameLegend = $("#keyboard-frame-legend") as HTMLElement;
+const velocityTelemetryGrid = $("#velocity-telemetry-grid") as HTMLElement;
 const motionMode = $("#motion-mode");
 const jointTarget = $("#joint-target") as HTMLElement;
 const poseTarget = $("#pose-target") as HTMLElement;
@@ -287,6 +305,7 @@ const poseReferenceByArm: Partial<Record<ArmId, FrameState>> = {};
 const tfFramesByArm: Partial<Record<ArmId, FrameState[]>> = {};
 const poseSliderCentersByArm: Partial<Record<ArmId, number[]>> = {};
 const kinematicsStatusByArm: Partial<Record<ArmId, string>> = {};
+const cartesianVelocityStates: Partial<Record<ArmId, CartesianVelocityTelemetry>> = {};
 const activeKinematicsRequestByArm: Partial<Record<ArmId, string>> = {};
 const ikPreviewValidByArm: Partial<Record<ArmId, boolean>> = {};
 const motionSettingsByArm: Partial<Record<ArmId, { velocity: string; timeout: string }>> = {};
@@ -297,10 +316,13 @@ const recordRequestTimerByArm: Partial<Record<ArmId, number>> = {};
 const activeRecoveryRequestByArm: Partial<Record<ArmId, string>> = {};
 const robotScenes: Partial<Record<ArmId, RobotScene>> = {};
 const keyboardWorkFrames: Partial<Record<KeyboardArmId, THREE.AxesHelper>> = {};
-let renderer: THREE.WebGLRenderer;
-let scene: THREE.Scene;
-let camera: THREE.PerspectiveCamera;
-let controls: OrbitControls;
+let renderer: THREE.WebGLRenderer | undefined;
+let scene: THREE.Scene | undefined;
+let camera: THREE.PerspectiveCamera | undefined;
+let controls: OrbitControls | undefined;
+let fallbackContext: CanvasRenderingContext2D | null = null;
+let fallbackResizeObserver: ResizeObserver | undefined;
+let renderMode: "webgl" | "canvas2d" | undefined;
 let selectedShadowArm: ArmId | null = null;
 let loadGeneration = 0;
 
@@ -609,6 +631,43 @@ function renderCoordinateState() {
     <div class="coordinate-meta">${state.work?.controller_name ?? state.current_work}</div>
     <div class="coordinate-meta">${state.work?.xyz_m ? `xyz ${state.work.xyz_m.map((value) => displayNumber(value)).join(", ")}` : ""}</div>
   `;
+}
+function telemetryVector(values: number[] | undefined, digits = 3) {
+  if (!Array.isArray(values) || values.length !== 3 || !values.every(Number.isFinite)) return "--";
+  return `[${values.map((value) => displayNumber(value, digits)).join(", ")}]`;
+}
+function telemetryNorm(values: number[] | undefined, digits = 3) {
+  if (!Array.isArray(values) || values.length !== 3 || !values.every(Number.isFinite)) return "--";
+  return displayNumber(Math.hypot(...values), digits);
+}
+function telemetryReferenceLabel(state: CartesianVelocityTelemetry) {
+  const kind = state.reference_type === 1 ? "WORK" : state.reference_type === 2 ? "TOOL" : "BASE";
+  return `${kind} / ${state.reference_name || "unknown"}`;
+}
+function renderCartesianVelocityTelemetry() {
+  velocityTelemetryGrid.innerHTML = (["l", "r"] as const).map((arm) => {
+    const state = cartesianVelocityStates[arm];
+    if (!state) {
+      return `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}"><div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-status">WAIT</span></div><div class="telemetry-empty">等待 /${arm}/cartesian_velocity/state</div></article>`;
+    }
+    const measuredStatus = state.measured_valid ? "VALID" : "STALE / NO DATA";
+    const measuredStatusClass = state.measured_valid ? "valid" : "stale";
+    const sessionStatus = state.session_active ? "ACTIVE" : "IDLE";
+    const commandFrame = state.command_frame_id || telemetryReferenceLabel(state);
+    const measuredFrame = state.measured_frame_id || `${arm}/base_link`;
+    return `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}">
+      <div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-status ${state.session_active ? "active" : ""}">${sessionStatus}</span></div>
+      <div class="telemetry-reference"><span>命令坐标系</span><strong>${escapeHtml(commandFrame)}</strong><span>参考</span><strong>${escapeHtml(telemetryReferenceLabel(state))}</strong></div>
+      <div class="telemetry-row"><span>命令线速度</span><strong>${telemetryVector(state.commanded_linear_velocity_mps)} m/s</strong><em>age ${Number.isFinite(state.command_age_ms) ? state.command_age_ms : "--"} ms</em></div>
+      <div class="telemetry-row"><span>限速后线速度</span><strong>${telemetryVector(state.limited_linear_velocity_mps)} m/s <small>|${telemetryNorm(state.limited_linear_velocity_mps)}|</small></strong><em></em></div>
+      <div class="telemetry-row"><span>命令角速度</span><strong>${telemetryVector(state.commanded_angular_velocity_radps)} rad/s</strong><em></em></div>
+      <div class="telemetry-row"><span>限速后角速度</span><strong>${telemetryVector(state.limited_angular_velocity_radps)} rad/s <small>|${telemetryNorm(state.limited_angular_velocity_radps)}|</small></strong><em></em></div>
+      <div class="telemetry-divider"></div>
+      <div class="telemetry-reference"><span>实测坐标系</span><strong>${escapeHtml(measuredFrame)}</strong><span>状态</span><strong class="telemetry-measured ${measuredStatusClass}">${measuredStatus}</strong></div>
+      <div class="telemetry-row"><span>实测线速度</span><strong>${telemetryVector(state.measured_linear_velocity_mps)} m/s <small>|${telemetryNorm(state.measured_linear_velocity_mps)}|</small></strong><em>age ${Number.isFinite(state.measured_age_ms) ? state.measured_age_ms : "--"} ms</em></div>
+      <div class="telemetry-row"><span>实测角速度</span><strong>${telemetryVector(state.measured_angular_velocity_radps)} rad/s <small>|${telemetryNorm(state.measured_angular_velocity_radps)}|</small></strong><em></em></div>
+    </article>`;
+  }).join("");
 }
 function renderFleetStrip() {
   if (!manifest) return;
@@ -966,6 +1025,131 @@ function setShadowVisibility(arm: ArmId) {
   selectedShadowArm = arm;
 }
 
+type FallbackPoint = { x: number; y: number; z: number };
+const FALLBACK_LINK_LENGTHS = [0.256, 0.21, 0.144, 0.11, 0.08];
+
+function fallbackArmPoints(arm: ArmId, values: number[]): FallbackPoint[] {
+  const transform = robotConfig(arm).transform;
+  const joints = values.map((value) => (Number.isFinite(value) ? value : 0));
+  const points: FallbackPoint[] = [
+    { x: transform.x, y: transform.y, z: transform.z },
+    { x: transform.x, y: transform.y, z: transform.z + 0.2405 },
+  ];
+  let point = { ...points[1] };
+  let yaw = transform.yaw + (joints[0] ?? 0);
+  let pitch = transform.pitch + (joints[1] ?? 0) * 0.55;
+  FALLBACK_LINK_LENGTHS.forEach((length, index) => {
+    if (index > 0) {
+      yaw += (joints[index + 1] ?? 0) * 0.22;
+      pitch += (joints[index + 1] ?? 0) * 0.32;
+    }
+    const horizontal = length * Math.cos(pitch);
+    point = {
+      x: point.x + horizontal * Math.cos(yaw),
+      y: point.y + horizontal * Math.sin(yaw),
+      z: point.z + length * Math.sin(pitch),
+    };
+    points.push({ ...point });
+  });
+  return points;
+}
+
+function drawFallbackScene() {
+  if (renderMode !== "canvas2d" || !fallbackContext || !manifest) return;
+  const box = viewer.getBoundingClientRect();
+  if (!box.width || !box.height) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(1, Math.round(box.width));
+  const height = Math.max(1, Math.round(box.height));
+  const pixelWidth = Math.max(1, Math.round(width * dpr));
+  const pixelHeight = Math.max(1, Math.round(height * dpr));
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  const context = fallbackContext;
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#091114";
+  context.fillRect(0, 0, width, height);
+
+  const pointsByArm = new Map<ArmId, { live: FallbackPoint[]; shadow: FallbackPoint[] }>();
+  const projectedBounds: Array<{ x: number; y: number }> = [];
+  for (const arm of ["l", "m", "r"] as const) {
+    const live = fallbackArmPoints(arm, armJointSnapshot(arm));
+    const shadow = fallbackArmPoints(arm, armTargetSnapshot(arm));
+    pointsByArm.set(arm, { live, shadow });
+    [...live, ...shadow].forEach((point) => projectedBounds.push({
+      x: point.x + point.y * 0.55,
+      y: point.z + point.y * 0.18,
+    }));
+  }
+  const minX = Math.min(...projectedBounds.map((point) => point.x));
+  const maxX = Math.max(...projectedBounds.map((point) => point.x));
+  const minY = Math.min(...projectedBounds.map((point) => point.y));
+  const maxY = Math.max(...projectedBounds.map((point) => point.y));
+  const spanX = Math.max(maxX - minX, 0.8);
+  const spanY = Math.max(maxY - minY, 0.8);
+  const scale = Math.min((width - 64) / spanX, (height - 64) / spanY);
+  const project = (point: FallbackPoint) => ({
+    x: 32 + (point.x + point.y * 0.55 - minX) * scale,
+    y: height - 32 - (point.z + point.y * 0.18 - minY) * scale,
+  });
+
+  context.strokeStyle = "#1c3035";
+  context.lineWidth = 1;
+  for (let x = 16; x < width; x += 32) {
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, height);
+    context.stroke();
+  }
+  for (let y = 16; y < height; y += 32) {
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(width, y);
+    context.stroke();
+  }
+
+  for (const arm of ["l", "m", "r"] as const) {
+    const points = pointsByArm.get(arm)!;
+    const color = `#${ARM_COLORS[arm].toString(16).padStart(6, "0")}`;
+    const drawArm = (values: FallbackPoint[], shadow: boolean) => {
+      const projected = values.map(project);
+      context.save();
+      context.globalAlpha = shadow ? 0.42 : 1;
+      context.strokeStyle = shadow ? "#e08a52" : color;
+      context.lineWidth = shadow ? 3 : 6;
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.setLineDash(shadow ? [7, 5] : []);
+      context.beginPath();
+      projected.forEach((point, index) => {
+        if (index === 0) context.moveTo(point.x, point.y);
+        else context.lineTo(point.x, point.y);
+      });
+      context.stroke();
+      context.setLineDash([]);
+      context.fillStyle = shadow ? "#e08a52" : color;
+      projected.forEach((point, index) => {
+        context.beginPath();
+        context.arc(point.x, point.y, index === 0 ? 8 : 4, 0, Math.PI * 2);
+        context.fill();
+      });
+      context.restore();
+      const label = project(values.at(-1)!);
+      context.fillStyle = color;
+      context.font = "600 11px ui-monospace, monospace";
+      context.fillText(`${arm.toUpperCase()} ${shadow ? "TARGET" : "LIVE"}`, label.x + 8, label.y - 8);
+    };
+    drawArm(points.shadow, true);
+    drawArm(points.live, false);
+  }
+  viewer.dataset.liveMeshes = "canvas2d";
+  viewer.dataset.shadowMeshes = "canvas2d";
+  viewer.dataset.visualizationReferenceArm = "m";
+}
+
 function frameScene(includeSelectedShadow = false) {
   if (!manifest || !camera || !controls || !scene) return;
   const bounds = new THREE.Box3();
@@ -1214,6 +1398,13 @@ function handleMessage(message: Message) {
       renderCoordinateState();
       if (manifest) configureVelocity();
     }
+  } else if (message.type === "cartesian_velocity_state") {
+    const arm = message.arm as ArmId;
+    if (!( ["l", "m", "r"] as ArmId[]).includes(arm)) return;
+    const state = message.state as CartesianVelocityTelemetry | undefined;
+    if (!state) return;
+    cartesianVelocityStates[arm] = state;
+    renderCartesianVelocityTelemetry();
   } else if (message.type === "tf_frames") {
     const arm = message.arm as ArmId;
     tfFramesByArm[arm] = Array.isArray(message.frames) ? message.frames : [];
@@ -1521,6 +1712,7 @@ function loadManifest(next: Manifest) {
   renderMotionEditor();
   configureVelocity();
   renderCoordinateState();
+  renderCartesianVelocityTelemetry();
   renderFleetStrip();
   setSelectedConnection();
   if (!renderer) initScene();

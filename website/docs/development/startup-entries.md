@@ -41,6 +41,18 @@ rm65_project_help
 （`./rm65 camera`、`rm65_camera_start`）已弃用，仅作历史备选，且与 ROS2 节点互斥。默认 `up`
 不启动 RViz，生产端不需要 `DISPLAY` 或 `XAUTHORITY`。
 
+::: warning 驱动服务互斥
+`realman_bringup_remote` 是生产 ROS 图中唯一启动三台 `realman_driver` 的服务。不要在它运行时启动
+`realman_driver_rviz`；后者也会连接真实机械臂，导致同一命名空间出现重复驱动和多个
+`/<arm>/cartesian_velocity` Action Server，键盘速度指令可能因此被多个执行器同时消费。`./rm65 up`、
+`./rm65 up desktop` 和 `./rm65 up policy` 会在启动相机前检查该 Compose 服务，发现仍在运行就拒绝启动，
+不会自动停止其他容器。
+
+桌面查看生产 ROS 图请使用 `realman_remote_rviz`。它只启动 `rviz2` 并订阅远程图，不启动 RealMan 驱动、
+`robot_state_publisher` 或假关节状态源；`./rm65 up` 默认不启动它，只有显式执行 `./rm65 up desktop` 才会加入
+这个 RViz-only 服务。出现冲突时先停止 `realman_driver_rviz`，再重新执行需要的入口。
+:::
+
 行为树驱动测试使用两个终端：先执行 `./rm65 up` 启动生产 ROS/相机/Web 项目，再执行
 `./rm65 bt r`。行为树执行器、只读 `bt_server` 和静态运行监视器都在
 `realman_bringup_remote` 容器内；启动器依赖 `/<arm_id>/execute_motion` Action Server，

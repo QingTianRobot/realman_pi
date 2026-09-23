@@ -153,6 +153,8 @@ l/r 的 pending goal、accepted handle、最新命令、输入时间和取消状
 前一层处理 Web/网络停更，后一层处理 router 到 driver 的刷新中断。`dry_run=true` 时 router 仍执行目录、
 WORK、frame、速度上限和 timeout 校验，但不发送 Action Goal，也不向 driver command topic 发布消息。
 键盘 Action goal 显式携带普通会话上限 `0.05 m/s`；Pika 单独申请 `1.0 m/s` 不会改变键盘值。
+键盘 Goal 使用 `follow=false` 的低跟随模式；RealMan SDK 的高跟随模式要求稳定的 `<=10 ms` 透传，不能
+仅因需要更快响应就把键盘会话改成高跟随。
 进入 `ACTIVE/keyboard` 时，:8765 Web 页还会把 l/r 已验证 WORK 的红/绿/蓝 XYZ 轴绘制在 URDF 场景中；
 模式离开或坐标失配即隐藏。
 
@@ -160,6 +162,27 @@ WORK、frame、速度上限和 timeout 校验，但不发送 Action Goal，也�
 不依赖 WORK，按次经 `/keyboard/l|r/gripper_command` 转发到 `/gripper_left|right/percentage/command`。
 模式、epoch/request、时效、夹爪健康和 dry-run 都在 router 检查；松键不撤销已提交目标，不发送“零值停止夹爪”。
 详细键位、JSON 契约和验证见[键盘双夹爪](./gripper-control#键盘双夹爪全开-全闭)。
+
+### 速度遥测与控制坐标
+
+键盘、Pika 或其它速度 session 运行时，驱动为每个 arm 发布
+`/<arm>/cartesian_velocity/state`（`realman_msgs/msg/CartesianVelocityState`）。
+`commanded_*` 是输入源提交的速度，`limited_*` 是经过 session 上限/加速度限制后真正送入 SDK 的速度，
+两者的 `command_frame_id` 保持输入控制帧；`measured_*` 是状态轮询 + FK 位姿差分估计，并固定使用
+`l/base_link` 或 `r/base_link`。因此不能把 WORK/Pika 控制向量和 BASE 实测向量按分量直接比较或混合，
+必须先做明确的 TF 变换。`measured_valid=false` 或 `measured_age_ms` 过大时，遥测只能作为无效/过期诊断。
+
+行为树调试时可直接查看：
+
+```bash
+ros2 topic info /l/cartesian_velocity/state -v
+ros2 topic echo --once /l/cartesian_velocity/state
+ros2 topic echo --once /r/cartesian_velocity/state
+```
+
+Web control 的“命令与实际末端速度”区域会同时显示左右臂的原始命令、限速后命令、实测线/角速度、
+两个 frame ID 以及 command/measured age；这部分是观测，不改变 ReactiveFallback 的输入模式仲裁、
+看门狗或停止顺序。
 
 ## Pika rosbag replay 边界
 

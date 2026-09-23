@@ -32,6 +32,18 @@ def test_router_requires_active_keyboard_and_verified_default_work():
     assert "goal.max_angular_speed_radps = profile.max_angular_speed_radps" in source
 
 
+def test_keyboard_velocity_goal_uses_low_follow_for_web_timing():
+    from keyboard_control_router import KeyboardControlRouter, _ArmProfile
+
+    profile = _ArmProfile("cell", "r/work/cell", 20, 100, 0.05, 0.25, 0.1, 0.5)
+
+    goal = KeyboardControlRouter._goal(profile)
+
+    assert goal.follow is False
+    assert goal.control_period_ms == 20
+    assert goal.watchdog_ms == 100
+
+
 def test_router_stops_on_timeout_mode_loss_and_shutdown():
     source = ROUTER.read_text(encoding="utf-8")
     assert "input_timeout_ms" in source

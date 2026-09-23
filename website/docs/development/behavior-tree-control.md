@@ -79,6 +79,10 @@ Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。键盘�
 取消 session。driver 仍按 `config/ros/realman_motion.yaml` 的 `20 ms` 周期和 `100 ms` watchdog
 执行第二层失效保护。
 
+键盘速度 Goal 固定使用 `follow=false`（RealMan SDK 的低跟随模式）。SDK 高跟随要求透传周期不超过
+`10 ms`，而浏览器/DDS 键盘链路不是实时通道；不要仅把配置周期改成 `10 ms` 就重新启用高跟随，除非
+同时验证实际 `rm_movev_canfd` 发送间隔始终满足该约束。
+
 离开 `keyboard`、WORK 失配、按键全部释放、Web 输入超时、owner WebSocket 关闭或 router 关闭时，
 相关臂先收敛到零速度，再取消其 Action session。浏览器 owner 断开还会释放 lease 并请求安全模式
 `none`。如果停止条件发生在 Action goal response 返回之前，router 设置 `cancel_after_accept`；迟到接受的

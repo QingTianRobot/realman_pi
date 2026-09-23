@@ -72,10 +72,32 @@ compose() {
   esac
 }
 
+check_driver_rviz_conflict() {
+  [[ "$DRY_RUN" == "1" ]] && return 0
+
+  local container_id
+  if ! container_id="$(
+    docker ps -q \
+      --filter 'label=com.docker.compose.service=realman_driver_rviz' \
+      --filter status=running
+  )"; then
+    printf '%s\n' 'rm65: unable to check for the legacy realman_driver_rviz service' >&2
+    return 1
+  fi
+
+  if [[ -n "$container_id" ]]; then
+    printf '%s\n' \
+      'rm65: refusing to start while realman_driver_rviz is running; stop it and use realman_remote_rviz for viewing' \
+      >&2
+    return 1
+  fi
+}
+
 up() {
   local profile="${1:-production}"
   case "$profile" in
     production)
+      check_driver_rviz_conflict
       camera_start
       if ! compose up -d realman_bringup_remote realman_web_control; then
         camera_stop
@@ -83,6 +105,7 @@ up() {
       fi
       ;;
     desktop)
+      check_driver_rviz_conflict
       camera_start
       if ! compose up -d realman_bringup_remote realman_web_control realman_remote_rviz; then
         camera_stop
@@ -93,6 +116,7 @@ up() {
       # Production graph plus the VLA policy bridge container. The bridge is a
       # pure publish layer; it stays idle until the router selects policy mode
       # and /policy/activate is called.
+      check_driver_rviz_conflict
       camera_start
       if ! compose up -d realman_bringup_remote realman_web_control policy_bridge; then
         camera_stop

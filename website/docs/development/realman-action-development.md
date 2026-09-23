@@ -306,6 +306,22 @@ ROS 接口的 `ReferenceType` 与厂商速度初始化枚举不是同一个数�
 没有“到达终点后自然成功”的路径：调用方主动结束返回 `CANCELED`，命令断流返回
 `WATCHDOG_STOP`，初始化/SDK/停止失败返回 `ABORTED`。`WATCHDOG_STOP` 不是成功到位。
 
+### CartesianVelocityState 遥测
+
+驱动同时发布 `/<arm>/cartesian_velocity/state`（`realman_msgs/msg/CartesianVelocityState`）作为
+只读 session 快照。消息中的 `commanded_linear/angular_velocity_*` 是最近接受的原始命令，
+`limited_linear/angular_velocity_*` 是速度上限与加速度限制之后送入 SDK 的向量；两组命令保留
+`command_frame_id`（例如 `l/work/cell`）。`measured_linear/angular_velocity_*` 则来自现有状态轮询
+和 FK 位姿差分，固定标记为 `<arm>/base_link`，不能用命令回显冒充实测值。
+
+`measured_valid=false` 表示首个样本、FK/状态读取失败或采样间隔断流；此时实测向量仅是诊断占位，
+调用方必须检查有效位。`command_age_ms` 和 `measured_age_ms` 用于判断反馈是否新鲜。默认状态频率约
+10 Hz，未来替换 UDP 状态回调时保持相同 topic、字段和坐标语义。示例：
+
+```bash
+ros2 topic echo --once /l/cartesian_velocity/state
+```
+
 ### 命令新鲜度与 QoS
 
 订阅为 `KEEP_LAST=1`、`VOLATILE`，DDS lifespan 等于 watchdog。每条命令必须满足：

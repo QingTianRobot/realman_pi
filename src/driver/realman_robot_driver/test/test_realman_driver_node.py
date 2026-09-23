@@ -1100,6 +1100,9 @@ def test_publish_state_retries_quarantined_event_channel_without_direct_connect(
         connected_publisher=SimpleNamespace(publish=published.append),
         _report_state_error=lambda _state: None,
     )
+    node.get_clock = lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(nanoseconds=1),
+    )
     node._maybe_reconnect = lambda: RealManDriverNode._maybe_reconnect(node)
 
     RealManDriverNode._publish_state(node)

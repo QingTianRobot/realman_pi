@@ -7,9 +7,12 @@ are dropped rather than allowed to accumulate a durable-data backlog.
 from __future__ import annotations
 
 import asyncio
+import json
 import threading
 from pathlib import Path
 from typing import Any
+
+from .lerobot_web_replay import LeRobotReplayCatalog
 
 
 class RecordingWebServer:
@@ -21,6 +24,8 @@ class RecordingWebServer:
         static_root: str | Path,
         manifest: dict[str, Any],
         description_root: str | Path,
+        recording_root: str | Path,
+        lerobot_export_dir: str | Path,
         logger: Any,
     ) -> None:
         self._bind_host = bind_host
@@ -28,6 +33,7 @@ class RecordingWebServer:
         self._static_root = Path(static_root).resolve()
         self._manifest = manifest
         self._description_root = Path(description_root).resolve()
+        self._replay = LeRobotReplayCatalog(recording_root, lerobot_export_dir)
         self._logger = logger
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -127,6 +133,13 @@ class RecordingWebServer:
         app.router.add_get("/api/layout", self._layout)
         app.router.add_get("/ws", self._websocket)
         app.router.add_get("/preview/{camera_id}.jpg", self._preview)
+        app.router.add_get("/api/lerobot", self._lerobot_list)
+        app.router.add_get("/api/lerobot/{session_id}/summary", self._lerobot_summary)
+        app.router.add_get("/api/lerobot/{session_id}/frames", self._lerobot_frames)
+        app.router.add_get(
+            "/api/lerobot/{session_id}/frames/{frame_index}/cameras/{camera_id}",
+            self._lerobot_image,
+        )
         app.router.add_get("/models/{path:.*}", self._model_asset)
         app.router.add_get("/{path:.*}", self._static_asset)
         self._runner = web.AppRunner(app, access_log=None)
@@ -179,6 +192,61 @@ class RecordingWebServer:
         if jpeg is None:
             raise web.HTTPNotFound(text="preview is not available")
         return web.Response(body=jpeg, content_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    async def _lerobot_list(self, _request: Any) -> Any:
+        """List completed LeRobot episodes without exposing filesystem paths."""
+        from aiohttp import web
+        try:
+            # Dataset discovery may open metadata/video indexes. Keep that
+            # synchronous SDK work off the aiohttp event loop so live snapshot
+            # WebSockets remain responsive while the replay tab is opened.
+            sessions = await asyncio.to_thread(self._replay.list_datasets)
+            return web.json_response({"sessions": sessions})
+        except Exception as error:  # noqa: BLE001 - read-only endpoint must stay available
+            self._logger.warning(f"LeRobot replay listing failed: {error}")
+            # An empty list means "there are no completed episodes".  A missing
+            # SDK or a decoder failure is a distinct operational state and must
+            # be visible to the UI as 503 without taking down live WebSocket data.
+            raise web.HTTPServiceUnavailable(text="LeRobot replay is unavailable") from error
+
+    async def _lerobot_frames(self, request: Any) -> Any:
+        from aiohttp import web
+        try:
+            frames = await asyncio.to_thread(self._replay.frames, request.match_info["session_id"])
+            return web.json_response({"frames": frames})
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        except Exception as error:  # noqa: BLE001 - report SDK/decoder failures to browser
+            self._logger.warning(f"LeRobot replay frame listing failed: {error}")
+            raise web.HTTPServiceUnavailable(text="LeRobot replay is unavailable") from error
+
+    async def _lerobot_summary(self, request: Any) -> Any:
+        from aiohttp import web
+        try:
+            summary = await asyncio.to_thread(self._replay.summary, request.match_info["session_id"])
+            return web.json_response(summary)
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        except Exception as error:  # noqa: BLE001 - isolate SDK failures from live Web state
+            self._logger.warning(f"LeRobot replay summary failed: {error}")
+            raise web.HTTPServiceUnavailable(text="LeRobot replay is unavailable") from error
+
+    async def _lerobot_image(self, request: Any) -> Any:
+        from aiohttp import web
+        try:
+            frame_index = int(request.match_info["frame_index"])
+            image = await asyncio.to_thread(
+                self._replay.image,
+                request.match_info["session_id"],
+                frame_index,
+                request.match_info["camera_id"],
+            )
+        except (ValueError, TypeError) as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        except Exception as error:  # noqa: BLE001 - decoder failure is isolated to this image
+            self._logger.warning(f"LeRobot replay image failed: {error}")
+            raise web.HTTPServiceUnavailable(text="LeRobot image is unavailable") from error
+        return web.Response(body=image, content_type="image/jpeg", headers={"Cache-Control": "no-store"})
 
     async def _websocket(self, request: Any) -> Any:
         from aiohttp import web

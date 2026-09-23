@@ -62,6 +62,8 @@ class RecordingWebBridgeNode(Node):
         self.declare_parameter("gripper_torque_topics", [""])
         self.declare_parameter("gripper_alarm_topics", [""])
         self.declare_parameter("static_root", str(package_share / "static"))
+        self.declare_parameter("recording_root", "/data/realman-recordings")
+        self.declare_parameter("lerobot_export_dir", "/data/realman-recordings/lerobot")
 
         self._callback_group = ReentrantCallbackGroup()
         # Explicitly retain the same ROS 2 SYSTEM_TIME domain used by the recorder.
@@ -80,7 +82,6 @@ class RecordingWebBridgeNode(Node):
         self._preview_lock = threading.Lock()
         self._preview_frames: dict[str, PreviewFrame] = {}
         self._rerun_preview_wall_ns: dict[str, int] = {}
-        self._subscriptions = []
         # Keep every configured camera visible in the dashboard, even when preview
         # decoding is disabled or a source has not produced its first frame yet.
         self._camera_sources = load_camera_sources(self)
@@ -91,11 +92,11 @@ class RecordingWebBridgeNode(Node):
         # starve the snapshot timer.
         if self._preview_worker is not None:
             for source in self._camera_sources:
-                self._subscriptions.append(self.create_subscription(
+                self.create_subscription(
                     Image, source.image_topic,
                     lambda message, selected=source.camera_id: self._preview_image(selected, message),
                     10, callback_group=self._callback_group,
-                ))
+                )
         self._rerun = RerunVisualizationAdapter(
             application_id=str(self.get_parameter("rerun_application_id").value),
             spawn=bool(self.get_parameter("rerun_spawn").value),
@@ -107,23 +108,23 @@ class RecordingWebBridgeNode(Node):
             )
 
         for arm in self._arms:
-            self._subscriptions.append(self.create_subscription(
+            self.create_subscription(
                 JointState, f"/{arm}/joint_states", lambda message, selected=arm: self._joint_state(selected, message),
                 10, callback_group=self._callback_group,
-            ))
-            self._subscriptions.append(self.create_subscription(
+            )
+            self.create_subscription(
                 Bool, f"/{arm}/connected", lambda message, selected=arm: self._connection(selected, message),
                 10, callback_group=self._callback_group,
-            ))
-            self._subscriptions.append(self.create_subscription(
+            )
+            self.create_subscription(
                 String, f"/{arm}/coordinates/state", lambda message, selected=arm: self._coordinates_message(selected, message),
                 10, callback_group=self._callback_group,
-            ))
+            )
         self._register_gripper_subscriptions()
-        self._subscriptions.append(self.create_subscription(
+        self.create_subscription(
             RecordingStatus, "recording/status", self._recording_status_message,
             10, callback_group=self._callback_group,
-        ))
+        )
         self._manifest = build_recording_manifest(self.get_parameter("layout_config_file").value)
         self._server = RecordingWebServer(
             bind_host=str(self.get_parameter("bind_host").value),
@@ -131,6 +132,8 @@ class RecordingWebBridgeNode(Node):
             static_root=str(self.get_parameter("static_root").value),
             manifest=self._manifest,
             description_root=self.get_parameter("description_root").value,
+            recording_root=self.get_parameter("recording_root").value,
+            lerobot_export_dir=self.get_parameter("lerobot_export_dir").value,
             logger=self.get_logger(),
         )
         self._server.start()
@@ -203,20 +206,20 @@ class RecordingWebBridgeNode(Node):
     def _register_gripper_subscriptions(self) -> None:
         """Subscribe gripper position/torque/alarm topics into the per-topic cache."""
         for topic in self.get_parameter("gripper_position_topics").value:
-            self._subscriptions.append(self.create_subscription(
+            self.create_subscription(
                 Float64, str(topic), lambda message, selected=str(topic): self._gripper_value(selected, "position", message.data),
                 10, callback_group=self._callback_group,
-            ))
+            )
         for topic in self.get_parameter("gripper_torque_topics").value:
-            self._subscriptions.append(self.create_subscription(
+            self.create_subscription(
                 Bool, str(topic), lambda message, selected=str(topic): self._gripper_value(selected, "torque_reached", message.data),
                 10, callback_group=self._callback_group,
-            ))
+            )
         for topic in self.get_parameter("gripper_alarm_topics").value:
-            self._subscriptions.append(self.create_subscription(
+            self.create_subscription(
                 Int32, str(topic), lambda message, selected=str(topic): self._gripper_value(selected, "alarm", message.data),
                 10, callback_group=self._callback_group,
-            ))
+            )
 
     def _joint_state(self, arm: str, message: JointState) -> None:
         """Cache joint_1..joint_6 positions only when the full set is present."""

@@ -8,19 +8,97 @@
     :root{color-scheme:dark;--bg:#080b12;--surface:#111722;--surface2:#171e2c;--line:#263246;--text:#edf3ff;--muted:#8793a8;--blue:#55a6ff;--green:#67d391;--amber:#f4bb63;--red:#ff717c;--shadow:0 18px 50px #0005}
     *{box-sizing:border-box}body{margin:0;background:radial-gradient(circle at 75% -20%,#1a3453 0,#080b12 42rem);color:var(--text);font:14px/1.5 Inter,ui-sans-serif,system-ui,-apple-system,"Segoe UI",sans-serif;min-height:100vh}.shell{max-width:1440px;margin:auto;padding:22px 28px 44px}.topbar{display:flex;align-items:center;justify-content:space-between;border-bottom:1px solid var(--line);padding-bottom:18px;margin-bottom:22px}.brand{display:flex;align-items:center;gap:12px}.brand-mark{display:grid;place-items:center;width:38px;height:38px;border-radius:11px;background:linear-gradient(135deg,var(--blue),#7867ff);box-shadow:0 8px 24px #4e8eff44;font-weight:800;letter-spacing:-1px}.brand h1{font-size:17px;margin:0;letter-spacing:.02em}.brand small{display:block;color:var(--muted);font-size:11px}.connection{display:flex;align-items:center;gap:9px;color:var(--muted);font-size:12px}.dot{width:8px;height:8px;border-radius:50%;background:var(--red);box-shadow:0 0 0 4px #ff717c1a}.connection.online{color:var(--green)}.connection.online .dot{background:var(--green);box-shadow:0 0 0 4px #67d3911c}.eyebrow{font-size:11px;letter-spacing:.12em;text-transform:uppercase;color:var(--muted);font-weight:700}.tabs{display:flex;gap:8px;margin-bottom:18px;border-bottom:1px solid var(--line);padding-bottom:0}.tab{background:none;border:none;color:var(--muted);font:14px/1 inherit;padding:10px 18px;cursor:pointer;border-bottom:2px solid transparent;margin-bottom:-1px;transition:color .15s,border-color .15s}.tab:hover{color:var(--text)}.tab.active{color:var(--text);border-bottom-color:var(--blue);font-weight:600}.status-hero{display:flex;align-items:center;justify-content:space-between;gap:20px;background:linear-gradient(110deg,#17263b,#111722 65%);border:1px solid #315277;border-radius:16px;padding:22px 25px;box-shadow:var(--shadow);margin-bottom:18px}.status-title{display:flex;align-items:center;gap:13px}.status-title h2{margin:4px 0 0;font-size:25px;letter-spacing:-.03em}.status-pulse{width:12px;height:12px;border-radius:50%;background:var(--amber);box-shadow:0 0 0 7px #f4bb6322}.hero-meta{display:flex;gap:28px;text-align:right}.metric strong{display:block;font-size:21px;letter-spacing:-.03em}.metric span{color:var(--muted);font-size:11px}.layout{display:grid;grid-template-columns:minmax(0,1fr);gap:18px}.panel{background:color-mix(in srgb,var(--surface) 94%,transparent);border:1px solid var(--line);border-radius:14px;box-shadow:0 10px 35px #0002}.panel-head{display:flex;align-items:center;justify-content:space-between;padding:17px 19px;border-bottom:1px solid var(--line)}.panel-head h3{font-size:14px;margin:0}.panel-head .count{color:var(--muted);font-size:12px}.viewer{position:relative;flex:1;min-height:0;background:#091114}.viewer canvas{display:block;width:100%;height:100%}.viewer-state{position:absolute;left:50%;top:50%;transform:translate(-50%,-50%);color:var(--muted);font-size:12px}.viewer-footer{display:flex;justify-content:space-between;color:#59677d;font-size:11px;padding:10px 19px}.camera-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(280px,1fr));gap:10px;padding:12px}.camera-card{position:relative;aspect-ratio:4/3;border-radius:10px;overflow:hidden;background:#0b0f17;border:1px solid #202c40}.camera-card img{display:block;width:100%;height:100%;object-fit:cover}.camera-card .camera-label{position:absolute;left:10px;top:9px;padding:4px 8px;border-radius:5px;background:#080b12cc;color:#fff;font-size:11px}.no-feed{height:100%;display:grid;place-items:center;color:#65748b;font-size:12px;background:repeating-linear-gradient(135deg,#0e141f,#0e141f 8px,#101824 8px,#101824 16px)}.arm-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:12px}.arm-card{background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:13px}.arm-card h4{display:flex;justify-content:space-between;margin:0 0 10px;font-size:13px}.arm-card h4 span{font-size:10px;color:var(--red);font-weight:500}.arm-card.connected h4 span{color:var(--green)}.joint-list{display:grid;grid-template-columns:1fr 1fr;gap:5px 10px;color:var(--muted);font:11px ui-monospace,SFMono-Regular,Menlo,monospace}.joint-list b{color:var(--text);font-weight:500}.gripper-grid{display:grid;grid-template-columns:repeat(auto-fit,minmax(180px,1fr));gap:10px;padding:12px}.gripper-card{background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:13px}.gripper-card h4{margin:0 0 10px;font-size:13px}.gripper-values{display:grid;gap:6px;color:var(--muted);font:11px ui-monospace,SFMono-Regular,Menlo,monospace}.gripper-values span{display:flex;justify-content:space-between}.gripper-values b{color:var(--text);font-weight:500}.empty{padding:38px;text-align:center;color:var(--muted);font-size:12px}.toast{position:fixed;right:24px;bottom:24px;max-width:430px;padding:12px 15px;border-radius:9px;background:#1b2739;border:1px solid #385275;box-shadow:var(--shadow);opacity:0;transform:translateY(8px);pointer-events:none;transition:.2s}.toast.show{opacity:1;transform:none}.toast.error{border-color:#78414c}.replay-controls{display:flex;flex-wrap:wrap;gap:12px;align-items:center;padding:16px 19px}.replay-controls select{flex:1;min-width:220px;background:#0b0f17;color:#edf3ff;border:1px solid #263246;border-radius:8px;padding:9px 12px;font:13px inherit}.replay-controls button{background:#2a3a55;color:#edf3ff;border:1px solid #263246;border-radius:8px;padding:8px 14px;cursor:pointer;font:13px inherit}.replay-controls input[type=range]{flex:1;min-width:160px;accent-color:#55a6ff}.replay-controls .frame-label{min-width:88px;text-align:right;color:#8793a8;font:11px ui-monospace,Menlo,monospace}.export-bar{padding:16px 19px}.export-bar .track{height:10px;background:#0b0f17;border:1px solid #202c40;border-radius:6px;overflow:hidden}.export-bar .fill{height:100%;width:0%;background:linear-gradient(90deg,#55a6ff,#67d391);transition:width .2s}.export-bar .dir{margin-top:10px;font:11px ui-monospace,Menlo,monospace;color:#8793a8;word-break:break-all}.footer{display:flex;justify-content:space-between;color:#59677d;font-size:11px;margin-top:22px}@media(max-width:900px){.status-hero{align-items:flex-start;flex-direction:column}.hero-meta{text-align:left}}@media(max-width:560px){.shell{padding:16px}.camera-grid,.arm-grid{grid-template-columns:1fr}.topbar{align-items:flex-start;gap:14px;flex-direction:column}.hero-meta{gap:18px}}
   </style>
+  <style>
+    :root{--bg:#080b12;--surface:#111722;--surface2:#171e2c;--line:#263246;--text:#edf3ff;--muted:#8793a8;--blue:#55a6ff;--green:#67d391;--amber:#f4bb63;--red:#ff717c;--shadow:0 18px 50px #0005}
+    body{background:radial-gradient(ellipse at 72% -18%,#1a3453 0,#080b12 43rem);}
+    .panel{border-color:#263246;background:linear-gradient(155deg,#141c2af5,#101722f5);box-shadow:0 12px 34px #0005}
+    .panel-head{border-bottom-color:#263246}
+    .tab.active{border-bottom-color:var(--blue)}
+    .status-hero{background:linear-gradient(110deg,#17263b,#111722 68%);border-color:#315277}
+    .brand-mark{background:linear-gradient(135deg,#55a6ff,#7867ff);box-shadow:0 8px 24px #4e8eff44}
+    .studio-sidebar,.studio-inspector{box-shadow:0 14px 36px #02090b55}
+    .episode-item{transition:border-color .16s,background .16s,transform .16s}
+    .episode-item:hover{transform:translateY(-1px)}
+    .episode-item.active{border-color:#55a6ff;background:linear-gradient(110deg,#17263b,#142033);box-shadow:inset 2px 0 #55a6ff}
+    .studio-toolbar button:focus-visible,.studio-select:focus-visible,.replay-controls button:focus-visible{outline:2px solid #55a6ff;outline-offset:2px}
+    .replay-timeline input{accent-color:#55a6ff}
+    .studio-inspector-body svg{background:#0b0f17;border-color:#263246}
+    .inspector-selectors{display:grid;grid-template-columns:1fr;gap:7px}
+    .studio-inspector-body select{min-width:0}
+    .studio-inspector-body select[hidden]{display:none}
+    .replay-studio{grid-template-columns:minmax(205px,230px) minmax(0,1fr) minmax(270px,310px);gap:14px}
+    .studio-center{grid-template-rows:minmax(230px,1fr) auto auto}
+    .studio-media{min-width:0;overflow:hidden}
+    .replay-camera-grid{display:grid;grid-template-columns:repeat(2,minmax(0,1fr));gap:10px;padding:12px;min-height:190px}
+    .replay-camera-grid .camera-card{aspect-ratio:16/9;background:#080b12;border-color:#263246}
+    .replay-camera-grid .camera-card img{object-fit:contain}
+    .replay-camera-grid .empty{grid-column:1/-1;align-self:center}
+    .studio-toolbar{min-height:54px}
+    .replay-timeline{padding-top:12px;padding-bottom:12px}
+    .layout.replay-layout{grid-template-columns:minmax(0,1.65fr) minmax(300px,1fr);grid-template-rows:390px auto;align-items:start;gap:12px;margin-top:12px}
+    .layout.replay-layout>.grid-stack-item{position:relative!important;inset:auto!important;width:auto!important;height:auto!important;padding:0!important;min-height:0}
+    .layout.replay-layout>.grid-stack-item>.grid-stack-item-content{position:relative!important;inset:auto!important;width:100%!important;height:auto!important;overflow:hidden}
+    .layout.replay-layout>.grid-stack-item:nth-child(1){grid-column:1;grid-row:1;height:390px!important}
+    .layout.replay-layout>.grid-stack-item:nth-child(1)>.grid-stack-item-content{height:100%!important}
+    .layout.replay-layout>.grid-stack-item:nth-child(2){display:none!important}
+    .layout.replay-layout>.grid-stack-item:nth-child(3){grid-column:2;grid-row:1}
+    .layout.replay-layout>.grid-stack-item:nth-child(4){grid-column:2;grid-row:2}
+    .layout.replay-layout #viewer{height:100%;min-height:0}
+    .layout.replay-layout #previews{display:none}
+    @media(max-width:1100px){.replay-studio{grid-template-columns:190px minmax(0,1fr)}.layout.replay-layout{grid-template-columns:minmax(0,1.4fr) minmax(250px,1fr)}}
+    @media(max-width:700px){.replay-studio{grid-template-columns:1fr}.replay-camera-grid{grid-template-columns:1fr 1fr}.layout.replay-layout{grid-template-columns:1fr}.layout.replay-layout>.grid-stack-item:nth-child(1){grid-column:1;grid-row:auto;height:320px!important}.layout.replay-layout>.grid-stack-item:nth-child(3),.layout.replay-layout>.grid-stack-item:nth-child(4){grid-column:1;grid-row:auto}.studio-toolbar{flex-wrap:wrap}}
+  </style>
 </head>
 <body>
   <main class="shell">
     <header class="topbar"><div class="brand"><div class="brand-mark">RM</div><div><h1>RealMan 数据录制</h1><small>只读监控 · Read-only monitoring</small></div></div><div id="connection" class="connection"><i class="dot"></i><span>WebSocket 未连接</span></div></header>
 
+    <nav class="tabs">
+      <button class="tab active" data-tab="record">录制</button>
+      <button class="tab" data-tab="replay">回放</button>
+    </nav>
+
+    <!-- 录制 tab -->
+    <section id="tab-record">
       <section class="status-hero"><div class="status-title"><i id="status-pulse" class="status-pulse"></i><div><div class="eyebrow">Session status</div><h2 id="recording">等待设备数据</h2></div></div><div class="hero-meta"><div class="metric"><strong id="elapsed">0.0s</strong><span>已录制</span></div><div class="metric"><strong id="remaining">—</strong><span>剩余时间</span></div><div class="metric"><strong id="dropped">0</strong><span>丢样本</span></div></div></section>
       <section class="panel" id="export-panel" style="display:none;margin-bottom:18px"><div class="panel-head"><h3>LeRobot 转换</h3><span id="export-state" class="count">等待录制结束</span></div><div class="export-bar"><div class="track"><div id="export-progress" class="fill"></div></div><div id="export-dir" class="dir"></div></div></section>
+    </section>
+
+    <!-- 回放 tab -->
+    <section id="tab-replay" style="display:none">
+      <section class="replay-studio">
+        <aside class="studio-sidebar panel">
+          <div class="panel-head"><h3>数据集 / Episodes</h3><span id="replay-count" class="count">未选择</span></div>
+          <div class="studio-sidebar-body">
+            <select id="replay-dataset" class="studio-select"><option value="">— 选择已完成数据集 —</option></select>
+            <div id="replay-episodes" class="episode-list"><div class="empty">等待 LeRobot 数据集</div></div>
+            <div class="studio-meta"><span class="eyebrow">当前任务</span><strong id="replay-task">—</strong><span id="replay-dataset-meta">—</span></div>
+          </div>
+        </aside>
+        <section class="studio-center">
+          <section class="panel studio-media">
+            <div class="panel-head"><h3>同步相机</h3><span id="replay-camera-count" class="count">选择 Episode 后显示</span></div>
+            <div id="replay-cameras" class="replay-camera-grid"><div class="empty">选择一个 Episode 开始回放</div></div>
+          </section>
+          <section class="panel studio-toolbar">
+            <div class="studio-toolbar-group"><button id="replay-exit" style="display:none">退出回放</button><button id="replay-prev" title="上一帧">‹</button><button id="replay-play" style="display:none">▶ 播放</button><button id="replay-next" title="下一帧">›</button></div>
+            <label>速度 <select id="replay-speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label>
+            <span id="replay-frame-label" class="frame-label">— / —</span>
+          </section>
+          <section class="panel replay-timeline"><input id="replay-slider" type="range" min="0" max="0" value="0" step="1"><div><span id="replay-time-label">—</span><span>LeRobot policy timeline</span></div></section>
+        </section>
+        <aside class="studio-inspector panel">
+          <div class="panel-head"><h3>Canonical 字段</h3><span id="replay-feature-count" class="count">—</span></div>
+          <div class="studio-inspector-body"><div class="inspector-selectors"><select id="replay-feature-select" class="studio-select" aria-label="选择 Canonical 字段"></select><select id="replay-feature-component" class="studio-select" aria-label="选择向量分量" hidden></select></div><svg id="replay-feature-chart" viewBox="0 0 320 120" role="img" aria-label="字段时间序列"></svg><pre id="replay-feature-raw">选择一个字段查看数据</pre></div>
+        </aside>
+      </section>
+    </section>
 
     <div class="layout grid-stack">
-      <div class="grid-stack-item" gs-w="12" gs-h="8" gs-min-h="5"><section class="panel grid-stack-item-content" style="display:flex;flex-direction:column"><div class="panel-head"><h3>三臂 3D 姿态</h3><span class="count">URDF 实时关节</span></div><div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div></div><div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span>ROS 2 SYSTEM_TIME</span></div></section></div>
+      <div class="grid-stack-item" gs-w="12" gs-h="8" gs-min-h="5"><section class="panel grid-stack-item-content" style="display:flex;flex-direction:column"><div class="panel-head"><h3>三臂 3D 姿态</h3><span id="pose-count" class="count">URDF 实时关节</span></div><div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div></div><div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span>ROS 2 SYSTEM_TIME</span></div></section></div>
       <div class="grid-stack-item" gs-w="12" gs-h="4" gs-min-h="3"><section class="panel grid-stack-item-content"><div class="panel-head"><h3>相机预览</h3><span id="camera-count" class="count">等待视频流</span></div><div id="previews" class="camera-grid"><div class="empty" style="grid-column:1/-1">预览未启动 · 启用 preview_enabled 后显示低清画面</div></div></section></div>
       <div class="grid-stack-item" gs-w="12" gs-h="3" gs-min-h="2"><section class="panel grid-stack-item-content"><div class="panel-head"><h3>机械臂状态</h3><span id="arm-count" class="count">0 / 3 online</span></div><div id="arms" class="arm-grid"><div class="empty" style="grid-column:1/-1">等待 ROS 2 状态话题</div></div></section></div>
-      <div class="grid-stack-item" gs-w="12" gs-h="2" gs-min-h="2"><section class="panel grid-stack-item-content"><div class="panel-head"><h3>夹爪状态</h3><span class="count">实时输入</span></div><div id="grippers" class="gripper-grid"><div class="empty" style="grid-column:1/-1">等待夹爪话题</div></div></section></div>
+      <div class="grid-stack-item" gs-w="12" gs-h="2" gs-min-h="2"><section class="panel grid-stack-item-content"><div class="panel-head"><h3>夹爪状态</h3><span id="gripper-count" class="count">实时输入</span></div><div id="grippers" class="gripper-grid"><div class="empty" style="grid-column:1/-1">等待夹爪话题</div></div></section></div>
     </div>
     <footer class="footer"><span>数据采集独立于预览与浏览器连接</span><span>ROS 2 SYSTEM_TIME</span></footer>
   </main><div id="toast" class="toast"></div>

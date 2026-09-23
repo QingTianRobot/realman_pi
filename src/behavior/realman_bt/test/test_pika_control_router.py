@@ -1,8 +1,10 @@
 from pathlib import Path
+import sys
 
 
 ROOT = Path(__file__).parents[4]
 ROUTER = ROOT / "src/behavior/realman_bt/scripts/pika_control_router.py"
+sys.path.insert(0, str(ROUTER.parent))
 
 
 def test_pika_router_only_constructs_left_and_right_streams():
@@ -33,6 +35,43 @@ def test_pika_router_uses_both_continuous_driver_actions():
     assert "cartesian_pose/command" in source
     assert "cartesian_velocity/command" in source
     assert 'self.mode != expected_mode' in source
+
+
+def test_pika_velocity_uses_configured_work_and_per_session_speed_limits():
+    source = ROUTER.read_text(encoding="utf-8")
+
+    assert "parse_arm_profiles" in source
+    assert 'logical_name == work_reference' in source
+    assert "CartesianVelocity.Goal.WORK" in source
+    assert "goal.max_linear_speed_mps = profile.max_linear_speed_mps" in source
+    assert "goal.max_angular_speed_radps = profile.max_angular_speed_radps" in source
+    assert "message.header.frame_id != profile.frame_id" in source
+    assert "linear speed exceeds Pika session limit" in source
+
+
+def test_profile_parser_selects_configured_pikabase_work_reference():
+    from pika_control_router import parse_arm_profiles
+
+    profiles = parse_arm_profiles(
+        [
+            "l|default_work|1|cell|l/work/cell",
+            "l|work/pikabase|1|pikabase|l/work/pikabase",
+            "r|default_work|1|cell|r/work/cell",
+            "r|work/pikabase|1|pikabase|r/work/pikabase",
+        ],
+        [
+            "l|20|100|0.05|0.25|0.1|0.5|10|2",
+            "r|20|100|0.05|0.25|0.1|0.5|10|2",
+        ],
+        "work/pikabase",
+        1.0,
+        0.25,
+    )
+
+    assert profiles["l"].reference_name == "pikabase"
+    assert profiles["l"].frame_id == "l/work/pikabase"
+    assert profiles["r"].reference_name == "pikabase"
+    assert profiles["r"].frame_id == "r/work/pikabase"
 
 
 def test_pika_router_forwards_continuous_gripper_percentages_for_left_and_right():

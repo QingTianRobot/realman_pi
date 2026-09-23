@@ -19,6 +19,8 @@ def test_runtime_registry_maps_one_reference_name_to_driver_fields():
     assert "l|default_tool|2|tcpgrip|l/tool/tcpgrip" in references
     assert "l|tool/tcpgrip|2|tcpgrip|l/tool/tcpgrip" in references
     assert "l|default_work|1|cell|l/work/cell" in references
+    assert "l|work/pikabase|1|pikabase|l/work/pikabase" in references
+    assert "r|work/pikabase|1|pikabase|r/work/pikabase" in references
     assert "l|base|0|base|l/base_link" in references
     assert "l|20|100|0.05|0.25|0.1|0.5|10|2" in profiles
 

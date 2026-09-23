@@ -88,6 +88,22 @@ type InputModeResult = {
   accepted: boolean;
   message: string;
 };
+type CartesianVelocityTelemetry = {
+  session_active: boolean;
+  reference_type: number;
+  reference_name: string;
+  command_frame_id: string;
+  commanded_linear_velocity_mps: number[];
+  commanded_angular_velocity_radps: number[];
+  limited_linear_velocity_mps: number[];
+  limited_angular_velocity_radps: number[];
+  measured_frame_id: string;
+  measured_linear_velocity_mps: number[];
+  measured_angular_velocity_radps: number[];
+  measured_valid: boolean;
+  command_age_ms: number;
+  measured_age_ms: number;
+};
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -108,7 +124,7 @@ app.innerHTML = `
       <div class="viewer-layout">
         <div id="fleet-strip" class="fleet-strip"></div>
         <div class="viewer-column">
-          <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
+          <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div><div id="keyboard-frame-legend" class="keyboard-frame-legend" hidden><strong>L WORK</strong><strong>R WORK</strong><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
           <div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span id="root-frame"></span></div>
         </div>
       </div>
@@ -183,6 +199,7 @@ app.innerHTML = `
         <button id="execute-motion" class="button primary full" type="button" disabled>发送 MOVEJ</button>
       </section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">CARTESIAN</span><h2>末端速度</h2></div><span id="velocity-state" class="mini-state">IDLE</span></div><div class="form-grid"><label>参考系<select id="velocity-frame"></select></label><label>周期 (ms)<input id="velocity-period" type="number" min="1" step="1" /></label><label>看门狗 (ms)<input id="velocity-watchdog" type="number" min="1" step="1" /></label><label>线加速度<input id="linear-accel" type="number" min="0.001" step="0.01" /></label><label>角加速度<input id="angular-accel" type="number" min="0.001" step="0.01" /></label></div><div id="velocity-inputs" class="velocity-inputs"></div><div class="inline-actions"><button id="start-velocity" class="button secondary" type="button" disabled>启动速度 Action</button><button id="cancel-velocity" class="button ghost" type="button" disabled>取消</button></div></section>
+      <section id="velocity-telemetry-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">VELOCITY TELEMETRY</span><h2>命令与实际末端速度</h2></div><span class="mini-state">L + R</span></div><p class="telemetry-help">命令值来自当前速度控制 session；实际值由驱动根据状态位姿差分估计。两者坐标系和数据年龄始终单独标注。</p><div id="velocity-telemetry-grid" class="velocity-telemetry-grid"></div></section>
       <section id="gripper-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">GRIPPER</span><h2>夹爪控制</h2></div><span id="gripper-state" class="mini-state">WAIT</span></div><div class="form-grid"><label>设备<select id="gripper-select"></select></label><label>开合度 (0=闭合)<input id="gripper-percentage" type="range" min="0" max="1" step="0.01" value="1" /></label></div><div class="inline-actions"><button id="gripper-open" class="button secondary" type="button">打开</button><button id="gripper-close" class="button secondary" type="button">闭合</button><button id="gripper-enable" class="button ghost" type="button">使能</button><button id="gripper-reset" class="button danger" type="button">复位</button></div><div id="gripper-feedback" class="feedback">等待夹爪状态</div></section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">ACTION MONITOR</span><h2>运行反馈</h2></div><span id="action-state" class="mini-state">IDLE</span></div><div class="progress-track"><div id="progress" class="progress-bar"></div></div><div id="feedback" class="feedback">尚未发送 Action</div><pre id="result" class="result" aria-live="polite">等待结果…</pre></section>
     </aside>
@@ -218,6 +235,8 @@ const inputModeActive = $("#input-mode-active");
 const inputModeDetail = $("#input-mode-detail");
 const keyboardControlCard = $("#keyboard-control-card") as HTMLElement;
 const keyboardControlState = $("#keyboard-control-state");
+const keyboardFrameLegend = $("#keyboard-frame-legend") as HTMLElement;
+const velocityTelemetryGrid = $("#velocity-telemetry-grid") as HTMLElement;
 const motionMode = $("#motion-mode");
 const jointTarget = $("#joint-target") as HTMLElement;
 const poseTarget = $("#pose-target") as HTMLElement;
@@ -286,6 +305,7 @@ const poseReferenceByArm: Partial<Record<ArmId, FrameState>> = {};
 const tfFramesByArm: Partial<Record<ArmId, FrameState[]>> = {};
 const poseSliderCentersByArm: Partial<Record<ArmId, number[]>> = {};
 const kinematicsStatusByArm: Partial<Record<ArmId, string>> = {};
+const cartesianVelocityStates: Partial<Record<ArmId, CartesianVelocityTelemetry>> = {};
 const activeKinematicsRequestByArm: Partial<Record<ArmId, string>> = {};
 const ikPreviewValidByArm: Partial<Record<ArmId, boolean>> = {};
 const motionSettingsByArm: Partial<Record<ArmId, { velocity: string; timeout: string }>> = {};
@@ -295,10 +315,14 @@ const activeRecordRequestByArm: Partial<Record<ArmId, string>> = {};
 const recordRequestTimerByArm: Partial<Record<ArmId, number>> = {};
 const activeRecoveryRequestByArm: Partial<Record<ArmId, string>> = {};
 const robotScenes: Partial<Record<ArmId, RobotScene>> = {};
-let renderer: THREE.WebGLRenderer;
-let scene: THREE.Scene;
-let camera: THREE.PerspectiveCamera;
-let controls: OrbitControls;
+const keyboardWorkFrames: Partial<Record<KeyboardArmId, THREE.AxesHelper>> = {};
+let renderer: THREE.WebGLRenderer | undefined;
+let scene: THREE.Scene | undefined;
+let camera: THREE.PerspectiveCamera | undefined;
+let controls: OrbitControls | undefined;
+let fallbackContext: CanvasRenderingContext2D | null = null;
+let fallbackResizeObserver: ResizeObserver | undefined;
+let renderMode: "webgl" | "canvas2d" | undefined;
 let selectedShadowArm: ArmId | null = null;
 let loadGeneration = 0;
 
@@ -417,6 +441,55 @@ function renderKeyboardControl() {
   keyboardControlState.textContent = label;
   keyboardControlState.className = `mini-state keyboard-${label.toLowerCase().replaceAll(" ", "-")}`;
 }
+function keyboardWorkFramePose(arm: KeyboardArmId) {
+  const work = coordinateStates[arm]?.work;
+  const position = work?.xyz_m?.map(Number);
+  const quaternion = work?.quaternion_wxyz?.map(Number);
+  if (!keyboardWorkAvailable(arm) || position?.length !== 3 || quaternion?.length !== 4 ||
+      ![...position, ...quaternion].every(Number.isFinite) || Math.hypot(...quaternion) < 1e-9) return undefined;
+  return { position, quaternion };
+}
+function updateKeyboardWorkFrames() {
+  if (renderMode === "canvas2d") {
+    keyboardFrameLegend.hidden = true;
+    viewer.dataset.keyboardWorkFrames = "";
+    return;
+  }
+  const visibleArms: KeyboardArmId[] = [];
+  for (const arm of ["l", "r"] as const) {
+    const robotScene = robotScenes[arm];
+    let axes = keyboardWorkFrames[arm];
+    if (robotScene?.live && axes?.parent !== robotScene.live) {
+      axes?.removeFromParent();
+      axes = new THREE.AxesHelper(0.18);
+      axes.name = `${arm}-keyboard-work-frame`;
+      axes.renderOrder = 20;
+      axes.traverse((object: any) => {
+        if (object.material) {
+          object.material.depthTest = false;
+          object.material.transparent = true;
+        }
+      });
+      robotScene.live.add(axes);
+      keyboardWorkFrames[arm] = axes;
+    }
+    const pose = keyboardWorkFramePose(arm);
+    const visible = Boolean(axes && keyboardModeGloballyActive() && pose);
+    if (axes) {
+      axes.visible = visible;
+      if (pose) {
+        axes.position.fromArray(pose.position);
+        axes.quaternion.set(
+          pose.quaternion[1], pose.quaternion[2], pose.quaternion[3], pose.quaternion[0],
+        ).normalize();
+        axes.updateMatrixWorld(true);
+      }
+    }
+    if (visible) visibleArms.push(arm);
+  }
+  viewer.dataset.keyboardWorkFrames = visibleArms.join(",");
+  keyboardFrameLegend.hidden = visibleArms.length === 0;
+}
 function guideToKeyboardControl() {
   if (!keyboardModeActive() || inputModeState?.epoch === keyboardGuideEpoch || keyboardControlCard.hidden) return;
   keyboardGuideEpoch = inputModeState!.epoch;
@@ -437,6 +510,7 @@ function renderInputModeCard() {
   inputModeCard.hidden = !inputModeCatalog;
   if (!inputModeCatalog) {
     reconcileKeyboardControl();
+    updateKeyboardWorkFrames();
     return;
   }
   const remoteKeyboard = inputModeState?.phase === "ACTIVE" &&
@@ -465,6 +539,7 @@ function renderInputModeCard() {
   updateInputModeSelectionDisabled();
   reconcileKeyboardControl();
   guideToKeyboardControl();
+  updateKeyboardWorkFrames();
 }
 function finishInputModeRequestIfTerminal() {
   if (!activeInputModeRequest || activeInputModeExecutorRequest === undefined || !inputModeState ||
@@ -561,6 +636,43 @@ function renderCoordinateState() {
     <div class="coordinate-meta">${state.work?.controller_name ?? state.current_work}</div>
     <div class="coordinate-meta">${state.work?.xyz_m ? `xyz ${state.work.xyz_m.map((value) => displayNumber(value)).join(", ")}` : ""}</div>
   `;
+}
+function telemetryVector(values: number[] | undefined, digits = 3) {
+  if (!Array.isArray(values) || values.length !== 3 || !values.every(Number.isFinite)) return "--";
+  return `[${values.map((value) => displayNumber(value, digits)).join(", ")}]`;
+}
+function telemetryNorm(values: number[] | undefined, digits = 3) {
+  if (!Array.isArray(values) || values.length !== 3 || !values.every(Number.isFinite)) return "--";
+  return displayNumber(Math.hypot(...values), digits);
+}
+function telemetryReferenceLabel(state: CartesianVelocityTelemetry) {
+  const kind = state.reference_type === 1 ? "WORK" : state.reference_type === 2 ? "TOOL" : "BASE";
+  return `${kind} / ${state.reference_name || "unknown"}`;
+}
+function renderCartesianVelocityTelemetry() {
+  velocityTelemetryGrid.innerHTML = (["l", "r"] as const).map((arm) => {
+    const state = cartesianVelocityStates[arm];
+    if (!state) {
+      return `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}"><div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-status">WAIT</span></div><div class="telemetry-empty">等待 /${arm}/cartesian_velocity/state</div></article>`;
+    }
+    const measuredStatus = state.measured_valid ? "VALID" : "STALE / NO DATA";
+    const measuredStatusClass = state.measured_valid ? "valid" : "stale";
+    const sessionStatus = state.session_active ? "ACTIVE" : "IDLE";
+    const commandFrame = state.command_frame_id || telemetryReferenceLabel(state);
+    const measuredFrame = state.measured_frame_id || `${arm}/base_link`;
+    return `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}">
+      <div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-status ${state.session_active ? "active" : ""}">${sessionStatus}</span></div>
+      <div class="telemetry-reference"><span>命令坐标系</span><strong>${escapeHtml(commandFrame)}</strong><span>参考</span><strong>${escapeHtml(telemetryReferenceLabel(state))}</strong></div>
+      <div class="telemetry-row"><span>命令线速度</span><strong>${telemetryVector(state.commanded_linear_velocity_mps)} m/s</strong><em>age ${Number.isFinite(state.command_age_ms) ? state.command_age_ms : "--"} ms</em></div>
+      <div class="telemetry-row"><span>限速后线速度</span><strong>${telemetryVector(state.limited_linear_velocity_mps)} m/s <small>|${telemetryNorm(state.limited_linear_velocity_mps)}|</small></strong><em></em></div>
+      <div class="telemetry-row"><span>命令角速度</span><strong>${telemetryVector(state.commanded_angular_velocity_radps)} rad/s</strong><em></em></div>
+      <div class="telemetry-row"><span>限速后角速度</span><strong>${telemetryVector(state.limited_angular_velocity_radps)} rad/s <small>|${telemetryNorm(state.limited_angular_velocity_radps)}|</small></strong><em></em></div>
+      <div class="telemetry-divider"></div>
+      <div class="telemetry-reference"><span>实测坐标系</span><strong>${escapeHtml(measuredFrame)}</strong><span>状态</span><strong class="telemetry-measured ${measuredStatusClass}">${measuredStatus}</strong></div>
+      <div class="telemetry-row"><span>实测线速度</span><strong>${telemetryVector(state.measured_linear_velocity_mps)} m/s <small>|${telemetryNorm(state.measured_linear_velocity_mps)}|</small></strong><em>age ${Number.isFinite(state.measured_age_ms) ? state.measured_age_ms : "--"} ms</em></div>
+      <div class="telemetry-row"><span>实测角速度</span><strong>${telemetryVector(state.measured_angular_velocity_radps)} rad/s <small>|${telemetryNorm(state.measured_angular_velocity_radps)}|</small></strong><em></em></div>
+    </article>`;
+  }).join("");
 }
 function renderFleetStrip() {
   if (!manifest) return;
@@ -832,6 +944,7 @@ function renderJointControls() {
     targetEditedByArm[selectedArm] = true;
     $(`#joint-value-${index}`).textContent = `${displayNumber(Number(input.value))}°`;
     selectedRobotScene()?.shadow?.setJointValues(Object.fromEntries(targetJoints.map((value, i) => [`joint_${i + 1}`, value])));
+    drawFallbackScene();
   }));
 }
 
@@ -849,6 +962,7 @@ function setJointInputs(values: number[], target = false) {
 function setRobotJoints(target: any, values: number[]) {
   target?.setJointValues(Object.fromEntries(values.map((value, index) => [`joint_${index + 1}`, value])));
   target?.updateMatrixWorld(true);
+  drawFallbackScene();
 }
 
 function applyJointRecordToJoints(arm: ArmId, jointDegrees: number[], message: string) {
@@ -918,6 +1032,131 @@ function setShadowVisibility(arm: ArmId) {
   selectedShadowArm = arm;
 }
 
+type FallbackPoint = { x: number; y: number; z: number };
+const FALLBACK_LINK_LENGTHS = [0.256, 0.21, 0.144, 0.11, 0.08];
+
+function fallbackArmPoints(arm: ArmId, values: number[]): FallbackPoint[] {
+  const transform = robotConfig(arm).transform;
+  const joints = values.map((value) => (Number.isFinite(value) ? value : 0));
+  const points: FallbackPoint[] = [
+    { x: transform.x, y: transform.y, z: transform.z },
+    { x: transform.x, y: transform.y, z: transform.z + 0.2405 },
+  ];
+  let point = { ...points[1] };
+  let yaw = transform.yaw + (joints[0] ?? 0);
+  let pitch = transform.pitch + (joints[1] ?? 0) * 0.55;
+  FALLBACK_LINK_LENGTHS.forEach((length, index) => {
+    if (index > 0) {
+      yaw += (joints[index + 1] ?? 0) * 0.22;
+      pitch += (joints[index + 1] ?? 0) * 0.32;
+    }
+    const horizontal = length * Math.cos(pitch);
+    point = {
+      x: point.x + horizontal * Math.cos(yaw),
+      y: point.y + horizontal * Math.sin(yaw),
+      z: point.z + length * Math.sin(pitch),
+    };
+    points.push({ ...point });
+  });
+  return points;
+}
+
+function drawFallbackScene() {
+  if (renderMode !== "canvas2d" || !fallbackContext || !manifest) return;
+  const box = viewer.getBoundingClientRect();
+  if (!box.width || !box.height) return;
+  const dpr = Math.min(window.devicePixelRatio || 1, 2);
+  const width = Math.max(1, Math.round(box.width));
+  const height = Math.max(1, Math.round(box.height));
+  const pixelWidth = Math.max(1, Math.round(width * dpr));
+  const pixelHeight = Math.max(1, Math.round(height * dpr));
+  if (canvas.width !== pixelWidth || canvas.height !== pixelHeight) {
+    canvas.width = pixelWidth;
+    canvas.height = pixelHeight;
+  }
+  const context = fallbackContext;
+  context.setTransform(dpr, 0, 0, dpr, 0, 0);
+  context.clearRect(0, 0, width, height);
+  context.fillStyle = "#091114";
+  context.fillRect(0, 0, width, height);
+
+  const pointsByArm = new Map<ArmId, { live: FallbackPoint[]; shadow: FallbackPoint[] }>();
+  const projectedBounds: Array<{ x: number; y: number }> = [];
+  for (const arm of ["l", "m", "r"] as const) {
+    const live = fallbackArmPoints(arm, armJointSnapshot(arm));
+    const shadow = fallbackArmPoints(arm, armTargetSnapshot(arm));
+    pointsByArm.set(arm, { live, shadow });
+    [...live, ...shadow].forEach((point) => projectedBounds.push({
+      x: point.x + point.y * 0.55,
+      y: point.z + point.y * 0.18,
+    }));
+  }
+  const minX = Math.min(...projectedBounds.map((point) => point.x));
+  const maxX = Math.max(...projectedBounds.map((point) => point.x));
+  const minY = Math.min(...projectedBounds.map((point) => point.y));
+  const maxY = Math.max(...projectedBounds.map((point) => point.y));
+  const spanX = Math.max(maxX - minX, 0.8);
+  const spanY = Math.max(maxY - minY, 0.8);
+  const scale = Math.min((width - 64) / spanX, (height - 64) / spanY);
+  const project = (point: FallbackPoint) => ({
+    x: 32 + (point.x + point.y * 0.55 - minX) * scale,
+    y: height - 32 - (point.z + point.y * 0.18 - minY) * scale,
+  });
+
+  context.strokeStyle = "#1c3035";
+  context.lineWidth = 1;
+  for (let x = 16; x < width; x += 32) {
+    context.beginPath();
+    context.moveTo(x, 0);
+    context.lineTo(x, height);
+    context.stroke();
+  }
+  for (let y = 16; y < height; y += 32) {
+    context.beginPath();
+    context.moveTo(0, y);
+    context.lineTo(width, y);
+    context.stroke();
+  }
+
+  for (const arm of ["l", "m", "r"] as const) {
+    const points = pointsByArm.get(arm)!;
+    const color = `#${ARM_COLORS[arm].toString(16).padStart(6, "0")}`;
+    const drawArm = (values: FallbackPoint[], shadow: boolean) => {
+      const projected = values.map(project);
+      context.save();
+      context.globalAlpha = shadow ? 0.42 : 1;
+      context.strokeStyle = shadow ? "#e08a52" : color;
+      context.lineWidth = shadow ? 3 : 6;
+      context.lineCap = "round";
+      context.lineJoin = "round";
+      context.setLineDash(shadow ? [7, 5] : []);
+      context.beginPath();
+      projected.forEach((point, index) => {
+        if (index === 0) context.moveTo(point.x, point.y);
+        else context.lineTo(point.x, point.y);
+      });
+      context.stroke();
+      context.setLineDash([]);
+      context.fillStyle = shadow ? "#e08a52" : color;
+      projected.forEach((point, index) => {
+        context.beginPath();
+        context.arc(point.x, point.y, index === 0 ? 8 : 4, 0, Math.PI * 2);
+        context.fill();
+      });
+      context.restore();
+      const label = project(values.at(-1)!);
+      context.fillStyle = color;
+      context.font = "600 11px ui-monospace, monospace";
+      context.fillText(`${arm.toUpperCase()} ${shadow ? "TARGET" : "LIVE"}`, label.x + 8, label.y - 8);
+    };
+    drawArm(points.shadow, true);
+    drawArm(points.live, false);
+  }
+  viewer.dataset.liveMeshes = "canvas2d";
+  viewer.dataset.shadowMeshes = "canvas2d";
+  viewer.dataset.visualizationReferenceArm = "m";
+}
+
 function frameScene(includeSelectedShadow = false) {
   if (!manifest || !camera || !controls || !scene) return;
   const bounds = new THREE.Box3();
@@ -972,15 +1211,18 @@ async function loadFleet() {
       return { config, live, shadow };
     }));
     if (generation !== loadGeneration) return;
-    scene.clear();
-    scene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
-    const key = new THREE.DirectionalLight(0xffffff, 4);
-    key.position.set(2, -3, 4);
-    key.castShadow = true;
-    scene.add(key);
-    const grid = new THREE.GridHelper(3.5, 22, 0x567078, 0x263b40);
-    grid.rotation.x = Math.PI / 2;
-    scene.add(grid);
+    if (renderMode === "webgl") {
+      if (!scene) throw new Error("WebGL scene was not initialized");
+      scene.clear();
+      scene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
+      const key = new THREE.DirectionalLight(0xffffff, 4);
+      key.position.set(2, -3, 4);
+      key.castShadow = true;
+      scene.add(key);
+      const grid = new THREE.GridHelper(3.5, 22, 0x567078, 0x263b40);
+      grid.rotation.x = Math.PI / 2;
+      scene.add(grid);
+    }
     const allMeshes: any[] = [];
     const middleTransform = manifest!.robots.find((robot) => robot.id === "m")?.transform;
     if (!middleTransform) throw new Error("middle-arm transform is missing from the layout manifest");
@@ -998,8 +1240,10 @@ async function loadFleet() {
         config.transform.z - middleTransform.z,
       );
       shadow.rotation.set(config.transform.roll, config.transform.pitch, config.transform.yaw, "ZYX");
-      scene.add(live);
-      scene.add(shadow);
+      if (scene) {
+        scene.add(live);
+        scene.add(shadow);
+      }
       robotScenes[config.id] = { live, shadow };
       allMeshes.push(live, shadow);
     });
@@ -1011,43 +1255,80 @@ async function loadFleet() {
       setRobotJoints(shadow, armTargetSnapshot(config.id));
       live.updateMatrixWorld(true);
     });
+    updateKeyboardWorkFrames();
     const selectedConfig = robotConfig(selectedArm);
     setShadowVisibility(selectedArm);
     frameScene(false);
     viewer.dataset.liveMeshes = String(snapshots.reduce((count, { live }) => count + meshCount(live), 0));
     viewer.dataset.shadowMeshes = String(snapshots.reduce((count, { shadow }) => count + meshCount(shadow), 0));
     viewer.dataset.visualizationReferenceArm = "m";
-    viewerState.setAttribute("hidden", "");
+    if (renderMode === "webgl") {
+      viewerState.setAttribute("hidden", "");
+    } else {
+      viewerState.textContent = "WebGL 不可用，已加载 2D 机械臂预览";
+      viewerState.removeAttribute("hidden");
+      drawFallbackScene();
+    }
     $("#model-label").textContent = `${selectedConfig.model} / ${selectedArm.toUpperCase()} + 3 arms`;
   } catch (error) {
-    viewerState.textContent = `URDF 加载失败: ${String(error)}`;
+    if (renderMode === "canvas2d") {
+      viewerState.textContent = `模型资源不可用，已使用 2D 机械臂预览: ${String(error)}`;
+      viewerState.removeAttribute("hidden");
+      drawFallbackScene();
+    } else {
+      viewerState.textContent = `URDF 加载失败: ${String(error)}`;
+    }
   }
 }
 
 function initScene() {
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.setClearColor(0x091114, 1);
-  renderer.shadowMap.enabled = true;
-  scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
-  camera.up.set(0, 0, 1);
-  camera.position.set(1.2, -1.8, 1.25);
-  controls = new OrbitControls(camera, canvas);
-  controls.enableDamping = true;
-  controls.target.set(0, 0, 0.55);
-  const resize = () => {
-    const box = viewer.getBoundingClientRect();
-    if (!box.width || !box.height) return;
-    renderer.setSize(box.width, box.height, false);
-    camera.aspect = box.width / box.height;
-    camera.updateProjectionMatrix();
-  };
-  new ResizeObserver(resize).observe(viewer);
-  resize();
-  const frame = () => { requestAnimationFrame(frame); controls.update(); renderer.render(scene, camera); };
-  frame();
+  try {
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
+    renderMode = "webgl";
+    viewer.dataset.renderer = "webgl";
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.setClearColor(0x091114, 1);
+    renderer.shadowMap.enabled = true;
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+    camera.up.set(0, 0, 1);
+    camera.position.set(1.2, -1.8, 1.25);
+    controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.target.set(0, 0, 0.55);
+    const resize = () => {
+      const box = viewer.getBoundingClientRect();
+      if (!box.width || !box.height || !renderer || !camera) return;
+      renderer.setSize(box.width, box.height, false);
+      camera.aspect = box.width / box.height;
+      camera.updateProjectionMatrix();
+    };
+    new ResizeObserver(resize).observe(viewer);
+    resize();
+    const frame = () => {
+      requestAnimationFrame(frame);
+      if (!renderer || !scene || !camera || !controls) return;
+      controls.update();
+      renderer.render(scene, camera);
+    };
+    frame();
+  } catch (error) {
+    renderer = undefined;
+    scene = undefined;
+    camera = undefined;
+    controls = undefined;
+    renderMode = "canvas2d";
+    viewer.dataset.renderer = "canvas2d";
+    fallbackContext = canvas.getContext("2d");
+    if (!fallbackContext) throw error;
+    viewerState.textContent = "WebGL 不可用，正在加载 2D 机械臂预览";
+    viewerState.removeAttribute("hidden");
+    const resize = () => drawFallbackScene();
+    fallbackResizeObserver = new ResizeObserver(resize);
+    fallbackResizeObserver.observe(viewer);
+    resize();
+  }
 }
 
 function configureVelocity() {
@@ -1159,11 +1440,19 @@ function handleMessage(message: Message) {
   } else if (message.type === "coordinate_state") {
     coordinateStates[message.arm] = message as CoordinateState;
     reconcileKeyboardControl();
+    updateKeyboardWorkFrames();
     renderFleetStrip();
     if (message.arm === selectedArm) {
       renderCoordinateState();
       if (manifest) configureVelocity();
     }
+  } else if (message.type === "cartesian_velocity_state") {
+    const arm = message.arm as ArmId;
+    if (!( ["l", "m", "r"] as ArmId[]).includes(arm)) return;
+    const state = message.state as CartesianVelocityTelemetry | undefined;
+    if (!state) return;
+    cartesianVelocityStates[arm] = state;
+    renderCartesianVelocityTelemetry();
   } else if (message.type === "tf_frames") {
     const arm = message.arm as ArmId;
     tfFramesByArm[arm] = Array.isArray(message.frames) ? message.frames : [];
@@ -1471,9 +1760,10 @@ function loadManifest(next: Manifest) {
   renderMotionEditor();
   configureVelocity();
   renderCoordinateState();
+  renderCartesianVelocityTelemetry();
   renderFleetStrip();
   setSelectedConnection();
-  if (!renderer) initScene();
+  if (!renderMode) initScene();
   loadFleet();
   updateButtons();
 }

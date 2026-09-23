@@ -281,6 +281,8 @@ Action goal accepted
 | `reference_type/name` | 必须对应当前已验证的 WORK 或 TOOL 坐标；速度模式拒绝 BASE |
 | `control_period_ms` | 必须等于配置周期，当前默认 20 ms |
 | `watchdog_ms` | 正数且不超过配置上限，当前默认 100 ms |
+| `max_linear_speed_mps` | 本 session 的线速度向量模长上限；`0` 使用普通默认值，正数不得超过驱动硬上限 |
+| `max_angular_speed_radps` | 本 session 的角速度向量模长上限；`0` 使用普通默认值，正数不得超过驱动硬上限 |
 | `max_linear_accel_mps2` | 正数且不超过逐臂配置上限 |
 | `max_angular_accel_radps2` | 正数且不超过逐臂配置上限 |
 | `follow` | 原样传给 `rm_movev_canfd` |
@@ -294,10 +296,31 @@ ROS 接口的 `ReferenceType` 与厂商速度初始化枚举不是同一个数�
 `TOOL -> rm_set_movev_canfd_init frame_type 0`，`WORK -> frame_type 1`。不得把 ROS 的
 `TOOL=2` 原样传入 SDK。厂商接口没有独立 BASE 值，因此速度 Goal 使用 BASE 时在初始化前拒绝。
 
+`config/ros/realman_motion.yaml` 将普通会话速度与绝对硬上限分开。`max_linear_speed_mps` 当前仍为
+`0.05`，由 Web、键盘和普通行为树客户端写入 Goal；l/r 的 `hard_max_linear_speed_mps` 为 `1.0`，
+只供 Pika 的显式逐会话请求使用。m 的两个值都保持 `0.05`。驱动按 Goal 中已验证的 session 上限
+检查和裁剪每条 `TwistStamped`，不会因为提高 l/r 硬上限而自动放宽其它客户端。
+
 速度 feedback 还会返回命令向量、经过速度/加速度限制后的向量、`command_age_ms`、
 活动坐标和 API2 status。IDL 保留 `SUCCEEDED=0`，但当前速度 session 是开放式控制，
 没有“到达终点后自然成功”的路径：调用方主动结束返回 `CANCELED`，命令断流返回
 `WATCHDOG_STOP`，初始化/SDK/停止失败返回 `ABORTED`。`WATCHDOG_STOP` 不是成功到位。
+
+### CartesianVelocityState 遥测
+
+驱动同时发布 `/<arm>/cartesian_velocity/state`（`realman_msgs/msg/CartesianVelocityState`）作为
+只读 session 快照。消息中的 `commanded_linear/angular_velocity_*` 是最近接受的原始命令，
+`limited_linear/angular_velocity_*` 是速度上限与加速度限制之后送入 SDK 的向量；两组命令保留
+`command_frame_id`（例如 `l/work/cell`）。`measured_linear/angular_velocity_*` 则来自现有状态轮询
+和 FK 位姿差分，固定标记为 `<arm>/base_link`，不能用命令回显冒充实测值。
+
+`measured_valid=false` 表示首个样本、FK/状态读取失败或采样间隔断流；此时实测向量仅是诊断占位，
+调用方必须检查有效位。`command_age_ms` 和 `measured_age_ms` 用于判断反馈是否新鲜。默认状态频率约
+10 Hz，未来替换 UDP 状态回调时保持相同 topic、字段和坐标语义。示例：
+
+```bash
+ros2 topic echo --once /l/cartesian_velocity/state
+```
 
 ### 命令新鲜度与 QoS
 
@@ -372,6 +395,45 @@ session。
 默认周期和 watchdog 与速度 session 相同（20 ms / 100 ms），位姿 Action 的 `follow=true`
 使用 `rm_movep_canfd` 进行连续透传。取消、切换模式、显式 `/stop`、断开和关闭都会停止
 session 并释放 arm ownership。
+
+## Pika rosbag replay 的 ingress 与坐标桥接
+
+Pika rosbag replay 是独立部署在 `$HOME/pika_realman_replay` 的 operator boundary。它不创建
+RealMan driver，也不选择 input mode；control tree 必须由操作员以 `REALMAN_BT_DRY_RUN=false`
+显式启动，并在 Web 中手动选择 `Pika / 速度控制`，等待 `/realman_bt_executor/input_mode_state`
+报告 `pikavelocity` 的 `ACTIVE` 状态。
+该手动选择会先执行三臂 Pika 准备运动；现场放行必须发生在选择之前。独立项目只复用 ROS 图，不加入
+或重启生产 Compose 服务。
+
+bag 的左右速度 frame 是 `l/base_link`、`r/base_link`，但 RealMan velocity 初始化不支持 BASE。
+Replay 因此选择 identity WORK aliases `l/work/pikabase`、`r/work/pikabase`，再把消息 frame 映射为
+`l/work/pikabase`、`r/work/pikabase`，并且只发布以下外部 ingress：
+
+| Stream | Topic | Type/contract |
+| --- | --- | --- |
+| left velocity | `/pika/l/cartesian_velocity` | `TwistStamped`, `l/work/pikabase` |
+| right velocity | `/pika/r/cartesian_velocity` | `TwistStamped`, `r/work/pikabase` |
+| left gripper | `/pika/l/gripper_percentage` | `Float32`, `0` closed, `1` open |
+| right gripper | `/pika/r/gripper_percentage` | `Float32`, `0` closed, `1` open |
+
+Pika router 的权威引用是
+[`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 中的
+`pika_velocity.work_reference: work/pikabase`；单位 WORK 的配置来自
+[`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml)。Replay 使用
+`1.0 m/s` 线速度和 `0.25 rad/s` 角速度向量模长上限。键盘保留 `cell` WORK，其它客户端保留各自的
+引用；键盘、Web 手动速度和普通行为树速度客户端仍为 `0.05 m/s` 普通会话上限。
+Replay 执行尝试选择坐标后，结束或检测到 mode、坐标、时间戳或订阅者失效时，先发送左右速度终端零
+向量并等待超过驱动 `100 ms` watchdog，再把已选择或可能已选择的工作坐标恢复为 `cell`
+（`l/work/cell`、`r/work/cell`）。夹爪不发送零值作为停止，因为 `0` 是闭合目标。若恢复失败，
+停止操作并通过 `/<arm>/coordinates/select_work`（`SelectFrame`，`{name: cell}`）人工恢复，确认
+`coordinates/state` 的 `work_matched` 与 `motion_allowed` 后才可重试。
+
+独立项目的 `./replay.sh run <bag>` 默认只做只读图预检，不选择坐标、不发送命令或 cleanup 零速；
+只有操作员明确加上 `--execute` 才会选择 `pikabase` 并发布 ingress。自动化测试、`inspect` 和部署后的
+验证绝不运行真实 `--execute`；执行分支测试使用 fake 节点。Replay 的
+`ReplayNode.spin_once()` 仅供内部调度器使用，公开 operator API 是 `replay.sh`。
+完整操作顺序见 [Pika rosbag replay](./behavior-tree-control#pika-rosbag-replay)，
+生命周期边界见 [Pika replay 边界](./behavior-tree-motion#pika-rosbag-replay-边界)。
 
 ## 坐标与 motion gate
 

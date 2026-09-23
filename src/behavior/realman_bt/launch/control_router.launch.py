@@ -67,6 +67,34 @@ def _load_pika_joint_defaults(config_file: Path) -> dict[str, str]:
     return values
 
 
+def _load_pika_velocity_config(config_file: Path) -> dict[str, str | float]:
+    with config_file.open("r", encoding="utf-8") as stream:
+        document = yaml.safe_load(stream) or {}
+    velocity = document.get("pika_velocity")
+    if not isinstance(velocity, dict):
+        raise ValueError(f"missing pika_velocity in {config_file}")
+    work_reference = velocity.get("work_reference")
+    if not isinstance(work_reference, str) or not work_reference:
+        raise ValueError(f"{config_file}: pika_velocity.work_reference must be a non-empty string")
+    result: dict[str, str | float] = {
+        "pika_velocity_work_reference": work_reference,
+    }
+    for config_name, parameter_name in (
+        ("max_linear_speed_mps", "pika_velocity_max_linear_speed_mps"),
+        ("max_angular_speed_radps", "pika_velocity_max_angular_speed_radps"),
+    ):
+        value = velocity.get(config_name)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0.0
+        ):
+            raise ValueError(f"{config_file}: pika_velocity.{config_name} must be positive")
+        result[parameter_name] = float(value)
+    return result
+
+
 def _load_keyboard_input_timeout(config_file: Path) -> int:
     with config_file.open("r", encoding="utf-8") as stream:
         document = yaml.safe_load(stream) or {}
@@ -78,9 +106,9 @@ def _load_keyboard_input_timeout(config_file: Path) -> int:
 
 def generate_launch_description():
     config_root = _config_root()
-    pika_joint_defaults = _load_pika_joint_defaults(
-        config_root / "ros" / "pika_config.yaml"
-    )
+    pika_config_file = config_root / "ros" / "pika_config.yaml"
+    pika_joint_defaults = _load_pika_joint_defaults(pika_config_file)
+    pika_velocity_config = _load_pika_velocity_config(pika_config_file)
     coordinate_references, velocity_profiles = load_runtime_registries(
         config_root / "ros" / "realman_coordinates.yaml",
         config_root / "ros" / "realman_motion.yaml",
@@ -146,7 +174,12 @@ def generate_launch_description():
         executable="pika_control_router",
         name="pika_control_router",
         output="screen",
-        parameters=[{"dry_run": LaunchConfiguration("dry_run")}],
+        parameters=[{
+            "dry_run": LaunchConfiguration("dry_run"),
+            "coordinate_references": coordinate_references,
+            "cartesian_velocity_profiles": velocity_profiles,
+            **pika_velocity_config,
+        }],
     )
 
     keyboard_router = Node(

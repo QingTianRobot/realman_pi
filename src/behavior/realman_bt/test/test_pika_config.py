@@ -17,6 +17,14 @@ def test_pika_config_uses_production_default_pose_joint_contract():
     assert pose["right"]["joint_degrees"] == [-9.89, 18.046, 79.074, 15.505, 79.606, -6.194]
 
 
+def test_pika_velocity_has_an_isolated_one_meter_per_second_limit():
+    document = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    velocity = document["pika_velocity"]
+    assert velocity["work_reference"] == "work/pikabase"
+    assert velocity["max_linear_speed_mps"] == 1.0
+    assert velocity["max_angular_speed_radps"] == 0.25
+
+
 def test_control_tree_reads_pika_joint_defaults_from_blackboard():
     source = TREE.read_text(encoding="utf-8")
     assert 'l_joint_degrees="{pika_l_joint_degrees}"' in source
@@ -32,3 +40,7 @@ def test_control_router_launch_loads_pika_config_and_injects_joint_defaults():
     assert '"pika_l_joint_degrees"' in source
     assert '"pika_m_joint_degrees"' in source
     assert '"pika_r_joint_degrees"' in source
+    assert '"pika_velocity_work_reference"' in source
+    assert '"pika_velocity_max_linear_speed_mps"' in source
+    assert '"coordinate_references": coordinate_references' in source
+    assert '"cartesian_velocity_profiles": velocity_profiles' in source

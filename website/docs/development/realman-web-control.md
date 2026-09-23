@@ -405,6 +405,32 @@ Web 控制相关 Compose 服务把 `./config` 以可写方式挂到容器内，�
 不是 Euler 姿态；位姿 Action 的四元数仍使用 `[w,x,y,z]`，从而不会在浏览器控制面板中
 引入万向锁。
 
+### 命令与实际末端速度反馈
+
+驱动为每个 arm 发布只读话题 `/<arm>/cartesian_velocity/state`，类型为
+`realman_msgs/msg/CartesianVelocityState`。Web bridge 将其转成 WebSocket 事件
+`{type: "cartesian_velocity_state", arm, state}`，页面同时显示 l/r 两臂，不受当前运动编辑器
+选中 arm 的切换影响。反馈卡片明确区分：
+
+- `commanded_*`：浏览器/键盘/Pika 最近接受的原始速度命令，以及 `command_frame_id`；
+- `limited_*`：经过 session 速度上限和加速度限制后实际送入 SDK 的速度；
+- `measured_*`：现有状态轮询和 FK 位姿差分得到的末端速度，固定使用
+  `<arm>/base_link` 的 `measured_frame_id`，不回显命令值；
+- `measured_valid`、`command_age_ms`、`measured_age_ms`：新鲜度和有效性。无有效 FK 样本时页面显示
+  `STALE / NO DATA`，不会把零向量当作有效实测速度。
+
+检查 ROS 图和一次反馈：
+
+```bash
+ros2 topic info /l/cartesian_velocity/state -v
+ros2 topic info /r/cartesian_velocity/state -v
+ros2 topic echo --once /l/cartesian_velocity/state
+```
+
+命令速度仍保留当前控制帧（例如 `l/work/cell` 或 `l/work/pikabase`）；实测速度的
+`l/base_link`/`r/base_link` 是独立的测量坐标约定，调用方不能把两者的分量直接相加。第一版测量频率
+由驱动状态轮询决定（默认约 10 Hz），后续可替换为 RealMan UDP 实时状态回调而不改变消息契约。
+
 ## 取消与软件停止
 
 “取消 Action”只对发起该 Action 的 WebSocket 客户端有效，调用 `cancel_goal_async()`，
@@ -468,6 +494,7 @@ npm run test:web-control
 ```
 
 Playwright 测试应覆盖桌面和移动视口、canvas 非空、实体/影子同时存在、滑轨后画布改变、
-feedback/result 实时更新、cancel 和 software stop 的协议消息。真机测试前先用 mock driver
+速度遥测的命令/限速/实测与 stale 状态、feedback/result 实时更新、cancel 和 software stop 的协议消息。
+真机测试前先用 mock driver
 启动同一 Web 服务验证 ownership 和断开清理，再在低速率和明确物理安全员在场时切换
 到实际控制器。

@@ -664,6 +664,15 @@ def test_node_source_registers_cartesian_velocity_action_and_command_topic():
     assert "self.velocity_session.accept_command" in source
 
 
+def test_node_source_registers_cartesian_velocity_state_topic_and_estimator():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert "CartesianVelocityState" in source
+    assert "PoseVelocityEstimator" in source
+    assert '"cartesian_velocity/state"' in source
+    assert "measured_valid" in source
+
+
 def test_node_source_registers_cartesian_pose_action_and_command_topic():
     source = NODE_PATH.read_text(encoding="utf-8")
 
@@ -1090,6 +1099,9 @@ def test_publish_state_retries_quarantined_event_channel_without_direct_connect(
         _connect_to_robot=lambda: connect_calls.append(True),
         connected_publisher=SimpleNamespace(publish=published.append),
         _report_state_error=lambda _state: None,
+    )
+    node.get_clock = lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(nanoseconds=1),
     )
     node._maybe_reconnect = lambda: RealManDriverNode._maybe_reconnect(node)
 

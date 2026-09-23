@@ -36,6 +36,14 @@ robots:
           # Work origin in metres; use calibrated values only after explicit apply.
           xyz_m: [0.0, 0.0, 0.0]
           quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+      pikabase:
+        controller_name: pikabase
+        ros_frame_id: l/work/pikabase
+        pose:
+          # RealMan velocity has no BASE mode; this identity WORK frame preserves
+          # Pika's per-arm BASE-expressed Cartesian vectors.
+          xyz_m: [0.0, 0.0, 0.0]
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
 
   m:
     default_tool: tcpgrip
@@ -74,5 +82,13 @@ robots:
         controller_name: cell
         ros_frame_id: r/work/cell
         pose:
+          xyz_m: [0.0, 0.0, 0.0]
+          quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]
+      pikabase:
+        controller_name: pikabase
+        ros_frame_id: r/work/pikabase
+        pose:
+          # RealMan velocity has no BASE mode; this identity WORK frame preserves
+          # Pika's per-arm BASE-expressed Cartesian vectors.
           xyz_m: [0.0, 0.0, 0.0]
           quaternion_wxyz: [1.0, 0.0, 0.0, 0.0]

@@ -20,9 +20,11 @@ Policy/Pika 输入叶一样保持 `RUNNING` 并记录控制权；实际键盘速
 
 选择器显示 `Pika / 位置控制`（模式 ID `pikaposition`）和 `Pika / 速度控制`（模式 ID
 `pikavelocity`）两个独立选项。Pika 生产 topic 为 `/pika/l|r/cartesian_pose`（`PoseStamped`）
-和 `/pika/l|r/cartesian_velocity`（`TwistStamped`）；位置数据是基座坐标系下的米和四元数。
-夹爪开合度由 `/pika/l|r/gripper_percentage`（`std_msgs/msg/Float32`）持续发布，范围是
-`0.0..1.0`（`0` 闭合，`1` 张开）。Pika 只控制 l/r，绝不订阅或发送 m 的夹爪信号。
+和 `/pika/l|r/cartesian_velocity`（`TwistStamped`）；位置数据使用各臂 BASE frame（`l/base_link`、
+`r/base_link`），速度数据使用已验证的 identity WORK frame（`l/work/pikabase`、`r/work/pikabase`）。
+键盘仍要求已验证的默认 `l/work/cell`、`r/work/cell`。夹爪开合度由 `/pika/l|r/gripper_percentage`
+（`std_msgs/msg/Float32`）持续发布，范围是 `0.0..1.0`（`0` 闭合，`1` 张开）。Pika 只控制
+l/r，绝不订阅或发送 m 的夹爪信号。
 
 `InputModeGuard` 的 `mode`、`label`、`selectable` 字面量在 XML 构造时注册目录，
 因此新增模式只改 XML 和相应叶注册，不能在 Web 或 Python 写静态枚举。路由根节点必须保留
@@ -77,11 +79,20 @@ Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。键盘�
 取消 session。driver 仍按 `config/ros/realman_motion.yaml` 的 `20 ms` 周期和 `100 ms` watchdog
 执行第二层失效保护。
 
+键盘速度 Goal 固定使用 `follow=false`（RealMan SDK 的低跟随模式）。SDK 高跟随要求透传周期不超过
+`10 ms`，而浏览器/DDS 键盘链路不是实时通道；不要仅把配置周期改成 `10 ms` 就重新启用高跟随，除非
+同时验证实际 `rm_movev_canfd` 发送间隔始终满足该约束。
+
 离开 `keyboard`、WORK 失配、按键全部释放、Web 输入超时、owner WebSocket 关闭或 router 关闭时，
 相关臂先收敛到零速度，再取消其 Action session。浏览器 owner 断开还会释放 lease 并请求安全模式
 `none`。如果停止条件发生在 Action goal response 返回之前，router 设置 `cancel_after_accept`；迟到接受的
 goal 会立即取消，不能成为 active session。`dry_run=true` 时仍校验模式、WORK、配置和输入，但不发送
 driver Goal，也不发布 driver command。
+
+切入 `ACTIVE/keyboard` 后，Web 控制台会在 URDF 查看区同时绘制左右臂可用的 WORK 坐标轴：
+X/Y/Z 分别为红/绿/蓝，轴的位姿来自驱动回传的 `work.xyz_m` 与 `work.quaternion_wxyz`，再叠加
+`three_robots.yaml` 中该臂的 world 安装变换。离开 keyboard 或某臂 WORK 校验失效时，对应坐标轴立即隐藏；
+画面不会用静态默认值伪装成可控制坐标。
 
 同一 keyboard 分支还支持左右夹爪的单次全开／全闭：左 `1/2`、右 `9/0`，与速度键独立。
 Web bridge 检查 lease/sequence 并识别新按下边沿，发布 `/keyboard/l|r/gripper_command`
@@ -98,6 +109,57 @@ Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/com
 其它模式会丢弃输入，不自动开合。夹爪 command topic 是非阻塞的连续控制路径，`dry_run=true`
 （默认）时不发送机器人 Action 或夹爪 command。需要真实 Pika 运动时必须显式设置
 `REALMAN_BT_DRY_RUN=false`，并完成低速、急停和工作区检查。
+
+`pikavelocity` 是实时速度流，而不是单点位置目标。其逐会话线速度向量模长上限来自
+[`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 的
+`pika_velocity.max_linear_speed_mps`，当前为 `1.0 m/s`；角速度上限仍为 `0.25 rad/s`。
+驱动配置中的普通会话上限继续是 `0.05 m/s`，所以键盘、Web 手动速度和普通行为树速度节点不会随
+Pika 一起升速。驱动仅将 l/r 的绝对逐会话硬上限设为 `1.0 m/s`，m 仍为 `0.05 m/s`。
+
+### Pika rosbag replay
+
+独立的 Pika rosbag replay 项目把 bag 中的 `l/base_link`、`r/base_link` 速度记录送入同名
+`/pika/l|r/cartesian_velocity` ingress。RealMan 的速度初始化没有 BASE 选项，因此 replay 在发送前
+选择 identity WORK aliases `l/work/pikabase`、`r/work/pikabase`，并将 `header.frame_id` 改为相应的
+`l/work/pikabase` 或 `r/work/pikabase`。Pika router 由 `pika_velocity.work_reference: work/pikabase`
+配置这个引用；其零平移和单位四元数来自
+[`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml)，保持 BASE 速度向量
+数值不变。键盘和默认会话仍使用 `cell`。
+Replay 只发布 `/pika/l|r/cartesian_velocity` 与 `/pika/l|r/gripper_percentage`，夹爪值是
+`Float32` 的归一化百分比（`0` 闭合、`1` 张开），Pika 限制为 `1.0 m/s` 和 `0.25 rad/s`。
+进入执行并尝试选择坐标后，每次结束或失败会向两路速度 ingress 发送终端零向量，等待超过 `100 ms`
+watchdog 后把已选或可能已选的坐标恢复为 `cell`；只读预检不会选择坐标或执行这段 cleanup。
+恢复失败必须先人工确认 `/<arm>/coordinates/state`，再调用 `/<arm>/coordinates/select_work` 选择 `cell`。
+夹爪不发送“零值停止”，因为 `0` 是闭合目标。
+
+Replay 不替 control tree 选择模式。操作员先启动 `REALMAN_BT_DRY_RUN=false ./rm65 bt control`，
+在 Web 页面手动选择
+`Pika / 速度控制` 并等待 `ACTIVE`，再运行独立项目的 `./replay.sh run <bag>` 只读预检，最后才由
+操作员显式添加 `--execute`。关闭 dry-run 后，手动进入 Pika 本身就会执行三臂准备运动，必须在选择
+之前确认工作区和急停。自动验证和 `inspect` 不运行真实 `--execute`；测试中的执行分支只连接 fake。
+独立项目的 `ReplayNode.spin_once()` 只在内部调度，操作员入口始终是 `replay.sh`。
+
+Replay 部署到 `$HOME/pika_realman_replay`，使用独立 Compose 与生产 ROS domain `65`，不启动或
+重启生产 driver/control tree。生命周期见 [Pika replay 边界](./behavior-tree-motion#pika-rosbag-replay-边界)，
+driver 侧契约见 [ingress 与坐标桥接](./realman-action-development#pika-rosbag-replay-的-ingress-与坐标桥接)。
+
+Pika 发送端应以约 `50 Hz` 分别发布左右臂，消息字段如下；`header.stamp` 必须使用发送节点当前 ROS
+clock、非零且严格递增，不能重复使用旧消息：
+
+```yaml
+# /pika/l/cartesian_velocity
+header:
+  stamp: <node.get_clock().now().to_msg()>
+  frame_id: l/work/pikabase
+twist:
+  linear:  {x: 0.10, y: 0.00, z: 0.00}   # m/s
+  angular: {x: 0.00, y: 0.00, z: 0.00}   # rad/s
+```
+
+右臂只把 `frame_id` 改为 `r/work/pikabase` 并发布到 `/pika/r/cartesian_velocity`。线速度限制按
+`sqrt(vx^2 + vy^2 + vz^2)` 计算；例如 `(1, 1, 0)` 的模长约为 `1.414 m/s`，会被拒绝。
+输入停止超过 `100 ms` 后 driver watchdog 会零速并终止 session；正常停止也应先连续发送零向量，
+然后切换到 `none` 或其它输入模式。
 
 切入任一 Pika 模式时，行为树先用 `ThreeArmMoveJ` 将 l/m/r 移动到
 [`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 中

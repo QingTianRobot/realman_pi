@@ -663,7 +663,7 @@ def test_select_tool_updates_selection_and_verifies_readback(
     assert atomic_owner.released == ["l"]
 
 
-def test_select_work_updates_selection_and_verifies_readback(
+def test_select_work_provisions_before_selecting_and_verifies_readback(
     atomic_owner: AtomicOwner, profile_path: Path, fake_adapter: FakeAdapter
 ):
     manager = CoordinateManager.from_yaml(
@@ -675,12 +675,37 @@ def test_select_work_updates_selection_and_verifies_readback(
 
     result = manager.select_work(fake_adapter, "l", "fixture")
 
+    set_index = next(
+        index
+        for index, call in enumerate(fake_adapter.calls)
+        if call[0] == "set_work_frame"
+    )
+    change_index = fake_adapter.calls.index(("change_work_frame", "fixture"))
+    assert set_index < change_index
     assert result.matched is True
     assert (result.expected_tool, result.current_tool) == ("tcpgrip", "tcpgrip")
     assert (result.expected_work, result.current_work) == ("fixture", "fixture")
     assert ("change_work_frame", "fixture") in fake_adapter.calls
     assert atomic_owner.owned == set()
     assert atomic_owner.released == ["l"]
+
+
+def test_select_work_set_failure_does_not_change_or_enable_motion(
+    atomic_owner: AtomicOwner, profile_path: Path, fake_adapter: FakeAdapter
+):
+    manager = CoordinateManager.from_yaml(
+        profile_path,
+        acquire_arm=atomic_owner.acquire,
+        release_arm=atomic_owner.release,
+    )
+    fake_adapter.raise_from = "set_work_frame"
+
+    result = manager.select_work(fake_adapter, "l", "fixture")
+
+    assert result.matched is False
+    assert manager.motion_allowed("l") is False
+    assert not any(call[0] == "change_work_frame" for call in fake_adapter.calls)
+    assert atomic_owner.owned == set()
 
 
 def test_does_not_expose_unapproved_selection_query_methods(profile_path: Path):

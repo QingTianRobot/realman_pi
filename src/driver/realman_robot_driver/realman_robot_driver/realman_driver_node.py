@@ -24,6 +24,7 @@ from rclpy.qos import (
 )
 from geometry_msgs.msg import PoseStamped, TwistStamped
 from realman_msgs.action import CartesianPose, CartesianVelocity, ExecuteMotion, ExecuteTrajectory
+from realman_msgs.msg import CartesianVelocityState
 from realman_msgs.srv import (
     ForwardKinematics,
     GetCurrentPose,
@@ -45,6 +46,7 @@ from .coordinate_services import (
 )
 from .cartesian_velocity_session import CartesianVelocitySession
 from .cartesian_pose_session import CartesianPoseSession
+from .cartesian_velocity_telemetry import PoseVelocityEstimator, PoseVelocitySample
 from .motion_coordinator import ArmOwnership, MotionCoordinator
 from .motion_types import MotionSettings, ReferenceState, ReferenceType
 from .pose_math import (
@@ -205,6 +207,9 @@ class RealManDriverNode(Node):
                 profile.tools[profile.tool_default].ros_frame_id,
             ),
         }
+        self._velocity_estimator = PoseVelocityEstimator(
+            max_sample_gap_sec=max(0.1, 3.0 / self.state_publish_rate)
+        )
         self.velocity_session = CartesianVelocitySession(
             arm_id=self.arm_id,
             adapter=self.adapter,
@@ -307,6 +312,16 @@ class RealManDriverNode(Node):
             callback_group=self.velocity_command_callback_group,
         )
         self.joint_state_publisher = self.create_publisher(JointState, "joint_states", 10)
+        self.cartesian_velocity_state_publisher = self.create_publisher(
+            CartesianVelocityState,
+            "cartesian_velocity/state",
+            QoSProfile(
+                history=QoSHistoryPolicy.KEEP_LAST,
+                depth=10,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.VOLATILE,
+            ),
+        )
         self.connected_publisher = self.create_publisher(Bool, "connected", 10)
         self._services = [
             self.create_service(Trigger, "connect", self._connect),
@@ -1068,6 +1083,9 @@ class RealManDriverNode(Node):
     def _publish_state(self) -> None:
         self._maybe_reconnect()
 
+        now = self.get_clock().now()
+        stamp_ns = now.nanoseconds
+
         try:
             state = self.adapter.get_state()
         except Exception as error:
@@ -1085,6 +1103,12 @@ class RealManDriverNode(Node):
         connected.data = state.connected
         self.connected_publisher.publish(connected)
         if not state.connected or state.error_code != 0 or not state.joint_degrees:
+            estimator = getattr(self, "_velocity_estimator", None)
+            if estimator is not None:
+                estimator.reset()
+                self._publish_cartesian_velocity_state(
+                    now.to_msg(), estimator.latest(stamp_ns)
+                )
             self._report_state_error(state)
             return
 
@@ -1098,13 +1122,72 @@ class RealManDriverNode(Node):
                     f"Ignoring joint state with {joint_count} joints; "
                     f"configuration expects {len(self.joint_names)}"
                 )
+            estimator = getattr(self, "_velocity_estimator", None)
+            if estimator is not None:
+                estimator.reset()
+                self._publish_cartesian_velocity_state(
+                    now.to_msg(), estimator.latest(stamp_ns)
+                )
             return
         self._last_joint_count_error = 0
         message.name = self.joint_names
         # The vendor API reports degrees; sensor_msgs/JointState requires radians.
         message.position = [math.radians(float(value)) for value in state.joint_degrees]
         self.joint_state_publisher.publish(message)
+        estimator = getattr(self, "_velocity_estimator", None)
+        if estimator is not None:
+            fk = getattr(self.adapter, "forward_kinematics", None)
+            if not callable(fk):
+                estimator.reset()
+                measured = estimator.latest(stamp_ns)
+            else:
+                try:
+                    fk_status, base_pose = fk(list(state.joint_degrees))
+                except Exception as error:
+                    self.get_logger().debug(
+                        f"RealMan FK state read failed for velocity telemetry: {error}"
+                    )
+                    estimator.reset()
+                    measured = estimator.latest(stamp_ns)
+                else:
+                    if fk_status == 0:
+                        estimator.update(stamp_ns, base_pose)
+                        measured = estimator.latest(stamp_ns)
+                    else:
+                        self.get_logger().debug(
+                            "RealMan FK state read failed for velocity telemetry "
+                            f"with API2 status {fk_status}"
+                        )
+                        estimator.reset()
+                        measured = estimator.latest(stamp_ns)
+            self._publish_cartesian_velocity_state(now.to_msg(), measured)
         self._report_state_error(state)
+
+    def _publish_cartesian_velocity_state(
+        self, stamp: Any, measured: PoseVelocitySample
+    ) -> None:
+        publisher = getattr(self, "cartesian_velocity_state_publisher", None)
+        if publisher is None:
+            return
+        state = self.velocity_session.telemetry_snapshot()
+        message = CartesianVelocityState()
+        message.header.stamp = stamp
+        message.header.frame_id = f"{self.arm_id}/base_link"
+        message.session_active = state.session_active
+        message.reference_type = state.reference_type
+        message.reference_name = state.reference_name
+        message.command_frame_id = state.frame_id
+        message.commanded_linear_velocity_mps = list(state.commanded[:3])
+        message.commanded_angular_velocity_radps = list(state.commanded[3:])
+        message.limited_linear_velocity_mps = list(state.limited[:3])
+        message.limited_angular_velocity_radps = list(state.limited[3:])
+        message.measured_frame_id = f"{self.arm_id}/base_link"
+        message.measured_linear_velocity_mps = list(measured.linear_mps)
+        message.measured_angular_velocity_radps = list(measured.angular_radps)
+        message.measured_valid = measured.valid
+        message.command_age_ms = state.command_age_ms
+        message.measured_age_ms = measured.age_ms
+        publisher.publish(message)
 
     def _report_state_error(self, state: RobotState) -> None:
         if state.error_code == self._last_state_error:

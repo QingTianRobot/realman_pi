@@ -320,7 +320,11 @@ class CoordinateManager:
             identity_error = _adapter_identity_error(adapter, arm)
             if identity_error:
                 return self._failure(arm, -1, identity_error)
-            status, error = _write_frame(adapter, "change_work_frame", profile.works[name].controller_name)
+            frame = profile.works[name]
+            status, error = _write_frame(adapter, "set_work_frame", frame)
+            if status != 0:
+                return self._failure(arm, status, error)
+            status, error = _write_frame(adapter, "change_work_frame", frame.controller_name)
             if status != 0:
                 return self._failure(arm, status, error)
             self._selected_works[arm] = name

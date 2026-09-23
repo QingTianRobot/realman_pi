@@ -152,11 +152,68 @@ l/r 的 pending goal、accepted handle、最新命令、输入时间和取消状
 `config/ros/realman_motion.yaml` 的 `20 ms` 周期刷新，而 driver 自身 `100 ms` watchdog 对命令流再次检查。
 前一层处理 Web/网络停更，后一层处理 router 到 driver 的刷新中断。`dry_run=true` 时 router 仍执行目录、
 WORK、frame、速度上限和 timeout 校验，但不发送 Action Goal，也不向 driver command topic 发布消息。
+键盘 Action goal 显式携带普通会话上限 `0.05 m/s`；Pika 单独申请 `1.0 m/s` 不会改变键盘值。
+键盘 Goal 使用 `follow=false` 的低跟随模式；RealMan SDK 的高跟随模式要求稳定的 `<=10 ms` 透传，不能
+仅因需要更快响应就把键盘会话改成高跟随。
+进入 `ACTIVE/keyboard` 时，:8765 Web 页还会把 l/r 已验证 WORK 的红/绿/蓝 XYZ 轴绘制在 URDF 场景中；
+模式离开或坐标失配即隐藏。
 
 同一个 keyboard router 还接收左右夹爪的全开／全闭边沿（左 `1/2`、右 `9/0`）。它们不属于速度 session，
 不依赖 WORK，按次经 `/keyboard/l|r/gripper_command` 转发到 `/gripper_left|right/percentage/command`。
 模式、epoch/request、时效、夹爪健康和 dry-run 都在 router 检查；松键不撤销已提交目标，不发送“零值停止夹爪”。
 详细键位、JSON 契约和验证见[键盘双夹爪](./gripper-control#键盘双夹爪全开-全闭)。
+
+### 速度遥测与控制坐标
+
+键盘、Pika 或其它速度 session 运行时，驱动为每个 arm 发布
+`/<arm>/cartesian_velocity/state`（`realman_msgs/msg/CartesianVelocityState`）。
+`commanded_*` 是输入源提交的速度，`limited_*` 是经过 session 上限/加速度限制后真正送入 SDK 的速度，
+两者的 `command_frame_id` 保持输入控制帧；`measured_*` 是状态轮询 + FK 位姿差分估计，并固定使用
+`l/base_link` 或 `r/base_link`。因此不能把 WORK/Pika 控制向量和 BASE 实测向量按分量直接比较或混合，
+必须先做明确的 TF 变换。`measured_valid=false` 或 `measured_age_ms` 过大时，遥测只能作为无效/过期诊断。
+
+行为树调试时可直接查看：
+
+```bash
+ros2 topic info /l/cartesian_velocity/state -v
+ros2 topic echo --once /l/cartesian_velocity/state
+ros2 topic echo --once /r/cartesian_velocity/state
+```
+
+Web control 的“命令与实际末端速度”区域会同时显示左右臂的原始命令、限速后命令、实测线/角速度、
+两个 frame ID 以及 command/measured age；这部分是观测，不改变 ReactiveFallback 的输入模式仲裁、
+看门狗或停止顺序。
+
+## Pika rosbag replay 边界
+
+独立的 `pika_realman_replay` 项目只连接已经运行的 ROS 图，不启动 driver 或行为树。bag 速度记录的
+坐标是 `l/base_link`、`r/base_link`，桥接后只进入 `/pika/l/cartesian_velocity` 和
+`/pika/r/cartesian_velocity`；夹爪记录只进入 `/pika/l/gripper_percentage` 和
+`/pika/r/gripper_percentage`，类型为 `std_msgs/msg/Float32`，归一化值 `0` 表示闭合、`1` 表示打开。
+RealMan 速度模式没有 BASE 初始化选项，所以 replay 在执行前选择 identity WORK aliases
+`l/work/pikabase`、`r/work/pikabase`，并将速度消息 frame 改为相应的 `l/work/pikabase`、
+`r/work/pikabase`。Pika router 的 `pika_velocity.work_reference` 固定引用这组单位 WORK；键盘与默认
+WORK 会话继续使用 `l/work/cell`、`r/work/cell`，其它客户端保留各自的配置引用。
+
+Replay 的 Pika 会话上限为 `1.0 m/s` 线速度和 `0.25 rad/s` 角速度。桥接器按 bag 顺序发布新时间戳，
+执行尝试选择 WORK 之后，结束或任何运行时安全条件失败时先向左右速度 ingress 发送零向量，等待超过
+`100 ms` watchdog，再将已选择或可能已选择的 WORK 恢复为 `cell`（`l/work/cell`、`r/work/cell`）。
+只读预检不会改坐标或发送 cleanup 零速；夹爪的 `0` 是闭合指令，不能用作停止。
+恢复失败时保持控制树在中性模式，检查
+`/<arm>/coordinates/state` 后通过 `/<arm>/coordinates/select_work`（`realman_msgs/srv/SelectFrame`，
+`{name: cell}`）人工恢复并重新验证。
+
+操作员必须先运行 `REALMAN_BT_DRY_RUN=false ./rm65 bt control`，在 Web 控制页手动选择
+**Pika / 速度控制** 并等待 `ACTIVE`。该选择会执行三臂准备动作，必须先确认工作区和急停。
+再执行独立项目的 `./replay.sh run <bag>` 只读预检；只有明确输入 `--execute` 才会选择 `pikabase` 并
+发布真实 ingress。生产 control router 必须以 `REALMAN_BT_DRY_RUN=false` 运行。自动化测试只做
+`inspect`、构建、隔离 fake 测试和 no-motion preflight，永远不启动真实 `--execute`。
+
+该 replay 使用内部 `ReplayNode.spin_once()` 处理 ROS 回调和时间调度；这是组合 API 的实现细节，
+操作者只使用独立项目的 `replay.sh` 命令，不直接运行 Python 节点。
+项目部署到独立的 `$HOME/pika_realman_replay`，不复用生产 Compose project，也不重启生产容器。
+模式与帧配置见 [Pika rosbag replay](./behavior-tree-control#pika-rosbag-replay)，
+接口映射见 [ingress 与坐标桥接](./realman-action-development#pika-rosbag-replay-的-ingress-与坐标桥接)。
 
 ## 构建
 

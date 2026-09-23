@@ -58,6 +58,18 @@ driver 与 :8765 Web control。停止 router 不会停止这些服务；使用 `
 `pikaposition`/`pikavelocity` 和粘性、非可选的 Web override；详见
 [行为树控制权与 Mock 测试](./behavior-tree-control)。
 
+### 驱动与远程 RViz 的边界
+
+生产运行时只允许 `realman_bringup_remote` 持有三台真实 `realman_driver`。历史的
+`realman_driver_rviz` 服务也会启动驱动，因此不能和生产服务并行运行；否则每个机械臂命名空间可能出现
+重复驱动和多个 Cartesian Velocity Action Server，导致一个轴的速度输入被重复执行或表现为其他轴联动。
+
+`./rm65 up`、`./rm65 up desktop` 和 `./rm65 up policy` 在启动相机前检查运行中的
+`realman_driver_rviz` Compose 服务。检查到冲突时入口会失败并提示先停止该服务，不会自动杀掉容器。
+默认 `./rm65 up` 不启动 RViz；需要查看远程生产图时使用 `./rm65 up desktop` 或单独启动
+`realman_remote_rviz`。后者只运行 `rviz2`，订阅远程的机器人描述、TF 和关节状态，不启动驱动、
+`robot_state_publisher` 或假关节状态发布器。
+
 ## 启动入口
 
 ```bash

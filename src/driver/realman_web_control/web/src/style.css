@@ -48,6 +48,12 @@ canvas { display: block; width: 100%; height: 100%; }
 .legend { position: absolute; left: 16px; bottom: 14px; display: flex; align-items: center; gap: 7px; color: #a7b9b8; font-size: 10px; }
 .legend-live, .legend-shadow { display: inline-block; width: 12px; height: 3px; background: #43c4b5; }
 .legend-shadow { margin-left: 8px; background: #e08a52; opacity: .8; }
+.keyboard-frame-legend { position: absolute; right: 14px; bottom: 14px; display: grid; grid-template-columns: auto auto repeat(3, 18px); align-items: center; gap: 7px; padding: 7px 9px; border: 1px solid #476166; background: rgba(9, 17, 20, .87); color: #b8cac7; font-size: 9px; pointer-events: none; }
+.keyboard-frame-legend[hidden] { display: none; }
+.keyboard-frame-legend strong { font-size: 9px; letter-spacing: 0; }
+.keyboard-frame-legend .axis-x { color: #ff5a5a; }
+.keyboard-frame-legend .axis-y { color: #63dc72; }
+.keyboard-frame-legend .axis-z { color: #5594ff; }
 .viewer-footer { display: grid; grid-template-columns: minmax(0, 1fr) 100px; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid #263b40; }
 .viewer-footer #root-frame { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
 .controls { display: flex; flex-direction: column; gap: 16px; }
@@ -125,6 +131,23 @@ input[type="range"] { display: block; width: 100%; accent-color: #4dbbb0; }
 .coordinate-row { display: flex; justify-content: space-between; gap: 12px; align-items: baseline; color: #c8d8d5; font-size: 11px; }
 .coordinate-row strong { color: #e7efec; font-size: 11px; font-weight: 700; text-align: right; }
 .coordinate-meta, .coordinate-empty { color: #82999d; font-size: 10px; line-height: 1.45; }
+.telemetry-help { margin: -3px 0 12px; color: #82999d; font-size: 10px; line-height: 1.45; }
+.velocity-telemetry-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
+.velocity-telemetry-arm { min-width: 0; min-height: 286px; padding: 10px; border: 1px solid #2d4549; background: #101d20; }
+.velocity-telemetry-heading, .telemetry-reference, .telemetry-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 7px 10px; align-items: baseline; }
+.velocity-telemetry-heading { margin-bottom: 10px; font-size: 10px; }
+.velocity-telemetry-heading strong { color: #d9e7e4; }
+.telemetry-status { border: 1px solid #385158; color: #82999d; padding: 3px 6px; font-size: 9px; letter-spacing: .08em; }
+.telemetry-status.active, .telemetry-measured.valid { color: #84dfd0; border-color: #477d79; }
+.telemetry-status.stale, .telemetry-measured.stale { color: #e4b16f; border-color: #896b45; }
+.telemetry-reference { grid-template-columns: auto minmax(0, 1fr); margin-bottom: 7px; color: #82999d; font-size: 9px; }
+.telemetry-reference strong { min-width: 0; overflow: hidden; color: #c8d8d5; font-size: 10px; font-weight: 700; text-align: right; text-overflow: ellipsis; white-space: nowrap; }
+.telemetry-row { grid-template-columns: minmax(82px, auto) minmax(0, 1fr) auto; min-height: 24px; color: #8fa6a9; font-size: 9px; }
+.telemetry-row strong { min-width: 0; overflow-wrap: anywhere; color: #e7efec; font-size: 10px; font-variant-numeric: tabular-nums; font-weight: 600; }
+.telemetry-row small { color: #84dfd0; font-size: 9px; font-weight: 700; }
+.telemetry-row em { color: #637d7b; font-size: 9px; font-style: normal; text-align: right; white-space: nowrap; }
+.telemetry-divider { height: 1px; margin: 6px 0 8px; background: #2d4549; }
+.telemetry-empty { display: grid; min-height: 240px; place-items: center; color: #82999d; font-size: 10px; text-align: center; }
 .form-grid { display: grid; grid-template-columns: 1fr 1fr; gap: 9px; }
 .form-grid label, .velocity-inputs label { display: grid; gap: 5px; color: #8fa6a9; font-size: 10px; }
 .form-grid select, .form-grid input { width: 100%; min-width: 0; padding: 7px; font-size: 11px; }
@@ -162,10 +185,13 @@ dialog input { width: 100%; margin: 8px 0 18px; }
   .viewer-panel { height: 600px; min-height: 600px; }
   .viewer-layout { grid-template-columns: 1fr; }
   .viewer { min-height: 320px; }
+  .keyboard-frame-legend { top: 12px; right: 12px; bottom: auto; }
   .fleet-strip { grid-template-columns: repeat(3, minmax(0, 1fr)); border-right: 0; border-bottom: 1px solid #263b40; }
   .velocity-inputs { grid-template-columns: repeat(3, 1fr); row-gap: 8px; }
   .input-mode-body label { grid-template-columns: 1fr; gap: 5px; }
   .keyboard-arm-grid { grid-template-columns: 1fr; }
+  .velocity-telemetry-grid { grid-template-columns: 1fr; }
+  .velocity-telemetry-arm { min-height: 0; }
   .viewer-footer { font-size: 9px; }
   .record-save-row, .record-apply-row { grid-template-columns: 1fr; }
 }

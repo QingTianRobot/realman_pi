@@ -450,6 +450,11 @@ function keyboardWorkFramePose(arm: KeyboardArmId) {
   return { position, quaternion };
 }
 function updateKeyboardWorkFrames() {
+  if (renderMode === "canvas2d") {
+    keyboardFrameLegend.hidden = true;
+    viewer.dataset.keyboardWorkFrames = "";
+    return;
+  }
   const visibleArms: KeyboardArmId[] = [];
   for (const arm of ["l", "r"] as const) {
     const robotScene = robotScenes[arm];
@@ -939,6 +944,7 @@ function renderJointControls() {
     targetEditedByArm[selectedArm] = true;
     $(`#joint-value-${index}`).textContent = `${displayNumber(Number(input.value))}°`;
     selectedRobotScene()?.shadow?.setJointValues(Object.fromEntries(targetJoints.map((value, i) => [`joint_${i + 1}`, value])));
+    drawFallbackScene();
   }));
 }
 
@@ -956,6 +962,7 @@ function setJointInputs(values: number[], target = false) {
 function setRobotJoints(target: any, values: number[]) {
   target?.setJointValues(Object.fromEntries(values.map((value, index) => [`joint_${index + 1}`, value])));
   target?.updateMatrixWorld(true);
+  drawFallbackScene();
 }
 
 function applyJointRecordToJoints(arm: ArmId, jointDegrees: number[], message: string) {
@@ -1204,15 +1211,18 @@ async function loadFleet() {
       return { config, live, shadow };
     }));
     if (generation !== loadGeneration) return;
-    scene.clear();
-    scene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
-    const key = new THREE.DirectionalLight(0xffffff, 4);
-    key.position.set(2, -3, 4);
-    key.castShadow = true;
-    scene.add(key);
-    const grid = new THREE.GridHelper(3.5, 22, 0x567078, 0x263b40);
-    grid.rotation.x = Math.PI / 2;
-    scene.add(grid);
+    if (renderMode === "webgl") {
+      if (!scene) throw new Error("WebGL scene was not initialized");
+      scene.clear();
+      scene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
+      const key = new THREE.DirectionalLight(0xffffff, 4);
+      key.position.set(2, -3, 4);
+      key.castShadow = true;
+      scene.add(key);
+      const grid = new THREE.GridHelper(3.5, 22, 0x567078, 0x263b40);
+      grid.rotation.x = Math.PI / 2;
+      scene.add(grid);
+    }
     const allMeshes: any[] = [];
     const middleTransform = manifest!.robots.find((robot) => robot.id === "m")?.transform;
     if (!middleTransform) throw new Error("middle-arm transform is missing from the layout manifest");
@@ -1230,8 +1240,10 @@ async function loadFleet() {
         config.transform.z - middleTransform.z,
       );
       shadow.rotation.set(config.transform.roll, config.transform.pitch, config.transform.yaw, "ZYX");
-      scene.add(live);
-      scene.add(shadow);
+      if (scene) {
+        scene.add(live);
+        scene.add(shadow);
+      }
       robotScenes[config.id] = { live, shadow };
       allMeshes.push(live, shadow);
     });
@@ -1250,37 +1262,73 @@ async function loadFleet() {
     viewer.dataset.liveMeshes = String(snapshots.reduce((count, { live }) => count + meshCount(live), 0));
     viewer.dataset.shadowMeshes = String(snapshots.reduce((count, { shadow }) => count + meshCount(shadow), 0));
     viewer.dataset.visualizationReferenceArm = "m";
-    viewerState.setAttribute("hidden", "");
+    if (renderMode === "webgl") {
+      viewerState.setAttribute("hidden", "");
+    } else {
+      viewerState.textContent = "WebGL 不可用，已加载 2D 机械臂预览";
+      viewerState.removeAttribute("hidden");
+      drawFallbackScene();
+    }
     $("#model-label").textContent = `${selectedConfig.model} / ${selectedArm.toUpperCase()} + 3 arms`;
   } catch (error) {
-    viewerState.textContent = `URDF 加载失败: ${String(error)}`;
+    if (renderMode === "canvas2d") {
+      viewerState.textContent = `模型资源不可用，已使用 2D 机械臂预览: ${String(error)}`;
+      viewerState.removeAttribute("hidden");
+      drawFallbackScene();
+    } else {
+      viewerState.textContent = `URDF 加载失败: ${String(error)}`;
+    }
   }
 }
 
 function initScene() {
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.setClearColor(0x091114, 1);
-  renderer.shadowMap.enabled = true;
-  scene = new THREE.Scene();
-  camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
-  camera.up.set(0, 0, 1);
-  camera.position.set(1.2, -1.8, 1.25);
-  controls = new OrbitControls(camera, canvas);
-  controls.enableDamping = true;
-  controls.target.set(0, 0, 0.55);
-  const resize = () => {
-    const box = viewer.getBoundingClientRect();
-    if (!box.width || !box.height) return;
-    renderer.setSize(box.width, box.height, false);
-    camera.aspect = box.width / box.height;
-    camera.updateProjectionMatrix();
-  };
-  new ResizeObserver(resize).observe(viewer);
-  resize();
-  const frame = () => { requestAnimationFrame(frame); controls.update(); renderer.render(scene, camera); };
-  frame();
+  try {
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true, preserveDrawingBuffer: false });
+    renderMode = "webgl";
+    viewer.dataset.renderer = "webgl";
+    renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
+    renderer.outputColorSpace = THREE.SRGBColorSpace;
+    renderer.setClearColor(0x091114, 1);
+    renderer.shadowMap.enabled = true;
+    scene = new THREE.Scene();
+    camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
+    camera.up.set(0, 0, 1);
+    camera.position.set(1.2, -1.8, 1.25);
+    controls = new OrbitControls(camera, canvas);
+    controls.enableDamping = true;
+    controls.target.set(0, 0, 0.55);
+    const resize = () => {
+      const box = viewer.getBoundingClientRect();
+      if (!box.width || !box.height || !renderer || !camera) return;
+      renderer.setSize(box.width, box.height, false);
+      camera.aspect = box.width / box.height;
+      camera.updateProjectionMatrix();
+    };
+    new ResizeObserver(resize).observe(viewer);
+    resize();
+    const frame = () => {
+      requestAnimationFrame(frame);
+      if (!renderer || !scene || !camera || !controls) return;
+      controls.update();
+      renderer.render(scene, camera);
+    };
+    frame();
+  } catch (error) {
+    renderer = undefined;
+    scene = undefined;
+    camera = undefined;
+    controls = undefined;
+    renderMode = "canvas2d";
+    viewer.dataset.renderer = "canvas2d";
+    fallbackContext = canvas.getContext("2d");
+    if (!fallbackContext) throw error;
+    viewerState.textContent = "WebGL 不可用，正在加载 2D 机械臂预览";
+    viewerState.removeAttribute("hidden");
+    const resize = () => drawFallbackScene();
+    fallbackResizeObserver = new ResizeObserver(resize);
+    fallbackResizeObserver.observe(viewer);
+    resize();
+  }
 }
 
 function configureVelocity() {
@@ -1715,7 +1763,7 @@ function loadManifest(next: Manifest) {
   renderCartesianVelocityTelemetry();
   renderFleetStrip();
   setSelectedConnection();
-  if (!renderer) initScene();
+  if (!renderMode) initScene();
   loadFleet();
   updateButtons();
 }

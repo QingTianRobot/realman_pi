@@ -23,6 +23,7 @@ select, input[type="number"], input[type="password"] { border: 1px solid #385158
 .button.danger { background: #963d36; border-color: #e37f68; }
 .workspace { display: grid; grid-template-columns: minmax(0, 1.45fr) minmax(340px, .8fr); align-items: start; gap: 16px; max-width: 1640px; margin: 0 auto; padding: 16px clamp(16px, 3vw, 42px) 28px; }
 .panel { border: 1px solid #283e42; background: #111e22; }
+.visualization-column { display: grid; gap: 16px; min-width: 0; align-content: start; }
 .viewer-panel { height: 640px; min-height: 640px; display: flex; flex-direction: column; }
 .panel-heading { display: flex; align-items: flex-start; justify-content: space-between; gap: 16px; padding: 16px 18px; border-bottom: 1px solid #263b40; }
 .panel-heading.compact { padding: 0 0 13px; border-bottom: 0; align-items: center; }

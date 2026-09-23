@@ -17,6 +17,11 @@ watchdog 或 lockout。网页保存的关节记录写入 `config/web-control/joi
 平移，绝不修改 `config/ros/three_robots.yaml` 的世界/TF 布局或任何 Action 的运动坐标。
 这让标定后左右臂位置改变时，中臂仍保持在画面中心。
 
+页面启动时直接创建 Three.js WebGL 渲染器，并使用完整 URDF 实体/影子模型。WebGL 是三维机械臂
+预览的必要能力；浏览器禁用 GPU、软件光栅化不可用或上下文创建失败时，页面明确显示
+`WebGL 渲染失败` 和底层错误，不伪造二维机械臂或布局加载成功。恢复浏览器 WebGL 后刷新页面，
+即可重新加载完整 URDF 网格显示。
+
 ```text
 笔记本浏览器
     │ http://工控机:8765/ + /ws
@@ -135,6 +140,9 @@ Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`s
 运行反馈，需在当前页面重新选择键盘模式取得 lease。
 键盘说明和右侧控制卡片的增减不得改变左侧三臂 3D viewer 的高度。桌面、窄屏和手机布局分别使用
 有界的 viewer 面板高度，避免 WebGL canvas 被右栏总高度拉伸后压缩相机水平视场。
+桌面端左列由纵向 \`visualization-column\` 组成：上方是 WebGL 三臂展示，下方是
+\`velocity-telemetry-panel\`；右列继续承载坐标、一次性运动、速度 Action、夹爪和运行反馈。
+窄屏和手机端按 WebGL 展示、速度遥测、控制卡片的顺序单列排列。
 左右臂按键完全独立，可同时按住：
 
 | 末端轴 | 左臂正/负 | 右臂正/负 |
@@ -493,8 +501,9 @@ npm run build:web-control
 npm run test:web-control
 ```
 
-Playwright 测试应覆盖桌面和移动视口、canvas 非空、实体/影子同时存在、滑轨后画布改变、
-速度遥测的命令/限速/实测与 stale 状态、feedback/result 实时更新、cancel 和 software stop 的协议消息。
+Playwright 测试应覆盖桌面和移动视口、WebGL canvas 非空、实体/影子同时存在、滑轨后画布改变、
+WebGL 不可用时的明确渲染错误、速度遥测的命令/限速/实测与 stale 状态、feedback/result 实时更新、
+cancel 和 software stop 的协议消息。
 真机测试前先用 mock driver
 启动同一 Web 服务验证 ownership 和断开清理，再在低速率和明确物理安全员在场时切换
 到实际控制器。

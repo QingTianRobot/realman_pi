@@ -197,6 +197,9 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   const viewerBounds = await page.locator("#viewer").boundingBox();
   expect(viewerBounds?.height).toBeLessThanOrEqual(560);
   expect(viewerBounds?.height).toBeGreaterThan(300);
+  await expect(page.locator(".visualization-column > .viewer-panel")).toHaveCount(1);
+  await expect(page.locator(".visualization-column > #velocity-telemetry-panel")).toHaveCount(1);
+  await expect(page.locator(".controls > #velocity-telemetry-panel")).toHaveCount(0);
   const liveCanvasBeforeFeedback = await canvasChecksum(page);
   await page.evaluate(() => {
     (window as any).__webSocket.emit("message", { data: JSON.stringify({
@@ -418,7 +421,7 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await page.screenshot({ path: test.info().outputPath("web-control.png"), fullPage: true });
 });
 
-test("falls back to a live Canvas 2D arm preview when WebGL is unavailable", async ({ page }) => {
+test("reports a WebGL renderer failure when WebGL is unavailable", async ({ page }) => {
   await page.addInitScript(() => {
     const originalGetContext = HTMLCanvasElement.prototype.getContext;
     HTMLCanvasElement.prototype.getContext = function getContext(
@@ -432,29 +435,9 @@ test("falls back to a live Canvas 2D arm preview when WebGL is unavailable", asy
 
   await page.goto("/");
 
-  await expect(page.locator("#viewer")).toHaveAttribute("data-renderer", "canvas2d");
-  await expect(page.locator("#viewer-state")).toContainText("2D");
-  await expect(page.locator(".fleet-chip")).toHaveCount(3);
-  const initialChecksum = await page.locator("#canvas").evaluate((element: HTMLCanvasElement) => {
-    const context = element.getContext("2d");
-    if (!context) return 0;
-    return context.getImageData(0, 0, element.width, element.height).data
-      .reduce((sum, value, index) => (sum + value * ((index % 7) + 1)) % 1000000007, 0);
-  });
-  expect(initialChecksum).toBeGreaterThan(0);
-
-  await emitWebSocketEvent(page, {
-    type: "joint_state",
-    arm: "r",
-    positions_rad: [0.8, -0.6, 0.5, -0.4, 0.3, -0.2],
-    stamp_ns: 200,
-  });
-  await expect.poll(() => page.locator("#canvas").evaluate((element: HTMLCanvasElement) => {
-    const context = element.getContext("2d");
-    if (!context) return 0;
-    return context.getImageData(0, 0, element.width, element.height).data
-      .reduce((sum, value, index) => (sum + value * ((index % 7) + 1)) % 1000000007, 0);
-  })).not.toBe(initialChecksum);
+  await expect(page.locator("#viewer")).not.toHaveAttribute("data-renderer", "canvas2d");
+  await expect(page.locator("#viewer-state")).toContainText("WebGL 渲染失败");
+  await expect(page.locator("#viewer-state")).toContainText("Error creating WebGL context");
 });
 
 test("copies the selected arm current joint angles as degree array", async ({ page }) => {

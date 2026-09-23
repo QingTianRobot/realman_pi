@@ -5,7 +5,7 @@
     # Runtime data volume. Override with REALMAN_RECORDING_ROOT / launch argument in Docker.
     recording_root: /data/realman-recordings
     # LeRobot dataset output directory for the recorder's asynchronous exporter.
-    # The Web bridge never reads this root; offline analysis uses the Rerun CLI.
+    # The Web bridge uses the same path read-only for the completed-episode replay page.
     lerobot_export_dir: /data/realman-recordings/lerobot
     # A full queue records a drop metric instead of blocking driver subscription callbacks.
     max_state_queue: 10000
@@ -13,6 +13,10 @@
     # Controller-side Cartesian command streams. They are observations only; the recorder
     # never publishes to them. Configure each external teleoperation source explicitly.
     arm_action_topics: [/l/cartesian_velocity/command, /m/cartesian_velocity/command, /r/cartesian_velocity/command]
+    # Driver-published measured end-effector velocity (CartesianVelocityState), in
+    # left/middle/right order. These replace offline FK+pose-difference velocity
+    # estimation when present; leave empty to fall back to the derived estimate.
+    arm_velocity_topics: [/l/cartesian_velocity/state, /m/cartesian_velocity/state, /r/cartesian_velocity/state]
     # Optional actual gripper command streams, in left/middle/right order.  Leave
     # empty until the upstream gripper interface exposes a command topic: the
     # exporter then writes an honest 18D arm-only action instead of copying state.
@@ -31,10 +35,13 @@
     base_frames: [l/base_link, m/base_link, r/base_link]
     ee_links: [link_6, link_6, link_6]
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
-    # Cartesian commands use metres/s and radians/s.  The command header frame
-    # is archived separately and must agree with this configured convention.
+    # Cartesian commands use metres/s and radians/s. The current RealMan control
+    # router publishes these TwistStamped commands in each arm's active work
+    # frame (cell), not the URDF base frame. The command header frame is archived
+    # separately and must agree with this configured convention; changing the
+    # controller's active work profile requires updating this list as one unit.
     cartesian_command_representation: velocity
-    cartesian_command_frames: [l/base_link, m/base_link, r/base_link]
+    cartesian_command_frames: [l/work/cell, m/work/cell, r/work/cell]
     # Point this at the immutable result from realman_camera_calibration after a
     # solved hand-eye calibration. Empty keeps 2D data recordable but marks its
     # geometric calibration provenance as UNAVAILABLE.
@@ -77,6 +84,10 @@
     # Bind loopback until an authenticated/reverse-proxy deployment is implemented.
     bind_host: 127.0.0.1
     port: 8770
+    # Must match the recorder paths above. The bridge only reads finalized
+    # manifests/datasets and never writes or controls the recording lifecycle.
+    recording_root: /data/realman-recordings
+    lerobot_export_dir: /data/realman-recordings/lerobot
     # This is a browser snapshot cap, not a data-recording rate.
     web_state_hz: 10.0
     # Optional Rerun output uses this bridge's already-coalesced state cache; it cannot

@@ -64,13 +64,15 @@ _STATUS_CODE = {
 class RecordingRecorderNode(Node):
     """Record selected existing ROS observations into an isolated local session."""
 
-    def __init__(self) -> None:
-        super().__init__("recording_recorder")
+    def __init__(self, *, parameter_overrides: list[Any] | None = None) -> None:
+        """Create the recorder node, optionally injecting ROS parameters in tests."""
+        super().__init__("recording_recorder", parameter_overrides=parameter_overrides)
         self.declare_parameter("recording_root", "/data/realman-recordings")
         self.declare_parameter("lerobot_export_dir", "/data/realman-recordings/lerobot")
         self.declare_parameter("max_state_queue", 10_000)
         self.declare_parameter("arm_namespaces", ["l", "m", "r"])
         self.declare_parameter("arm_action_topics", [""])
+        self.declare_parameter("arm_velocity_topics", [""])
         self.declare_parameter("gripper_action_topics", [""])
         self.declare_parameter("lerobot_repo_id", "realman/pi05-three-arm")
         self.declare_parameter("embodiment_id", "realman-rm65-b-three-arm-v1")
@@ -114,7 +116,16 @@ class RecordingRecorderNode(Node):
         self._receipt_wall_clock = Clock(clock_type=ClockType.SYSTEM_TIME)
         self._arms = tuple(str(item) for item in self.get_parameter("arm_namespaces").value)
         self._lock = threading.RLock()
+        # Service callbacks use a reentrant ROS callback group so status/subscription
+        # work can continue, but lifecycle commands themselves must be serialized:
+        # START consumes the PREPARE result and a concurrent PREPARE must not replace
+        # it between admission and writer creation.
+        self._service_lock = threading.RLock()
         self._callback_group = ReentrantCallbackGroup()
+        for recovered in SessionStore.recover_orphaned_sessions(self._root):
+            self.get_logger().warning(
+                f"recovered interrupted session {recovered['session_id']} as {recovered['state']}"
+            )
         self._store: SessionStore | None = None
         self._archive: McapStateArchive | None = None
         self._camera_worker: RosImageArchive | None = None
@@ -146,7 +157,6 @@ class RecordingRecorderNode(Node):
         self._export_error = ""
 
         self._topic_types: dict[str, str] = {}
-        self._subscriptions = []
         self._register_subscriptions()
         self._register_camera_subscriptions()
         self._status_publisher = self.create_publisher(RecordingStatus, "recording/status", 10)
@@ -166,6 +176,13 @@ class RecordingRecorderNode(Node):
         return super().destroy_node()
 
     def _manage_service(
+        self, request: ManageRecordingService.Request, response: ManageRecordingService.Response
+    ) -> ManageRecordingService.Response:
+        """Serialize lifecycle commands while keeping sensor callbacks concurrent."""
+        with self._service_lock:
+            return self._manage_service_serial(request, response)
+
+    def _manage_service_serial(
         self, request: ManageRecordingService.Request, response: ManageRecordingService.Response
     ) -> ManageRecordingService.Response:
         """Handle bounded upstream lifecycle requests; export work remains asynchronous."""
@@ -214,6 +231,7 @@ class RecordingRecorderNode(Node):
         catalog = build_topic_catalog(
             self._arms,
             arm_action_topics=self.get_parameter("arm_action_topics").value,
+            arm_velocity_topics=self.get_parameter("arm_velocity_topics").value,
             gripper_position_topics=self.get_parameter("gripper_position_topics").value,
             gripper_action_topics=self.get_parameter("gripper_action_topics").value,
             gripper_torque_topics=self.get_parameter("gripper_torque_topics").value,
@@ -222,16 +240,14 @@ class RecordingRecorderNode(Node):
         self._topic_types = {spec.topic: spec.type_name for spec in catalog.values()}
         for spec in catalog.values():
             connected_arm = _connected_arm_from_topic(spec.topic)
-            self._subscriptions.append(
-                self.create_subscription(
-                    spec.message_type,
-                    spec.topic,
-                    lambda message, selected=spec.topic, arm=connected_arm: self._record_message(
-                        selected, message, arm
-                    ),
-                    10,
-                    callback_group=self._callback_group,
-                )
+            self.create_subscription(
+                spec.message_type,
+                spec.topic,
+                lambda message, selected=spec.topic, arm=connected_arm: self._record_message(
+                    selected, message, arm
+                ),
+                10,
+                callback_group=self._callback_group,
             )
         # Canonical v1 records the configured calibration snapshot as immutable camera
         # provenance.  It deliberately does not archive live CameraInfo or /tf_static:
@@ -242,14 +258,12 @@ class RecordingRecorderNode(Node):
     def _register_camera_subscriptions(self) -> None:
         """Subscribe the driver's raw image topics without entering the state MCAP path."""
         for source in self._camera_sources():
-            self._subscriptions.append(
-                self.create_subscription(
-                    Image,
-                    source.image_topic,
-                    lambda message, selected=source: self._record_camera_image(selected, message),
-                    10,
-                    callback_group=self._callback_group,
-                )
+            self.create_subscription(
+                Image,
+                source.image_topic,
+                lambda message, selected=source: self._record_camera_image(selected, message),
+                10,
+                callback_group=self._callback_group,
             )
 
     def _record_camera_image(self, source: CameraSource, message: Image) -> None:
@@ -357,6 +371,7 @@ class RecordingRecorderNode(Node):
                         "repo_id": str(self.get_parameter("lerobot_repo_id").value),
                         "arms": list(self._arms),
                         "arm_action_topics": [str(item) for item in self.get_parameter("arm_action_topics").value if str(item)],
+                        "arm_velocity_topics": [str(item) for item in self.get_parameter("arm_velocity_topics").value if str(item)],
                         "gripper_position_topics": [str(item) for item in self.get_parameter("gripper_position_topics").value if str(item)],
                         "gripper_action_topics": [str(item) for item in self.get_parameter("gripper_action_topics").value if str(item)],
                         "camera_ids": [str(item) for item in self.get_parameter("camera_ids").value if str(item)],
@@ -762,6 +777,11 @@ class RecordingRecorderNode(Node):
             ).start()
 
     def _start_scheduled_session(self, goal: Any) -> None:
+        """Serialize a due scheduled start against explicit lifecycle requests."""
+        with self._service_lock:
+            self._start_scheduled_session_serial(goal)
+
+    def _start_scheduled_session_serial(self, goal: Any) -> None:
         """Re-check health at the requested wall-time without blocking ROS callbacks."""
         try:
             self._prepare(goal, preserve_scheduled_state=True)

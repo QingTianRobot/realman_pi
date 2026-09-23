@@ -15,6 +15,7 @@ from dataclasses import dataclass
 from typing import Any, Iterable
 
 from geometry_msgs.msg import TwistStamped
+from realman_msgs.msg import CartesianVelocityState
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Float64, Int32, String
 from tf2_msgs.msg import TFMessage
@@ -30,6 +31,7 @@ TYPE_REGISTRY: dict[str, Any] = {
     "std_msgs/msg/Int32": Int32,
     "tf2_msgs/msg/TFMessage": TFMessage,
     "geometry_msgs/msg/TwistStamped": TwistStamped,
+    "realman_msgs/msg/CartesianVelocityState": CartesianVelocityState,
 }
 
 
@@ -46,6 +48,7 @@ def build_topic_catalog(
     arm_namespaces: Iterable[str],
     *,
     arm_action_topics: Iterable[str] = (),
+    arm_velocity_topics: Iterable[str] = (),
     gripper_position_topics: Iterable[str] = (),
     gripper_action_topics: Iterable[str] = (),
     gripper_torque_topics: Iterable[str] = (),
@@ -80,6 +83,9 @@ def build_topic_catalog(
     for topic in arm_action_topics:
         if str(topic):
             add(str(topic), TwistStamped, "geometry_msgs/msg/TwistStamped")
+    for topic in arm_velocity_topics:
+        if str(topic):
+            add(str(topic), CartesianVelocityState, "realman_msgs/msg/CartesianVelocityState")
     for topic in gripper_position_topics:
         if str(topic):
             add(str(topic), Float64, "std_msgs/msg/Float64")

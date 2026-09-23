@@ -22,6 +22,7 @@ class LeRobotV3Schema:
     fps: int
     arm_joint_topics: tuple[str, ...]
     arm_action_topics: tuple[str, ...]
+    arm_velocity_topics: tuple[str, ...]
     gripper_position_topics: tuple[str, ...]
     gripper_action_topics: tuple[str, ...]
     camera_ids: tuple[str, ...]
@@ -48,10 +49,19 @@ class LeRobotV3Schema:
             raise ValueError("all configured state/action topics must be absolute ROS topic names")
         if len(self.arm_joint_topics) != len(self.arm_action_topics):
             raise ValueError("each arm joint stream requires one action stream")
+        if self.arm_velocity_topics and len(self.arm_velocity_topics) != len(self.arm_joint_topics):
+            raise ValueError("each arm joint stream requires one measured velocity stream when configured")
+        if any(not value.startswith("/") for value in self.arm_velocity_topics):
+            raise ValueError("all configured velocity topics must be absolute ROS topic names")
         if not self.joint_names or len(set(self.joint_names)) != len(self.joint_names):
             raise ValueError("joint_names must be non-empty and unique")
-        if len(self.base_frames) != len(self.arm_joint_topics) or len(self.ee_links) != len(self.arm_joint_topics):
+        if (len(self.base_frames) != len(self.arm_joint_topics)
+                or len(self.ee_links) != len(self.arm_joint_topics)
+                or not all(self.base_frames)
+                or not all(self.ee_links)):
             raise ValueError("each arm requires one base frame and end-effector link")
+        if len(set(self.arm_ids)) != self.arm_count:
+            raise ValueError("each configured base frame must identify a unique arm")
         if not self.embodiment_id or not self.urdf_package or not self.urdf_relative_path or not self.urdf_base_link:
             raise ValueError("embodiment_id and URDF source details are required")
         if self.cartesian_command_representation != "velocity":
@@ -103,24 +113,73 @@ class LeRobotV3Schema:
                 *self.arm_action_topics, *self.gripper_action_topics,
                 *(f"image:{camera}" for camera in self.camera_ids))
 
+    @staticmethod
+    def _topic_entity(topic: str) -> str:
+        """Return the ROS namespace component that identifies a robot device."""
+        parts = [part for part in topic.split("/") if part]
+        return parts[-2] if len(parts) > 1 else parts[-1]
+
+    @staticmethod
+    def _frame_robot_id(frame: str) -> str:
+        """Return the robot namespace from a qualified frame such as l/work/cell."""
+        return next(part for part in frame.split("/") if part)
+
+    @property
+    def arm_ids(self) -> tuple[str, ...]:
+        """Arm labels follow configured base-frame order (for example l/m/r)."""
+        return tuple(self._frame_robot_id(frame) for frame in self.base_frames)
+
+    @property
+    def gripper_ids(self) -> tuple[str, ...]:
+        """Stable gripper labels follow the configured observation order."""
+        return tuple(self._topic_entity(topic) for topic in self.gripper_position_topics)
+
     def features(self, image_shapes: dict[str, tuple[int, int, int]]) -> dict[str, dict]:
         """Return the public ``LeRobotDataset.create`` feature declaration."""
         missing = set(self.camera_ids).difference(image_shapes)
         if missing:
             raise ValueError(f"missing camera image shapes: {sorted(missing)}")
+        joint_components = [f"{arm}.{joint}" for arm in self.arm_ids for joint in self.joint_names]
+        ee_pose_components = [
+            f"{arm}.{axis}" for arm in self.arm_ids
+            for axis in ("x", "y", "z", "qx", "qy", "qz", "qw")
+        ]
+        ee_velocity_components = [
+            f"{arm}.{axis}" for arm in self.arm_ids
+            for axis in ("vx", "vy", "vz", "wx", "wy", "wz")
+        ]
+        gripper_components = list(self.gripper_ids)
+        command_components = [
+            f"{self._frame_robot_id(frame)}.{axis}" for frame in self.cartesian_command_frames
+            for axis in ("vx", "vy", "vz", "wx", "wy", "wz")
+        ]
         result: dict[str, dict] = {
-            "observation.joint_position": {"dtype": "float32", "shape": (self.joint_dim,), "names": None},
-            "observation.joint_velocity": {"dtype": "float32", "shape": (self.joint_dim,), "names": None},
-            "observation.ee_pose_base": {"dtype": "float32", "shape": (self.ee_pose_dim,), "names": None},
-            "observation.ee_velocity_base": {"dtype": "float32", "shape": (self.ee_velocity_dim,), "names": None},
-            "observation.gripper_position": {"dtype": "float32", "shape": (self.gripper_dim,), "names": None},
-            "action.command.cartesian_velocity": {"dtype": "float32", "shape": (6 * self.arm_count,), "names": None},
-            "quality.valid": {"dtype": "bool", "shape": (1,), "names": None},
-            "quality.sync_error_ns": {"dtype": "int64", "shape": (len(self.sync_source_ids),), "names": None},
+            "observation.joint_position": {
+                "dtype": "float32", "shape": (self.joint_dim,), "names": joint_components,
+            },
+            "observation.joint_velocity": {
+                "dtype": "float32", "shape": (self.joint_dim,), "names": joint_components,
+            },
+            "observation.ee_pose_base": {
+                "dtype": "float32", "shape": (self.ee_pose_dim,), "names": ee_pose_components,
+            },
+            "observation.ee_velocity_base": {
+                "dtype": "float32", "shape": (self.ee_velocity_dim,), "names": ee_velocity_components,
+            },
+            "observation.gripper_position": {
+                "dtype": "float32", "shape": (self.gripper_dim,), "names": gripper_components,
+            },
+            "action.command.cartesian_velocity": {
+                "dtype": "float32", "shape": (self.command_dim,), "names": command_components,
+            },
+            "quality.valid": {"dtype": "bool", "shape": (1,), "names": ["valid"]},
+            "quality.sync_error_ns": {
+                "dtype": "int64", "shape": (len(self.sync_source_ids),), "names": list(self.sync_source_ids),
+            },
         }
         if self.gripper_action_topics:
             result["action.command.gripper"] = {
-                "dtype": "float32", "shape": (self.gripper_command_dim,), "names": None,
+                "dtype": "float32", "shape": (self.gripper_command_dim,), "names": gripper_components,
             }
         for camera_id in self.camera_ids:
             height, width, channels = image_shapes[camera_id]
@@ -148,6 +207,7 @@ class LeRobotV3Schema:
 
 
 def schema_from_parameters(*, repo_id: str, fps: float, arms: Iterable[str], arm_action_topics: Iterable[str],
+                           arm_velocity_topics: Iterable[str] = (),
                            gripper_position_topics: Iterable[str], gripper_action_topics: Iterable[str],
                            camera_ids: Iterable[str], joint_names: Iterable[str] = ("joint_1", "joint_2", "joint_3", "joint_4", "joint_5", "joint_6"),
                            embodiment_id: str = "realman-rm65-b-three-arm-v1",
@@ -169,6 +229,7 @@ def schema_from_parameters(*, repo_id: str, fps: float, arms: Iterable[str], arm
         repo_id=str(repo_id), fps=integer_fps,
         arm_joint_topics=tuple(f"/{arm}/joint_states" for arm in arm_names),
         arm_action_topics=tuple(str(item) for item in arm_action_topics if str(item)),
+        arm_velocity_topics=tuple(str(item) for item in arm_velocity_topics if str(item)),
         gripper_position_topics=tuple(str(item) for item in gripper_position_topics if str(item)),
         gripper_action_topics=tuple(str(item) for item in gripper_action_topics if str(item)),
         camera_ids=tuple(str(item) for item in camera_ids if str(item)),

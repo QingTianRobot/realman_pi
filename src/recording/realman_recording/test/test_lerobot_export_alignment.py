@@ -57,3 +57,18 @@ def test_v3_receipt_is_written_as_a_complete_json_document(tmp_path: Path):
     assert receipt["episode_index"] == 3
     assert receipt["first_walltime_ns"] == 100
     assert receipt["canonical"]["camera_archive_quality"] == {"state": "UNAVAILABLE"}
+
+
+def test_dataset_root_uses_stable_repo_child_for_collection_directory(tmp_path: Path):
+    schema = schema_from_parameters(
+        repo_id="realman/pi05-three-arm", fps=15.0, arms=["l"],
+        arm_action_topics=["/l/cartesian_velocity/command"],
+        gripper_position_topics=["/gripper_left/position"],
+        gripper_action_topics=[], camera_ids=["front"],
+        base_frames=["l/base_link"], ee_links=["link_6"],
+        cartesian_command_frames=["l/base_link"],
+    )
+    assert LeRobotExporter._dataset_root(tmp_path, schema) == tmp_path / "realman__pi05-three-arm"
+    (tmp_path / "meta").mkdir()
+    (tmp_path / "meta" / "info.json").write_text("{}", encoding="utf-8")
+    assert LeRobotExporter._dataset_root(tmp_path, schema) == tmp_path

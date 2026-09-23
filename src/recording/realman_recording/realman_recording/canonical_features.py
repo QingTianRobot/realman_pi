@@ -122,12 +122,21 @@ def materialize_canonical_frames(
             poses.extend(pose)
         poses_by_frame.append(tuple(poses))
 
-    ee_velocities_by_frame: list[tuple[float, ...]] = [tuple() for _ in aligned]
-    for arm_index in range(schema.arm_count):
-        poses = [pose[arm_index * 7:(arm_index + 1) * 7] for pose in poses_by_frame]
-        velocities = _pose_velocity_series(timestamps, poses)
-        for index, velocity in enumerate(velocities):
-            ee_velocities_by_frame[index] += velocity
+    if schema.arm_velocity_topics:
+        # Driver-published measured end-effector velocity (base frame, 6-DOF per arm).
+        ee_velocities_by_frame = [
+            _flatten_vectors(frame, schema.arm_velocity_topics, 6, label="measured ee velocity")
+            for frame in aligned
+        ]
+    else:
+        # Fall back to FK + shortest-arc pose difference when no measured velocity stream
+        # is configured (keeps older recordings exportable).
+        ee_velocities_by_frame: list[tuple[float, ...]] = [tuple() for _ in aligned]
+        for arm_index in range(schema.arm_count):
+            poses = [pose[arm_index * 7:(arm_index + 1) * 7] for pose in poses_by_frame]
+            velocities = _pose_velocity_series(timestamps, poses)
+            for index, velocity in enumerate(velocities):
+                ee_velocities_by_frame[index] += velocity
 
     result = []
     for index, frame in enumerate(aligned):

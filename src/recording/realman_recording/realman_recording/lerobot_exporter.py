@@ -89,8 +89,14 @@ class LeRobotExporter:
             aligned, schema, solvers,
             {camera: [timestamp for timestamp, _ in frames] for camera, frames in images.items()},
         )
-        with dataset_lock(request.output_dir):
-            dataset = self._open_v3_dataset(request.output_dir, schema, image_shapes)
+        # ``lerobot_export_dir`` is a collection root in the ROS node, while the
+        # SDK expects the directory passed to ``create`` to be one dataset root.
+        # Older deployments also leave per-session legacy directories below that
+        # collection root.  Select a stable repo-specific child unless the caller
+        # already supplied an initialized LeRobot dataset (``meta/info.json``).
+        dataset_root = self._dataset_root(request.output_dir, schema)
+        with dataset_lock(dataset_root):
+            dataset = self._open_v3_dataset(dataset_root, schema, image_shapes)
             try:
                 task = str(manifest.get("metadata", {}).get("task") or "recording")
                 for index, frame in enumerate(canonical):
@@ -111,10 +117,10 @@ class LeRobotExporter:
                         payload[f"observation.images.{camera_id}"] = self._load_rgb(selected[index][1])
                     dataset.add_frame(payload)
                     self._report(request, index + 1, len(aligned))
-                episode_index = int(dataset.meta.total_episodes)
+                episode_index = self._dataset_episode_count(dataset)
                 dataset.save_episode(parallel_encoding=True)
             except BaseException:
-                if dataset.has_pending_frames():
+                if self._dataset_has_pending_frames(dataset):
                     dataset.clear_episode_buffer()
                 raise
             finally:
@@ -123,7 +129,7 @@ class LeRobotExporter:
                 dataset.finalize()
         self._write_v3_receipt(
             request.session_dir,
-            request.output_dir,
+            dataset_root,
             manifest,
             schema,
             episode_index,
@@ -132,7 +138,18 @@ class LeRobotExporter:
             camera_archive_quality,
         )
         self._report(request, 100, 100)
-        return request.output_dir
+        return dataset_root
+
+    @staticmethod
+    def _dataset_root(output_dir: Path, schema: LeRobotV3Schema) -> Path:
+        """Resolve a collection directory to one stable LeRobot dataset root."""
+        output_dir = output_dir.expanduser().resolve()
+        if (output_dir / "meta" / "info.json").is_file():
+            return output_dir
+        slug = schema.repo_id.replace("/", "__").replace("\\", "__")
+        if not slug:
+            raise ValueError("LeRobot repo_id cannot produce an empty dataset directory")
+        return output_dir / slug
 
     @staticmethod
     def _gap_ns(max_gap_sec: float) -> int:
@@ -145,6 +162,7 @@ class LeRobotExporter:
         declared = ((schema.arm_joint_topics, AlignmentPolicy.LINEAR),
                     (schema.gripper_position_topics, AlignmentPolicy.FORWARD_FILL),
                     (schema.arm_action_topics, AlignmentPolicy.LINEAR),
+                    (schema.arm_velocity_topics, AlignmentPolicy.NEAREST),
                     (schema.gripper_action_topics, AlignmentPolicy.FORWARD_FILL))
         result = []
         for topics, policy in declared:
@@ -212,15 +230,40 @@ class LeRobotExporter:
         try:
             from lerobot.datasets import LeRobotDataset
         except ImportError as error:
-            raise RuntimeError("lerobot==0.6.1 is required for LeRobot v3 export") from error
+            try:
+                from lerobot.datasets.lerobot_dataset import LeRobotDataset
+            except ImportError:
+                raise RuntimeError("lerobot==0.4.4 is required for LeRobot v3 export") from error
         if (root / "meta" / "info.json").is_file():
-            return LeRobotDataset.resume(repo_id=schema.repo_id, root=root, batch_encoding_size=1)
+            resume = getattr(LeRobotDataset, "resume", None)
+            if callable(resume):
+                return resume(repo_id=schema.repo_id, root=root, batch_encoding_size=1)
+            # LeRobot 0.4.x resumes an existing local dataset through its constructor.
+            return LeRobotDataset(repo_id=schema.repo_id, root=root, batch_encoding_size=1)
         root.parent.mkdir(parents=True, exist_ok=True)
         return LeRobotDataset.create(
             repo_id=schema.repo_id, root=root, fps=schema.fps,
             features=schema.features(image_shapes), robot_type=schema.embodiment_id,
             use_videos=True, batch_encoding_size=1,
         )
+
+    @staticmethod
+    def _dataset_episode_count(dataset: Any) -> int:
+        """Read the episode count across LeRobot v3 SDK minor API variants."""
+        value = getattr(dataset, "num_episodes", None)
+        if value is not None:
+            return int(value() if callable(value) else value)
+        meta = getattr(dataset, "meta", None)
+        return int(getattr(meta, "total_episodes"))
+
+    @staticmethod
+    def _dataset_has_pending_frames(dataset: Any) -> bool:
+        """Detect an uncommitted episode across the 0.4.x and current SDKs."""
+        checker = getattr(dataset, "has_pending_frames", None)
+        if callable(checker):
+            return bool(checker())
+        buffer = getattr(dataset, "episode_buffer", None)
+        return isinstance(buffer, dict) and int(buffer.get("size", 0)) > 0
 
     @staticmethod
     def _write_v3_receipt(
@@ -233,7 +276,7 @@ class LeRobotExporter:
         urdf_path: Path,
         camera_archive_quality: dict[str, Any],
     ) -> None:
-        receipt = {"dataset_root": str(root), "repo_id": schema.repo_id, "episode_index": episode_index,
+        receipt = {"dataset_root": str(root), "repo_id": schema.repo_id, "fps": schema.fps, "episode_index": episode_index,
                    "schema_fingerprint": schema.fingerprint, "frame_count": len(anchors),
                    "first_walltime_ns": anchors[0], "last_walltime_ns": anchors[-1],
                    "source_session_id": manifest.get("session_id", session_dir.name),
@@ -255,7 +298,8 @@ class LeRobotExporter:
                        "urdf_path": str(urdf_path),
                        "urdf_sha256": sha256(urdf_path.read_bytes()).hexdigest(),
                        "units": {"joint_position": "rad", "joint_velocity": "rad/s", "ee_position": "m", "ee_angular_velocity": "rad/s"},
-                       "generator_versions": {"joint_velocity": "finite_difference_v1", "ee_fk": "urdf_fk_v1", "ee_velocity": "quaternion_shortest_arc_v1"},
+                       "generator_versions": {"joint_velocity": "finite_difference_v1", "ee_fk": "urdf_fk_v1",
+                                              "ee_velocity": "driver_measured_v1" if schema.arm_velocity_topics else "quaternion_shortest_arc_v1"},
                    }}
         atomic_json_write(session_dir / "export" / "lerobot-v3.json", receipt)
 
@@ -305,6 +349,7 @@ class LeRobotExporter:
         from rosbag2_py import ConverterOptions, SequentialReader, StorageOptions  # type: ignore[import-not-found]
         from rclpy.serialization import deserialize_message  # type: ignore[import-not-found]
         from geometry_msgs.msg import TwistStamped  # type: ignore[import-not-found]
+        from realman_msgs.msg import CartesianVelocityState  # type: ignore[import-not-found]
         from sensor_msgs.msg import JointState  # type: ignore[import-not-found]
         from std_msgs.msg import Float64  # type: ignore[import-not-found]
 
@@ -321,6 +366,7 @@ class LeRobotExporter:
             "sensor_msgs/msg/JointState": JointState,
             "std_msgs/msg/Float64": Float64,
             "geometry_msgs/msg/TwistStamped": TwistStamped,
+            "realman_msgs/msg/CartesianVelocityState": CartesianVelocityState,
         }
         topic_types = {meta.name: meta.type for meta in reader.get_all_topics_and_types()}
 
@@ -350,6 +396,10 @@ class LeRobotExporter:
         if "/cartesian_velocity/command" in topic:
             twist = message.twist
             return [twist.linear.x, twist.linear.y, twist.linear.z, twist.angular.x, twist.angular.y, twist.angular.z]
+        if "/cartesian_velocity/state" in topic:
+            if not message.measured_valid:
+                return None
+            return list(message.measured_linear_velocity_mps) + list(message.measured_angular_velocity_radps)
         if topic.startswith("/gripper_") and (topic.endswith("/position") or topic.endswith("/command")):
             return float(message.data)
         return None
@@ -437,6 +487,7 @@ def main(args: list[str] | None = None) -> int:
         repo_id=str(config.get("repo_id", "realman/pi05-three-arm")), fps=parsed.target_fps,
         arms=config.get("arms", ["l", "m", "r"]),
         arm_action_topics=config.get("arm_action_topics", []),
+        arm_velocity_topics=config.get("arm_velocity_topics", []),
         gripper_position_topics=config.get("gripper_position_topics", []),
         gripper_action_topics=config.get("gripper_action_topics", []),
         camera_ids=config.get("camera_ids", []),

@@ -2,8 +2,13 @@
 from __future__ import annotations
 
 import json
+import os
+import subprocess
+import sys
+from pathlib import Path
 
 from realman_recording.session_store import SessionState, SessionStore
+from realman_recording.json_io import atomic_json_write
 
 
 def test_session_store_creates_minimal_layout_and_finalizes(tmp_path):
@@ -126,3 +131,70 @@ def test_decision_timestamps_reject_negative_values(tmp_path):
         assert "non-negative" in str(error)
     else:
         raise AssertionError("negative ADOPT timestamp was accepted")
+
+
+def test_atomic_json_replace_failure_preserves_previous_document_and_cleans_temp(monkeypatch, tmp_path):
+    destination = tmp_path / "manifest.json"
+    destination.write_text('{"state":"READY"}\n', encoding="utf-8")
+
+    def fail_replace(_source, _destination):
+        raise OSError("simulated disk/rename failure")
+
+    monkeypatch.setattr(os, "replace", fail_replace)
+    try:
+        atomic_json_write(destination, {"state": "FAILED"})
+    except OSError as error:
+        assert "simulated" in str(error)
+    else:
+        raise AssertionError("replace failure was swallowed")
+
+    assert destination.read_text(encoding="utf-8") == '{"state":"READY"}\n'
+    assert list(tmp_path.glob(".manifest.json.*")) == []
+
+
+def test_recover_orphaned_recording_marks_subprocess_crash_failed(tmp_path):
+    package_root = Path(__file__).parents[1] / "realman_recording"
+    crash_script = (
+        "import os, sys; "
+        "from realman_recording.session_store import SessionState, SessionStore; "
+        "store = SessionStore(sys.argv[1]); "
+        "store.create({'profile': 'interrupted'}); "
+        "store.transition(SessionState.RECORDING); "
+        "os._exit(23)"
+    )
+    environment = os.environ.copy()
+    existing_pythonpath = environment.get("PYTHONPATH", "")
+    environment["PYTHONPATH"] = os.pathsep.join(
+        item for item in (str(package_root), existing_pythonpath) if item
+    )
+    crashed = subprocess.run(
+        [sys.executable, "-c", crash_script, str(tmp_path)],
+        env=environment,
+        check=False,
+    )
+    assert crashed.returncode == 23
+
+    recovered = SessionStore.recover_orphaned_sessions(tmp_path, recovered_realtime_ns=123)
+    session_directories = [path for path in tmp_path.iterdir() if path.is_dir()]
+    assert len(session_directories) == 1
+    manifest_path = session_directories[0] / "manifest.json"
+    assert recovered == [{"session_id": session_directories[0].name, "state": "FAILED"}]
+    manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+    assert manifest["state"] == "FAILED"
+    assert manifest["summary"]["write_errors"] == 1
+    assert not (session_directories[0] / "manifest.partial.json").exists()
+
+
+def test_recover_orphaned_ready_manifest_promotes_without_marking_write_error(tmp_path):
+    store = SessionStore(tmp_path)
+    session = store.create({"profile": "ready-before-rename"})
+    store.finalize(True, ended_realtime_ns=99, write_errors=0, camera_write_errors=0)
+    # Simulate the narrow crash window by moving the completed manifest back to the
+    # partial name and removing the final name.
+    os.replace(session.directory / "manifest.json", session.directory / "manifest.partial.json")
+    recovered = SessionStore.recover_orphaned_sessions(tmp_path, recovered_realtime_ns=123)
+    assert recovered == [{"session_id": session.session_id, "state": "READY"}]
+    manifest = json.loads((session.directory / "manifest.json").read_text(encoding="utf-8"))
+    assert manifest["state"] == "READY"
+    assert manifest["summary"]["write_errors"] == 0
+    assert manifest["recovery"]["state"] == "FINALIZED_AFTER_PROCESS_INTERRUPTION"

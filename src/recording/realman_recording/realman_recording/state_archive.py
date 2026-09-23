@@ -37,6 +37,7 @@ class McapStateArchive:
         self._stop_requested = threading.Event()
         self._stats = ArchiveStats()
         self._writer: Any | None = None
+        self._output_uri: Path | None = None
 
     def start(self, output: Path, topic_types: dict[str, str]) -> None:
         """Create an MCAP rosbag and start its sole serialization/write worker.
@@ -80,6 +81,7 @@ class McapStateArchive:
 
         with self._lock:
             self._writer = writer
+            self._output_uri = Path(output)
             self._accepting = True
             self._thread = threading.Thread(
                 target=self._write_loop, name="recording-mcap", daemon=True
@@ -120,7 +122,35 @@ class McapStateArchive:
             with self._lock:
                 self._thread = None
                 self._writer = None
+                output_uri = self._output_uri
+                self._output_uri = None
+        # Older Humble bindings finalize through the C++ writer destructor rather
+        # than an exposed close() method. Drop the last Python reference before
+        # checking bag metadata so that fallback finalization has completed.
+        del writer
+        if output_uri is not None:
+            self._verify_finalized_bag(output_uri)
         return self.stats
+
+    def _verify_finalized_bag(self, output_uri: Path) -> None:
+        """Reject a bag whose finalized metadata cannot account for successful writes.
+
+        MCAP may buffer chunks and some Humble storage bindings do not propagate an
+        underlying ENOSPC from their C++ stream. Reading the finalized metadata after
+        releasing the writer catches missing/truncated final output without rescanning
+        every message or touching the ROS callback path.
+        """
+        try:
+            from rosbag2_py import Info  # type: ignore[import-not-found]
+
+            metadata = Info().read_metadata(str(output_uri), "mcap")
+            persisted_messages = int(metadata.message_count)
+        except Exception:
+            self._increment(write_errors=1)
+            return
+
+        if persisted_messages != self.stats.accepted:
+            self._increment(write_errors=1)
 
     @property
     def stats(self) -> ArchiveStats:

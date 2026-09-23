@@ -6,9 +6,9 @@
 
 **架构：** `state.mcap`、JPEG、标定与 URDF 快照是不可变事实来源。ADOPT 后 exporter 在固定 `dataset_fps` 网格对齐原始流，生成有 provenance 的 LeRobot v3 episode。FK、EE 速度、模型 state、reward 都是可版本化重建的派生字段，不能反写或取代原始录制。
 
-**技术栈：** ROS 2 Humble、rosbag2 MCAP、`lerobot==0.6.1`、NumPy、Pillow、URDF/KDL FK 后端（在 Humble 容器固定）、OpenPI data transforms。
+**技术栈：** ROS 2 Humble、rosbag2 MCAP、`lerobot==0.4.4`、NumPy、Pillow、URDF/KDL FK 后端（在 Humble 容器固定）、OpenPI data transforms。
 
-> **版本边界（2026-09-22 已核对）：** “LeRobot Dataset v3”是存储格式版本，不等于 Python 包版本。官方 v3 格式从 `lerobot >= 0.4.0` 起支持；本项目固定 `lerobot==0.6.1`，使用 `LeRobotDataset.create()` / `resume()`、`add_frame()`、`save_episode()`、`finalize()` 的 v3 writer 路径。不要因为外部提到“v3.1”而把 SDK 版本号臆改为 `3.1`；若升级 SDK，必须在 Humble 容器先跑 SDK reload、视频 decode 和 OpenPI one-batch 验收。
+> **版本边界（2026-09-22 已核对）：** “LeRobot Dataset v3”是存储格式版本，不等于 Python 包版本。官方 v3 格式从 `lerobot >= 0.4.0` 起支持；本项目固定 `lerobot==0.4.4`（Humble Python 3.10 可安装的最新版本），使用 `LeRobotDataset.create()` / `resume()`、`add_frame()`、`save_episode()`、`finalize()` 的 v3 writer 路径。不要因为外部提到“v3.1”而把 SDK 版本号臆改为 `3.1`；若升级 SDK，必须在 Humble 容器先跑 SDK reload、视频 decode 和 OpenPI one-batch 验收。
 
 ## 不可变原则
 
@@ -55,7 +55,7 @@ manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URD
 
 ## 实施任务
 
-> 进度（2026-09-22）：Task 1–5 的纯 Python/静态实现已完成并以失败测试覆盖；唯一未通过的验收是 Humble + `lerobot==0.6.1` + OpenPI 的真实 SDK/真机 smoke。宿主没有这些运行时依赖，不能把静态验证误报为端到端成功。
+> 进度补记（2026-09-23，本轮）：上述 97 条测试/镜像缺 MCAP 是本轮之前的状态，现已被后续验证取代。当前工控机 `rm65-recording:test` 已更新，含 MCAP plugin 和 `setuptools=79.0.1`（满足 Humble `colcon-core<80`）；`ros2 bag list storage` 列出 mcap，`colcon list` 正常，当前 recording 测试套件 107 条通过。新增隔离 ROS domain 的真实 recorder Service 集成测试，以合成传感器流完成 PREPARE、START、MCAP 写入、STOP、重复 STOP、DISCARD，并验证节点正常销毁；同时修复 recorder/Web bridge 对 `rclpy.Node._subscriptions` 重复登记导致销毁异常的问题。新增 WebSocket 慢 client 回归测试发现并修复 `web_server.py` 缺少 `json` import 导致 snapshot 广播后台失败的问题；验证慢客户端不会阻塞 producer、最新快照有界合并、发送超时后 client 被清理。新增进程级恢复测试，在 MCAP 已写入后 SIGKILL 活跃 recorder，再通过启动新 recorder ROS 节点验证 partial session 恢复为 FAILED。上一版镜像保留为 `rm65-recording:backup-before-process-recovery-20260923`；更早的 WebSocket 修复前镜像也有备份 tag。另用 LeRobot 0.4.4 SDK 生成的视频 episode fixture 端到端验证 Web HTTP list/summary/frames/JPEG 与 `source_timestamps_ns` 精确映射；这是 SDK fixture 而非机械臂真机采集。四相机成功采集、真实 ENOSPC、真机成功 LeRobot 导出、OpenPI one-batch 与训练验证仍待设备/运行环境验收。
 
 ### Task 1：Canonical schema、能力描述与配置（已实现）
 
@@ -94,27 +94,26 @@ manifest 与 dataset receipt 保存：`embodiment_id`、robot model/serial、URD
 4. 为 success/terminated/truncated/intervention 保留 manifest annotation block；不实现 reward/RL writer。
 5. 提交 `feat(recording): preserve canonical episode provenance`。
 
-### Task 5：π0.5 adapter 与 smoke test（adapter 已实现；容器 smoke 待执行）
+### Task 5：π0.5 adapter 与 smoke test（adapter、LeRobot 容器 smoke 已实现；OpenPI 待执行）
 
 **文件：** 新增 `realman_recording/adapters/pi05.py`、`test/test_pi05_adapter.py`、训练环境文档。
 
 1. 写纯 NumPy 测试：canonical `ee_pose_base + gripper_position` 转所选 checkpoint 的 `observation.state`；canonical command 转对应 action contract。
 2. adapter 的字段选择、是否包含真实 gripper command、rot6d/delta、checkpoint state/action dimension、normalizer asset version 都显式配置；normalizer version 为空必须拒绝，并将 adapter `contract()` 与训练运行产物一起保存。adapter 不执行归一化，OpenPI transform 是唯一的归一化实现；禁止训练代码猜测单位/shape。
-3. 在 OpenPI 训练容器跑 loader + one-batch smoke；action dimension 以实际 checkpoint 为准，不预设 21/32。
+3. 在 OpenPI 训练容器跑 loader + one-batch smoke；当前已完成 LeRobot/adapter 容器 smoke，OpenPI 本体仍待安装。action dimension 以实际 checkpoint 为准，不预设 21/32。
 4. 提交 `feat(recording): add pi05 canonical data adapter`。
 
-### Task 6：回放、文档与真机验证（回放/文档已实现；真机验收待执行）
+### Task 6：文档与真机验证（离线回放暂缓）
 
-**文件：** `replay.py`、`web_server.py`、Web 前端、`website/docs/development/recording-platform.md`、`src/recording/README.md`。
+**文件：** `web_server.py`、Web 前端、`website/docs/development/recording-platform.md`、`src/recording/README.md`。
 
-1. 回放从 canonical episode 读取 joint、EE、gripper、相机，展示 derived feature source/version。
-2. 文档列出 raw source、LeRobot feature、单位/frame、缺失策略与 annotation workflow。
-3. Humble 真机验收四相机/三臂/三夹爪：fixed FPS、quality masks、FK 基准、SDK reload、π0.5 adapter batch。
-4. 提交回放与文档变更。
+1. 文档列出 raw source、LeRobot feature、单位/frame、缺失策略与 annotation workflow。
+2. 已在 `recording-test` 加载 ROS interface 并手工验证 `/recording/manage` 的 PREPARE、短时 START/自动结束和重复 STOP；完整 Humble 真机验收仍需四相机/三臂/三夹爪 fixed FPS、quality masks、FK 基准、SDK reload、π0.5 adapter batch。
+3. 离线回放/Rerun 不纳入本阶段验收，保留骨架供后续恢复。
 
 ## 顺序与明确不做的事
 
-先执行 Task 1–4，之后是 Task 5，最后回放/RL。当前不实现 force/torque、触觉、移动底盘、reward 聚合、`action.executed` 或 RL rollout 字段：它们没有可靠 raw source，仅保留 metadata extension 位置。
+先执行 Task 1–4，之后是 Task 5，最后做真机验收。离线回放/Rerun 暂缓。当前不实现 force/torque、触觉、移动底盘、reward 聚合、`action.executed` 或 RL rollout 字段：它们没有可靠 raw source，仅保留 metadata extension 位置。
 
 ## 总验收门槛
 

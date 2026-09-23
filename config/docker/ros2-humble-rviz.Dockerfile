@@ -52,6 +52,7 @@ RUN find -L /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
         curl \
         ros-humble-ament-cmake-gtest \
         ros-humble-ament-cmake-pytest \
+        ros-humble-rosbag2-storage-mcap \
         ros-humble-diagnostic-msgs \
         ros-humble-joint-state-publisher \
         ros-humble-joint-state-publisher-gui \
@@ -81,6 +82,14 @@ RUN cmake -S /opt/rm65_ws/src/behavior_tree_cpp -B /opt/rm65_ws/behavior_tree/bu
         -DBT_BUILD_EXAMPLES=OFF \
     && cmake --build /opt/rm65_ws/behavior_tree/build --target bt_server \
     && install -D -m 0755 /opt/rm65_ws/behavior_tree/build/bin/bt_server /opt/rm65_ws/behavior_tree/bin/bt_server
+
+# Install CPU-only PyTorch for the recording/export runtime. The recording image
+# does not need CUDA; training images may install their own GPU build separately.
+RUN python3 -m pip install --no-cache-dir \
+        --index-url "https://download.pytorch.org/whl/cpu" \
+        --retries 5 \
+        --timeout 60 \
+        torch==2.6.0+cpu torchvision==0.21.0+cpu
 
 # Install the pinned vendor API used by the real driver. Mock tests still avoid
 # importing it, while production launches can read real controller state.

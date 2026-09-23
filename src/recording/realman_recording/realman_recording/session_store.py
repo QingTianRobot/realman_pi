@@ -152,6 +152,73 @@ class SessionStore:
         atomic_json_write(self.session.directory / "manifest.partial.json", self._manifest)
 
     @staticmethod
+    def recover_orphaned_sessions(root: str | Path, *, recovered_realtime_ns: int | None = None) -> list[dict[str, Any]]:
+        """Close manifests left by a recorder process that died before ``finalize``.
+
+        A partial manifest is never silently discarded.  A session whose persisted
+        state is already READY and whose writer counters are clean is promoted to the
+        final name (the crash happened after writing the complete manifest but before
+        ``os.replace``).  All other partial sessions become FAILED with at least one
+        write error, so an incomplete MCAP can never be adopted.  Raw files remain in
+        place for forensic inspection.
+        """
+        base = Path(root).expanduser().resolve()
+        if not base.is_dir():
+            return []
+        now_ns = time.time_ns() if recovered_realtime_ns is None else _timestamp_or_now(
+            recovered_realtime_ns, name="recovered_realtime_ns"
+        )
+        recovered: list[dict[str, Any]] = []
+        for directory in sorted(base.iterdir()):
+            if not directory.is_dir() or directory.name.startswith("."):
+                continue
+            partial = directory / "manifest.partial.json"
+            final = directory / "manifest.json"
+            if final.is_file() or not partial.is_file():
+                continue
+            try:
+                payload = json.loads(partial.read_text(encoding="utf-8"))
+                if not isinstance(payload, dict):
+                    raise ValueError("manifest must be an object")
+                summary = payload.get("summary")
+                clean_ready = (
+                    payload.get("state") == SessionState.READY.value
+                    and isinstance(summary, dict)
+                    and int(summary.get("write_errors", 1)) == 0
+                    and int(summary.get("camera_write_errors", 0)) == 0
+                )
+                if clean_ready:
+                    payload["recovery"] = {
+                        "state": "FINALIZED_AFTER_PROCESS_INTERRUPTION",
+                        "recovered_realtime_ns": now_ns,
+                    }
+                else:
+                    payload["state"] = SessionState.FAILED.value
+                    payload["ended_realtime_ns"] = int(payload.get("ended_realtime_ns", now_ns))
+                    if not isinstance(summary, dict):
+                        summary = {}
+                    summary["write_errors"] = max(1, int(summary.get("write_errors", 0)))
+                    summary["recovery_reason"] = "recorder process interrupted before finalization"
+                    payload["summary"] = summary
+                    payload["recovery"] = {
+                        "state": "FAILED_AFTER_PROCESS_INTERRUPTION",
+                        "recovered_realtime_ns": now_ns,
+                    }
+                atomic_json_write(partial, payload)
+                os.replace(partial, final)
+                recovered.append(
+                    {
+                        "session_id": str(payload.get("session_id", directory.name)),
+                        "state": str(payload.get("state", SessionState.FAILED.value)),
+                    }
+                )
+            except (OSError, ValueError, TypeError, json.JSONDecodeError):
+                # A malformed/locked partial is retained for manual recovery; startup
+                # must not make the recorder unavailable because of one bad session.
+                continue
+        return recovered
+
+    @staticmethod
     def update_final_manifest(directory: str | Path, **updates: Any) -> dict[str, Any]:
         """Atomically update decision/export metadata of a finalized session only.
 

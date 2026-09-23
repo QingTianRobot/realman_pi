@@ -22,12 +22,24 @@ def atomic_json_write(path: Path, payload: dict[str, Any]) -> None:
     leaves either the previous complete file or the new complete file, never a
     truncated intermediate.
     """
-    with tempfile.NamedTemporaryFile(
-        mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
-    ) as stream:
-        json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
-        stream.write("\n")
-        stream.flush()
-        os.fsync(stream.fileno())
-        temporary = Path(stream.name)
-    os.replace(temporary, path)
+    temporary: Path | None = None
+    try:
+        with tempfile.NamedTemporaryFile(
+            mode="w", encoding="utf-8", dir=path.parent, prefix=f".{path.name}.", delete=False
+        ) as stream:
+            json.dump(payload, stream, ensure_ascii=False, indent=2, sort_keys=True)
+            stream.write("\n")
+            stream.flush()
+            os.fsync(stream.fileno())
+            temporary = Path(stream.name)
+        os.replace(temporary, path)
+    finally:
+        # A full disk, permissions change, or injected replace failure can happen
+        # after the temporary file is fsync-ed.  Never leave a misleading orphan
+        # beside a session manifest; the previous destination remains untouched when
+        # replace itself fails.
+        if temporary is not None:
+            try:
+                temporary.unlink(missing_ok=True)
+            except OSError:
+                pass

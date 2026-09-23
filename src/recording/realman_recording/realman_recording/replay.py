@@ -87,7 +87,10 @@ class ReplayPlayer:
         try:
             from lerobot.datasets import LeRobotDataset
         except ImportError as error:
-            raise RuntimeError("lerobot==0.6.1 is required for offline replay") from error
+            try:
+                from lerobot.datasets.lerobot_dataset import LeRobotDataset
+            except ImportError:
+                raise RuntimeError("lerobot==0.4.4 is required for offline replay") from error
         receipt_path = self._options.session_dir / "export" / "lerobot-v3.json"
         if not receipt_path.is_file():
             raise ValueError("session is missing its canonical LeRobot export receipt")

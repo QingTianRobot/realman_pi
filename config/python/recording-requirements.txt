@@ -1,8 +1,12 @@
 # Optional live visualizer dependency. The recording core handles ImportError and
 # remains fully functional when this SDK is absent; production images install it here.
 rerun-sdk
-# LeRobot v3 writer used by the asynchronous, adopted-session exporter.  v0.6.1
-# is the current stable pip release; recorder and π₀.₅ training must share it.
-lerobot==0.6.1
+# LeRobot v3 writer used by the asynchronous, adopted-session exporter.  Dataset
+# v3 is supported by lerobot 0.4.x; 0.4.4 is the newest release available for
+# the Python 3.10 / ROS 2 Humble image and is shared with π₀.₅ training.
+lerobot==0.4.4
+# ROS 2 Humble's colcon-core currently requires setuptools <80; keep LeRobot's
+# transitive setuptools upgrade inside that compatible range.
+setuptools>=71,<80
 # Decode the recorder's JPEG archive to uint8 RGB HWC arrays for the official writer.
 Pillow

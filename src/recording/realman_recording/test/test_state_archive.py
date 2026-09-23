@@ -147,7 +147,15 @@ def test_start_creates_cdr_topics_writes_and_closes_a_real_writer_boundary(monke
         def close(self):
             self.closed = True
 
+    class Info:
+        def read_metadata(self, uri, storage_id):
+            assert uri == str(tmp_path / "state.mcap")
+            assert storage_id == "mcap"
+            assert writers[0].closed is True
+            return types.SimpleNamespace(message_count=len(writers[0].writes))
+
     rosbag2_py = types.ModuleType("rosbag2_py")
+    rosbag2_py.Info = Info
     rosbag2_py.StorageOptions = StorageOptions
     rosbag2_py.ConverterOptions = ConverterOptions
     rosbag2_py.TopicMetadata = TopicMetadata

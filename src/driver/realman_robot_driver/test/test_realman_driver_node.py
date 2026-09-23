@@ -664,6 +664,15 @@ def test_node_source_registers_cartesian_velocity_action_and_command_topic():
     assert "self.velocity_session.accept_command" in source
 
 
+def test_node_source_registers_cartesian_velocity_state_topic_and_estimator():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert "CartesianVelocityState" in source
+    assert "PoseVelocityEstimator" in source
+    assert '"cartesian_velocity/state"' in source
+    assert "measured_valid" in source
+
+
 def test_node_source_registers_cartesian_pose_action_and_command_topic():
     source = NODE_PATH.read_text(encoding="utf-8")
 

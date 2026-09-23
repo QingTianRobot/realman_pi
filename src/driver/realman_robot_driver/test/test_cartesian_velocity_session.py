@@ -223,6 +223,47 @@ def test_start_initializes_zero_command_and_claims_arm():
     session.shutdown()
 
 
+def test_telemetry_snapshot_distinguishes_requested_and_limited_commands():
+    clock = Clock()
+    adapter = FakeAdapter()
+    session = make_session(
+        adapter=adapter,
+        clock=clock,
+        session_settings=settings(max_linear_speed_mps=1.0),
+        active_frame=lambda reference_type: ("cell", "l/work/cell"),
+    )
+
+    idle = session.telemetry_snapshot()
+    assert idle.session_active is False
+    assert idle.commanded == (0.0,) * 6
+    assert idle.limited == (0.0,) * 6
+
+    assert session.start(
+        valid_goal(
+            reference_type=int(ReferenceType.WORK),
+            reference_name="cell",
+            max_linear_speed_mps=0.5,
+        )
+    ) is True
+    session.accept_command(
+        twist(
+            "l/work/cell",
+            linear=(0.4, 0.0, 0.0),
+            stamp_ns=1_000_000_000,
+        )
+    )
+    clock.advance(0.02)
+    assert session.tick() is None
+
+    state = session.telemetry_snapshot()
+    assert state.session_active is True
+    assert state.reference_name == "cell"
+    assert state.frame_id == "l/work/cell"
+    assert state.commanded == pytest.approx((0.4, 0.0, 0.0, 0.0, 0.0, 0.0))
+    assert state.limited == pytest.approx((0.02, 0.0, 0.0, 0.0, 0.0, 0.0))
+    session.shutdown()
+
+
 def test_work_velocity_uses_vendor_world_frame_type():
     adapter = FakeAdapter()
     session = make_session(

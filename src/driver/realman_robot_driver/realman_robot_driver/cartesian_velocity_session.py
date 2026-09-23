@@ -40,6 +40,19 @@ class VelocityResult:
 
 
 @dataclass(frozen=True)
+class VelocityCommandState:
+    """Read-only command snapshot for Cartesian velocity telemetry."""
+
+    session_active: bool
+    reference_type: int
+    reference_name: str
+    frame_id: str
+    commanded: tuple[float, ...]
+    limited: tuple[float, ...]
+    command_age_ms: int
+
+
+@dataclass(frozen=True)
 class _ValidatedGoal:
     reference_type: ReferenceType
     reference_name: str
@@ -155,6 +168,38 @@ class CartesianVelocitySession:
             if self._result is None:
                 return VelocityResult(False, VelocityTerminalState.ABORTED, 0, "not started")
             return self._result
+
+    def telemetry_snapshot(self) -> VelocityCommandState:
+        """Return the latest command without acquiring motion ownership."""
+        with self._condition:
+            goal = self._goal
+            active = bool(self._running and goal is not None)
+            if goal is None:
+                return VelocityCommandState(
+                    False,
+                    int(ReferenceType.BASE),
+                    "",
+                    "",
+                    _ZERO,
+                    _ZERO,
+                    0,
+                )
+            command = self._command if active else _ZERO
+            limited = self._limited_command if active else _ZERO
+            age_ms = (
+                int(max(0.0, self._monotonic() - self._command_received_at) * 1000.0)
+                if active
+                else 0
+            )
+            return VelocityCommandState(
+                active,
+                int(goal.reference_type),
+                goal.reference_name,
+                goal.ros_frame_id,
+                tuple(command),
+                tuple(limited),
+                age_ms,
+            )
 
     @property
     def thread(self) -> threading.Thread | None:
@@ -1534,6 +1579,7 @@ def _cancel_reject() -> Any:
 
 __all__ = [
     "CartesianVelocitySession",
+    "VelocityCommandState",
     "VelocityFeedbackPhase",
     "VelocityResult",
     "VelocityTerminalState",

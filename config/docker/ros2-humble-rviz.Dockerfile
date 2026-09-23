@@ -84,8 +84,13 @@ RUN cmake -S /opt/rm65_ws/src/behavior_tree_cpp -B /opt/rm65_ws/behavior_tree/bu
 
 # Install the pinned vendor API used by the real driver. Mock tests still avoid
 # importing it, while production launches can read real controller state.
+# Chinese PyPI mirrors (Tsinghua/Aliyun/USTC/Tencent/Huawei/NJU) currently only
+# carry Robotic_Arm up to 1.0.6, but this project is aligned with vendor API
+# V1.7.13 and requires 1.1.6. Fall back to official pypi.org for this single
+# pure-Python wheel; every other package still resolves from PYPI_INDEX_URL.
 RUN python3 -m pip install --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
+        --extra-index-url "https://pypi.org/simple" \
         --retries 5 \
         --timeout 60 \
         --requirement /opt/rm65_ws/config/python/realman-sdk-requirements.txt \
@@ -97,10 +102,18 @@ RUN python3 -m pip install --no-cache-dir \
         --timeout 60 \
         --requirement /opt/rm65_ws/config/python/gripper-requirements.txt
 
+# Transport deps (msgpack + websockets) for the vendored OpenPI policy client
+# used by policy_bridge.
+RUN python3 -m pip install --no-cache-dir \
+        --index-url "${PYPI_INDEX_URL}" \
+        --retries 5 \
+        --timeout 60 \
+        --requirement /opt/rm65_ws/config/python/policy-bridge-requirements.txt
+
 RUN . /opt/ros/humble/setup.sh \
     && colcon build --symlink-install \
-        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock realman_recording realman_recording_msgs \
-    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock realman_recording realman_recording_msgs \
+        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock realman_recording realman_recording_msgs policy_bridge \
+    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock realman_recording realman_recording_msgs policy_bridge \
     && colcon test-result --verbose
 
 COPY --from=bt_editor_build /opt/bt_editor/dist /opt/rm65_ws/behavior_tree/editor-dist

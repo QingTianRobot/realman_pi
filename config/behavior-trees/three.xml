@@ -1,0 +1,15 @@
+<?xml version="1.0"?>
+<!-- RealMan joint angles are degrees. Both leaf nodes default to dry-run. -->
+<root main_tree_to_execute="MainTree"
+      realman_arm_id="r"
+      realman_required_arms="l,m,r"
+      realman_launch="arm_move"
+      realman_stop_on_terminal="true"
+      realman_exit_on_terminal="true">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="three_arm_staged_move">
+      <ThreeArmMoveJ name="all_zero" dry_run="{dry_run}" l_joint_degrees="0,0,0,0,0,0" m_joint_degrees="0,0,0,0,0,0" r_joint_degrees="0,0,0,0,0,0" velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+      <ThreeArmMoveJ name="requested_pose" dry_run="{dry_run}" l_joint_degrees="24,20,66,24,84,14.5" m_joint_degrees="0,18,70,0,90,9" r_joint_degrees="15,22,65,23,82,-7.5" velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

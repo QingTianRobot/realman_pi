@@ -51,7 +51,7 @@ def test_executor_increments_sequence_and_writes_snapshot_for_every_tick_status(
     assert 'status = tree_->tickOnce();' in source
     assert 'void RealmanBtExecutorNode::flushSnapshot()' in source
     assert '++snapshot_sequence_;' in source
-    assert 'snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_);' in source
+    assert 'snapshot_writer_->write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_,' in source
     tick_body = source[source.index('void RealmanBtExecutorNode::onTick()'):]
     flush_index = tick_body.index('flushSnapshot();')
     terminal_index = tick_body.index('if (bt_core::isStatusCompleted(status)')
@@ -185,6 +185,14 @@ def test_halted_pending_goal_is_drained_by_executor_owned_async_state():
     assert 'create_wall_timer' in executor
     assert 'drainCancellationQueue' in executor
     assert 'if (remaining != current)' in executor
+
+
+def test_shutdown_snapshot_exposes_pending_cancellation_drains():
+    snapshot = (ROOT / 'src/behavior/realman_bt/src/runtime_snapshot.cpp').read_text()
+    executor = EXECUTOR.read_text()
+    assert 'pending_cancellations' in snapshot
+    assert 'cancellation_drains_.size()' in executor
+    assert 'write(*tree_, tree_id_, snapshot_sequence_, &diagnostics_,' in executor
 
 
 def test_three_arm_movej_is_registered_and_failure_handoffs_other_goals():

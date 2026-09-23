@@ -16,6 +16,16 @@ install(
   DESTINATION share/${PROJECT_NAME}/config
 )
 
+# Optional, gitignored site override. Installed only when present at build time.
+# Under `colcon build --symlink-install` the launch also resolves this file from
+# the source tree, so it can be created or edited without rebuilding.
+install(
+  FILES
+    ${CMAKE_CURRENT_SOURCE_DIR}/../../config/ros/cameras_ros2.local.yaml
+  DESTINATION share/${PROJECT_NAME}/config
+  OPTIONAL
+)
+
 install(
   FILES
     ${CMAKE_CURRENT_SOURCE_DIR}/../../config/rviz/cameras.rviz

@@ -1,0 +1,65 @@
+<?xml version="1.0"?>
+<root main_tree_to_execute="InputControl"
+      realman_arm_id="r"
+      realman_required_arms="l,m,r"
+      realman_launch="control_router"
+      realman_stop_on_terminal="false"
+      realman_exit_on_terminal="false">
+  <BehaviorTree ID="InputControl">
+    <ReactiveSequence name="input_control">
+      <SelectInputMode selected_mode="{selected_mode}"/>
+      <ReactiveFallback name="input_router">
+        <ReactiveSequence name="web_branch">
+          <InputModeGuard mode="web" label="Web" selectable="false"
+                          selected_mode="{selected_mode}"/>
+          <ActivateInputMode mode="web"/>
+          <WebInputStub/>
+        </ReactiveSequence>
+        <ReactiveSequence name="keyboard_branch">
+          <InputModeGuard mode="keyboard" label="Web / 键盘速度控制" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <ActivateInputMode mode="keyboard"/>
+          <KeyboardVelocityInput/>
+        </ReactiveSequence>
+        <ReactiveSequence name="policy_branch">
+          <InputModeGuard mode="policy" label="Policy" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <ActivateInputMode mode="policy"/>
+          <PolicyInputStub/>
+        </ReactiveSequence>
+        <ReactiveSequence name="pikaposition_branch">
+          <InputModeGuard mode="pikaposition" label="Pika / 位置控制" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <Sequence name="pika_position_entry">
+            <ThreeArmMoveJ name="pika_default_pose" dry_run="{dry_run}"
+                           l_joint_degrees="{pika_l_joint_degrees}"
+                           m_joint_degrees="{pika_m_joint_degrees}"
+                           r_joint_degrees="{pika_r_joint_degrees}"
+                           velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+            <ActivateInputMode mode="pikaposition"/>
+            <PikaPositionInput/>
+          </Sequence>
+        </ReactiveSequence>
+        <ReactiveSequence name="pikavelocity_branch">
+          <InputModeGuard mode="pikavelocity" label="Pika / 速度控制" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <Sequence name="pika_velocity_entry">
+            <ThreeArmMoveJ name="pika_default_pose" dry_run="{dry_run}"
+                           l_joint_degrees="{pika_l_joint_degrees}"
+                           m_joint_degrees="{pika_m_joint_degrees}"
+                           r_joint_degrees="{pika_r_joint_degrees}"
+                           velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+            <ActivateInputMode mode="pikavelocity"/>
+            <PikaVelocityInput/>
+          </Sequence>
+        </ReactiveSequence>
+        <ReactiveSequence name="none_branch">
+          <InputModeGuard mode="none" label="无输入" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <ActivateInputMode mode="none"/>
+          <IdleInput/>
+        </ReactiveSequence>
+      </ReactiveFallback>
+    </ReactiveSequence>
+  </BehaviorTree>
+</root>

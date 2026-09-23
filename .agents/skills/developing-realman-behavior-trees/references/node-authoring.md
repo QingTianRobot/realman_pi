@@ -1,93 +1,103 @@
 # Node Authoring and Motion Safety
 
-## MoveJ Port Contract
+## Authoring Workflow
 
-Declare every public input in `providedPorts()` with a type, safe default, and description. `MoveJ` accepts:
+For a new executable BT node, update the complete contract:
 
-| Port | Rule |
+1. Add the header/source under `src/behavior/realman_bt/{include/realman_bt,src}/`.
+2. Declare typed ports with `providedPorts()`; use snake_case names and include units in names where ambiguity is possible.
+3. Register the exact XML tag in `RealmanBtExecutorNode`; XML tags use PascalCase without the C++ `Node` suffix.
+4. Add sources, ROS dependencies, installation, and focused tests in `CMakeLists.txt`/`package.xml` as needed.
+5. Add or update an authoritative XML tree and its root startup metadata.
+6. Add port, registration, XML, failure, dry-run, and lifecycle tests. Update developer documentation for any public contract.
+
+Do not add a tag to XML before registration exists. Conversely, a registered node without a tested XML use site is not a complete public tree contract.
+
+## Port Contract
+
+Declare each public input with a type, safe default, and useful description. Read and validate every value before creating clients, publishers, timers, or goals. Reject malformed or non-finite input; do not clamp it or silently substitute a production fallback.
+
+Use these naming rules:
+
+- identity/reference: `arm_id`, `reference`, `mode`;
+- booleans: `dry_run`, `selectable`;
+- quantities: suffix units, such as `joint_degrees`, `linear_velocity_mps`, `angular_velocity_radps`, `duration_sec`, `timeout_sec`, `control_period_ms`;
+- per-arm values: `l_`, `m_`, `r_`, such as `l_joint_degrees`;
+- blackboard remapping: `{snake_case_key}`; keep catalog metadata such as input-mode `mode`, `label`, and `selectable` literal.
+
+Validate bounds independently. Current motion nodes establish these examples:
+
+| Node | Important ports and constraints |
 | --- | --- |
-| `arm_id` | Exactly `l`, `m`, or `r`. |
-| `dry_run` | Defaults to `true`; only `false` may permit a goal. |
-| `joint_degrees` | Exactly six comma-separated, finite doubles. |
-| `velocity_percent` | Integer in `[1, 100]`. |
-| `blend_radius_percent` | Integer in `[0, 100]`. |
-| `timeout_sec` | Finite and strictly positive. |
+| `MoveJ` | `arm_id` is `l/m/r`; six finite `joint_degrees`; velocity `[1,100]`; blend `[0,100]`; positive finite timeout; `dry_run=true` default. |
+| `ThreeArmMoveJ` | Six finite joint values for each `l/m/r`; no `arm_id`; common velocity/blend/timeout; all values validated before any client is created. |
+| `CartesianVelocityForDuration` | `arm_id`, configured logical `reference`, two finite three-value vectors, and positive duration; speed, acceleration, watchdog, goal timeout, and stop timeout come from the per-arm runtime profile. |
 
-Validate before creating an Action client or sending a goal. Do not clamp invalid input, silently use a fallback after a malformed value, or confuse blend with velocity: blend may be zero, velocity may not. Construct the goal with `MOVEJ`, `BASE`, `reference_name="base"`, `connect=false`, and the validated values.
+## Stateful Asynchronous Leaf Pattern
 
-## Failure and Async Rules
+A long-running leaf returns `RUNNING` while it owns asynchronous work. Keep initialization idempotent and retain all resources as members: ROS node, client, goal-response future, accepted handle, result future, publisher/timer, deadlines, and explicit state flags.
 
-Catch malformed input, client creation, send-goal, goal-response, result-listener, and result-future failures. Call `setFailureReason()` with the original useful message before returning `FAILURE`; emit the same diagnostic detail where applicable. For a non-success Action result, prefer `wrapped.result->message`; otherwise preserve the ROS Action result code. Do not replace an unknown result response with a generic success or omit it from the monitor.
+The normal Action lifecycle is:
 
-Use an Action for long-running or cancellable motion. `~/start` and `~/stop` are `std_srvs/srv/Trigger` Services for short executor control only; they must not become substitutes for a motion Action.
+1. validate ports and build the complete goal;
+2. if dry-run, record validation success and return `SUCCESS` without creating ROS motion resources;
+3. create the client and wait non-blockingly for the server;
+4. send exactly once and retain the pending goal response;
+5. retain an accepted handle and install the result listener;
+6. return `SUCCESS` only after both ROS result code and result payload satisfy the node contract;
+7. on every failure, preserve the most specific message in `failureReason()` and diagnostics.
 
-After `async_send_goal`, keep the client and pending response alive. A deadline while awaiting the response stays `RUNNING`; a delayed accepted goal is cancelled once cancellation submission succeeds. A halt transfers pending responses and accepted nonterminal handles to the executor-owned `MoveJCancellationDrain`, driven separately from tree ticks. This also applies when `async_get_result()` setup throws after acceptance. The drain retains pending responses until rejection and accepted handles until `async_cancel_goal()` successfully submits; retain and retry on a submission exception. It releases tracking immediately after successful submission and does not wait for cancel acknowledgement or a terminal result. Never cancel a goal with a ready terminal result. Process shutdown still stops the drain timer; robot safety after process exit depends on the driver software stop and an accessible emergency stop.
+Never treat `UNKNOWN`, a missing result payload, a canceled result, or an exception as success. Prefer the Action result's `message`; otherwise retain the ROS result code or exception text.
 
-## ThreeArmMoveJ and Stage Barriers
+## Halt and Cancellation Ownership
 
-Read `src/behavior/realman_bt/{include/realman_bt,src}/three_arm_move_j_node.*` and its focused test before changing this leaf. It has no `arm_id` port: it always targets `/l/execute_motion`, `/m/execute_motion`, and `/r/execute_motion`.
+`onHalted()` is a safety boundary, not just state reset. Apply this order:
 
-| Port | Default and constraint |
-| --- | --- |
-| `l_joint_degrees`, `m_joint_degrees`, `r_joint_degrees` | Each defaults to `0,0,0,0,0,0`; six finite joint angles in degrees per arm. |
-| `dry_run` | `true`; no Action client or goal in this mode. |
-| `velocity_percent` | `10`; integer `[1, 100]`. |
-| `blend_radius_percent` | `0`; integer `[0, 100]`. |
-| `timeout_sec` | `120`; finite positive seconds, including server discovery and result waiting. |
+1. Stop periodic nonzero command generation.
+2. Publish a neutral command when the interface requires it; `CartesianVelocityForDuration` publishes zero velocity.
+3. If the goal response is pending, move the client and response future into an executor-owned drain.
+4. If an accepted goal is nonterminal, move the client and handle into a drain, including when `async_get_result()` setup failed.
+5. Only reset leaf state after ownership was transferred or no work remains.
 
-Validate all three goals before client creation. Wait for all three servers, then submit l/m/r goals asynchronously in the same tick. Success requires all three wrapped result codes to be `SUCCEEDED` and every result payload's `success` to be true. A failed arm must preserve its cause and transfer unfinished siblings to the executor drain; completed terminal goals need no cancellation.
+The drain retains a pending response until rejection or acceptance. For an accepted goal it retries if `async_cancel_goal()` throws, then releases after cancellation submission succeeds. It does not wait for cancel acknowledgement or a terminal Action result. Never cancel a goal whose result is already terminal.
 
-Unlike single-arm MoveJ's pending-response timeout path above, ThreeArmMoveJ can return `FAILURE` immediately after handing pending work to the executor drain. Process exit still waits for drain completion. Do not document these two leaf timing behaviors as identical.
+One-shot process exit waits until all MoveJ and Cartesian-velocity drains report empty. This is a software ownership guarantee, not proof of physical stop; the driver watchdog, software stop, and emergency stop remain separate layers.
 
-Reuse `config/behavior-trees/three_arm_staged_move.xml`: its stateful `Sequence` contains `all_zero` followed by `requested_pose`. Each child is one ThreeArmMoveJ leaf, so no arm starts stage two before all stage-one results succeed. Avoid three sequential MoveJ leaves for a concurrent stage; no additional generic Parallel node is registered by this executor.
+## One-Shot and Continuous Motion
 
-When changing this behavior, exercise all-server readiness, same-tick submissions, the all-success barrier, rejection/result failure, sibling cancellation, timeout handoff, dry-run, and exact XML target values in `test_three_arm_move_j_node.cpp` and `test_tree_contract.py`.
+Use `MoveJ` for one completed joint-space operation through `/<arm>/execute_motion`.
 
-## Persistent Input Router
+Use `ThreeArmMoveJ` when one stage requires l/m/r goals to be submitted in the same tree tick and the next stage must wait for all three successes. A stateful `Sequence` of `ThreeArmMoveJ` leaves creates stage barriers; three sequential `MoveJ` leaves do not. Concurrent submission is not synchronized physical arrival.
 
-`config/behavior-trees/control_router.xml` is the public catalog, not an
-example to duplicate in code. A selectable mode is registered by a literal
-`InputModeGuard mode`, `label`, and `selectable` attribute while XML is built;
-mode IDs are lower-case ASCII identifiers. Keep the root `ReactiveSequence`
-and `ReactiveFallback`: they re-check the selection on every tick and halt a
-previous RUNNING branch whose guard becomes false. Do not replace them with
-stateful `Sequence` or `Fallback`, or modify vendored control nodes.
+Use the continuous-session pattern for streamed control:
 
-Keep `web` first and `selectable="false"`; it is the sticky, highest-priority
-override selected by Web motion arbitration, never a picker option. Keep
-selectable `none` as the configured safe fallback and its neutral branch. A
-mode branch is always, in this order, `InputModeGuard`, `ActivateInputMode`,
-then its input leaf. `ActivateInputMode` publishes active state synchronously
-before the leaf runs, including for a placeholder.
+- Action establishes and owns the session;
+- Topic refreshes commands while that Action is active;
+- watchdog handles stale commands;
+- cancel/stop terminates the session;
+- timer-based refresh must not depend on BT tick frequency.
 
-A change from the current active mode first selects and activates `none` for
-one router tick, then selects and activates the requested mode on the following
-tick. This neutral handoff is what makes a new mode take over a running branch
-without waiting for it to finish. Reselecting the already active mode instead
-returns its existing request ID immediately: it has no neutral tick and does
-not increment `epoch`. Non-Web selection from the browser cancels Web-owned
-Actions before requesting the global mode. A Web motion request may supersede
-a pending non-Web request, but may be forwarded only after matching
-`ACTIVE/web` state.
+`CartesianVelocityForDuration` follows this pattern with `/<arm>/cartesian_velocity` plus `/<arm>/cartesian_velocity/command`. It samples current pose before and after the session and returns success only when configured minimum physical motion is observed; an expected canceled session alone is not proof that the robot moved.
 
-Policy and Pika are intentionally RUNNING placeholders: emit their
-once-per-entry diagnostic only and send no goals. Test router changes with XML
-contract and mock/dry-run coverage, including catalog order, the neutral tick,
-active-before-leaf ordering, Web priority, and cancellation-before-leaving-Web;
-do not require an input device or real robot motion.
+## Input-Mode Nodes
 
-## Dry-Run and Tests
+`InputModeGuard` registers literal XML metadata during tree construction. `ActivateInputMode` must occur after the guard and before the input leaf can emit commands. `SelectInputMode` writes the coordinator's current selection each tick.
 
-`dry_run=true` validates the goal and records a validation-complete `result` event, but creates no Action client and sends no goal. Keep it the default.
+Long-lived input leaves return `RUNNING`. Their `onHalted()` must stop or transfer owned work and reset once-per-entry state. A placeholder may record a once-per-entry diagnostic, but it must not create a hidden command path.
 
-For an authoring change, add or update focused coverage for the port bounds and malformed joints, failure reason, dry-run no-goal boundary, result message/code, timeout while response is pending, delayed acceptance cancellation, halt/drain ownership, cancellation retry, and `async_get_result()` setup failure. Keep `test_tree_contract.py` and XML tests aligned with registration and port changes. Run focused tests before ROS integration; then run `./rm65 bt-test build` and `./rm65 bt-test mock` where ROS tooling is available. Real motion requires an explicit decision after dry-run, a cleared workspace, low speed, and accessible emergency stop.
+Pika's `PikaPositionInput` and `PikaVelocityInput` leaves are intentionally ownership/diagnostic markers; `pika_control_router` owns the l/r Action sessions and stream forwarding. Do not duplicate that routing inside the leaf.
 
-## Pressure Checklist
+## Test Matrix
 
-- Does every failed send, response, result, or exception retain the original detail, including `unknown result response, ignoring...`?
-- Does `failureReason()` exist before every terminal `FAILURE` path that has a cause?
-- Are malformed, non-finite, short, and long joint lists rejected before client creation?
-- Are velocity `[1, 100]`, blend `[0, 100]`, and positive finite timeout each tested independently?
-- Does timeout retain pending-response ownership and cancel delayed acceptance once after successful submission, without claiming to await acknowledgement or terminal completion?
-- Does halt preserve ownership when the response is pending, result setup failed, or cancel submission throws?
-- Does dry-run prove that no Action client or goal exists?
+At minimum, cover:
+
+- valid defaults and every boundary independently;
+- malformed, non-finite, short, and long vectors;
+- dry-run creates no client, goal, timer, or hardware command;
+- unavailable server, send exception, rejection, listener exception, result exception, non-success code, and payload failure;
+- timeout before send, pending goal response after timeout, delayed acceptance, cancellation submission retry, and terminal result before cancel;
+- halt with a pending response, accepted handle, and missing result future;
+- exact diagnostic interface name, phase, severity, and failure detail;
+- XML tag registration, port names, blackboard remaps, and startup metadata.
+
+Run focused tests before ROS integration. Use mock/dry-run validation by default; never make a real motion goal part of an ordinary node test.

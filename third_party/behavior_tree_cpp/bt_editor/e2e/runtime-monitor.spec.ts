@@ -25,7 +25,7 @@ async function mockRuntime(page: Page, initial: unknown = snapshot) {
 
 test('waits in IDLE until executor data arrives, without an editing surface', async ({ page }) => {
   const state = await mockRuntime(page, { state: 'IDLE', root_status: 'IDLE', nodes: [] });
-  await page.goto('/?tree=arm_move.xml');
+  await page.goto('/?tree=move.xml');
   await expect(page.getByText('等待执行器发布运行树')).toBeVisible();
   await expect(page.getByRole('status')).toHaveText('已连接');
   await expect(page.getByRole('region', { name: '运行概况' }).getByText('IDLE')).toBeVisible();

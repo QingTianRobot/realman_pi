@@ -72,10 +72,32 @@ compose() {
   esac
 }
 
+check_driver_rviz_conflict() {
+  [[ "$DRY_RUN" == "1" ]] && return 0
+
+  local container_id
+  if ! container_id="$(
+    docker ps -q \
+      --filter 'label=com.docker.compose.service=realman_driver_rviz' \
+      --filter status=running
+  )"; then
+    printf '%s\n' 'rm65: unable to check for the legacy realman_driver_rviz service' >&2
+    return 1
+  fi
+
+  if [[ -n "$container_id" ]]; then
+    printf '%s\n' \
+      'rm65: refusing to start while realman_driver_rviz is running; stop it and use realman_remote_rviz for viewing' \
+      >&2
+    return 1
+  fi
+}
+
 up() {
   local profile="${1:-production}"
   case "$profile" in
     production)
+      check_driver_rviz_conflict
       camera_start
       if ! compose up -d realman_bringup_remote realman_web_control; then
         camera_stop
@@ -83,8 +105,20 @@ up() {
       fi
       ;;
     desktop)
+      check_driver_rviz_conflict
       camera_start
       if ! compose up -d realman_bringup_remote realman_web_control realman_remote_rviz; then
+        camera_stop
+        return 1
+      fi
+      ;;
+    policy)
+      # Production graph plus the VLA policy bridge container. The bridge is a
+      # pure publish layer; it stays idle until the router selects policy mode
+      # and /policy/activate is called.
+      check_driver_rviz_conflict
+      camera_start
+      if ! compose up -d realman_bringup_remote realman_web_control policy_bridge; then
         camera_stop
         return 1
       fi
@@ -93,15 +127,19 @@ up() {
       compose run --rm rm65_three_rviz
       ;;
     *)
-      printf 'usage: rm65 up [desktop|model]\n' >&2
+      printf 'usage: rm65 up [desktop|model|policy]\n' >&2
       return 2
       ;;
   esac
 }
 
 down() {
-  compose stop realman_bringup_remote realman_web_control realman_remote_rviz || true
+  compose stop realman_bringup_remote realman_web_control realman_remote_rviz policy_bridge || true
   camera_stop
+}
+
+build() {
+  compose build realman_bringup_remote realman_web_control
 }
 
 status() {
@@ -114,7 +152,7 @@ status() {
   else
     printf 'camera: stopped\n'
   fi
-  compose ps realman_bringup_remote realman_web_control realman_remote_rviz
+  compose ps realman_bringup_remote realman_web_control realman_remote_rviz policy_bridge
 }
 
 logs() {
@@ -123,7 +161,7 @@ logs() {
     return 0
   fi
   [[ -f "$LOG_ROOT/rm65-camera.log" ]] && tail -n 100 "$LOG_ROOT/rm65-camera.log" || true
-  compose logs --tail=100 realman_bringup_remote realman_web_control
+  compose logs --tail=100 realman_bringup_remote realman_web_control policy_bridge
 }
 
 sync_repo() {
@@ -139,13 +177,14 @@ usage() {
 Usage: ./rm65 <command> [profile]
 
 Commands:
+  build               Rebuild the local production driver and Web control images.
   up [desktop|model]  Start production runtime, desktop RViz, or offline model viewer.
   down                Stop unified runtime and ROS 2 cameras.
   status              Show camera and Docker service state.
   logs                Show recent camera and bringup logs.
   camera              Run the legacy RTSP/TCP camera helper.
   bt-test build|mock|web|all  Build, run, or validate isolated behavior-tree scenarios.
-  bt [l|m|r|three]    Run a one-shot behavior tree; executor and :8080 monitor exit at terminal state.
+  bt [tree-name|l|m|r|three|control]  Run a behavior tree from config/behavior-trees; .xml may be omitted.
   bt control          Run the persistent input router and :8080 monitor until Ctrl-C.
   sync                Synchronize the clean main branch to production.
 EOF
@@ -154,6 +193,7 @@ EOF
 command_name="${1:-help}"
 shift || true
 case "$command_name" in
+  build) build "$@" ;;
   up) up "$@" ;;
   down) down "$@" ;;
   status) status "$@" ;;

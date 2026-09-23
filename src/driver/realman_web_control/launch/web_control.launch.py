@@ -36,6 +36,11 @@ def generate_launch_description():
                 description="Verified coordinate frame names exposed to the browser UI.",
             ),
             DeclareLaunchArgument(
+                "keyboard_control_config_file",
+                default_value=str(config_root / "ros" / "keyboard_control.yaml"),
+                description="Dual-arm Web keyboard bindings and heartbeat timing.",
+            ),
+            DeclareLaunchArgument(
                 "joint_record_dir",
                 default_value=str(config_root / "web-control" / "joint-records"),
                 description="Writable Web control joint target records under root config/.",
@@ -62,6 +67,7 @@ def generate_launch_description():
                         "layout_config_file": LaunchConfiguration("layout_config_file"),
                         "motion_config_file": LaunchConfiguration("motion_config_file"),
                         "coordinates_config_file": LaunchConfiguration("coordinates_config_file"),
+                        "keyboard_control_config_file": LaunchConfiguration("keyboard_control_config_file"),
                         "joint_record_dir": LaunchConfiguration("joint_record_dir"),
                         "description_root": str(description_share),
                         "static_root": str(package_share / "static"),

@@ -1,0 +1,21 @@
+<?xml version="1.0"?>
+<!-- Move the left arm along the active default tool +X axis for 0.5 seconds. -->
+<root main_tree_to_execute="MainTree"
+      realman_arm_id="l"
+      realman_required_arms="l"
+      realman_required_actions="cartesian_velocity"
+      realman_launch="arm_move"
+      realman_stop_on_terminal="true"
+      realman_exit_on_terminal="true">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="tool_x_motion">
+      <CartesianVelocityForDuration name="move_tool_x_positive"
+                                    arm_id="{arm_id}"
+                                    dry_run="{dry_run}"
+                                    reference="default_tool"
+                                    linear_velocity_mps="0.02,0,0"
+                                    angular_velocity_radps="0,0,0"
+                                    duration_sec="0.5"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

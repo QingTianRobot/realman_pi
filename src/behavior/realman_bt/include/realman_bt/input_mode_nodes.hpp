@@ -60,10 +60,40 @@ class PolicyInputStubNode final : public bt_core::ActionNode {
   bool entry_recorded_{false};
 };
 
+class KeyboardVelocityInputNode final : public bt_core::ActionNode {
+ public:
+  using bt_core::ActionNode::ActionNode;
+  bt_core::NodeStatus tick() override;
+  void onHalted() override;
+
+ private:
+  bool entry_recorded_{false};
+};
+
 class PikaInputStubNode final : public bt_core::ActionNode {
  public:
   using bt_core::ActionNode::ActionNode;
 
+  bt_core::NodeStatus tick() override;
+  void onHalted() override;
+
+ private:
+  bool entry_recorded_{false};
+};
+
+class PikaPositionInputNode final : public bt_core::ActionNode {
+ public:
+  using bt_core::ActionNode::ActionNode;
+  bt_core::NodeStatus tick() override;
+  void onHalted() override;
+
+ private:
+  bool entry_recorded_{false};
+};
+
+class PikaVelocityInputNode final : public bt_core::ActionNode {
+ public:
+  using bt_core::ActionNode::ActionNode;
   bt_core::NodeStatus tick() override;
   void onHalted() override;
 

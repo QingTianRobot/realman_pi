@@ -62,11 +62,55 @@ Web `percentage` 的范围是 `0.0..1.0`：`0` 映射到 `close_position`，`1` 
 | `/<name>/calibrate` | `std_srvs/srv/Trigger` | 当前固定返回失败；默认禁用自动标定 |
 | `/<name>/enable` | `std_srvs/srv/SetBool` | `true` 使能，`false` 禁用 |
 | `/<name>/percentage` | `gripper_ros2_msgs/srv/GripperPercentage` | 按 `0.0..1.0` 移动 |
+| `/<name>/percentage/command` | `std_msgs/msg/Float32` | 非阻塞持续目标；`0.0` 闭合，`1.0` 张开 |
 | `/<name>/position` | `std_msgs/msg/Float64` | 反馈位置 |
 | `/<name>/speed`、`current`、`alarm` | `std_msgs/msg/Int32` | 反馈速度、电流和报警码 |
 | `/<name>/torque_reached`、`connected` | `std_msgs/msg/Bool` | 力矩到达和通信健康状态 |
 
 服务在设备不可用时返回 `success=false`，manager 继续运行并尝试重连。除显式 `enable=false` 外，运动服务会在需要时先使能设备。
+
+`/<name>/percentage/command` 是给连续控制器使用的非阻塞 topic。manager 只校验范围、确保设备已使能，
+将百分比转换为配置中的设备位置并把最新目标交给总线线程，不等待夹爪到位反馈；同一总线上的新目标会覆盖尚未处理的旧目标。
+它不改变同步 `/<name>/percentage` service 的等待和结果语义。
+
+行为树的 Pika router 订阅 `/pika/l/gripper_percentage`、`/pika/r/gripper_percentage`，在
+`pikaposition` 或 `pikavelocity` 为 `ACTIVE` 时分别转发到 `gripper_left`、`gripper_right` 的 command topic。
+Pika 不控制 `gripper_mid`；切出 Pika 模式后不会自动发送开、合或停止命令。
+
+## 键盘双夹爪全开／全闭
+
+启动 `control.xml` 后，8765 网页会根据动态目录显示键盘卡片。选择 `keyboard` 并获得独占 WebSocket lease 后，
+左侧 `1/2` 分别全开／全闭，右侧 `9/0` 分别全开／全闭；两侧可独立或同时操作，也可与机械臂速度键并用。
+按键配置是 `config/ros/keyboard_control.yaml` 的 `grippers.l|r.open|close`（物理 `Digit*` 码）；
+位置端点沿用本页的 `gripper.yaml`，不复制行程值，不新增中间夹爪键盘入口。
+
+```text
+:8765 keyboard_state（每侧完整按键集合、递增 sequence）
+  -> Web KeyboardControlBridge（lease + 单次按下边沿）
+  -> /keyboard/l|r/gripper_command（std_msgs/msg/String JSON）
+  -> keyboard_control_router（ACTIVE/keyboard + epoch/request + 时效 + 健康 + dry_run）
+  -> /gripper_left|right/percentage/command（std_msgs/msg/Float32）
+  -> gripper_manager（1.0 = 全开；0.0 = 全闭）
+```
+
+ingress JSON 字段为 `command`（`open` 或 `close`）、`epoch`、`request_id`（当前 executor 状态中的整数）和
+`stamp_ns`（Web ROS 时钟纳秒整数）。该 topic 是内部离散目标入口，不提供到位 Action/result；不得绕过 Web lease 使用它。
+QoS 为可靠、volatile、depth=1，消息寿命与键盘 `input_timeout_ms` 一致（默认 150 ms）。router 拒绝未来时间、
+超时或重复／倒序时间戳、错误 epoch/request 和非活动模式的事件；Web 与 router 应使用同步的 ROS 时钟。
+旧事件不排队等待下次切入，也不会在从 dry-run 切换后重放。
+
+浏览器、Web 和 router 都要求对应夹爪 `connected=true` 且 `alarm=0`。夹爪健康与机械臂 WORK 独立，
+WORK 不可用不影响健康夹爪；一侧离线／报警也不影响另一侧。服务端识别新按下边沿，长按和 50 ms 心跳不会
+重发目标，同侧同时按开／闭键不发送，全部松开才能重新触发。被健康检查拒绝的边沿不会在恢复时自动重放。
+
+目标提交后正常执行；松键、窗口失焦、断网或离开 keyboard **不会取消已经提交的夹爪动作**，只阻止后续输入。
+不能在松键时发送 `0.0`，因为它代表全闭而非停止。键盘不调用会等待到位的 `open/close` Trigger service，
+而是复用非阻塞 percentage topic，避免左右夹爪在 Web/ROS 回调中等待彼此。此路径没有物理完成回执，需观察夹爪反馈。
+`REALMAN_BT_DRY_RUN=true`（默认）禁止 router 发布夹爪 command；本页下方普通 Web 夹爪按钮的 service 路径保持不变。
+
+无硬件回归覆盖配置／协议、单次边沿、控制权、健康门控、epoch/时效、dry-run 和桌面／移动端键盘交互：
+在 Humble 环境运行 Web keyboard/input-mode、BT keyboard router 和 gripper_ros2 的 pytest；网页执行
+`cd website && npm run test:web-control`。真实夹爪验收须另行确认工作区安全和运动授权。
 
 ## WebSocket 生命周期
 

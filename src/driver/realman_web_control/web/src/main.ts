@@ -4,6 +4,7 @@ import URDFLoader from "urdf-loader";
 import "./style.css";
 
 type ArmId = "l" | "m" | "r";
+type KeyboardArmId = "l" | "r";
 type Frame = { type: number; name: string; frame_id: string };
 type Joint = { name: string; lower_rad: number; upper_rad: number; lower_deg: number; upper_deg: number };
 type FrameState = {
@@ -48,6 +49,18 @@ type Manifest = {
   root_frame: string;
   default_joint_position_rad: number;
   robots: Robot[];
+  keyboard_control: {
+    heartbeat_period_ms: number;
+    input_timeout_ms: number;
+    grippers: Record<KeyboardArmId, { open: string; close: string }>;
+    arms: Record<KeyboardArmId, {
+      bindings: Record<string, { positive: string; negative: string }>;
+      linear_speed_mps: number;
+      angular_speed_radps: number;
+      work_reference_name: string;
+      work_frame_id: string;
+    }>;
+  };
 };
 type MotionCommand = 0 | 1 | 2;
 type Message = Record<string, any> & { type: string };
@@ -75,6 +88,22 @@ type InputModeResult = {
   accepted: boolean;
   message: string;
 };
+type CartesianVelocityTelemetry = {
+  session_active: boolean;
+  reference_type: number;
+  reference_name: string;
+  command_frame_id: string;
+  commanded_linear_velocity_mps: number[];
+  commanded_angular_velocity_radps: number[];
+  limited_linear_velocity_mps: number[];
+  limited_angular_velocity_radps: number[];
+  measured_frame_id: string;
+  measured_linear_velocity_mps: number[];
+  measured_angular_velocity_radps: number[];
+  measured_valid: boolean;
+  command_age_ms: number;
+  measured_age_ms: number;
+};
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
@@ -90,22 +119,33 @@ app.innerHTML = `
     <button id="stop-button" class="button danger" type="button" disabled>■ 软件停止</button>
   </header>
   <main class="workspace">
-    <section class="viewer-panel panel">
-      <div class="panel-heading"><div><span class="eyebrow">LIVE / TARGET</span><h1>三维姿态</h1></div><div id="model-label" class="muted">loading model</div></div>
-      <div class="viewer-layout">
-        <div id="fleet-strip" class="fleet-strip"></div>
-        <div class="viewer-column">
-          <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
-          <div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span id="root-frame"></span></div>
+    <div class="visualization-column">
+      <section class="viewer-panel panel">
+        <div class="panel-heading"><div><span class="eyebrow">LIVE / TARGET</span><h1>三维姿态</h1></div><div id="model-label" class="muted">loading model</div></div>
+        <div class="viewer-layout">
+          <div id="fleet-strip" class="fleet-strip"></div>
+          <div class="viewer-column">
+            <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div><div id="keyboard-frame-legend" class="keyboard-frame-legend" hidden><strong>L WORK</strong><strong>R WORK</strong><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
+            <div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span id="root-frame"></span></div>
+          </div>
         </div>
-      </div>
-    </section>
+      </section>
+      <section id="velocity-telemetry-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">VELOCITY TELEMETRY</span><h2>命令与实际末端速度</h2></div><span class="mini-state">L + R</span></div><p class="telemetry-help">命令值来自当前速度控制 session；实际值由驱动根据状态位姿差分估计。两者坐标系和数据年龄始终单独标注。</p><div id="velocity-telemetry-grid" class="velocity-telemetry-grid"></div></section>
+    </div>
     <aside class="controls">
       <section id="input-mode-card" class="panel panel-section input-mode-card" hidden>
         <div class="panel-heading compact"><div><span class="eyebrow">GLOBAL INPUT</span><h2>输入模式</h2></div><span id="input-mode-active" class="mini-state">WAIT</span></div>
         <div class="input-mode-body"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div></div>
       </section>
-      <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><span id="coordinate-state" class="mini-state">WAIT</span></div><div id="coordinate-summary" class="coordinate-summary"></div></section>
+      <section id="keyboard-control-card" class="panel panel-section keyboard-control-card" hidden>
+        <div class="panel-heading compact"><div><span class="eyebrow">KEYBOARD / L + R</span><h2>双臂键盘速度与夹爪</h2></div><span id="keyboard-control-state" class="mini-state">RELEASED</span></div>
+        <p class="keyboard-help">切换到“Web / 键盘速度控制”后：机械臂按住运动，松键、失焦或通信超时停止；夹爪按一次全开／全闭，松键不撤销已提交目标。仅在在线且无报警时接收新夹爪指令。</p>
+        <div class="keyboard-arm-grid">
+          <div id="keyboard-left" class="keyboard-arm" data-arm="l"></div>
+          <div id="keyboard-right" class="keyboard-arm" data-arm="r"></div>
+        </div>
+      </section>
+      <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><div class="coordinate-actions"><button id="copy-current-joints" class="button ghost" type="button" disabled>复制当前角度</button><span id="coordinate-state" class="mini-state">WAIT</span></div></div><div id="coordinate-summary" class="coordinate-summary"></div><div id="joint-copy-status" class="joint-copy-status" aria-live="polite">等待有效 joint_states</div></section>
       <section class="panel panel-section motion-panel">
         <div class="panel-heading compact"><div><span class="eyebrow">MOTION TARGET</span><h2>一次性运动</h2></div><div class="panel-actions"><span id="selected-arm-label" class="mini-state">L</span><button id="reset-preview" class="text-button" type="button">重置目标</button></div></div>
         <div id="motion-mode" class="segmented-control" aria-label="运动类型">
@@ -113,7 +153,10 @@ app.innerHTML = `
           <button type="button" data-motion-command="1" aria-pressed="false">MOVEL</button>
           <button type="button" data-motion-command="2" aria-pressed="false">MOVEP</button>
         </div>
-        <div id="joint-target"><div id="joint-controls" class="joint-controls"></div></div>
+        <div id="joint-target">
+          <div class="joint-toolbar"><span class="target-field-label">关节目标 (degree)</span></div>
+          <div id="joint-controls" class="joint-controls"></div>
+        </div>
         <div id="pose-target" class="pose-target" hidden>
           <div class="target-field-label">位置 (m)</div>
           <div class="pose-inputs position-inputs">
@@ -192,6 +235,10 @@ const inputModeCard = $("#input-mode-card") as HTMLElement;
 const inputModeSelect = $("#input-mode-select") as HTMLSelectElement;
 const inputModeActive = $("#input-mode-active");
 const inputModeDetail = $("#input-mode-detail");
+const keyboardControlCard = $("#keyboard-control-card") as HTMLElement;
+const keyboardControlState = $("#keyboard-control-state");
+const keyboardFrameLegend = $("#keyboard-frame-legend") as HTMLElement;
+const velocityTelemetryGrid = $("#velocity-telemetry-grid") as HTMLElement;
 const motionMode = $("#motion-mode");
 const jointTarget = $("#joint-target") as HTMLElement;
 const poseTarget = $("#pose-target") as HTMLElement;
@@ -205,6 +252,8 @@ const resetPreviewButton = $("#reset-preview") as HTMLButtonElement;
 const motionReference = $("#motion-reference");
 const motionVelocityInput = $("#motion-velocity") as HTMLInputElement;
 const motionTimeoutInput = $("#motion-timeout") as HTMLInputElement;
+const copyCurrentJointsButton = $("#copy-current-joints") as HTMLButtonElement;
+const jointCopyStatus = $("#joint-copy-status");
 const recordNameInput = $("#record-name") as HTMLInputElement;
 const saveRecordButton = $("#save-record") as HTMLButtonElement;
 const recordSelect = $("#record-select") as HTMLSelectElement;
@@ -240,6 +289,12 @@ let activeMotionRequest = "";
 let motionFeedbackTimer = 0;
 let activeVelocityRequest = "";
 let velocityTimer = 0;
+const keyboardPressed: Record<KeyboardArmId, Set<string>> = { l: new Set(), r: new Set() };
+const keyboardSequence: Record<KeyboardArmId, number> = { l: 0, r: 0 };
+let keyboardHeartbeat = 0;
+let keyboardLeaseOwned = false;
+let keyboardGuideEpoch: number | undefined;
+let keyboardGuideTimer = 0;
 const coordinateStates: Partial<Record<ArmId, CoordinateState>> = {};
 const connectionStates: Partial<Record<ArmId, boolean>> = {};
 const currentJointsByArm: Partial<Record<ArmId, number[]>> = {};
@@ -252,6 +307,7 @@ const poseReferenceByArm: Partial<Record<ArmId, FrameState>> = {};
 const tfFramesByArm: Partial<Record<ArmId, FrameState[]>> = {};
 const poseSliderCentersByArm: Partial<Record<ArmId, number[]>> = {};
 const kinematicsStatusByArm: Partial<Record<ArmId, string>> = {};
+const cartesianVelocityStates: Partial<Record<ArmId, CartesianVelocityTelemetry>> = {};
 const activeKinematicsRequestByArm: Partial<Record<ArmId, string>> = {};
 const ikPreviewValidByArm: Partial<Record<ArmId, boolean>> = {};
 const motionSettingsByArm: Partial<Record<ArmId, { velocity: string; timeout: string }>> = {};
@@ -261,10 +317,11 @@ const activeRecordRequestByArm: Partial<Record<ArmId, string>> = {};
 const recordRequestTimerByArm: Partial<Record<ArmId, number>> = {};
 const activeRecoveryRequestByArm: Partial<Record<ArmId, string>> = {};
 const robotScenes: Partial<Record<ArmId, RobotScene>> = {};
-let renderer: THREE.WebGLRenderer;
-let scene: THREE.Scene;
-let camera: THREE.PerspectiveCamera;
-let controls: OrbitControls;
+const keyboardWorkFrames: Partial<Record<KeyboardArmId, THREE.AxesHelper>> = {};
+let renderer: THREE.WebGLRenderer | undefined;
+let scene: THREE.Scene | undefined;
+let camera: THREE.PerspectiveCamera | undefined;
+let controls: OrbitControls | undefined;
 let selectedShadowArm: ArmId | null = null;
 let loadGeneration = 0;
 
@@ -281,14 +338,180 @@ function canWrite() { return !readOnly && socket?.readyState === WebSocket.OPEN;
 function inputModeLabel(modeId: string) {
   return inputModeCatalog?.find((option) => option.id === modeId)?.label ?? modeId;
 }
+function keyboardModeDiscovered() {
+  return Boolean(inputModeCatalog?.some((option) => option.id === "keyboard" && option.selectable));
+}
+function keyboardModeActive() {
+  return keyboardLeaseOwned && keyboardModeDiscovered() && inputModeState?.phase === "ACTIVE" && inputModeState.active_mode === "keyboard";
+}
+function keyboardModeGloballyActive() {
+  return keyboardModeDiscovered() && inputModeState?.phase === "ACTIVE" && inputModeState.active_mode === "keyboard";
+}
+function keyboardWorkAvailable(arm: KeyboardArmId) {
+  const settings = manifest?.keyboard_control?.arms[arm];
+  const state = coordinateStates[arm];
+  return Boolean(settings && state?.motion_allowed === true && state.work_matched === true &&
+    state.current_work === settings.work_reference_name && state.expected_work === settings.work_reference_name &&
+    state.work?.name === settings.work_reference_name && state.work?.frame_id === settings.work_frame_id);
+}
+function keyboardGripperAvailable(arm: KeyboardArmId) {
+  const state = gripperStates[arm === "l" ? "gripper_left" : "gripper_right"];
+  return state?.connected === true && state.alarm === 0;
+}
+function keyboardVelocityCodes(arm: KeyboardArmId) {
+  const bindings = manifest?.keyboard_control?.arms[arm]?.bindings ?? {};
+  return new Set(Object.values(bindings).flatMap((binding) => [binding.positive, binding.negative]));
+}
+function keyboardGripperCodes(arm: KeyboardArmId) {
+  return new Set(Object.values(manifest?.keyboard_control?.grippers?.[arm] ?? {}));
+}
+function keyboardCodeReady(arm: KeyboardArmId, code: string) {
+  return keyboardModeActive() && canWrite() && !document.hidden &&
+    (keyboardGripperCodes(arm).has(code) ? keyboardGripperAvailable(arm) : keyboardWorkAvailable(arm));
+}
+function keyboardArmForCode(code: string): KeyboardArmId | undefined {
+  for (const arm of ["l", "r"] as const) {
+    if (keyboardVelocityCodes(arm).has(code) || keyboardGripperCodes(arm).has(code)) return arm;
+  }
+  return undefined;
+}
+function sendKeyboardState(arm: KeyboardArmId) {
+  send({ type: "keyboard_state", arm, keys: [...keyboardPressed[arm]].sort(), sequence: ++keyboardSequence[arm] });
+}
+function sendKeyboardStates() {
+  for (const arm of ["l", "r"] as const) sendKeyboardState(arm);
+}
+function stopKeyboardHeartbeat() {
+  if (keyboardHeartbeat) window.clearInterval(keyboardHeartbeat);
+  keyboardHeartbeat = 0;
+}
+function releaseKeyboardInput() {
+  const shouldSend = keyboardLeaseOwned && socket?.readyState === WebSocket.OPEN;
+  keyboardPressed.l.clear();
+  keyboardPressed.r.clear();
+  stopKeyboardHeartbeat();
+  if (shouldSend) sendKeyboardStates();
+  renderKeyboardControl();
+}
+function reconcileKeyboardControl() {
+  if (!keyboardModeActive() || !canWrite()) {
+    releaseKeyboardInput();
+    return;
+  }
+  for (const arm of ["l", "r"] as const) {
+    let changed = false;
+    for (const code of keyboardPressed[arm]) {
+      if (!keyboardCodeReady(arm, code)) {
+        keyboardPressed[arm].delete(code);
+        changed = true;
+      }
+    }
+    if (changed) sendKeyboardState(arm);
+  }
+  if (!keyboardHeartbeat) {
+    sendKeyboardStates();
+    keyboardHeartbeat = window.setInterval(sendKeyboardStates, manifest!.keyboard_control.heartbeat_period_ms);
+  }
+  renderKeyboardControl();
+}
+function renderKeyboardArm(arm: KeyboardArmId) {
+  const host = $(arm === "l" ? "#keyboard-left" : "#keyboard-right");
+  const settings = manifest?.keyboard_control?.arms[arm];
+  if (!settings) { host.replaceChildren(); return; }
+  const axisLabels: Record<string, string> = { vx: "X", vy: "Y", vz: "Z", wx: "RX", wy: "RY", wz: "RZ" };
+  const keyLabel = (code: string) => escapeHtml(code.replace(/^(Key|Digit)/, ""));
+  const gripper = manifest?.keyboard_control?.grippers?.[arm];
+  const health = gripperStates[arm === "l" ? "gripper_left" : "gripper_right"];
+  const gripperStatus = health?.connected !== true ? "OFFLINE" : health.alarm !== 0 ? "ALARM" : "READY";
+  host.innerHTML = `<div class="keyboard-arm-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span>${escapeHtml(settings.work_frame_id)}</span></div><div class="keyboard-bindings ${keyboardWorkAvailable(arm) ? "" : "unavailable"}">${Object.entries(settings.bindings).map(([axis, binding]) => `
+    <div class="keyboard-binding"><span>${axisLabels[axis] ?? axis}</span><kbd data-code="${escapeHtml(binding.positive)}">${keyLabel(binding.positive)}</kbd><em>+</em><kbd data-code="${escapeHtml(binding.negative)}">${keyLabel(binding.negative)}</kbd><em>−</em></div>`).join("")}</div>
+    ${gripper ? `<div class="keyboard-gripper ${keyboardGripperAvailable(arm) ? "" : "unavailable"}"><div class="keyboard-arm-heading"><strong>夹爪 / 单次目标</strong><span>${gripperStatus}</span></div><div class="keyboard-binding gripper-binding"><kbd data-code="${escapeHtml(gripper.open)}">${keyLabel(gripper.open)}</kbd><span>全开</span><kbd data-code="${escapeHtml(gripper.close)}">${keyLabel(gripper.close)}</kbd><span>全闭</span></div></div>` : ""}`;
+  host.querySelectorAll<HTMLElement>("kbd[data-code]").forEach((key) => key.classList.toggle("pressed", keyboardPressed[arm].has(key.dataset.code ?? "")));
+}
+function renderKeyboardControl() {
+  keyboardControlCard.hidden = !keyboardModeDiscovered() || !manifest?.keyboard_control;
+  if (keyboardControlCard.hidden) return;
+  renderKeyboardArm("l");
+  renderKeyboardArm("r");
+  const moving = (["l", "r"] as const).some((arm) => [...keyboardPressed[arm]].some((code) => keyboardVelocityCodes(arm).has(code)));
+  const anyAvailable = keyboardWorkAvailable("l") || keyboardWorkAvailable("r");
+  const gripperAvailable = keyboardGripperAvailable("l") || keyboardGripperAvailable("r");
+  const label = !keyboardModeGloballyActive() ? "RELEASED" : !keyboardLeaseOwned ? "REMOTE" : !anyAvailable ? (gripperAvailable ? "GRIPPER ONLY" : "WORK UNAVAILABLE") : moving ? "MOVING" : "READY";
+  keyboardControlState.textContent = label;
+  keyboardControlState.className = `mini-state keyboard-${label.toLowerCase().replaceAll(" ", "-")}`;
+}
+function keyboardWorkFramePose(arm: KeyboardArmId) {
+  const work = coordinateStates[arm]?.work;
+  const position = work?.xyz_m?.map(Number);
+  const quaternion = work?.quaternion_wxyz?.map(Number);
+  if (!keyboardWorkAvailable(arm) || position?.length !== 3 || quaternion?.length !== 4 ||
+      ![...position, ...quaternion].every(Number.isFinite) || Math.hypot(...quaternion) < 1e-9) return undefined;
+  return { position, quaternion };
+}
+function updateKeyboardWorkFrames() {
+  const visibleArms: KeyboardArmId[] = [];
+  for (const arm of ["l", "r"] as const) {
+    const robotScene = robotScenes[arm];
+    let axes = keyboardWorkFrames[arm];
+    if (robotScene?.live && axes?.parent !== robotScene.live) {
+      axes?.removeFromParent();
+      axes = new THREE.AxesHelper(0.18);
+      axes.name = `${arm}-keyboard-work-frame`;
+      axes.renderOrder = 20;
+      axes.traverse((object: any) => {
+        if (object.material) {
+          object.material.depthTest = false;
+          object.material.transparent = true;
+        }
+      });
+      robotScene.live.add(axes);
+      keyboardWorkFrames[arm] = axes;
+    }
+    const pose = keyboardWorkFramePose(arm);
+    const visible = Boolean(axes && keyboardModeGloballyActive() && pose);
+    if (axes) {
+      axes.visible = visible;
+      if (pose) {
+        axes.position.fromArray(pose.position);
+        axes.quaternion.set(
+          pose.quaternion[1], pose.quaternion[2], pose.quaternion[3], pose.quaternion[0],
+        ).normalize();
+        axes.updateMatrixWorld(true);
+      }
+    }
+    if (visible) visibleArms.push(arm);
+  }
+  viewer.dataset.keyboardWorkFrames = visibleArms.join(",");
+  keyboardFrameLegend.hidden = visibleArms.length === 0;
+}
+function guideToKeyboardControl() {
+  if (!keyboardModeActive() || inputModeState?.epoch === keyboardGuideEpoch || keyboardControlCard.hidden) return;
+  keyboardGuideEpoch = inputModeState!.epoch;
+  // Keep the 3D viewer and MoveJ controls in place; the keyboard card is
+  // already visible in the controls column and only needs an active cue.
+  keyboardControlCard.classList.add("keyboard-guide-active");
+  if (keyboardGuideTimer) window.clearTimeout(keyboardGuideTimer);
+  keyboardGuideTimer = window.setTimeout(() => {
+    keyboardControlCard.classList.remove("keyboard-guide-active");
+    keyboardGuideTimer = 0;
+  }, 1800);
+}
 function updateInputModeSelectionDisabled() {
   inputModeSelect.disabled = !canWrite() || Boolean(activeInputModeRequest) || inputModeState?.phase === "SWITCHING" ||
     !(inputModeCatalog?.some((option) => option.id !== "web" && option.selectable));
 }
 function renderInputModeCard() {
   inputModeCard.hidden = !inputModeCatalog;
-  if (!inputModeCatalog) return;
-  const selectedMode = inputModeState?.selected_mode ?? pendingInputModeId;
+  if (!inputModeCatalog) {
+    reconcileKeyboardControl();
+    updateKeyboardWorkFrames();
+    return;
+  }
+  const remoteKeyboard = inputModeState?.phase === "ACTIVE" &&
+    inputModeState.active_mode === "keyboard" && !keyboardLeaseOwned;
+  const selectedMode = remoteKeyboard && !pendingInputModeId
+    ? ""
+    : pendingInputModeId || inputModeState?.selected_mode;
   inputModeSelect.replaceChildren(...inputModeCatalog
     .filter((option) => option.id !== "web")
     .map((option) => {
@@ -308,11 +531,15 @@ function renderInputModeCard() {
   inputModeActive.className = `mini-state ${state?.phase.toLowerCase() ?? ""}`;
   inputModeDetail.textContent = state?.detail || inputModeResultDetail || "等待输入模式状态";
   updateInputModeSelectionDisabled();
+  reconcileKeyboardControl();
+  guideToKeyboardControl();
+  updateKeyboardWorkFrames();
 }
 function finishInputModeRequestIfTerminal() {
   if (!activeInputModeRequest || activeInputModeExecutorRequest === undefined || !inputModeState ||
       inputModeState.request_id !== activeInputModeExecutorRequest ||
       !["ACTIVE", "FAILED"].includes(inputModeState.phase)) return;
+  inputModeSelect.blur();
   activeInputModeRequest = "";
   activeInputModeExecutorRequest = undefined;
   pendingInputModeId = "";
@@ -323,6 +550,25 @@ function displayNumber(value: number, digits = 2) {
 function displayValue(value: unknown, digits = 2) {
   const number = Number(value);
   return Number.isFinite(number) ? number.toFixed(digits) : String(value ?? "");
+}
+function formatJointDegrees(values: number[]) {
+  return `[${values.map((value) => (value * 180 / Math.PI).toFixed(3)).join(", ")}]`;
+}
+async function copyText(value: string) {
+  if (navigator.clipboard?.writeText) {
+    await navigator.clipboard.writeText(value);
+    return;
+  }
+  const fallback = document.createElement("textarea");
+  fallback.value = value;
+  fallback.setAttribute("readonly", "");
+  fallback.style.position = "fixed";
+  fallback.style.opacity = "0";
+  document.body.append(fallback);
+  fallback.select();
+  const copied = document.execCommand("copy");
+  fallback.remove();
+  if (!copied) throw new Error("clipboard copy failed");
 }
 function referenceLabel(frame?: FrameState | null) {
   if (!frame) return "BASE / base";
@@ -362,6 +608,7 @@ function updateSelectedArmFromState() {
   kinematicsStatus.textContent = kinematicsStatusByArm[selectedArm] ?? "MOVEL 逆解仅更新影子预览";
   configureVelocity();
   renderFleetStrip();
+  jointCopyStatus.textContent = lastJointStampByArm[selectedArm] === undefined ? "等待有效 joint_states" : "可复制当前关节角";
   setSelectedConnection();
   updateButtons();
 }
@@ -383,6 +630,43 @@ function renderCoordinateState() {
     <div class="coordinate-meta">${state.work?.controller_name ?? state.current_work}</div>
     <div class="coordinate-meta">${state.work?.xyz_m ? `xyz ${state.work.xyz_m.map((value) => displayNumber(value)).join(", ")}` : ""}</div>
   `;
+}
+function telemetryVector(values: number[] | undefined, digits = 3) {
+  if (!Array.isArray(values) || values.length !== 3 || !values.every(Number.isFinite)) return "--";
+  return `[${values.map((value) => displayNumber(value, digits)).join(", ")}]`;
+}
+function telemetryNorm(values: number[] | undefined, digits = 3) {
+  if (!Array.isArray(values) || values.length !== 3 || !values.every(Number.isFinite)) return "--";
+  return displayNumber(Math.hypot(...values), digits);
+}
+function telemetryReferenceLabel(state: CartesianVelocityTelemetry) {
+  const kind = state.reference_type === 1 ? "WORK" : state.reference_type === 2 ? "TOOL" : "BASE";
+  return `${kind} / ${state.reference_name || "unknown"}`;
+}
+function renderCartesianVelocityTelemetry() {
+  velocityTelemetryGrid.innerHTML = (["l", "r"] as const).map((arm) => {
+    const state = cartesianVelocityStates[arm];
+    if (!state) {
+      return `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}"><div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-status">WAIT</span></div><div class="telemetry-empty">等待 /${arm}/cartesian_velocity/state</div></article>`;
+    }
+    const measuredStatus = state.measured_valid ? "VALID" : "STALE / NO DATA";
+    const measuredStatusClass = state.measured_valid ? "valid" : "stale";
+    const sessionStatus = state.session_active ? "ACTIVE" : "IDLE";
+    const commandFrame = state.command_frame_id || telemetryReferenceLabel(state);
+    const measuredFrame = state.measured_frame_id || `${arm}/base_link`;
+    return `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}">
+      <div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-status ${state.session_active ? "active" : ""}">${sessionStatus}</span></div>
+      <div class="telemetry-reference"><span>命令坐标系</span><strong>${escapeHtml(commandFrame)}</strong><span>参考</span><strong>${escapeHtml(telemetryReferenceLabel(state))}</strong></div>
+      <div class="telemetry-row"><span>命令线速度</span><strong>${telemetryVector(state.commanded_linear_velocity_mps)} m/s</strong><em>age ${Number.isFinite(state.command_age_ms) ? state.command_age_ms : "--"} ms</em></div>
+      <div class="telemetry-row"><span>限速后线速度</span><strong>${telemetryVector(state.limited_linear_velocity_mps)} m/s <small>|${telemetryNorm(state.limited_linear_velocity_mps)}|</small></strong><em></em></div>
+      <div class="telemetry-row"><span>命令角速度</span><strong>${telemetryVector(state.commanded_angular_velocity_radps)} rad/s</strong><em></em></div>
+      <div class="telemetry-row"><span>限速后角速度</span><strong>${telemetryVector(state.limited_angular_velocity_radps)} rad/s <small>|${telemetryNorm(state.limited_angular_velocity_radps)}|</small></strong><em></em></div>
+      <div class="telemetry-divider"></div>
+      <div class="telemetry-reference"><span>实测坐标系</span><strong>${escapeHtml(measuredFrame)}</strong><span>状态</span><strong class="telemetry-measured ${measuredStatusClass}">${measuredStatus}</strong></div>
+      <div class="telemetry-row"><span>实测线速度</span><strong>${telemetryVector(state.measured_linear_velocity_mps)} m/s <small>|${telemetryNorm(state.measured_linear_velocity_mps)}|</small></strong><em>age ${Number.isFinite(state.measured_age_ms) ? state.measured_age_ms : "--"} ms</em></div>
+      <div class="telemetry-row"><span>实测角速度</span><strong>${telemetryVector(state.measured_angular_velocity_radps)} rad/s <small>|${telemetryNorm(state.measured_angular_velocity_radps)}|</small></strong><em></em></div>
+    </article>`;
+  }).join("");
 }
 function renderFleetStrip() {
   if (!manifest) return;
@@ -794,6 +1078,7 @@ async function loadFleet() {
       return { config, live, shadow };
     }));
     if (generation !== loadGeneration) return;
+    if (!scene) throw new Error("WebGL scene was not initialized");
     scene.clear();
     scene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
     const key = new THREE.DirectionalLight(0xffffff, 4);
@@ -833,6 +1118,7 @@ async function loadFleet() {
       setRobotJoints(shadow, armTargetSnapshot(config.id));
       live.updateMatrixWorld(true);
     });
+    updateKeyboardWorkFrames();
     const selectedConfig = robotConfig(selectedArm);
     setShadowVisibility(selectedArm);
     frameScene(false);
@@ -843,11 +1129,13 @@ async function loadFleet() {
     $("#model-label").textContent = `${selectedConfig.model} / ${selectedArm.toUpperCase()} + 3 arms`;
   } catch (error) {
     viewerState.textContent = `URDF 加载失败: ${String(error)}`;
+    viewerState.removeAttribute("hidden");
   }
 }
 
 function initScene() {
   renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
+  viewer.dataset.renderer = "webgl";
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
   renderer.setClearColor(0x091114, 1);
@@ -861,14 +1149,19 @@ function initScene() {
   controls.target.set(0, 0, 0.55);
   const resize = () => {
     const box = viewer.getBoundingClientRect();
-    if (!box.width || !box.height) return;
+    if (!box.width || !box.height || !renderer || !camera) return;
     renderer.setSize(box.width, box.height, false);
     camera.aspect = box.width / box.height;
     camera.updateProjectionMatrix();
   };
   new ResizeObserver(resize).observe(viewer);
   resize();
-  const frame = () => { requestAnimationFrame(frame); controls.update(); renderer.render(scene, camera); };
+  const frame = () => {
+    requestAnimationFrame(frame);
+    if (!renderer || !scene || !camera || !controls) return;
+    controls.update();
+    renderer.render(scene, camera);
+  };
   frame();
 }
 
@@ -929,6 +1222,10 @@ function handleMessage(message: Message) {
       pendingInputModeId = "";
     }
     renderInputModeCard();
+  } else if (message.type === "keyboard_lease") {
+    keyboardLeaseOwned = Boolean(message.active);
+    if (!keyboardLeaseOwned) releaseKeyboardInput();
+    renderInputModeCard();
   } else if (message.type === "input_mode_result") {
     const modeResult: InputModeResult = {
       request_id: String(message.request_id ?? ""),
@@ -949,6 +1246,11 @@ function handleMessage(message: Message) {
       renderInputModeCard();
     }
   } else if (message.type === "input_mode_state") {
+    const nextPhase = String(message.phase ?? "");
+    const nextActiveMode = String(message.active_mode ?? "");
+    const modeLost = (inputModeState !== undefined && inputModeState.epoch !== Number(message.epoch)) ||
+      nextPhase !== "ACTIVE" || nextActiveMode !== "keyboard";
+    if (modeLost) releaseKeyboardInput();
     inputModeState = {
       requested_mode: String(message.requested_mode ?? ""),
       selected_mode: String(message.selected_mode ?? ""),
@@ -958,6 +1260,7 @@ function handleMessage(message: Message) {
       epoch: Number(message.epoch),
       detail: String(message.detail ?? ""),
     };
+    if (modeLost) keyboardLeaseOwned = false;
     finishInputModeRequestIfTerminal();
     renderInputModeCard();
   } else if (message.type === "gripper_list") {
@@ -965,15 +1268,25 @@ function handleMessage(message: Message) {
   } else if (message.type === "gripper_state") {
     gripperStates[String(message.name)] = message;
     renderGripperState();
+    reconcileKeyboardControl();
   } else if (message.type === "gripper_result") {
     if (message.message) $("#gripper-feedback").textContent = String(message.message);
   } else if (message.type === "coordinate_state") {
     coordinateStates[message.arm] = message as CoordinateState;
+    reconcileKeyboardControl();
+    updateKeyboardWorkFrames();
     renderFleetStrip();
     if (message.arm === selectedArm) {
       renderCoordinateState();
       if (manifest) configureVelocity();
     }
+  } else if (message.type === "cartesian_velocity_state") {
+    const arm = message.arm as ArmId;
+    if (!( ["l", "m", "r"] as ArmId[]).includes(arm)) return;
+    const state = message.state as CartesianVelocityTelemetry | undefined;
+    if (!state) return;
+    cartesianVelocityStates[arm] = state;
+    renderCartesianVelocityTelemetry();
   } else if (message.type === "tf_frames") {
     const arm = message.arm as ArmId;
     tfFramesByArm[arm] = Array.isArray(message.frames) ? message.frames : [];
@@ -1010,6 +1323,7 @@ function handleMessage(message: Message) {
     if (arm === selectedArm) {
       currentJoints = positions;
       $("#joint-stamp").textContent = `joint_states / ${stamp}`;
+      jointCopyStatus.textContent = "可复制当前关节角";
     }
     renderFleetStrip();
   } else if (message.type === "joint_records") {
@@ -1113,7 +1427,7 @@ function handleMessage(message: Message) {
     actionState.textContent = String(message.state).toUpperCase();
     actionState.className = `mini-state ${message.state}`;
     if (message.action === "cartesian_velocity") velocityState.textContent = String(message.state).toUpperCase();
-    if (["rejected", "error"].includes(message.state)) {
+    if (["rejected", "error", "stopped"].includes(message.state)) {
       if (message.action === "execute_motion") {
         window.clearTimeout(motionFeedbackTimer);
         motionFeedbackTimer = 0;
@@ -1172,6 +1486,13 @@ function handleMessage(message: Message) {
     if (arm === selectedArm) actionState.textContent = status.toUpperCase();
     updateButtons();
   } else if (message.type === "error") {
+    if (message.code === "keyboard_lease" || message.code === "keyboard_inactive") {
+      keyboardLeaseOwned = false;
+      releaseKeyboardInput();
+      inputModeResultDetail = `${message.code}: ${message.message}`;
+      renderInputModeCard();
+      return;
+    }
     result.textContent = `${message.code}: ${message.message}`;
     if (message.request_id === activeInputModeRequest) {
       inputModeResultDetail = `${message.code}: ${message.message}`;
@@ -1207,11 +1528,17 @@ function handleMessage(message: Message) {
 }
 
 function connect() {
+  keyboardLeaseOwned = false;
+  releaseKeyboardInput();
   socket?.close();
   const protocol = location.protocol === "https:" ? "wss" : "ws";
   socket = new WebSocket(`${protocol}://${location.host}/ws`);
-  socket.addEventListener("open", () => setConnection(true));
+  socket.addEventListener("open", () => {
+    setConnection(true);
+    updateButtons();
+  });
   socket.addEventListener("close", () => {
+    releaseKeyboardInput();
     setConnection(false);
     activeInputModeRequest = "";
     activeInputModeExecutorRequest = undefined;
@@ -1235,6 +1562,7 @@ function updateButtons() {
   fillCurrentPoseButton.disabled = !writable || selectedMotionCommand === 0;
   solveIkButton.disabled = !writable || selectedMotionCommand !== 1 || activeKinematicsRequest || !Boolean(readPoseGoal());
   const activeRecordRequest = Boolean(activeRecordRequestByArm[selectedArm]);
+  copyCurrentJointsButton.disabled = !writable || lastJointStampByArm[selectedArm] === undefined;
   saveRecordButton.disabled = !writable || activeRecordRequest || recordNameInput.value.trim() === "" || (currentJointsByArm[selectedArm]?.length ?? 0) !== 6;
   applyRecordButton.disabled = !writable || activeRecordRequest || !recordSelect.value;
   deleteRecordButton.disabled = !writable || selectedMotionCommand !== 0 || activeRecordRequest || !recordSelect.value;
@@ -1243,6 +1571,7 @@ function updateButtons() {
 
 function loadManifest(next: Manifest) {
   manifest = next;
+  renderKeyboardControl();
   selectedArm = armSelect.value as ArmId;
   next.robots.forEach((item) => {
     const initial = item.joints.map(() => next.default_joint_position_rad);
@@ -1265,12 +1594,39 @@ function loadManifest(next: Manifest) {
   renderMotionEditor();
   configureVelocity();
   renderCoordinateState();
+  renderCartesianVelocityTelemetry();
   renderFleetStrip();
   setSelectedConnection();
   if (!renderer) initScene();
   loadFleet();
   updateButtons();
 }
+
+window.addEventListener("keydown", (event) => {
+  const target = event.target as HTMLElement | null;
+  if (event.repeat || event.ctrlKey || event.altKey || event.metaKey || event.shiftKey || event.isComposing) return;
+  if (target?.closest("input, textarea, select") || target?.isContentEditable) return;
+  const arm = keyboardArmForCode(event.code);
+  if (!arm || !keyboardCodeReady(arm, event.code)) return;
+  event.preventDefault();
+  if (!keyboardPressed[arm].has(event.code)) {
+    keyboardPressed[arm].add(event.code);
+    reconcileKeyboardControl();
+    sendKeyboardStates();
+    renderKeyboardControl();
+  }
+});
+window.addEventListener("keyup", (event) => {
+  const arm = keyboardArmForCode(event.code);
+  if (!arm || !keyboardPressed[arm].delete(event.code)) return;
+  event.preventDefault();
+  sendKeyboardStates();
+  renderKeyboardControl();
+});
+window.addEventListener("blur", releaseKeyboardInput);
+document.addEventListener("visibilitychange", () => {
+  if (document.hidden) releaseKeyboardInput();
+});
 
 resetPreviewButton.addEventListener("click", () => {
   targetJoints = [...currentJoints];
@@ -1328,6 +1684,16 @@ poseInputElements().forEach((input) => {
 });
 recordNameInput.addEventListener("input", updateButtons);
 recordSelect.addEventListener("change", updateButtons);
+copyCurrentJointsButton.addEventListener("click", async () => {
+  const values = currentJointsByArm[selectedArm];
+  if (!values || values.length !== 6 || lastJointStampByArm[selectedArm] === undefined) return;
+  try {
+    await copyText(formatJointDegrees(values));
+    jointCopyStatus.textContent = "已复制当前关节角";
+  } catch {
+    jointCopyStatus.textContent = "复制失败，请检查浏览器剪贴板权限";
+  }
+});
 saveRecordButton.addEventListener("click", () => {
   if (!canWrite()) return;
   const label = recordNameInput.value.trim();
@@ -1456,7 +1822,13 @@ recoverMotionButton.addEventListener("click", () => {
   send({ type: "recover_motion", request_id: requestIdValue, arm: selectedArm });
   updateButtons();
 });
-fetch("/api/layout").then((response) => response.json()).then(loadManifest).catch((error) => { viewerState.textContent = `布局加载失败: ${String(error)}`; });
+fetch("/api/layout").then((response) => response.json()).then(loadManifest).catch((error) => {
+  const message = String(error);
+  viewerState.textContent = message.includes("WebGL")
+    ? `WebGL 渲染失败: ${message}`
+    : `布局加载失败: ${message}`;
+  viewerState.removeAttribute("hidden");
+});
 ($("#gripper-select") as HTMLSelectElement).addEventListener("change", (event) => { selectedGripper = (event.target as HTMLSelectElement).value; renderGripperState(); });
 $("#gripper-open").addEventListener("click", () => sendGripper("open"));
 $("#gripper-close").addEventListener("click", () => sendGripper("close"));

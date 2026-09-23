@@ -36,7 +36,7 @@ std::string readFile(const std::filesystem::path& path) {
 }
 
 std::string routerXml() {
-  return readFile(std::filesystem::path(BT_TEST_CONFIG_DIR) / "control_router.xml");
+  return readFile(std::filesystem::path(BT_TEST_CONFIG_DIR) / "control.xml");
 }
 
 void replaceOnce(std::string& text, const std::string& from, const std::string& to) {
@@ -134,12 +134,17 @@ void testCatalogSelectionAndLateSubscriber() {
   f.load(routerXml());
   const auto catalog = f.call<List>(kList, std::make_shared<List::Request>());
   require(catalog->success, "catalog failed");
-  require(catalog->mode_ids == std::vector<std::string>({"web", "policy", "pika", "none"}),
+  require(catalog->mode_ids == std::vector<std::string>(
+              {"web", "keyboard", "policy", "pikaposition", "pikavelocity", "none"}),
           "catalog order differs from XML declarations");
-  require(catalog->labels == std::vector<std::string>({"Web", "Policy", "Pika", "无输入"}),
+  require(catalog->labels == std::vector<std::string>(
+              {"Web", "Web / 键盘速度控制", "Policy", "Pika / 位置控制",
+               "Pika / 速度控制", "无输入"}),
           "catalog labels differ from XML declarations");
-  require(catalog->selectable.size() == 4 && !catalog->selectable[0] &&
-              catalog->selectable[1] && catalog->selectable[2] && catalog->selectable[3],
+  require(catalog->selectable.size() == 6 && !catalog->selectable[0] &&
+              catalog->selectable[1] && catalog->selectable[2] &&
+              catalog->selectable[3] && catalog->selectable[4] &&
+              catalog->selectable[5],
           "catalog arrays/selectability differ from XML declarations");
   f.subscribe();  // No tree ticks or prior subscribers: this must replay startup.
   require(f.until([&] { return !f.states.empty(); }), "late subscriber missed startup state");
@@ -208,7 +213,7 @@ void testSubscriberConnectedBeforePublisher() {
 
 void testMoveJHasNoModeInterfaces() {
   Fixture f;
-  f.load(readFile(std::filesystem::path(BT_TEST_CONFIG_DIR) / "arm_move.xml"));
+  f.load(readFile(std::filesystem::path(BT_TEST_CONFIG_DIR) / "move.xml"));
   auto list = f.client_node->create_client<List>(kList);
   auto select = f.client_node->create_client<Select>(kSelect);
   require(!list->wait_for_service(250ms) && !select->wait_for_service(250ms),
@@ -279,7 +284,7 @@ void testTimeoutPublishesFailedDetail() {
   f.load(routerXml(), {{"switch_timeout_ms", 1}});
   f.subscribe();
   require(f.until([&] { return !f.states.empty(); }), "missing startup state");
-  require(f.select("pika")->accepted, "pika request rejected");
+  require(f.select("pikaposition")->accepted, "pika position request rejected");
   std::this_thread::sleep_for(5ms);
   f.start();
   require(f.until([&] { return f.states.back().phase == State::FAILED; }),

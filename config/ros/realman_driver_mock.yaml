@@ -14,6 +14,8 @@
     auto_connect: true
     reconnect_interval: 0.0
     state_publish_rate: 10.0
+    # Match production's low-rate coordinate safety-state replay behavior.
+    coordinate_state_publish_rate: 1.0
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
 
 /m/realman_driver:
@@ -26,6 +28,7 @@
     auto_connect: true
     reconnect_interval: 0.0
     state_publish_rate: 10.0
+    coordinate_state_publish_rate: 1.0
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
 
 /r/realman_driver:
@@ -38,4 +41,5 @@
     auto_connect: true
     reconnect_interval: 0.0
     state_publish_rate: 10.0
+    coordinate_state_publish_rate: 1.0
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]

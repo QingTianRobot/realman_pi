@@ -34,6 +34,15 @@ export XAUTHORITY="$HOME/.Xauthority"
 
 ## Zsh 快捷函数
 
+生产镜像可直接从仓库根目录重建：
+
+```bash
+./rm65 build
+```
+
+该命令只构建 `realman_bringup_remote` 和 `realman_web_control`，不会停止或启动现有容器。更新完成后若要
+切换到新镜像，应在安全停机后依次执行 `./rm65 down`、`./rm65 build`、`./rm65 up`。
+
 根目录 `functions.zsh` 提供可选的开发与运行函数。在 Zsh 中加载一次即可从任意
 目录调用：
 
@@ -145,7 +154,8 @@ USB2 总线上；三路 Orbbec 使用 `320x240@15` 深度低带宽档可正常�
 相机出图主线使用官方 Orbbec ROS2 驱动加 RealSense ROS2 驱动。`rm65_camera_ros2` 会先停止
 已弃用的 SDK 推流以释放 USB，source ROS2 Humble、Orbbec、RealSense 和本仓库工作区，然后从
 `config/ros/cameras_ros2.yaml` 按串号启动三路 Gemini 305，并在 24s 错峰后启动全局 RealSense
-D435；宿主机缺少 `realsense2_camera` 驱动时自动降级为仅三路 Orbbec。默认使用 USB2 兼容的
+D435；宿主机缺少 `realsense2_camera` 驱动时 `rm65_camera_ros2` / `start_sensors.sh` / `./rm65 up`
+直接失败，禁止降级为仅三路 Orbbec。默认使用 USB2 兼容的
 `640x480@10 YUYV` 彩色；YUYV 用于规避右侧
 设备在 USB2/MJPEG 下的持续帧撕裂；深度向驱动传入
 `640x480@15 Y16` 和硬件抽取系数 `2`，实际发布 `320x240@15`。点云关闭；每次运行的
@@ -153,8 +163,10 @@ D435；宿主机缺少 `realsense2_camera` 驱动时自动降级为仅三路 Orb
 软件触发；启用 wrapper 默认同步参数会导致后启动的 USB2 设备只有 publisher 而没有图像帧。
 三台 Orbbec 与 D435 共用 USB2 root hub 时，还需将生产机 `usbfs_memory_mb` 调到至少 `256`；
 启动函数会检查该值并在过小时打印临时和持久化修复命令。
-`cameras.left.color` 固定左侧相机为 3 ms 曝光，以避免反光标定板在自动曝光下过曝；当现场光照
-改变时应调整该配置，而不是降低 ChArUco 的最小角点数。
+`wrist_cameras.devices.left.streams.color` 固定左侧相机为 3 ms 曝光，以避免反光标定板在自动曝光下过曝；当现场光照
+改变时应调整该配置，而不是降低 ChArUco 的最小角点数。现场串号等差异可写进被 `.gitignore` 忽略的
+`config/ros/cameras_ros2.local.yaml`（与 base 深合并、优先级 `local > base`，详见
+[开发者手册](../development/startup-entries.md#ros2-图像节点与-rviz2)）。
 生产机的 Orbbec 工作区与 Docker 镜像可能使用不同的 Fast DDS 补丁版本；项目默认从 `.env`
 加载 `FASTDDS_BUILTIN_TRANSPORTS=UDPv4`，避免 DDS 发现到 topic 后选择不兼容的同机共享内存。
 不要将它改回 `DEFAULT`，除非已验证宿主与容器能稳定互收 Image 和 `CameraInfo`。
@@ -171,7 +183,7 @@ rm65_camera_ros2_status
 ```
 
 默认会看到 `/camera_left`、`/camera_middle`、`/camera_right` 下的 `color/image_raw` 和
-对应 `camera_info`；已构建 `realsense2_camera` 时还会有全局
+对应 `camera_info`，以及全局
 `/camera_global/d435/color/image_raw`。需要深度时使用互斥的深度模式：
 
 ```zsh
@@ -210,7 +222,7 @@ rm65_docker_camera_rviz                 # 前台打开 RViz，关闭窗口或 Ct
 ```
 
 RViz 中会显示（前三路由 Orbbec 提供，第四路由 RealSense D435 提供；宿主机缺少
-`realsense2_camera` 驱动时 `rm65_camera_ros2` 自动降级为仅 Orbbec，此时第四格无图像）：
+`realsense2_camera` 驱动时 `rm65_camera_ros2` 直接失败，不会到达 RViz 阶段）：
 
 ```text
 /camera_left/color/image_raw
@@ -502,6 +514,7 @@ rm65_docker_web_control_logs -f
 | `MOVEP` | 显示当前激活参考系，支持填入当前位置；位姿滑轨不提供逆解/影子预览，确认目标后以 `MOVEJ_P` 提交关节空间运动 |
 | 关节记录 | 把当前真实关节角保存到 `config/web-control/joint-records/<arm>/`；选择记录可填入 MOVEJ，或经 FK 填入 MOVEL/MOVEP 位姿；在 MOVEJ 下可确认删除当前选择的记录 |
 | 末端速度 | 使用当前激活参考系建立六轴 `vx, vy, vz, wx, wy, wz` 速度 Action，按周期发送最新命令 |
+| 键盘坐标轴 | 输入模式为键盘时，在 URDF 区显示左右臂当前可用 WORK 的红/绿/蓝 XYZ 轴；模式离开或 WORK 不可用即隐藏 |
 | 取消 Action | 取消当前浏览器发起的 Action；普通运动立即停止，速度 session 零速后 slow-stop |
 | 恢复机械臂 | 对当前选中的机械臂重建取消后失效的运动事件通道；不发送运动指令 |
 | 软件停止 | 直接调用当前机械臂的 `/stop` 服务；它不是控制柜物理急停 |

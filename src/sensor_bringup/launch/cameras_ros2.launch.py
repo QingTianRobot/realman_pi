@@ -2,10 +2,16 @@
 
 The device selector is the serial number from ``config/ros/cameras_ros2.yaml``;
 USB port names are intentionally not used because they change after re-plugging.
-The default profile is the low-bandwidth USB2 profile validated on the production
-host. RViz is opt-in so the same launch works on a headless industrial PC.
+An optional, gitignored ``config/ros/cameras_ros2.local.yaml`` is deep-merged on
+top of the base config so each site can override serials (or any other leaf
+field) without touching the committed file; when it is absent the base config
+alone drives the launch. The default profile is the low-bandwidth USB2 profile
+validated on the production host. RViz is opt-in so the same launch works on a
+headless industrial PC.
 """
 
+import os
+import sys
 from pathlib import Path
 
 import yaml
@@ -19,58 +25,142 @@ from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
 
-def _load_defaults():
-    config_path = Path(get_package_share_directory("sensor_bringup")) / "config" / "cameras_ros2.yaml"
-    with config_path.open(encoding="utf-8") as config_file:
+# Leaf keys accepted under a wrist camera's color / depth stream block. Anything
+# else is a likely typo and is reported instead of being silently ignored.
+_COLOR_LEAF_KEYS = {"width", "height", "fps", "format", "auto_exposure", "exposure"}
+_DEPTH_LEAF_KEYS = {"width", "height", "fps", "format", "decimation_factor"}
+
+
+def _warn(message):
+    print(f"[cameras_ros2] WARNING: {message}", file=sys.stderr)
+
+
+def _deep_merge(base, override):
+    """Recursively merge ``override`` onto ``base``; leaf values in override win."""
+    if not isinstance(base, dict) or not isinstance(override, dict):
+        return override if override is not None else base
+    merged = dict(base)
+    for key, value in override.items():
+        merged[key] = _deep_merge(merged.get(key), value) if isinstance(value, dict) else value
+    return merged
+
+
+def _base_config_path():
+    return Path(get_package_share_directory("sensor_bringup")) / "config" / "cameras_ros2.yaml"
+
+
+def _local_override_path(base_path):
+    """Locate the optional, gitignored cameras_ros2.local.yaml override.
+
+    Precedence:
+      1. RM65_CAMERAS_LOCAL_CONFIG (absolute path) for ad-hoc overrides.
+      2. Beside the resolved base config. Under ``colcon build --symlink-install``
+         the installed base config is a symlink into ``config/ros/`` in the source
+         tree, so resolving it finds a local file added or edited without a rebuild.
+      3. Beside the installed base config (plain builds that installed a copy).
+    Returns None when no override file exists, in which case the base config runs.
+    """
+    env_path = os.environ.get("RM65_CAMERAS_LOCAL_CONFIG")
+    candidates = []
+    if env_path:
+        candidates.append(Path(env_path))
+    candidates.append(base_path.resolve().parent / "cameras_ros2.local.yaml")
+    candidates.append(base_path.parent / "cameras_ros2.local.yaml")
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _load_config():
+    """Load the base cameras_ros2.yaml, then deep-merge the optional local override.
+
+    Guarantees:
+      - The local file is OPTIONAL: when it is absent the base config is used
+        as-is and the launch runs normally.
+      - Precedence is local > base at every leaf (deep merge, base-only keys kept).
+    """
+    base_path = _base_config_path()
+    with base_path.open(encoding="utf-8") as config_file:
         config = yaml.safe_load(config_file) or {}
-    cameras = config.get("cameras", {})
-    streams = config.get("streams", {})
-    color = streams.get("color", {})
-    depth = streams.get("depth", {})
-    global_camera = config.get("global_camera", {})
-    global_color = global_camera.get("color", {})
-    global_depth = global_camera.get("depth", {})
-    global_tf = global_camera.get("tf", {})
+
+    local_path = _local_override_path(base_path)
+    if local_path is None:
+        # No local override present; the committed base config alone drives launch.
+        print(f"[cameras_ros2] no local override; using base {base_path}", file=sys.stderr)
+        return config
+
+    # An empty or comment-only local file yields {} and leaves base untouched.
+    with local_path.open(encoding="utf-8") as local_file:
+        local = yaml.safe_load(local_file) or {}
+    config = _deep_merge(config, local)  # local wins over base at every leaf
+    print(f"[cameras_ros2] applied local override (local > base): {local_path}", file=sys.stderr)
+    return config
+
+
+def _resolve_side_streams(global_streams, device_cfg, side):
+    """Deep-merge a device's stream leaves over the shared wrist defaults, then
+    flatten them into gemini305.launch.py argument literals."""
+    merged = _deep_merge(global_streams, device_cfg.get("streams", {}))
+    color = merged.get("color", {}) or {}
+    depth = merged.get("depth", {}) or {}
+
+    for key in set(color) - _COLOR_LEAF_KEYS:
+        _warn(f"wrist_cameras.devices.{side}.streams.color unknown key '{key}' (ignored)")
+    for key in set(depth) - _DEPTH_LEAF_KEYS:
+        _warn(f"wrist_cameras.devices.{side}.streams.depth unknown key '{key}' (ignored)")
+
     return {
-        "left_serial": str(cameras.get("left", {}).get("serial", "")),
-        "middle_serial": str(cameras.get("middle", {}).get("serial", "")),
-        "right_serial": str(cameras.get("right", {}).get("serial", "")),
-        "left_color_auto_exposure": "true"
-        if cameras.get("left", {}).get("color", {}).get("auto_exposure", True)
-        else "false",
-        "left_color_exposure": str(
-            cameras.get("left", {}).get("color", {}).get("exposure", -1)
-        ),
-        "middle_color_auto_exposure": "true"
-        if cameras.get("middle", {}).get("color", {}).get("auto_exposure", True)
-        else "false",
-        "middle_color_exposure": str(
-            cameras.get("middle", {}).get("color", {}).get("exposure", -1)
-        ),
-        "right_color_auto_exposure": "true"
-        if cameras.get("right", {}).get("color", {}).get("auto_exposure", True)
-        else "false",
-        "right_color_exposure": str(
-            cameras.get("right", {}).get("color", {}).get("exposure", -1)
-        ),
         "color_width": str(color.get("width", 640)),
         "color_height": str(color.get("height", 480)),
         "color_fps": str(color.get("fps", 30)),
         "color_format": str(color.get("format", "MJPG")),
-        "enable_color": "true" if config.get("mode", "color") == "color" else "false",
+        "enable_color_auto_exposure": "true" if color.get("auto_exposure", True) else "false",
+        "color_exposure": str(color.get("exposure", -1)),
         "depth_width": str(depth.get("width", 320)),
         "depth_height": str(depth.get("height", 240)),
         "depth_fps": str(depth.get("fps", 15)),
         "depth_format": str(depth.get("format", "Y16")),
         "depth_decimation_factor": str(depth.get("decimation_factor", 2)),
-        "enable_depth": "true" if config.get("mode", "color") == "depth" else "false",
-        "enable_frame_sync": "true" if config.get("sync", {}).get("enable_frame_sync", False) else "false",
-        "trigger_out_enabled": "true" if config.get("sync", {}).get("trigger_out_enabled", False) else "false",
-        "software_trigger_enabled": "true" if config.get("sync", {}).get("software_trigger_enabled", False) else "false",
+    }
+
+
+def _load_defaults():
+    config = _load_config()
+    wrist = config.get("wrist_cameras", {}) or {}
+    global_streams = wrist.get("streams", {}) or {}
+    devices = wrist.get("devices", {}) or {}
+    mode = wrist.get("mode", "color")
+    sync = wrist.get("sync", {}) or {}
+    global_camera = config.get("global_camera", {}) or {}
+    global_color = global_camera.get("color", {}) or {}
+    global_depth = global_camera.get("depth", {}) or {}
+    global_tf = global_camera.get("tf", {}) or {}
+
+    sides = {}
+    for side in ("left", "middle", "right"):
+        device_cfg = devices.get(side, {}) or {}
+        sides[side] = {
+            "serial": str(device_cfg.get("serial", "")),
+            "streams": _resolve_side_streams(global_streams, device_cfg, side),
+        }
+
+    realsense_serial_raw = str(global_camera.get("serial_no", "") or "")
+    return {
+        "sides": sides,
+        "enable_color": "true" if mode == "color" else "false",
+        "enable_depth": "true" if mode == "depth" else "false",
+        "enable_frame_sync": "true" if sync.get("enable_frame_sync", False) else "false",
+        "trigger_out_enabled": "true" if sync.get("trigger_out_enabled", False) else "false",
+        "software_trigger_enabled": "true" if sync.get("software_trigger_enabled", False) else "false",
         # Global RealSense D435 (native realsense2_camera node). use_realsense is
         # auto-degraded to false by rm65_camera_ros2 when the driver is missing.
         "use_realsense": "true" if global_camera.get("enabled", True) else "false",
-        "realsense_serial_no": str(global_camera.get("serial_no", "")),
+        # Wrap the serial in single quotes so launch_ros' YAML parameter inference
+        # keeps it a string. The D435 serial is all digits and would otherwise be
+        # parsed as an integer, which realsense_node_factory rejects: the node
+        # then dies with "parameter 'serial_no' has invalid type".
+        "realsense_serial_no": "'{}'".format(realsense_serial_raw) if realsense_serial_raw else "",
         "realsense_device_type": str(global_camera.get("device_type", "d435")),
         "realsense_namespace": str(global_camera.get("namespace", "camera_global")),
         "realsense_camera_name": str(global_camera.get("camera_name", "d435")),
@@ -98,7 +188,7 @@ def _load_defaults():
     }
 
 
-def _camera_include(side, serial, launch_arguments, condition, delay):
+def _camera_include(side, serial, stream_args, condition, delay):
     camera_launch = PathJoinSubstitution(
         [FindPackageShare("orbbec_camera"), "launch", "gemini305.launch.py"]
     )
@@ -109,21 +199,14 @@ def _camera_include(side, serial, launch_arguments, condition, delay):
         "enable_point_cloud": LaunchConfiguration("enable_point_cloud"),
         "enable_color": LaunchConfiguration("enable_color"),
         "enable_depth": LaunchConfiguration("enable_depth"),
-        "color_width": LaunchConfiguration("color_width"),
-        "color_height": LaunchConfiguration("color_height"),
-        "color_fps": LaunchConfiguration("color_fps"),
-        "color_format": LaunchConfiguration("color_format"),
-        "depth_width": LaunchConfiguration("depth_width"),
-        "depth_height": LaunchConfiguration("depth_height"),
-        "depth_fps": LaunchConfiguration("depth_fps"),
-        "depth_format": LaunchConfiguration("depth_format"),
-        "depth_decimation_factor": LaunchConfiguration("depth_decimation_factor"),
         "enable_frame_sync": LaunchConfiguration("enable_frame_sync"),
         "trigger_out_enabled": LaunchConfiguration("trigger_out_enabled"),
         "software_trigger_enabled": LaunchConfiguration("software_trigger_enabled"),
         "log_level": "info",
     }
-    arguments.update(launch_arguments)
+    # Per-side resolved stream/exposure literals, already merged from the shared
+    # wrist defaults, this device's own streams block, and any local override.
+    arguments.update(stream_args)
     return TimerAction(
         period=delay,
         actions=[
@@ -196,31 +279,11 @@ def _realsense_static_tf():
 
 def generate_launch_description():
     defaults = _load_defaults()
+    sides = defaults["sides"]
     declarations = [
-        DeclareLaunchArgument("left_serial", default_value=defaults["left_serial"]),
-        DeclareLaunchArgument("middle_serial", default_value=defaults["middle_serial"]),
-        DeclareLaunchArgument("right_serial", default_value=defaults["right_serial"]),
-        DeclareLaunchArgument(
-            "left_color_auto_exposure",
-            default_value=defaults["left_color_auto_exposure"],
-        ),
-        DeclareLaunchArgument(
-            "left_color_exposure", default_value=defaults["left_color_exposure"]
-        ),
-        DeclareLaunchArgument(
-            "middle_color_auto_exposure",
-            default_value=defaults["middle_color_auto_exposure"],
-        ),
-        DeclareLaunchArgument(
-            "middle_color_exposure", default_value=defaults["middle_color_exposure"]
-        ),
-        DeclareLaunchArgument(
-            "right_color_auto_exposure",
-            default_value=defaults["right_color_auto_exposure"],
-        ),
-        DeclareLaunchArgument(
-            "right_color_exposure", default_value=defaults["right_color_exposure"]
-        ),
+        DeclareLaunchArgument("left_serial", default_value=sides["left"]["serial"]),
+        DeclareLaunchArgument("middle_serial", default_value=sides["middle"]["serial"]),
+        DeclareLaunchArgument("right_serial", default_value=sides["right"]["serial"]),
         DeclareLaunchArgument("use_left", default_value="true"),
         DeclareLaunchArgument("use_middle", default_value="true"),
         DeclareLaunchArgument("use_right", default_value="true"),
@@ -232,18 +295,6 @@ def generate_launch_description():
             "device_num",
             default_value="3",
             description="Number of Orbbec devices in the shared SDK context.",
-        ),
-        DeclareLaunchArgument("color_width", default_value=defaults["color_width"]),
-        DeclareLaunchArgument("color_height", default_value=defaults["color_height"]),
-        DeclareLaunchArgument("color_fps", default_value=defaults["color_fps"]),
-        DeclareLaunchArgument("color_format", default_value=defaults["color_format"]),
-        DeclareLaunchArgument("depth_width", default_value=defaults["depth_width"]),
-        DeclareLaunchArgument("depth_height", default_value=defaults["depth_height"]),
-        DeclareLaunchArgument("depth_fps", default_value=defaults["depth_fps"]),
-        DeclareLaunchArgument("depth_format", default_value=defaults["depth_format"]),
-        DeclareLaunchArgument(
-            "depth_decimation_factor",
-            default_value=defaults["depth_decimation_factor"],
         ),
         DeclareLaunchArgument("enable_frame_sync", default_value=defaults["enable_frame_sync"]),
         DeclareLaunchArgument("trigger_out_enabled", default_value=defaults["trigger_out_enabled"]),
@@ -290,36 +341,21 @@ def generate_launch_description():
         _camera_include(
             "left",
             LaunchConfiguration("left_serial"),
-            {
-                "enable_color_auto_exposure": LaunchConfiguration(
-                    "left_color_auto_exposure"
-                ),
-                "color_exposure": LaunchConfiguration("left_color_exposure"),
-            },
+            sides["left"]["streams"],
             IfCondition(LaunchConfiguration("use_left")),
             0.0,
         ),
         _camera_include(
             "middle",
             LaunchConfiguration("middle_serial"),
-            {
-                "enable_color_auto_exposure": LaunchConfiguration(
-                    "middle_color_auto_exposure"
-                ),
-                "color_exposure": LaunchConfiguration("middle_color_exposure"),
-            },
+            sides["middle"]["streams"],
             IfCondition(LaunchConfiguration("use_middle")),
             8.0,
         ),
         _camera_include(
             "right",
             LaunchConfiguration("right_serial"),
-            {
-                "enable_color_auto_exposure": LaunchConfiguration(
-                    "right_color_auto_exposure"
-                ),
-                "color_exposure": LaunchConfiguration("right_color_exposure"),
-            },
+            sides["right"]["streams"],
             IfCondition(LaunchConfiguration("use_right")),
             16.0,
         ),

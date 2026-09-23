@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import math
 from pathlib import Path
 
 import std_msgs.msg
@@ -20,6 +21,7 @@ class GripperManagerNode:
         self.config = load_gripper_config(config_file)
         self.manager = GripperManager.from_config(self.config)
         self._services = []
+        self._subscriptions = []
         self._publishers = {}
         for name in self.manager.device_names:
             self._create_device_interfaces(name)
@@ -41,6 +43,14 @@ class GripperManagerNode:
             self.node.create_service(GripperPercentage, f"{prefix}/percentage", lambda req, res, n=name: self._percentage(n, req, res)),
             self.node.create_service(Trigger, f"{prefix}/calibrate", lambda req, res, n=name: self._calibrate(n, res)),
         ])
+        self._subscriptions.append(
+            self.node.create_subscription(
+                std_msgs.msg.Float32,
+                f"{prefix}/percentage/command",
+                lambda message, n=name: self._percentage_command(n, message),
+                10,
+            )
+        )
         self._publishers[name] = {
             suffix: self.node.create_publisher(message_type, f"{prefix}/{suffix}", 10)
             for suffix, message_type in {
@@ -149,6 +159,26 @@ class GripperManagerNode:
         except Exception as error:
             return self._response(response, False, f"Percentage error: {error}")
 
+    def _percentage_command(self, name, message):
+        value = float(message.data)
+        if not math.isfinite(value) or not 0.0 <= value <= 1.0:
+            self.node.get_logger().warning(
+                f"Ignoring invalid continuous percentage for {name}: {value!r}"
+            )
+            return
+        device, error = self._ready(name)
+        if error:
+            self.node.get_logger().warning(
+                f"Ignoring continuous percentage for {name}: {error}"
+            )
+            return
+        target = percentage_to_position(
+            value,
+            open_position=device.open_position,
+            close_position=device.close_position,
+        )
+        self.manager.request_move(name, target)
+
     def _calibrate(self, name, response):
         return self._response(
             response,
@@ -201,4 +231,3 @@ def main(args=None):
         node.destroy_node()
         if rclpy.ok():
             rclpy.shutdown()
-

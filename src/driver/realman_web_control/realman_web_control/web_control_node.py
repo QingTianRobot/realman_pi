@@ -26,7 +26,7 @@ from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from realman_msgs.action import CartesianVelocity, ExecuteMotion, ExecuteTrajectory
-from realman_msgs.msg import InputModeState, MotionWaypoint
+from realman_msgs.msg import CartesianVelocityState, InputModeState, MotionWaypoint
 from realman_msgs.srv import (
     CaptureCalibrationSample,
     ForwardKinematics,
@@ -46,6 +46,8 @@ from tf2_ros import Buffer, TransformListener
 from .action_bridge import ActionRecord, action_event, assign_fields, message_to_json
 from .input_mode_bridge import InputModeBridge, InputModeEffect, InputModeOption, InputModeSnapshot, MOTION_TYPES
 from .joint_records import JointRecordStore
+from .keyboard_control import KeyboardArmCommand, load_keyboard_control_config
+from .keyboard_control_bridge import KeyboardControlBridge
 from .model_manifest import build_manifest
 from .protocol import ProtocolError
 from .tf_pose import transform_stamped_pose
@@ -95,6 +97,10 @@ class WebControlNode(Node):
             str(config_root / "ros" / "realman_coordinates.yaml"),
         )
         self.declare_parameter(
+            "keyboard_control_config_file",
+            str(config_root / "ros" / "keyboard_control.yaml"),
+        )
+        self.declare_parameter(
             "joint_record_dir",
             str(config_root / "web-control" / "joint-records"),
         )
@@ -116,6 +122,7 @@ class WebControlNode(Node):
         layout_file = self._parameter("layout_config_file")
         motion_file = self._parameter("motion_config_file")
         coordinates_file = self._parameter("coordinates_config_file")
+        keyboard_file = self._parameter("keyboard_control_config_file")
         joint_record_dir = self._parameter("joint_record_dir")
         description_root = self._parameter("description_root")
         static_root = self._parameter("static_root")
@@ -129,9 +136,26 @@ class WebControlNode(Node):
             layout_file,
             motion_file,
             coordinates_file,
+            keyboard_file,
             description_root,
         )
         self._robots = {robot["id"]: robot for robot in self._manifest["robots"]}
+        self._keyboard_config = load_keyboard_control_config(
+            keyboard_file, motion_file, coordinates_file
+        )
+        self._keyboard = KeyboardControlBridge(self._keyboard_config)
+        self._keyboard_gripper_publishers = {
+            arm: self.create_publisher(String, f"/keyboard/{arm}/gripper_command",
+                QoSProfile(depth=1, lifespan=Duration(
+                    nanoseconds=self._keyboard_config.input_timeout_ms * 1_000_000)))
+            for arm in ("l", "r")
+        }
+        self._keyboard_publishers = {
+            arm: self.create_publisher(
+                TwistStamped, f"/keyboard/{arm}/cartesian_velocity", 1
+            )
+            for arm in ("l", "r")
+        }
         self._commands: queue.Queue[tuple[str, dict[str, Any]]] = queue.Queue(maxsize=2048)
         self._control_lock = threading.RLock()
         self._actions: dict[tuple[str, str], ActionRecord] = {}
@@ -143,6 +167,7 @@ class WebControlNode(Node):
         self._joint_degrees: dict[str, list[float]] = {}
         self._last_joint_stamp_ns: dict[str, int] = {}
         self._has_nonzero_joint_state: set[str] = set()
+        self._cartesian_velocity_states: dict[str, dict[str, Any]] = {}
         self._joint_records = JointRecordStore(joint_record_dir)
         self._callback_group = ReentrantCallbackGroup()
         # Node owns its own _subscriptions collection; never append to it twice.
@@ -286,7 +311,11 @@ class WebControlNode(Node):
                     String,
                     f"/{arm}/coordinates/state",
                     lambda message, selected=arm: self._coordinate_state_message(selected, message),
-                    10,
+                    QoSProfile(
+                        depth=1,
+                        reliability=ReliabilityPolicy.RELIABLE,
+                        durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                    ),
                     callback_group=self._callback_group,
                 )
             )
@@ -295,6 +324,17 @@ class WebControlNode(Node):
                     Bool,
                     f"/{arm}/connected",
                     lambda message, selected=arm: self._connection(selected, message),
+                    10,
+                    callback_group=self._callback_group,
+                )
+            )
+            self._web_subscriptions.append(
+                self.create_subscription(
+                    CartesianVelocityState,
+                    f"/{arm}/cartesian_velocity/state",
+                    lambda message, selected=arm: self._cartesian_velocity_state_message(
+                        selected, message
+                    ),
                     10,
                     callback_group=self._callback_group,
                 )
@@ -391,6 +431,8 @@ class WebControlNode(Node):
             self._gripper_command(client_id, message)
         elif message_type == "select_input_mode":
             self._apply_input_mode_effects(self._input_modes.select_mode(client_id, message))
+        elif message_type == "keyboard_state":
+            self._keyboard_state(client_id, message)
         elif message_type in MOTION_TYPES:
             if not self._input_modes.available:
                 self._apply_input_mode_effects(self._input_modes.update_catalog(
@@ -620,7 +662,88 @@ class WebControlNode(Node):
                 except Exception as error:
                     self.get_logger().error(f"Web motion dispatch failed: {error}")
                     self._server.send_event(ProtocolError("internal_error", str(error), effect.payload["request_id"]).event(), effect.client_id)
+            elif effect.kind == "keyboard_lease":
+                if effect.payload["active"]:
+                    self._keyboard.activate(effect.client_id)
+                else:
+                    self._keyboard.deactivate()
+                self._server.send_event(
+                    {"type": "keyboard_lease", "active": bool(effect.payload["active"])},
+                    effect.client_id,
+                )
+            elif effect.kind == "keyboard_zero":
+                self._publish_keyboard_zeros()
+            elif effect.kind == "request_safe_mode":
+                self._request_keyboard_safe_mode()
         self._forget_mode_selection_futures()
+
+    def _keyboard_work_available(self, arm: str) -> bool:
+        state = self._coordinate_state.get(arm, {})
+        arm_config = self._keyboard_config.arms[arm]
+        work = state.get("work")
+        return bool(
+            state.get("motion_allowed") is True
+            and state.get("work_matched") is True
+            and state.get("current_work") == arm_config.reference_name
+            and state.get("expected_work") == arm_config.reference_name
+            and isinstance(work, dict)
+            and work.get("name") == arm_config.reference_name
+            and work.get("frame_id") == arm_config.frame_id
+        )
+
+    def _keyboard_state(self, client_id: str, message: dict[str, Any]) -> None:
+        snapshot = self._input_modes.keyboard_snapshot(client_id)
+        command = self._keyboard.command(client_id, message)
+        gripper_error = None
+        if command.gripper_command is not None:
+            name = {"l": "gripper_left", "r": "gripper_right"}[command.arm]
+            state = self._gripper_states.get(name, {})
+            if state.get("connected") is not True or state.get("alarm") != 0:
+                gripper_error = ProtocolError("keyboard_gripper_unavailable", f"{name} gripper is offline or alarmed")
+            else:
+                # Discrete press edge; the BT router owns dry-run and mode gates.
+                # Never publish a release value: 0.0 means FULL CLOSE, not stop.
+                event = String(data=json.dumps({
+                    "command": command.gripper_command,
+                    "epoch": snapshot.epoch, "request_id": snapshot.request_id,
+                    "stamp_ns": self.get_clock().now().nanoseconds,
+                }))
+                self._keyboard_gripper_publishers[command.arm].publish(event)
+        nonzero = any(command.linear) or any(command.angular)
+        if nonzero and not self._keyboard_work_available(command.arm):
+            self._publish_keyboard_command(self._keyboard_config.command(command.arm, frozenset()))
+            raise ProtocolError(
+                "keyboard_work_unavailable",
+                f"{command.arm} default WORK reference is unavailable",
+            )
+        self._publish_keyboard_command(command)
+        if gripper_error is not None:
+            raise gripper_error
+
+    def _publish_keyboard_command(self, command: KeyboardArmCommand) -> None:
+        message = TwistStamped()
+        message.header.stamp = self.get_clock().now().to_msg()
+        message.header.frame_id = command.frame_id
+        message.twist.linear.x, message.twist.linear.y, message.twist.linear.z = command.linear
+        message.twist.angular.x, message.twist.angular.y, message.twist.angular.z = command.angular
+        self._keyboard_publishers[command.arm].publish(message)
+
+    def _publish_keyboard_zeros(self) -> None:
+        for arm in ("l", "r"):
+            self._publish_keyboard_command(
+                self._keyboard_config.command(arm, frozenset())
+            )
+
+    def _request_keyboard_safe_mode(self) -> None:
+        request = SelectInputMode.Request()
+        request.mode_id = "none"
+        request.requester_id = "web:keyboard-disconnect"
+        try:
+            self._mode_select_client.call_async(request)
+        except Exception as error:
+            self.get_logger().warning(
+                f"Keyboard safe-mode request failed: {error}"
+            )
 
     def _gripper_state(self, name: str, field: str, value: Any) -> None:
         state = self._gripper_states.get(name)
@@ -1207,6 +1330,42 @@ class WebControlNode(Node):
         self._coordinate_state[arm] = payload
         self._server.send_event(payload)
 
+    def _cartesian_velocity_state_message(
+        self, arm: str, message: CartesianVelocityState
+    ) -> None:
+        state = {
+            "session_active": bool(message.session_active),
+            "reference_type": int(message.reference_type),
+            "reference_name": str(message.reference_name),
+            "command_frame_id": str(message.command_frame_id),
+            "commanded_linear_velocity_mps": [
+                float(value) for value in message.commanded_linear_velocity_mps
+            ],
+            "commanded_angular_velocity_radps": [
+                float(value) for value in message.commanded_angular_velocity_radps
+            ],
+            "limited_linear_velocity_mps": [
+                float(value) for value in message.limited_linear_velocity_mps
+            ],
+            "limited_angular_velocity_radps": [
+                float(value) for value in message.limited_angular_velocity_radps
+            ],
+            "measured_frame_id": str(message.measured_frame_id),
+            "measured_linear_velocity_mps": [
+                float(value) for value in message.measured_linear_velocity_mps
+            ],
+            "measured_angular_velocity_radps": [
+                float(value) for value in message.measured_angular_velocity_radps
+            ],
+            "measured_valid": bool(message.measured_valid),
+            "command_age_ms": int(message.command_age_ms),
+            "measured_age_ms": int(message.measured_age_ms),
+        }
+        self._cartesian_velocity_states[arm] = state
+        self._server.send_event(
+            {"type": "cartesian_velocity_state", "arm": arm, "state": state}
+        )
+
     def _camera_health_message(self, message: String) -> None:
         try:
             payload = json.loads(message.data)
@@ -1229,6 +1388,16 @@ class WebControlNode(Node):
             state = self._coordinate_state.get(arm)
             if state is not None:
                 self._server.send_event(state, client_id)
+            velocity_state = self._cartesian_velocity_states.get(arm)
+            if velocity_state is not None:
+                self._server.send_event(
+                    {
+                        "type": "cartesian_velocity_state",
+                        "arm": arm,
+                        "state": velocity_state,
+                    },
+                    client_id,
+                )
             self._send_joint_records(client_id, arm)
         self._send_tf_frames(client_id)
 
@@ -1376,7 +1545,11 @@ class WebControlNode(Node):
                     f"goal.{goal_key} must equal configured {int(settings[expected_key])}",
                     message["request_id"],
                 )
+        goal_values["max_linear_speed_mps"] = settings["max_linear_speed_mps"]
+        goal_values["max_angular_speed_radps"] = settings["max_angular_speed_radps"]
         for goal_key, setting_key in (
+            ("max_linear_speed_mps", "max_linear_speed_mps"),
+            ("max_angular_speed_radps", "max_angular_speed_radps"),
             ("max_linear_accel_mps2", "max_linear_accel_mps2"),
             ("max_angular_accel_radps2", "max_angular_accel_radps2"),
         ):
@@ -1483,7 +1656,7 @@ class WebControlNode(Node):
             record.result_unavailable = True
             self._release_unobserved_cancel(record)
             self.get_logger().error(f"Web result listener failed for {record.arm}/{record.action}: {error}")
-            self._server.send_event(action_event(record, "error", message=str(error)))
+            self._server.send_event(self._result_transport_event(record, error))
 
     def _action_feedback(self, record: ActionRecord, feedback_message: Any) -> None:
         if self._actions.get((record.arm, record.action)) is not record:
@@ -1497,6 +1670,21 @@ class WebControlNode(Node):
                 "feedback": message_to_json(feedback_message.feedback),
             }
         )
+
+    def _result_transport_event(self, record: ActionRecord, error: Exception) -> dict[str, Any]:
+        if "goal handle is not known to this client" in str(error).lower():
+            # A physical emergency stop can tear down the action server's
+            # goal state before rclpy delivers the result.  The raw
+            # transport exception is useful in logs but is not a browser
+            # diagnosis, and this goal can no longer be cancelled.
+            self._actions.pop((record.arm, record.action), None)
+            return action_event(
+                record,
+                "stopped",
+                code="goal_handle_unknown",
+                message="运动已中断，Action 结果不可用；请检查急停状态并恢复机械臂",
+            )
+        return action_event(record, "error", message=str(error))
 
     @_serialized_control
     def _action_result(self, record: ActionRecord, future: Any) -> None:
@@ -1520,7 +1708,7 @@ class WebControlNode(Node):
             self.get_logger().error(
                 f"Web action result failed for {record.arm}/{record.action}: {error}"
             )
-            event = action_event(record, "error", message=str(error))
+            event = self._result_transport_event(record, error)
         self._server.send_event(event)
 
     def _cancel_action(self, client_id: str, arm: str, action: str) -> None:
@@ -1775,6 +1963,8 @@ class WebControlNode(Node):
         )
 
     def destroy_node(self) -> bool:
+        self._publish_keyboard_zeros()
+        self._keyboard.deactivate()
         self._server.stop()
         return super().destroy_node()
 

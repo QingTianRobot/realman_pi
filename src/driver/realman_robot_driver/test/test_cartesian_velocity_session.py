@@ -129,6 +129,8 @@ def settings(
     *,
     max_linear_speed_mps=1.0,
     max_angular_speed_radps=2.0,
+    hard_max_linear_speed_mps=None,
+    hard_max_angular_speed_radps=None,
     velocity_watchdog_ms=100,
 ) -> MotionSettings:
     return MotionSettings(
@@ -141,6 +143,8 @@ def settings(
         max_angular_accel_radps2=2.0,
         joint_goal_tolerance_deg=0.25,
         stop_timeout_sec=1.0,
+        hard_max_linear_speed_mps=hard_max_linear_speed_mps,
+        hard_max_angular_speed_radps=hard_max_angular_speed_radps,
     )
 
 
@@ -171,6 +175,8 @@ def valid_goal(**changes):
         reference_name="tcpgrip",
         control_period_ms=20,
         watchdog_ms=100,
+        max_linear_speed_mps=1.0,
+        max_angular_speed_radps=2.0,
         max_linear_accel_mps2=1.0,
         max_angular_accel_radps2=2.0,
         follow=True,
@@ -187,6 +193,7 @@ def make_session(
     ownership=None,
     session_settings=None,
     ros_clock=None,
+    active_frame=None,
 ):
     kwargs = {}
     if ros_clock is not None:
@@ -196,7 +203,8 @@ def make_session(
         adapter=adapter or FakeAdapter(),
         ownership=ownership or ArmOwnership(),
         settings=session_settings or settings(),
-        active_frame=lambda reference_type: ("tcpgrip", "l/tool/tcpgrip"),
+        active_frame=active_frame
+        or (lambda reference_type: ("tcpgrip", "l/tool/tcpgrip")),
         motion_allowed=lambda arm: True,
         monotonic=clock or Clock(),
         **kwargs,
@@ -209,10 +217,86 @@ def test_start_initializes_zero_command_and_claims_arm():
     session = make_session(adapter=adapter, ownership=ownership)
 
     assert session.start(valid_goal()) is True
-    assert adapter.init_calls == [(1, int(ReferenceType.TOOL), 20)]
+    assert adapter.init_calls == [(1, 0, 20)]
     assert adapter.velocity_calls[0][0] == [0.0] * 6
     assert ownership.is_busy("l") is True
     session.shutdown()
+
+
+def test_telemetry_snapshot_distinguishes_requested_and_limited_commands():
+    clock = Clock()
+    adapter = FakeAdapter()
+    session = make_session(
+        adapter=adapter,
+        clock=clock,
+        session_settings=settings(max_linear_speed_mps=1.0),
+        active_frame=lambda reference_type: ("cell", "l/work/cell"),
+    )
+
+    idle = session.telemetry_snapshot()
+    assert idle.session_active is False
+    assert idle.commanded == (0.0,) * 6
+    assert idle.limited == (0.0,) * 6
+
+    assert session.start(
+        valid_goal(
+            reference_type=int(ReferenceType.WORK),
+            reference_name="cell",
+            max_linear_speed_mps=0.5,
+        )
+    ) is True
+    session.accept_command(
+        twist(
+            "l/work/cell",
+            linear=(0.4, 0.0, 0.0),
+            stamp_ns=1_000_000_000,
+        )
+    )
+    clock.advance(0.02)
+    assert session.tick() is None
+
+    state = session.telemetry_snapshot()
+    assert state.session_active is True
+    assert state.reference_name == "cell"
+    assert state.frame_id == "l/work/cell"
+    assert state.commanded == pytest.approx((0.4, 0.0, 0.0, 0.0, 0.0, 0.0))
+    assert state.limited == pytest.approx((0.02, 0.0, 0.0, 0.0, 0.0, 0.0))
+    session.shutdown()
+
+
+def test_work_velocity_uses_vendor_world_frame_type():
+    adapter = FakeAdapter()
+    session = make_session(
+        adapter=adapter,
+        active_frame=lambda reference_type: ("cell", "l/work/cell"),
+    )
+
+    assert session.start(
+        valid_goal(
+            reference_type=int(ReferenceType.WORK),
+            reference_name="cell",
+        )
+    ) is True
+    assert adapter.init_calls == [(1, 1, 20)]
+    session.shutdown()
+
+
+def test_base_velocity_is_rejected_before_vendor_initialization():
+    adapter = FakeAdapter()
+    session = make_session(
+        adapter=adapter,
+        active_frame=lambda reference_type: ("base", "l/base_link"),
+    )
+
+    with pytest.raises(ValueError, match="BASE reference is not supported"):
+        session.start(
+            valid_goal(
+                reference_type=int(ReferenceType.BASE),
+                reference_name="base",
+            )
+        )
+
+    assert adapter.init_calls == []
 
 
 def test_logger_severity_changes_do_not_crash_velocity_session():
@@ -377,7 +461,11 @@ def test_tick_limits_linear_and_angular_delta_norms_independently():
             velocity_watchdog_ms=2000,
         ),
     )
-    session.start(valid_goal(watchdog_ms=2000))
+    session.start(valid_goal(
+        watchdog_ms=2000,
+        max_linear_speed_mps=10.0,
+        max_angular_speed_radps=10.0,
+    ))
     session.accept_command(twist("l/tool/tcpgrip", linear=(3.0, 4.0, 0.0), angular=(0.0, 3.0, 4.0)))
 
     clock.advance(1.0)
@@ -884,6 +972,52 @@ def test_goal_safety_settings_cannot_exceed_configuration(field, value, message)
 
     with pytest.raises(ValueError, match=message):
         session.start(valid_goal(**{field: value}))
+
+    assert ownership.is_busy("l") is False
+
+
+def test_session_goal_can_request_pika_speed_up_to_the_driver_hard_limit():
+    session = make_session(
+        session_settings=settings(
+            max_linear_speed_mps=0.05,
+            hard_max_linear_speed_mps=1.0,
+        )
+    )
+
+    assert session.start(valid_goal(max_linear_speed_mps=1.0)) is True
+    assert session.accept_command(twist("l/tool/tcpgrip", linear=(0.8, 0.0, 0.0))) is True
+    with pytest.raises(ValueError, match="session limit"):
+        session.accept_command(twist("l/tool/tcpgrip", linear=(1.01, 0.0, 0.0)))
+    session.shutdown()
+
+
+def test_zero_goal_speed_uses_the_standard_session_limit():
+    session = make_session(
+        session_settings=settings(
+            max_linear_speed_mps=0.05,
+            hard_max_linear_speed_mps=1.0,
+        )
+    )
+
+    assert session.start(valid_goal(max_linear_speed_mps=0.0)) is True
+    assert session.accept_command(twist("l/tool/tcpgrip", linear=(0.05, 0.0, 0.0))) is True
+    with pytest.raises(ValueError, match="session limit"):
+        session.accept_command(twist("l/tool/tcpgrip", linear=(0.051, 0.0, 0.0)))
+    session.shutdown()
+
+
+def test_goal_speed_cannot_exceed_the_driver_hard_limit():
+    ownership = ArmOwnership()
+    session = make_session(
+        ownership=ownership,
+        session_settings=settings(
+            max_linear_speed_mps=0.05,
+            hard_max_linear_speed_mps=1.0,
+        ),
+    )
+
+    with pytest.raises(ValueError, match="hard linear speed limit"):
+        session.start(valid_goal(max_linear_speed_mps=1.01))
 
     assert ownership.is_busy("l") is False
 
@@ -1890,10 +2024,11 @@ def test_disconnect_cleanup_rejects_live_velocity_work_and_retains_lockout(
     assert ownership.is_busy("l") is True
 
 
-def test_base_velocity_uses_namespaced_base_link_frame():
+def test_base_velocity_is_rejected_even_with_namespaced_base_link_frame():
+    adapter = FakeAdapter()
     session = CartesianVelocitySession(
         arm_id="l",
-        adapter=FakeAdapter(),
+        adapter=adapter,
         ownership=ArmOwnership(),
         settings=settings(),
         active_frame={ReferenceType.BASE: ("base", "l/base_link")},
@@ -1902,6 +2037,7 @@ def test_base_velocity_uses_namespaced_base_link_frame():
     )
     goal = valid_goal(reference_type=int(ReferenceType.BASE), reference_name="base")
 
-    assert session.start(goal) is True
-    assert session.accept_command(twist("l/base_link")) is True
-    session.shutdown()
+    with pytest.raises(ValueError, match="BASE reference is not supported"):
+        session.start(goal)
+
+    assert adapter.init_calls == []

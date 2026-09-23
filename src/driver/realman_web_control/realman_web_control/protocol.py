@@ -123,6 +123,34 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
             raise ProtocolError("invalid_field", "mode_id must be a lower-case ASCII identifier", request_id)
         return {"type": message_type, "request_id": request_id, "mode_id": mode_id}
 
+    if message_type == "keyboard_state":
+        arm = message.get("arm")
+        if arm not in {"l", "r"}:
+            raise ProtocolError("invalid_arm", "keyboard arm must be l or r")
+        keys = message.get("keys")
+        if (
+            not isinstance(keys, list)
+            or len(keys) > 14
+            or not all(
+                isinstance(code, str) and re.fullmatch(r"Key[A-Z]|Digit[0-9]", code)
+                for code in keys
+            )
+            or len(set(keys)) != len(keys)
+        ):
+            raise ProtocolError(
+                "invalid_field",
+                "keys must be unique physical KeyA–KeyZ or Digit0–Digit9 codes",
+            )
+        sequence = _integer(
+            message.get("sequence"), "sequence", 0, 9_007_199_254_740_991
+        )
+        return {
+            "type": message_type,
+            "arm": arm,
+            "keys": keys,
+            "sequence": sequence,
+        }
+
     if message_type == "capture_calibration_sample":
         request_id = _request_id(message)
         session_id = _string(message.get("session_id", ""), "session_id", maximum=128, allow_empty=True)

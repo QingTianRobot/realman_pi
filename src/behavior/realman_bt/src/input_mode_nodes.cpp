@@ -144,6 +144,18 @@ bt_core::NodeStatus PolicyInputStubNode::tick() {
 
 void PolicyInputStubNode::onHalted() { entry_recorded_ = false; }
 
+bt_core::NodeStatus KeyboardVelocityInputNode::tick() {
+  if (!entry_recorded_) {
+    recordPlaceholderEntry(
+        blackboard(), name(),
+        "Keyboard velocity stream is routed by keyboard_control_router");
+    entry_recorded_ = true;
+  }
+  return bt_core::NodeStatus::RUNNING;
+}
+
+void KeyboardVelocityInputNode::onHalted() { entry_recorded_ = false; }
+
 bt_core::NodeStatus PikaInputStubNode::tick() {
   if (!entry_recorded_) {
     recordPlaceholderEntry(
@@ -155,6 +167,30 @@ bt_core::NodeStatus PikaInputStubNode::tick() {
 }
 
 void PikaInputStubNode::onHalted() { entry_recorded_ = false; }
+
+bt_core::NodeStatus PikaPositionInputNode::tick() {
+  if (!entry_recorded_) {
+    recordPlaceholderEntry(
+        blackboard(), name(),
+        "Pika position stream is routed by the Cartesian Pika bridge");
+    entry_recorded_ = true;
+  }
+  return bt_core::NodeStatus::RUNNING;
+}
+
+void PikaPositionInputNode::onHalted() { entry_recorded_ = false; }
+
+bt_core::NodeStatus PikaVelocityInputNode::tick() {
+  if (!entry_recorded_) {
+    recordPlaceholderEntry(
+        blackboard(), name(),
+        "Pika velocity stream is routed by the Cartesian Pika bridge");
+    entry_recorded_ = true;
+  }
+  return bt_core::NodeStatus::RUNNING;
+}
+
+void PikaVelocityInputNode::onHalted() { entry_recorded_ = false; }
 
 bt_core::NodeStatus IdleInputNode::tick() {
   return bt_core::NodeStatus::RUNNING;

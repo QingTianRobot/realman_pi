@@ -11,12 +11,18 @@ import yaml
 NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
 SERVICE_SUFFIXES = ("open", "close", "reset", "enable", "grasp_check", "percentage", "calibrate")
 TOPIC_SUFFIXES = ("position", "speed", "current", "torque_reached", "alarm", "connected")
+COMMAND_SUFFIXES = ("percentage/command",)
 
 
 def interface_names(name: str) -> dict[str, str]:
     if not NAME_PATTERN.fullmatch(name):
         raise ValueError(f"invalid gripper name: {name!r}")
-    return {suffix: f"/{name}/{suffix}" for suffix in SERVICE_SUFFIXES + TOPIC_SUFFIXES}
+    interfaces = {suffix: f"/{name}/{suffix}" for suffix in SERVICE_SUFFIXES + TOPIC_SUFFIXES}
+    interfaces.update({
+        "percentage_command": f"/{name}/{suffix}"
+        for suffix in COMMAND_SUFFIXES
+    })
+    return interfaces
 
 
 def percentage_to_position(percentage: float, *, open_position: int,

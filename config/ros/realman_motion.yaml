@@ -9,6 +9,10 @@ robots:
     max_linear_speed_mps: 0.05
     # Cartesian rotation speed in rad/s; keep below abrupt wrist motion limits.
     max_angular_speed_radps: 0.25
+    # Absolute per-session driver ceiling; only the Pika router requests 1.0 m/s.
+    hard_max_linear_speed_mps: 1.0
+    # No elevated angular profile is enabled; all clients remain capped at 0.25 rad/s.
+    hard_max_angular_speed_radps: 0.25
     # Velocity command interval in ms; controller commands must be refreshed regularly.
     velocity_control_period_ms: 20
     # Stop velocity control after this many ms without a refresh for fail-safe behavior.
@@ -28,6 +32,9 @@ robots:
     max_linear_speed_mps: 0.05
     # Cartesian rotation speed in rad/s; keep below abrupt wrist motion limits.
     max_angular_speed_radps: 0.25
+    # Middle-arm streaming keeps the standard limit; Pika never controls this arm.
+    hard_max_linear_speed_mps: 0.05
+    hard_max_angular_speed_radps: 0.25
     # Velocity command interval in ms; controller commands must be refreshed regularly.
     velocity_control_period_ms: 20
     # Stop velocity control after this many ms without a refresh for fail-safe behavior.
@@ -47,6 +54,10 @@ robots:
     max_linear_speed_mps: 0.05
     # Cartesian rotation speed in rad/s; keep below abrupt wrist motion limits.
     max_angular_speed_radps: 0.25
+    # Absolute per-session driver ceiling; only the Pika router requests 1.0 m/s.
+    hard_max_linear_speed_mps: 1.0
+    # No elevated angular profile is enabled; all clients remain capped at 0.25 rad/s.
+    hard_max_angular_speed_radps: 0.25
     # Velocity command interval in ms; controller commands must be refreshed regularly.
     velocity_control_period_ms: 20
     # Stop velocity control after this many ms without a refresh for fail-safe behavior.

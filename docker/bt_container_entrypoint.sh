@@ -16,14 +16,16 @@ set -eo pipefail
 : "${BT_SERVER_PORT:=8080}"
 : "${BT_EDITOR_DIST:=/opt/rm65_ws/behavior_tree/editor-dist}"
 : "${BT_SERVER_BIN:=/opt/rm65_ws/behavior_tree/bin/bt_server}"
-: "${BT_TREE_FILE:=/opt/rm65_ws/config/behavior-trees/arm_move.xml}"
-: "${BT_REQUIRED_ARMS:=$REALMAN_BT_ARM_ID}"
-: "${BT_LAUNCH_FILE:=arm_move.launch.py}"
+: "${BT_TREE_FILE:=/opt/rm65_ws/config/behavior-trees/move.xml}"
+: "${BT_ARM_ID_OVERRIDE:=}"
+: "${BT_REQUIRED_ARMS:=}"
+: "${BT_REQUIRED_ACTIONS:=}"
+: "${BT_LAUNCH_FILE:=}"
 : "${BT_TREE_WORKSPACE:=/tmp/realman-bt-workspace}"
 : "${BT_READ_ONLY:=true}"
 : "${BT_RUNTIME_SNAPSHOT:=$BT_TREE_WORKSPACE/runtime.json}"
-: "${BT_STOP_ON_TERMINAL:=true}"
-: "${BT_EXIT_ON_TERMINAL:=true}"
+: "${BT_STOP_ON_TERMINAL:=}"
+: "${BT_EXIT_ON_TERMINAL:=}"
 : "${BT_RUNTIME_ARCHIVE_ROOT:=${REALMAN_LOG_ROOT:-/opt/rm65_ws/logs}/behavior-trees}"
 : "${BT_CLIENT_TOKEN:=}"
 readonly BT_INSTANCE_LOCK=/tmp/realman-bt.lock
@@ -49,6 +51,30 @@ if [[ ! -f "$BT_EDITOR_DIST/index.html" ]]; then
   echo "[bt-start] editor assets not found: $BT_EDITOR_DIST/index.html" >&2
   exit 1
 fi
+
+tree_metadata_script=/opt/rm65_ws/src/behavior/realman_bt/scripts/tree_metadata.py
+if [[ ! -f "$tree_metadata_script" ]]; then
+  echo "[bt-start] behavior-tree metadata reader not found: $tree_metadata_script" >&2
+  exit 1
+fi
+if ! metadata="$(python3 "$tree_metadata_script" "$BT_TREE_FILE")"; then
+  echo "[bt-start] invalid behavior-tree startup metadata" >&2
+  exit 2
+fi
+IFS=$'\t' read -r metadata_arm_id metadata_required_arms metadata_required_actions \
+  metadata_launch_file metadata_stop_on_terminal metadata_exit_on_terminal <<<"$metadata"
+[[ -n "$BT_ARM_ID_OVERRIDE" ]] && metadata_arm_id="$BT_ARM_ID_OVERRIDE"
+[[ -n "$BT_REQUIRED_ARMS" ]] && metadata_required_arms="$BT_REQUIRED_ARMS"
+[[ -n "$BT_REQUIRED_ACTIONS" ]] && metadata_required_actions="$BT_REQUIRED_ACTIONS"
+[[ -n "$BT_LAUNCH_FILE" ]] && metadata_launch_file="$BT_LAUNCH_FILE"
+[[ -n "$BT_STOP_ON_TERMINAL" ]] && metadata_stop_on_terminal="$BT_STOP_ON_TERMINAL"
+[[ -n "$BT_EXIT_ON_TERMINAL" ]] && metadata_exit_on_terminal="$BT_EXIT_ON_TERMINAL"
+REALMAN_BT_ARM_ID="$metadata_arm_id"
+BT_REQUIRED_ARMS="$metadata_required_arms"
+BT_REQUIRED_ACTIONS="$metadata_required_actions"
+BT_LAUNCH_FILE="$metadata_launch_file"
+BT_STOP_ON_TERMINAL="$metadata_stop_on_terminal"
+BT_EXIT_ON_TERMINAL="$metadata_exit_on_terminal"
 
 case "$BT_TREE_WORKSPACE" in
   /tmp/realman-bt-workspace*) ;;
@@ -168,17 +194,24 @@ if ! curl -fsS "http://127.0.0.1:${BT_SERVER_PORT}/api/health" >/dev/null 2>&1; 
 fi
 
 IFS="," read -r -a required_arms <<<"$BT_REQUIRED_ARMS"
+IFS="," read -r -a required_actions <<<"$BT_REQUIRED_ACTIONS"
 for arm_id in "${required_arms[@]}"; do
   case "$arm_id" in l|m|r) ;; *) echo "[bt-start] invalid arm id: $arm_id" >&2; exit 2 ;; esac
-  action_name="/${arm_id}/execute_motion"
-  deadline=$((SECONDS + BT_ACTION_TIMEOUT_SEC))
-  echo "[bt-start] waiting for ${action_name} (timeout ${BT_ACTION_TIMEOUT_SEC}s)"
-  until ros2 action info "$action_name" 2>/dev/null | grep -Eq 'Action servers:[[:space:]]*[1-9][0-9]*'; do
-    if (( SECONDS >= deadline )); then
-      echo "[bt-start] Action ${action_name} is not ready; behavior tree not started" >&2
-      exit 1
-    fi
-    sleep "$BT_ACTION_POLL_SEC"
+  for action in "${required_actions[@]}"; do
+    case "$action" in
+      execute_motion|cartesian_velocity) ;;
+      *) echo "[bt-start] invalid action name: $action" >&2; exit 2 ;;
+    esac
+    action_name="/${arm_id}/${action}"
+    deadline=$((SECONDS + BT_ACTION_TIMEOUT_SEC))
+    echo "[bt-start] waiting for ${action_name} (timeout ${BT_ACTION_TIMEOUT_SEC}s)"
+    until ros2 action info "$action_name" 2>/dev/null | grep -Eq 'Action servers:[[:space:]]*[1-9][0-9]*'; do
+      if (( SECONDS >= deadline )); then
+        echo "[bt-start] Action ${action_name} is not ready; behavior tree not started" >&2
+        exit 1
+      fi
+      sleep "$BT_ACTION_POLL_SEC"
+    done
   done
 done
 

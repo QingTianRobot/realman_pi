@@ -5,6 +5,7 @@ Log/
 
 **/__pycache__/
 *.py[cod]
+*.DS_Store
 
 # Ignore local agent state while keeping repository-level policy skills versioned.
 .agents/*
@@ -38,3 +39,6 @@ logs/*
 
 # Runtime calibration keeps one recoverable layout snapshot beside the YAML.
 config/ros/*.yaml.bak
+
+# Machine-local overrides layered on top of versioned ROS config YAML.
+config/ros/*.local.yaml

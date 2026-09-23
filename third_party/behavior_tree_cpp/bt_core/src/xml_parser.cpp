@@ -335,7 +335,16 @@ Tree XmlParser::loadFromText(const std::string& xml_text,
   for (const XMLAttribute* attr = root->FirstAttribute(); attr;
        attr = attr->Next()) {
     const std::string key = attr->Name();
-    if (key != "main_tree_to_execute" && key != "BTCPP_format") {
+    // realman_* fields are launcher metadata consumed before the executor
+    // starts. They remain XML attributes so custom trees can carry their own
+    // arm/readiness/terminal contract without introducing a second manifest.
+    const bool is_realman_launcher_metadata =
+        key == "realman_arm_id" || key == "realman_required_arms" ||
+        key == "realman_required_actions" ||
+        key == "realman_launch" || key == "realman_stop_on_terminal" ||
+        key == "realman_exit_on_terminal";
+    if (key != "main_tree_to_execute" && key != "BTCPP_format" &&
+        !is_realman_launcher_metadata) {
       throw std::runtime_error("<root> 包含不支持的属性 '" + key + "'");
     }
   }

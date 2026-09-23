@@ -5,6 +5,32 @@ import pytest
 from realman_web_control.protocol import ProtocolError, parse_message
 
 
+def test_keyboard_state_uses_l_r_physical_codes_and_safe_sequence():
+    message = {"type": "keyboard_state", "arm": "l", "keys": ["KeyW", "KeyD"], "sequence": 42}
+    assert parse_message(json.dumps(message)) == message
+
+
+def test_keyboard_state_accepts_full_arm_and_gripper_set_but_not_arbitrary_codes():
+    keys = ["KeyW", "KeyS", "KeyA", "KeyD", "KeyR", "KeyF", "KeyQ", "KeyE",
+            "KeyZ", "KeyC", "KeyX", "KeyV", "Digit1", "Digit2"]
+    message = {"type": "keyboard_state", "arm": "l", "keys": keys, "sequence": 4}
+    assert parse_message(json.dumps(message)) == message
+    for invalid in (["1"], ["Numpad1"], ["Digit1", "Digit1"], ["ControlLeft"]):
+        with pytest.raises(ProtocolError):
+            parse_message(json.dumps({**message, "keys": invalid}))
+
+
+@pytest.mark.parametrize("message", [
+    {"type": "keyboard_state", "arm": "m", "keys": [], "sequence": 1},
+    {"type": "keyboard_state", "arm": "l", "keys": ["w"], "sequence": 1},
+    {"type": "keyboard_state", "arm": "l", "keys": ["KeyW", "KeyW"], "sequence": 1},
+    {"type": "keyboard_state", "arm": "r", "keys": [], "sequence": -1},
+])
+def test_keyboard_state_rejects_unsafe_values(message):
+    with pytest.raises(ProtocolError):
+        parse_message(json.dumps(message))
+
+
 def test_select_input_mode_is_global_and_validates_syntax_only():
     assert parse_message(
         '{"type":"select_input_mode","request_id":"mode-1","mode_id":"policy"}'

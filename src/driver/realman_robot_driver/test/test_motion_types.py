@@ -307,6 +307,29 @@ def test_motion_settings_parse_existing_schema_and_units(tmp_path: Path):
     assert settings.watchdog_sec == pytest.approx(0.100)
     assert isinstance(settings.velocity_control_period_ms, int)
     assert isinstance(settings.velocity_watchdog_ms, int)
+    assert settings.linear_speed_hard_limit_mps == 0.05
+
+
+def test_motion_settings_separates_standard_and_hard_velocity_limits(tmp_path: Path):
+    path = write_settings(
+        tmp_path,
+        hard_max_linear_speed_mps=1.0,
+        hard_max_angular_speed_radps=0.25,
+    )
+
+    settings = MotionSettings.from_yaml(path, "l")
+
+    assert settings.max_linear_speed_mps == 0.05
+    assert settings.linear_speed_hard_limit_mps == 1.0
+    assert settings.max_angular_speed_radps == 0.25
+    assert settings.angular_speed_hard_limit_radps == 0.25
+
+
+def test_motion_settings_rejects_hard_limit_below_standard_limit(tmp_path: Path):
+    path = write_settings(tmp_path, hard_max_linear_speed_mps=0.049)
+
+    with pytest.raises(ValueError, match="at least max_linear_speed_mps"):
+        MotionSettings.from_yaml(path, "l")
 
 
 def test_motion_settings_parse_per_arm_completion_and_stop_safety_limits(tmp_path: Path):
@@ -377,6 +400,8 @@ def test_motion_type_hints_resolve_private_mapping_helper():
         "default_timeout_sec",
         "max_linear_speed_mps",
         "max_angular_speed_radps",
+        "hard_max_linear_speed_mps",
+        "hard_max_angular_speed_radps",
         "velocity_control_period_ms",
         "velocity_watchdog_ms",
         "max_linear_accel_mps2",

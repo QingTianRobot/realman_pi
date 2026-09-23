@@ -40,11 +40,16 @@ x-realman-common: &realman-common
     BT_RUNTIME_SNAPSHOT: ${BT_RUNTIME_SNAPSHOT:-/tmp/realman-bt-workspace/runtime.json}
     # CLI runs are one-shot and mutually exclusive inside the shared driver
     # container. Final snapshots are archived through the host logs mount.
-    BT_EXIT_ON_TERMINAL: ${BT_EXIT_ON_TERMINAL:-true}
+    # Empty means bt-start uses the behavior tree's XML metadata. The CLI
+    # can still pass BT_EXIT_ON_TERMINAL explicitly as an override.
+    BT_EXIT_ON_TERMINAL: ${BT_EXIT_ON_TERMINAL:-}
     BT_RUNTIME_ARCHIVE_ROOT: ${BT_RUNTIME_ARCHIVE_ROOT:-/opt/rm65_ws/logs/behavior-trees}
     BT_EDITOR_DIST: /opt/rm65_ws/behavior_tree/editor-dist
     # The launch file scans this path/glob and waits when it is not present.
     REALMAN_JOY_DEVICE: ${REALMAN_JOY_DEVICE:-auto}
+    # VLA policy service endpoint consumed by config/ros/policy_bridge.yaml
+    # (${POLICY_WS_HOST}). Host networking makes 127.0.0.1 the industrial host.
+    POLICY_WS_HOST: ${POLICY_WS_HOST:-127.0.0.1}
   volumes:
     # Runtime config edits take effect on the next launch without rebuilding.
     - ./config:/opt/rm65_ws/config:ro
@@ -325,3 +330,16 @@ services:
       - launch
       - realman_bt_mock
       - behavior_tree_mock.launch.py
+
+  # VLA policy bridge: joins an existing ROS graph and converts between the
+  # policy WebSocket service and ROS 2 topics (pure publish layer). Started
+  # explicitly via `./rm65 up policy`; not part of default production bringup.
+  policy_bridge:
+    <<: *realman-common
+    command:
+      - ros2
+      - launch
+      - policy_bridge
+      - policy_bridge.launch.py
+      - config_file:=${POLICY_BRIDGE_CONFIG_FILE:-/opt/rm65_ws/config/ros/policy_bridge.yaml}
+      - active_side:=${POLICY_BRIDGE_ACTIVE_SIDE:-left}

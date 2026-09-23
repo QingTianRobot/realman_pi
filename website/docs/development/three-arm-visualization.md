@@ -16,6 +16,7 @@ description: l、m、r 三台 RM65 在 ROS 2、RViz 2 和 GitHub Pages 中共享
 - 两个 Web 查看器固定以中间臂 `m` 的基座为**显示原点和相机焦点**。这只是渲染坐标的平移；YAML 中的世界/TF 变换不会被改写。
 - `settings.default_joint_position` 作为六个旋转关节的初始位置。
 - 当前配置保存最近一次生产三臂 ChArUco 标定结果：左臂是布局参考；中、右臂的六自由度位姿来自同一次求解。重新标定后应将成功写回的 `three_robots.yaml` 提交，才能让 GitHub Pages 与生产布局一致。
+- 生产 Web 控制台进入 `ACTIVE/keyboard` 时，会在 l/r URDF 上绘制当前已验证 WORK 坐标轴；坐标位姿来自驱动运行状态，失配或离开模式立即隐藏。
 
 权威配置是 [`config/ros/three_robots.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/three_robots.yaml)。不要在 launch 文件、网页组件或 RViz 配置中复制布局数值。
 
@@ -82,3 +83,4 @@ npm run test:e2e
 - Web 查看器同步机器人布局和默认关节位置，不解析 `config/rviz/three_robots.rviz` 中的 RViz 相机视角。RViz 与 Three.js 的相机参数体系不同；网页的固定中臂居中不改变 RViz 或 TF。
 - 修改 YAML 后，本地 RViz 需要重启对应 Compose 服务；Web 页面需要重新构建。推送到 `main` 后由 GitHub Pages 自动完成 Web 重建。
 - 网页是 URDF 状态预览，不订阅正在运行的 ROS 2 `/tf` 或 `/joint_states`，因此不会实时跟随机械臂控制器。
+- 上一条只适用于静态文档查看器。:8765 生产 Web 控制台订阅关节状态和坐标状态，并用运行时 WORK 位姿绘制键盘控制坐标轴。

@@ -30,6 +30,53 @@ def _assert_interface_contract(path: Path, expected_sections: list[list[str]]) -
 
 def test_motion_action_contracts_are_exact():
     _assert_interface_contract(
+        ROOT / "action/CartesianPose.action",
+        [
+            [
+                "uint8 BASE=0",
+                "uint8 WORK=1",
+                "uint8 TOOL=2",
+                "uint8 reference_type",
+                "string reference_name",
+                "uint32 control_period_ms",
+                "uint32 watchdog_ms",
+                "float64 max_linear_speed_mps",
+                "float64 max_angular_speed_radps",
+                "float64 max_linear_accel_mps2",
+                "float64 max_angular_accel_radps2",
+                "bool follow",
+                "uint8 trajectory_mode",
+                "uint16 radio",
+            ],
+            [
+                "uint8 SUCCEEDED=0",
+                "uint8 CANCELED=1",
+                "uint8 ABORTED=2",
+                "uint8 WATCHDOG_STOP=3",
+                "bool success",
+                "uint8 terminal_state",
+                "int32 api2_status",
+                "string message",
+            ],
+            [
+                "uint8 VALIDATING=0",
+                "uint8 EXECUTING=1",
+                "uint8 STOPPING=2",
+                "float64[3] commanded_position_m",
+                "float64[4] commanded_quaternion_wxyz",
+                "float64[3] limited_position_m",
+                "float64[4] limited_quaternion_wxyz",
+                "uint8 phase",
+                "uint8 active_reference_type",
+                "string active_reference_name",
+                "uint32 command_age_ms",
+                "int32 api2_status",
+                "string detail",
+            ],
+        ],
+    )
+
+    _assert_interface_contract(
         ROOT / "action/ExecuteTrajectory.action",
         [
             [
@@ -150,6 +197,8 @@ def test_motion_action_contracts_are_exact():
                 "string reference_name",
                 "uint32 control_period_ms",
                 "uint32 watchdog_ms",
+                "float64 max_linear_speed_mps",
+                "float64 max_angular_speed_radps",
                 "float64 max_linear_accel_mps2",
                 "float64 max_angular_accel_radps2",
                 "bool follow",
@@ -181,6 +230,32 @@ def test_motion_action_contracts_are_exact():
                 "int32 api2_status",
                 "string detail",
             ],
+        ],
+    )
+
+    _assert_interface_contract(
+        ROOT / "msg/CartesianVelocityState.msg",
+        [
+            [
+                "uint8 BASE=0",
+                "uint8 WORK=1",
+                "uint8 TOOL=2",
+                "std_msgs/Header header",
+                "bool session_active",
+                "uint8 reference_type",
+                "string reference_name",
+                "string command_frame_id",
+                "float64[3] commanded_linear_velocity_mps",
+                "float64[3] commanded_angular_velocity_radps",
+                "float64[3] limited_linear_velocity_mps",
+                "float64[3] limited_angular_velocity_radps",
+                "string measured_frame_id",
+                "float64[3] measured_linear_velocity_mps",
+                "float64[3] measured_angular_velocity_radps",
+                "bool measured_valid",
+                "uint32 command_age_ms",
+                "uint32 measured_age_ms",
+            ]
         ],
     )
 

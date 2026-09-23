@@ -14,12 +14,12 @@ description: realman_pi 功能契约、实现边界、配置来源和验证方�
 | [功能文档同步](./documentation-workflow) | 功能完成门槛、Web 手册结构和验证流程 | `.agents/skills/document-feature-updates/SKILL.md` |
 | [启动入口索引](./startup-entries) | `functions.zsh` 每个启动、构建、测试和部署入口的当前用途、组件范围和权威配置 | `functions.zsh`、`config/docker/compose.yaml` |
 | [睿尔曼 Python 驱动查询 Skill](./realman-python-driver) | Python API 文档检索、驱动开发约束、版本与安全核对流程 | `.agents/skills/realman-python-driver/SKILL.md` |
-| [行为树控制权与 Mock 测试](./behavior-tree-control) | 动态 XML 输入目录、Web override、无硬件 mock、只读监视器及 Action/Service 边界 | `config/behavior-trees/control_router.xml`、`config/ros/behavior_tree.yaml`、`src/behavior/realman_bt/` |
-| [行为树机械臂移动 Demo](./behavior-tree-motion) | 单臂/三臂阶段屏障、one-shot 退出、诊断归档和 ROS domain 排查 | `config/behavior-trees/`、`src/behavior/realman_bt/` |
+| [行为树控制权与 Mock 测试](./behavior-tree-control) | 动态 XML 输入目录、ReactiveFallback 双臂键盘速度／双夹爪目标、Web override、无硬件 mock 及 Action/Service 边界 | `config/behavior-trees/control.xml`、`config/ros/behavior_tree.yaml`、`config/ros/keyboard_control.yaml`、`src/behavior/realman_bt/` |
+| [行为树机械臂移动 Demo](./behavior-tree-motion) | 单臂/三臂阶段屏障、l/r 键盘连续速度 session、one-shot 退出和 ROS domain 排查 | `config/behavior-trees/`、`config/ros/keyboard_control.yaml`、`src/behavior/realman_bt/` |
 | [行为树开发 Skill](./behavior-tree-motion#在-codex-中复用行为树-skill) | 节点与 Action 所有权、启动部署、重复执行和 UNKNOWN 排障的可复用指引 | `.agents/skills/developing-realman-behavior-trees/SKILL.md` |
 | [睿尔曼三臂驱动与运动控制](./realman-driver-scaffold) | 三臂关节回读、可取消运动、坐标系、末端速度、RViz 和 mock 验证 | `config/ros/realman_driver.yaml`、`config/ros/realman_coordinates.yaml`、`config/ros/realman_motion.yaml` |
 | [睿尔曼 Action 开发与测试](./realman-action-development) | Action IDL、生命周期、安全状态机、速度 session、扩展步骤和测试矩阵 | `src/driver/realman_msgs/action/`、`config/ros/realman_motion.yaml` |
-| [WebSocket 浏览器控制与 URDF 影子](./realman-web-control) | 动态输入模式卡片、WebSocket 控制、坐标状态、关节记录、Action feedback/result、滑轨影子和软件停止 | `config/ros/realman_web_control.yaml`、`config/web-control/joint-records/`、`src/driver/realman_web_control/` |
+| [WebSocket 浏览器控制与 URDF 影子](./realman-web-control) | 动态输入模式卡片、l/r 独立键盘末端速度与夹爪全开全闭、WebSocket lease/心跳、坐标状态、URDF 影子和软件停止 | `config/ros/realman_web_control.yaml`、`config/ros/keyboard_control.yaml`、`config/web-control/joint-records/`、`src/driver/realman_web_control/` |
 | [独立数据录制骨架](./recording-platform) | 订阅式 session 录制、隔离网页展示、倒计时、媒体分段和 LeRobot 导出边界 | `config/ros/recording.yaml`、`src/recording/` |
 | [ROS2 相机出图](./startup-entries#ros2-图像节点与-rviz2) | 三路 Orbbec + 全局 RealSense D435 的 ROS2 image topic、彩色/深度互斥模式、相机 RViz；RTSP/TCP SDK 推流已弃用 | `config/ros/cameras_ros2.yaml`、`src/sensor_bringup/launch/cameras_ros2.launch.py` |
 | [三臂 ChArUco 手眼标定](./camera-calibration) | ROS service 原子采样、三套手眼求解、相对位姿和独立网页页面 | `config/ros/camera_calibration.yaml`、`src/sensor/realman_camera_calibration/` |
@@ -27,6 +27,7 @@ description: realman_pi 功能契约、实现边界、配置来源和验证方�
 | [Xbox 手柄输入](./xbox-controller) | SDL event 设备、`/input/joy`、C++ 按键边沿和输入测试 | `config/ros/xbox_controller.yaml` |
 | [系统 Bringup](./system-bringup) | 三臂、RViz、输入节点、远程运行和日志的启动编排 | `config/docker/compose.yaml` |
 | [Changingtek 夹爪控制](./gripper-control) | 多串口并行驱动、ROS 2 service/topic 和 Web control | `config/ros/gripper.yaml` |
+| [VLA 策略桥接节点](./policy-bridge) | 策略服务 WebSocket ↔ ROS 2 纯协议转换、滚动时域推理、模式门控发布与看门狗约定 | `config/ros/policy_bridge.yaml`、`config/docker/compose.yaml`、`src/policy_bridge/` |
 
 ROS 节点日志统一遵守项目 skill [`ros2-logging-conventions`](https://github.com/QingTianRobot/realman_pi/blob/main/.agents/skills/ros2-logging-conventions/SKILL.md)：官方 ROS 2 打印接口、彩色 rcutils 输出、时间目录和节点日志文件。
 

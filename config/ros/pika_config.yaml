@@ -1,0 +1,29 @@
+# Pika entry pose. Joint angles are RealMan degrees; only joint_degrees are
+# consumed by the behavior-tree router. TCP pose fields remain available to
+# Pika clients but are not used for the entry MoveJ.
+pika_default_pose:
+  left:
+    joint_degrees: [12.172, 25.223, 73.054, -16.703, 80.307, 14.455]
+    tcp_pose:
+      position: [-0.323, -0.028, 0.304]
+      orientation_xyzw: [0.990, 0.003, -0.045, -0.137]
+  middle:
+    joint_degrees: [0.0, 17.997, 70.0, 0.0, 90.0, 8.997]
+  right:
+    joint_degrees: [-9.89, 18.046, 79.074, 15.505, 79.606, -6.194]
+    tcp_pose:
+      position: [-0.299, 0.014, 0.319]
+      orientation_xyzw: [0.989, -0.052, -0.047, 0.128]
+  velocity_percent: 10
+  blend_radius_percent: 0
+  timeout_sec: 120
+
+# Pika owns a real-time l/r Cartesian velocity stream while pikavelocity is
+# active. The driver applies this per-session limit; ordinary Web and keyboard
+# sessions retain the 0.05 m/s limit from realman_motion.yaml.
+pika_velocity:
+  # Use per-arm identity WORK frames so Pika BASE-expressed vectors remain unchanged.
+  work_reference: work/pikabase
+  max_linear_speed_mps: 1.0
+  # Angular speed is intentionally not elevated with the linear Pika profile.
+  max_angular_speed_radps: 0.25

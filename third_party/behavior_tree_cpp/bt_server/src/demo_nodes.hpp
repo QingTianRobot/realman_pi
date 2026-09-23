@@ -116,7 +116,7 @@ public:
  * @brief 预览用关节运动动作。
  *
  * This node deliberately performs no ROS, network, or hardware operations.
- * It exists so the standalone bt_server can load and tick arm_move.xml safely.
+ * It exists so the standalone bt_server can load and tick move.xml safely.
  */
 class MoveJPreviewNode : public bt_core::ActionNode {
 public:

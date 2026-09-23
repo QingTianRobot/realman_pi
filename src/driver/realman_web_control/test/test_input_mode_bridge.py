@@ -11,11 +11,50 @@ from realman_web_control.input_mode_bridge import (
 
 CATALOG = (
     InputModeOption("web", "Web", False),
+    InputModeOption("keyboard", "Web / 键盘速度控制", True),
     InputModeOption("policy", "Policy", True),
     InputModeOption("pika", "Pika", True),
     InputModeOption("none", "None", True),
     InputModeOption("maintenance", "Maintenance", False),
 )
+
+
+def activate_keyboard(controller):
+    controller.update_catalog(CATALOG)
+    effects = controller.select_mode("browser-a", {"request_id": "keyboard-1", "mode_id": "keyboard"})
+    token = effects[-1].token
+    controller.selection_response(token, True, 50, "accepted")
+    return controller.update_state(state(50, "keyboard"))
+
+
+def test_keyboard_activation_leaving_and_disconnect_release_the_lease(bridge):
+    controller, _ = bridge
+    effects = activate_keyboard(controller)
+    assert effects[-1] == InputModeEffect("keyboard_lease", "browser-a", {"active": True})
+    leaving = controller.select_mode("browser-a", {"request_id": "none-1", "mode_id": "none"})
+    assert kinds(leaving) == ["keyboard_zero", "keyboard_lease", "cancel_web_actions", "request_mode"]
+    activate_keyboard(controller)
+    disconnected = controller.client_disconnected("browser-a")
+    assert kinds(disconnected) == ["keyboard_zero", "keyboard_lease", "request_safe_mode"]
+    assert disconnected[-1].payload == {"mode_id": "none"}
+
+
+@pytest.mark.parametrize("change", ["external_mode", "epoch", "catalog"])
+def test_keyboard_authorization_is_revoked_on_external_changes(bridge, change):
+    from realman_web_control.protocol import ProtocolError
+    controller, _ = bridge
+    activate_keyboard(controller)
+    assert controller.keyboard_snapshot("browser-a").epoch == 2
+    with pytest.raises(ProtocolError, match="lease"):
+        controller.keyboard_snapshot("other")
+    if change == "catalog":
+        effects = controller.update_catalog(tuple(x for x in CATALOG if x.id != "keyboard"))
+    else:
+        effects = controller.update_state(state(51, "none" if change == "external_mode" else "keyboard", epoch=3))
+    assert "keyboard_zero" in kinds(effects)
+    assert InputModeEffect("keyboard_lease", "browser-a", {"active": False}) in effects
+    with pytest.raises(ProtocolError):
+        controller.keyboard_snapshot("browser-a")
 
 
 class Clock:
@@ -79,9 +118,42 @@ def test_catalog_and_snapshot_preserve_executor_labels_order_and_fields(bridge):
         "type": "input_mode_state", "requested_mode": "futuremode", "selected_mode": "futuremode",
         "active_mode": "futuremode", "phase": "ACTIVE", "request_id": 7, "epoch": 3, "detail": "placeholder",
     }
-    assert [effect.client_id for effect in controller.cached_events("new-client")] == ["new-client", "new-client"]
+    cached = controller.cached_events("new-client")
+    assert [effect.client_id for effect in cached] == ["new-client", "new-client", "new-client"]
+    assert cached[-1].payload == {"type": "keyboard_lease", "active": False}
     with pytest.raises(FrozenInstanceError):
         snapshot.active_mode = "web"
+
+
+def test_cached_keyboard_lease_identifies_only_the_owning_browser(bridge):
+    controller, _ = bridge
+    activate_keyboard(controller)
+    assert controller.cached_events("browser-a")[-1].payload == {
+        "type": "keyboard_lease", "active": True,
+    }
+    assert controller.cached_events("browser-b")[-1].payload == {
+        "type": "keyboard_lease", "active": False,
+    }
+
+
+def test_already_active_keyboard_request_transfers_lease_without_new_state(bridge):
+    controller, _ = bridge
+    activate_keyboard(controller)
+    effects = controller.select_mode(
+        "browser-b", {"request_id": "keyboard-2", "mode_id": "keyboard"}
+    )
+    token = effects[-1].token
+    transferred = controller.selection_response(token, True, 50, "already active")
+    assert kinds(transferred) == [
+        "send_event", "keyboard_zero", "keyboard_lease", "keyboard_lease",
+    ]
+    assert transferred[-2:] == [
+        InputModeEffect("keyboard_lease", "browser-a", {"active": False}),
+        InputModeEffect("keyboard_lease", "browser-b", {"active": True}),
+    ]
+    assert controller.keyboard_snapshot("browser-b").request_id == 50
+    with pytest.raises(Exception, match="lease"):
+        controller.keyboard_snapshot("browser-a")
 
 
 @pytest.mark.parametrize("kind", ["execute_motion", "execute_trajectory", "start_cartesian_velocity"])

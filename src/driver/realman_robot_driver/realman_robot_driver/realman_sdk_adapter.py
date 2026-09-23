@@ -344,6 +344,22 @@ class RealManSdkAdapter:
             radio,
         )
 
+    def movep(
+        self,
+        pose: Any,
+        follow: bool,
+        trajectory_mode: int,
+        radio: int,
+    ) -> int:
+        return self._command(
+            "rm_movep_canfd",
+            "SDK Cartesian pose request failed",
+            _vendor_motion_pose(pose),
+            follow,
+            trajectory_mode,
+            radio,
+        )
+
     def current_trajectory(self) -> Any:
         if self.mock_mode:
             callback: Callable[[Any], Any] | None = None

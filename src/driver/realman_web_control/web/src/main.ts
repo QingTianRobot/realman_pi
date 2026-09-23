@@ -1283,7 +1283,7 @@ async function loadFleet() {
 
 function initScene() {
   try {
-    renderer = new THREE.WebGLRenderer({ canvas, antialias: false, alpha: true, preserveDrawingBuffer: false });
+    renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
     renderMode = "webgl";
     viewer.dataset.renderer = "webgl";
     renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));

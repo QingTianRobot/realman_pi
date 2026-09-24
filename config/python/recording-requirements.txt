@@ -10,3 +10,6 @@ lerobot==0.4.4
 setuptools>=71,<80
 # Decode the recorder's JPEG archive to uint8 RGB HWC arrays for the official writer.
 Pillow
+# LeRobot's dataset backend stores Arrow/Parquet; pin pyarrow explicitly so the
+# production image does not depend on a mirror's transitive resolution of lerobot.
+pyarrow

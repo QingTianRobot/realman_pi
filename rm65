@@ -99,7 +99,9 @@ up() {
     production)
       check_driver_rviz_conflict
       camera_start
-      if ! compose up -d realman_bringup_remote realman_web_control; then
+      # Recording joins the production graph so `./rm65 up` exposes the
+      # read-only replay dashboard directly on port 8770.
+      if ! compose up -d realman_bringup_remote realman_web_control realman_recording; then
         camera_stop
         return 1
       fi
@@ -107,7 +109,7 @@ up() {
     desktop)
       check_driver_rviz_conflict
       camera_start
-      if ! compose up -d realman_bringup_remote realman_web_control realman_remote_rviz; then
+      if ! compose up -d realman_bringup_remote realman_web_control realman_recording realman_remote_rviz; then
         camera_stop
         return 1
       fi
@@ -118,7 +120,7 @@ up() {
       # and /policy/activate is called.
       check_driver_rviz_conflict
       camera_start
-      if ! compose up -d realman_bringup_remote realman_web_control policy_bridge; then
+      if ! compose up -d realman_bringup_remote realman_web_control realman_recording policy_bridge; then
         camera_stop
         return 1
       fi
@@ -134,7 +136,7 @@ up() {
 }
 
 down() {
-  compose stop realman_bringup_remote realman_web_control realman_remote_rviz policy_bridge || true
+  compose stop realman_bringup_remote realman_web_control realman_recording realman_remote_rviz policy_bridge || true
   camera_stop
 }
 
@@ -152,7 +154,7 @@ status() {
   else
     printf 'camera: stopped\n'
   fi
-  compose ps realman_bringup_remote realman_web_control realman_remote_rviz policy_bridge
+  compose ps realman_bringup_remote realman_web_control realman_recording realman_remote_rviz policy_bridge
 }
 
 logs() {
@@ -161,7 +163,7 @@ logs() {
     return 0
   fi
   [[ -f "$LOG_ROOT/rm65-camera.log" ]] && tail -n 100 "$LOG_ROOT/rm65-camera.log" || true
-  compose logs --tail=100 realman_bringup_remote realman_web_control policy_bridge
+  compose logs --tail=100 realman_bringup_remote realman_web_control realman_recording policy_bridge
 }
 
 sync_repo() {

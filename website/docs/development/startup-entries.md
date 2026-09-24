@@ -24,7 +24,7 @@ rm65_project_help
 
 ```bash
 ./rm65 build              # 重建 realman_bringup_remote 与 realman_web_control；不改变容器状态
-./rm65 up                 # ROS 2 彩色相机 + 三臂真实驱动 + Web control + 相机健康诊断，无 RViz
+./rm65 up                 # ROS 2 彩色相机 + 三臂真实驱动 + Web control + 录制/回放 + 相机健康诊断，无 RViz
 ./rm65 up desktop         # 同上，并启动远程 ROS 图 RViz
 ./rm65 up model           # 离线三臂模型 + RViz，不连接真机
 ./rm65 bt <tree-name>    # 按 config/behavior-trees/<tree-name>[.xml] 启动行为树
@@ -40,6 +40,10 @@ rm65_project_help
 中的彩色话题一致；缺少 `realsense2_camera` 驱动时 `./rm65 up` 直接失败，禁止降级为仅三路 Orbbec。RTSP/TCP 推流
 （`./rm65 camera`、`rm65_camera_start`）已弃用，仅作历史备选，且与 ROS2 节点互斥。默认 `up`
 不启动 RViz，生产端不需要 `DISPLAY` 或 `XAUTHORITY`。
+
+`./rm65 up` 同时启动录制平台（`realman_recording` 容器内的 `recording_recorder` + 只读回放网页），回放页在
+`http://127.0.0.1:8770/`（默认仅绑定 loopback，认证/反向代理完成前不要暴露到局域网）。录制/回放细节见
+[独立数据录制平台](./recording-platform)。
 
 ::: warning 驱动服务互斥
 `realman_bringup_remote` 是生产 ROS 图中唯一启动三台 `realman_driver` 的服务。不要在它运行时启动

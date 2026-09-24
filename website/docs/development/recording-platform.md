@@ -5,7 +5,7 @@ description: RealMan 驱动输出的隔离录制、预检、低清展示与 LeRo
 
 # 独立数据录制平台
 
-`realman_recording` 是一个**按需启动的测试/数据采集** ROS 2 节点组：它只订阅已有的驱动与夹爪输出，不创建 `Robotic_Arm`/RealMan SDK 客户端，也不发布机械臂运动命令。它不属于默认 `rm65 up` 生产展示栈；正常实时展示继续由 `realman_web_control` 提供。recording 自带网页仅用于录制测试期间的只读监控，不发起任何录制控制；上游系统通过 `/recording/manage` Service 控制录制生命周期，不能复用或代理 `realman_web_control` 的运动面板。
+`realman_recording` 是一个**订阅式数据录制与回放** ROS 2 节点组：它只订阅已有的驱动与夹爪输出，不创建 `Robotic_Arm`/RealMan SDK 客户端，也不发布机械臂运动命令。`./rm65 up` 通过 `realman_recording` 容器随生产 ROS 图一起启动它（默认开启）；正常实时展示继续由 `realman_web_control` 提供。recording 自带网页仅用于录制与已导出 episode 的只读回放，不发起任何录制控制；上游系统通过 `/recording/manage` Service 控制录制生命周期，不能复用或代理 `realman_web_control` 的运动面板。
 
 录制和数据集转换是两个阶段：停止时只原子收尾原始 MCAP/JPEG 帧 session；上游明确采用后才会请求独立 LeRobot worker。转换占用的 CPU、GPU、图像解码或失败均不得减慢下一次 ROS 数据录制。
 
@@ -98,7 +98,11 @@ session manifest、相机 `media-index.json` 和 LeRobot `lerobot-v3.json` recei
 - `preview_*` 是 Web 独立预览限制，`preview_enabled=true` 才启动低清 JPEG 重压缩 worker；
 - LeRobot Web 回放已接入；Rerun 离线回放暂缓，不影响实时展示、原始数据录制或 LeRobot 导出。
 
-仅在需要录制测试、且已有驱动 ROS 图运行时单独启动：
+默认随 `./rm65 up` 一起启动（`realman_recording` 容器）；回放页在 `http://127.0.0.1:8770/`。Compose 将仓库
+`recordings/` 挂载为容器 `/data/realman-recordings`，同时保留 `logs/` 挂载。网页默认绑定 `127.0.0.1:8770`，
+在认证与反向代理完成前不要直接暴露到不可信网络。
+
+仅需录制测试、且已有驱动 ROS 图运行时，也可单独启动：
 
 ```bash
 source install/setup.bash
@@ -106,13 +110,11 @@ ros2 launch realman_recording recording.launch.py \
   recording_root:=/absolute/path/to/sessions
 ```
 
-容器入口为：
+独立容器入口为：
 
 ```bash
 docker compose up realman_recording
 ```
-
-Compose 将仓库 `recordings/` 挂载为容器 `/data/realman-recordings`，同时保留 `logs/` 挂载。网页默认绑定 `127.0.0.1:8770`，在认证与反向代理完成前不要直接暴露到不可信网络。
 
 独立 launch 会创建 `logs/YYYYMMDD_HHMMSS/` 并设置 ROS 2 官方节点日志目录；使用 rcutils 彩色输出，不应添加自定义日志重定向。
 

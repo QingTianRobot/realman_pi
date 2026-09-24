@@ -67,7 +67,14 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
         assert branch.tag == "ReactiveSequence"
         assert branch.attrib == {"name": f"{mode}_branch"}
         children = list(branch)
-        if has_entry_move:
+        if mode == "keyboard":
+            guard, entry_sequence = children
+            assert entry_sequence.tag == "Sequence"
+            assert entry_sequence.attrib == {"name": "keyboard_entry"}
+            preparation, activation, leaf = list(entry_sequence)
+            assert preparation.tag == "PrepareKeyboardWork"
+            assert preparation.attrib == {"dry_run": "{dry_run}"}
+        elif has_entry_move:
             guard, entry_sequence = children
             assert entry_sequence.tag == "Sequence"
             assert entry_sequence.attrib == {"name": entry_sequence_name}

@@ -18,8 +18,11 @@
         <ReactiveSequence name="keyboard_branch">
           <InputModeGuard mode="keyboard" label="Web / 键盘速度控制" selectable="true"
                           selected_mode="{selected_mode}"/>
-          <ActivateInputMode mode="keyboard"/>
-          <KeyboardVelocityInput/>
+          <Sequence name="keyboard_entry">
+            <PrepareKeyboardWork dry_run="{dry_run}"/>
+            <ActivateInputMode mode="keyboard"/>
+            <KeyboardVelocityInput/>
+          </Sequence>
         </ReactiveSequence>
         <ReactiveSequence name="policy_branch">
           <InputModeGuard mode="policy" label="Policy" selectable="true"

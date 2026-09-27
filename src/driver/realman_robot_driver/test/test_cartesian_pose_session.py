@@ -83,6 +83,8 @@ def goal(**changes):
         follow=True,
         trajectory_mode=0,
         radio=0,
+        velocity_percent=0,
+        blend_radius_percent=0,
     )
     value.update(changes)
     return SimpleNamespace(**value)

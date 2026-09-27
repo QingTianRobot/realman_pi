@@ -47,6 +47,8 @@ def test_motion_action_contracts_are_exact():
                 "bool follow",
                 "uint8 trajectory_mode",
                 "uint16 radio",
+                "uint8 velocity_percent",
+                "uint8 blend_radius_percent",
             ],
             [
                 "uint8 SUCCEEDED=0",

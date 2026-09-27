@@ -25,7 +25,7 @@ def test_manifest_reuses_layout_frames_motion_and_urdf_limits():
     left = manifest["robots"][0]
     assert left["transform"]["x"] == -1.0
     assert left["frames"]["tool"]["name"] == "tcpgrip"
-    assert left["motion"]["velocity_control_period_ms"] == 20
+    assert left["motion"]["velocity_control_period_ms"] == 10
     assert left["joints"][0]["lower_rad"] == pytest.approx(-3.106)
     assert left["urdf_url"] == "/models/urdf/RM65-B.urdf"
     assert manifest["keyboard_control"]["heartbeat_period_ms"] == 50

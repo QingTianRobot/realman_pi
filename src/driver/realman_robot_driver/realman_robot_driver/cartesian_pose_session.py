@@ -11,6 +11,7 @@ from typing import Any, Callable, Mapping, Sequence
 
 from .motion_types import MotionSettings, ReferenceType
 from .quaternion_math import normalize
+from .pose_math import quaternion_to_euler
 
 
 class PoseTerminalState(IntEnum):
@@ -48,6 +49,8 @@ class _Goal:
     follow: bool
     trajectory_mode: int
     radio: int
+    velocity_percent: int
+    blend_radius_percent: int
 
 
 _ZERO_POSE = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0))
@@ -92,9 +95,11 @@ class CartesianPoseSession:
         self._target_position, self._target_quaternion = _ZERO_POSE
         self._limited_position, self._limited_quaternion = _ZERO_POSE
         self._command_received_at = 0.0
+        self._command_received = False
         self._session_epoch_ns: int | None = None
         self._last_command_stamp_ns: int | None = None
         self._last_tick_at = 0.0
+        self._last_ik_failure_log = 0.0
         self._last_api2_status = 0
         self._phase = PoseFeedbackPhase.VALIDATING
         self._move_in_progress = False
@@ -134,8 +139,9 @@ class CartesianPoseSession:
             self._target_position, self._target_quaternion = _ZERO_POSE
             self._limited_position, self._limited_quaternion = _ZERO_POSE
             self._command_received_at = now
+            self._command_received = False
             self._last_tick_at = now
-            self._session_epoch_ns = self._read_ros_time_ns()
+            self._session_epoch_ns = None
             self._last_command_stamp_ns = None
             self._stop_event.clear()
             self._done_event.clear()
@@ -158,25 +164,23 @@ class CartesianPoseSession:
                 raise ValueError(
                     f"PoseStamped header.frame_id must equal active frame_id {self._goal.ros_frame_id!r}"
                 )
-            age_sec = 0.0
             if self._ros_time_now_ns is not None:
                 if stamp_ns <= 0:
                     raise ValueError("PoseStamped header.stamp must be set")
-                now_ns = self._read_ros_time_ns()
-                if self._session_epoch_ns is not None and stamp_ns < self._session_epoch_ns:
+                if self._session_epoch_ns is None:
+                    self._session_epoch_ns = stamp_ns
+                elif stamp_ns < self._session_epoch_ns:
                     raise ValueError("PoseStamped stamp belongs to a previous session")
-                age_ns = now_ns - stamp_ns
-                if age_ns < 0:
-                    raise ValueError("PoseStamped stamp is in the future")
-                if age_ns > self._goal.watchdog_ms * 1_000_000:
-                    raise ValueError("PoseStamped command is stale")
                 if self._last_command_stamp_ns is not None and stamp_ns <= self._last_command_stamp_ns:
                     raise ValueError("PoseStamped stamp must be newer than the last accepted command")
-                age_sec = age_ns / 1_000_000_000.0
                 self._last_command_stamp_ns = stamp_ns
             self._target_position = position
             self._target_quaternion = normalize(quaternion)
-            self._command_received_at = self._monotonic() - age_sec
+            if not self._command_received:
+                self._limited_position = position
+                self._limited_quaternion = normalize(quaternion)
+            self._command_received_at = self._monotonic()
+            self._command_received = True
             self._condition.notify_all()
             return True
 
@@ -192,26 +196,22 @@ class CartesianPoseSession:
             if not expired:
                 if self._move_in_progress:
                     return None
-                dt = max(0.0, now - self._last_tick_at)
-                self._last_tick_at = now
-                position = _limit_position(
-                    self._limited_position,
-                    self._target_position,
-                    self._goal.max_linear_speed_mps * dt,
-                )
-                quaternion = _limit_quaternion(
-                    self._limited_quaternion,
-                    self._target_quaternion,
-                    self._goal.max_angular_speed_radps * dt,
-                )
+                if not self._command_received:
+                    return None
                 self._move_in_progress = True
                 goal = self._goal
+                position = self._target_position
+                quaternion = self._target_quaternion
         if expired:
             return self._stop_and_join(PoseTerminalState.WATCHDOG_STOP, "pose command watchdog expired")
         try:
             status = int(self.adapter.movep([*position, *quaternion], goal.follow, goal.trajectory_mode, goal.radio))
+            if self._logger is not None:
+                self._logger.warning("DIAG %s movep status=%s" % (self.arm_id, status))
         except Exception:
             status = -1
+            if self._logger is not None:
+                self._logger.warning("DIAG %s movep exception" % self.arm_id)
         with self._condition:
             self._move_in_progress = False
             if not self._running or self._goal is not goal:
@@ -223,6 +223,45 @@ class CartesianPoseSession:
         if status != 0:
             return self._stop_and_join(PoseTerminalState.ABORTED, "Cartesian pose command failed", api2_status=status)
         return None
+
+    def _solve_ik(
+        self,
+        position: tuple[float, float, float],
+        quaternion: tuple[float, float, float, float],
+    ) -> list[float] | None:
+        """Solve IK from the current joints toward the target pose.
+
+        Returns target joint degrees, or ``None`` when the current joint state
+        is unavailable or the IK solver fails (singularity / unreachable pose).
+        On failure the caller holds the previous joint target instead of moving.
+        """
+        try:
+            state = self.adapter.get_state()
+        except Exception:
+            return None
+        current = getattr(state, "joint_degrees", None)
+        if getattr(state, "error_code", -1) != 0 or not current or len(current) != 6:
+            return None
+        pose_euler = [*position, *quaternion_to_euler(quaternion)]
+        try:
+            status, joints = self.adapter.inverse_kinematics(list(current), pose_euler)
+        except Exception:
+            return None
+        if status != 0 or not joints or len(joints) != 6:
+            self._log_ik_failure(status)
+            return None
+        return [float(value) for value in joints]
+
+    def _log_ik_failure(self, status: int) -> None:
+        now = self._monotonic()
+        if now - self._last_ik_failure_log < 1.0:
+            return
+        self._last_ik_failure_log = now
+        if self._logger is not None:
+            self._logger.warning(
+                f"Inverse kinematics failed for {self.arm_id} "
+                f"(api2_status={status}); holding the previous joint target"
+            )
 
     def cancel(self) -> PoseResult:
         return self._stop_and_join(PoseTerminalState.CANCELED, "pose session canceled")
@@ -312,8 +351,8 @@ class CartesianPoseSession:
         if reference_name != controller:
             raise ValueError(f"reference_name must equal active verified frame {controller!r}")
         period = _positive_int(_field(goal, "control_period_ms"), "control_period_ms")
-        if period != self.settings.velocity_control_period_ms:
-            raise ValueError("control_period_ms must equal the configured control period")
+        if period > self.settings.velocity_watchdog_ms:
+            raise ValueError("control_period_ms must not exceed the configured watchdog")
         watchdog = _positive_int(_field(goal, "watchdog_ms"), "watchdog_ms")
         if watchdog > self.settings.velocity_watchdog_ms:
             raise ValueError("watchdog_ms exceeds the configured watchdog")
@@ -321,11 +360,13 @@ class CartesianPoseSession:
         angular_speed = _bounded_positive(_field(goal, "max_angular_speed_radps"), self.settings.max_angular_speed_radps, "max_angular_speed_radps")
         linear_accel = _bounded_positive(_field(goal, "max_linear_accel_mps2"), self.settings.max_linear_accel_mps2, "max_linear_accel_mps2")
         angular_accel = _bounded_positive(_field(goal, "max_angular_accel_radps2"), self.settings.max_angular_accel_radps2, "max_angular_accel_radps2")
+        velocity_percent = _percent(_field(goal, "velocity_percent"), 50, "velocity_percent")
+        blend_radius_percent = _percent(_field(goal, "blend_radius_percent"), 100, "blend_radius_percent")
         trajectory_mode = int(_field(goal, "trajectory_mode"))
         radio = int(_field(goal, "radio"))
         if trajectory_mode not in {0, 1, 2} or not 0 <= radio <= {0: 0, 1: 100, 2: 1000}[trajectory_mode]:
             raise ValueError("trajectory_mode/radio is invalid")
-        return _Goal(reference_type, reference_name, ros_frame, period, watchdog, linear_speed, angular_speed, linear_accel, angular_accel, bool(_field(goal, "follow")), trajectory_mode, radio)
+        return _Goal(reference_type, reference_name, ros_frame, period, watchdog, linear_speed, angular_speed, linear_accel, angular_accel, bool(_field(goal, "follow")), trajectory_mode, radio, velocity_percent, blend_radius_percent)
 
     def _run_loop(self) -> None:
         goal = self._goal
@@ -451,6 +492,14 @@ def _bounded_positive(value: Any, maximum: float, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or float(value) <= 0 or float(value) > maximum:
         raise ValueError(f"{name} exceeds configured limit")
     return float(value)
+
+
+def _percent(value: Any, default: int, name: str) -> int:
+    if value is None or value == 0:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
+        raise ValueError(f"{name} must be an integer in 1..100")
+    return value
 
 
 def _limit_position(current: Sequence[float], target: Sequence[float], maximum_delta: float) -> tuple[float, float, float]:

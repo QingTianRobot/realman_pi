@@ -504,6 +504,7 @@ _MOTION_FIELDS = frozenset(
         "velocity_watchdog_ms",
         "max_linear_accel_mps2",
         "max_angular_accel_radps2",
+        "hard_max_angular_accel_radps2",
         "joint_goal_tolerance_deg",
         "stop_timeout_sec",
     }
@@ -535,6 +536,7 @@ class MotionSettings:
     stop_timeout_sec: float
     hard_max_linear_speed_mps: float | None = None
     hard_max_angular_speed_radps: float | None = None
+    hard_max_angular_accel_radps2: float | None = None
 
     @property
     def linear_speed_hard_limit_mps(self) -> float:
@@ -543,6 +545,10 @@ class MotionSettings:
     @property
     def angular_speed_hard_limit_radps(self) -> float:
         return self.hard_max_angular_speed_radps or self.max_angular_speed_radps
+
+    @property
+    def angular_accel_hard_limit_radps2(self) -> float:
+        return self.hard_max_angular_accel_radps2 or self.max_angular_accel_radps2
 
     @property
     def control_period_sec(self) -> float:
@@ -610,6 +616,14 @@ class MotionSettings:
                 values.get("hard_max_angular_speed_radps", standard_angular_speed),
                 f"robots.{robot}.hard_max_angular_speed_radps",
             )
+            standard_angular_accel = _positive_finite(
+                values["max_angular_accel_radps2"],
+                f"robots.{robot}.max_angular_accel_radps2",
+            )
+            hard_angular_accel = _positive_finite(
+                values.get("hard_max_angular_accel_radps2", standard_angular_accel),
+                f"robots.{robot}.hard_max_angular_accel_radps2",
+            )
             if hard_linear_speed < standard_linear_speed:
                 raise ValueError(
                     f"robots.{robot}.hard_max_linear_speed_mps must be at least max_linear_speed_mps"
@@ -617,6 +631,11 @@ class MotionSettings:
             if hard_angular_speed < standard_angular_speed:
                 raise ValueError(
                     f"robots.{robot}.hard_max_angular_speed_radps must be at least max_angular_speed_radps"
+                )
+            if hard_angular_accel < standard_angular_accel:
+                raise ValueError(
+                    f"robots.{robot}.hard_max_angular_accel_radps2 must be at least "
+                    "max_angular_accel_radps2"
                 )
             parsed[robot] = cls(
                 default_timeout_sec=_positive_finite(
@@ -634,9 +653,7 @@ class MotionSettings:
                 max_linear_accel_mps2=_positive_finite(
                     values["max_linear_accel_mps2"], f"robots.{robot}.max_linear_accel_mps2"
                 ),
-                max_angular_accel_radps2=_positive_finite(
-                    values["max_angular_accel_radps2"], f"robots.{robot}.max_angular_accel_radps2"
-                ),
+                max_angular_accel_radps2=standard_angular_accel,
                 joint_goal_tolerance_deg=_positive_finite(
                     values.get("joint_goal_tolerance_deg", 0.25),
                     f"robots.{robot}.joint_goal_tolerance_deg",
@@ -646,6 +663,7 @@ class MotionSettings:
                 ),
                 hard_max_linear_speed_mps=hard_linear_speed,
                 hard_max_angular_speed_radps=hard_angular_speed,
+                hard_max_angular_accel_radps2=hard_angular_accel,
             )
         return parsed[arm]
 

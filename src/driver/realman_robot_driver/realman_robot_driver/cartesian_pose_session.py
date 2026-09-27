@@ -71,6 +71,7 @@ class CartesianPoseSession:
         monotonic: Callable[[], float] = time.monotonic,
         ros_time_now_ns: Callable[[], int] | None = None,
         logger: Any | None = None,
+        ik_solver: Any | None = None,
     ) -> None:
         if arm_id not in {"l", "m", "r"}:
             raise ValueError("arm_id must be one of l, m, or r")
@@ -83,6 +84,7 @@ class CartesianPoseSession:
         self._monotonic = monotonic
         self._ros_time_now_ns = ros_time_now_ns
         self._logger = logger
+        self._ik_solver = ik_solver
         self._condition = threading.Condition(threading.RLock())
         self._stop_event = threading.Event()
         self._done_event = threading.Event()
@@ -241,6 +243,16 @@ class CartesianPoseSession:
         is unavailable or the IK solver fails (singularity / unreachable pose).
         On failure the caller holds the previous joint target instead of moving.
         """
+        if self._ik_solver is not None:
+            try:
+                state = self.adapter.get_state()
+            except Exception:
+                current = None
+            else:
+                current = getattr(state, "joint_degrees", None)
+                if getattr(state, "error_code", -1) != 0 or not current or len(current) != 6:
+                    current = None
+            return self._ik_solver.solve(position, quaternion, seed_joint_degrees=current)
         try:
             state = self.adapter.get_state()
         except Exception:

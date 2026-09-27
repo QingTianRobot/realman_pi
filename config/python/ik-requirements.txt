@@ -1,0 +1,5 @@
+# Custom inverse kinematics for PikaAnyArm-style position teleop.
+# Pinocchio loads the RM65 URDF and computes forward kinematics; CasADi
+# builds the symbolic optimization and bundles the IPOPT solver.
+pinocchio
+casadi

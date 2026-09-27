@@ -205,13 +205,19 @@ class CartesianPoseSession:
         if expired:
             return self._stop_and_join(PoseTerminalState.WATCHDOG_STOP, "pose command watchdog expired")
         try:
-            status = int(self.adapter.movep([*position, *quaternion], goal.follow, goal.trajectory_mode, goal.radio))
+            joints = self._solve_ik(position, quaternion)
+            if joints is None:
+                # IK failed (singularity / unreachable): hold the previous joint target.
+                status = 0
+            else:
+                # PikaAnyArm-style: solve IK once (seeded by current joints to avoid branch jumps) then MoveJ in joint space, not Cartesian movep.
+                status = int(self.adapter.movej(joints, goal.velocity_percent, goal.blend_radius_percent, True))
             if self._logger is not None:
-                self._logger.warning("DIAG %s movep status=%s" % (self.arm_id, status))
+                self._logger.warning("DIAG %s movej status=%s" % (self.arm_id, status))
         except Exception:
             status = -1
             if self._logger is not None:
-                self._logger.warning("DIAG %s movep exception" % self.arm_id)
+                self._logger.warning("DIAG %s movej exception" % self.arm_id)
         with self._condition:
             self._move_in_progress = False
             if not self._running or self._goal is not goal:

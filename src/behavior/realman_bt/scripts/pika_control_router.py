@@ -191,7 +191,7 @@ class PikaControlRouter(Node):
         self.control_period_ms = int(self.declare_parameter("control_period_ms", 20).value)
         self.watchdog_ms = int(self.declare_parameter("watchdog_ms", 250).value)
         self.dry_run = bool(self.declare_parameter("dry_run", True).value)
-        self.max_linear_speed_mps = float(self.declare_parameter("max_linear_speed_mps", 0.05).value)
+        self.max_linear_speed_mps = float(self.declare_parameter("max_linear_speed_mps", 0.15).value)
         self.max_angular_speed_radps = float(self.declare_parameter("max_angular_speed_radps", 0.25).value)
         self.max_linear_accel_mps2 = float(self.declare_parameter("max_linear_accel_mps2", 0.10).value)
         self.max_angular_accel_radps2 = float(self.declare_parameter("max_angular_accel_radps2", 0.50).value)

@@ -32,16 +32,25 @@ def test_router_requires_active_keyboard_and_verified_default_work():
     assert "goal.max_angular_speed_radps = profile.max_angular_speed_radps" in source
 
 
-def test_keyboard_velocity_goal_uses_low_follow_for_web_timing():
+def test_keyboard_velocity_goal_uses_high_follow_at_ten_milliseconds():
     from keyboard_control_router import KeyboardControlRouter, _ArmProfile
 
-    profile = _ArmProfile("cell", "r/work/cell", 20, 100, 0.05, 0.25, 0.1, 0.5)
+    profile = _ArmProfile("cell", "r/work/cell", 10, 100, 0.05, 0.25, 0.1, 0.5)
 
     goal = KeyboardControlRouter._goal(profile)
 
-    assert goal.follow is False
-    assert goal.control_period_ms == 20
+    assert goal.follow is True
+    assert goal.control_period_ms == 10
     assert goal.watchdog_ms == 100
+
+
+def test_keyboard_velocity_goal_rejects_period_above_high_follow_limit():
+    from keyboard_control_router import KeyboardControlRouter, _ArmProfile
+
+    profile = _ArmProfile("cell", "r/work/cell", 11, 100, 0.05, 0.25, 0.1, 0.5)
+
+    with pytest.raises(ValueError, match="high-follow requires control_period_ms <= 10"):
+        KeyboardControlRouter._goal(profile)
 
 
 def test_router_stops_on_timeout_mode_loss_and_shutdown():
@@ -64,15 +73,15 @@ def test_profile_parser_resolves_only_l_r_default_work_and_motion_limits():
             "r|default_work|1|cell|r/work/cell",
         ],
         [
-            "l|20|100|0.05|0.25|0.1|0.5|10|2",
+            "l|10|100|0.05|0.25|0.1|0.5|10|2",
             "m|20|100|0.05|0.25|0.1|0.5|10|2",
-            "r|20|100|0.05|0.25|0.1|0.5|10|2",
+            "r|10|100|0.05|0.25|0.1|0.5|10|2",
         ],
     )
     assert set(profiles) == {"l", "r"}
     assert profiles["l"].reference_name == "cell"
     assert profiles["l"].frame_id == "l/work/cell"
-    assert profiles["r"].control_period_ms == 20
+    assert profiles["r"].control_period_ms == 10
 
 
 def test_profile_parser_rejects_base_or_missing_default_work():
@@ -171,6 +180,55 @@ def test_late_accepted_goal_is_cancelled_after_mode_loss():
 
     assert handle.cancelled
     assert state.goal_handle is None
+
+
+def test_keyboard_goal_acceptance_immediately_publishes_cached_work_command():
+    """The first driver command must be sent only after WORK selection succeeds."""
+    from geometry_msgs.msg import TwistStamped
+    from builtin_interfaces.msg import Time
+    from keyboard_control_router import KeyboardControlRouter, _ArmProfile, _ArmState
+
+    published = []
+    result_future = Future()
+    handle = SimpleNamespace(
+        accepted=True,
+        get_result_async=lambda: result_future,
+    )
+    pending = Future()
+    pending.set_result(handle)
+    profile = _ArmProfile("cell", "l/work/cell", 20, 100, 0.05, 0.25, 0.1, 0.5)
+    command = TwistStamped()
+    command.header.frame_id = profile.frame_id
+    command.twist.linear.y = 0.03
+    state = _ArmState(
+        SimpleNamespace(),
+        SimpleNamespace(publish=published.append),
+        profile,
+        pending_goal=pending,
+        latest_command=command,
+        last_input_at=time.monotonic(),
+        work_available=True,
+    )
+    router = KeyboardControlRouter.__new__(KeyboardControlRouter)
+    router.dry_run = False
+    router.mode = "keyboard"
+    router.input_timeout_ms = 150
+    router._arms = {"l": state}
+    router.get_logger = lambda: SimpleNamespace(
+        info=lambda _message: None,
+        warning=lambda _message: None,
+        error=lambda _message: None,
+    )
+    router.get_clock = lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(to_msg=lambda: Time(sec=12, nanosec=34))
+    )
+
+    router._goal_response("l", pending)
+
+    assert len(published) == 1
+    assert published[0].header.frame_id == "l/work/cell"
+    assert published[0].header.stamp.sec == 12
+    assert published[0].twist.linear.y == 0.03
 
 
 @pytest.fixture

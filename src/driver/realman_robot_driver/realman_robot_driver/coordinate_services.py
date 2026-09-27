@@ -98,6 +98,7 @@ def run_coordinate_operation(
             arm,
             name,
             verified_result_callback=publish_verification,
+            ownership_already_acquired=ownership_already_acquired,
         )
     else:
         verification = manager.select_work(
@@ -105,6 +106,7 @@ def run_coordinate_operation(
             arm,
             name,
             verified_result_callback=publish_verification,
+            ownership_already_acquired=ownership_already_acquired,
         )
 
     return _operation_result(selected_operation, verification)

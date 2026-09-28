@@ -31,11 +31,19 @@ class RosClock:
 
 class Adapter:
     def __init__(self):
-        self.pose_calls = []
+        self.movej_calls = []
+        self.ik_calls = []
         self.slow_stop_calls = 0
 
-    def movep(self, pose, follow, trajectory_mode, radio):
-        self.pose_calls.append((list(pose), follow, trajectory_mode, radio))
+    def get_state(self):
+        return SimpleNamespace(joint_degrees=[0.0, 0.0, 0.0, 0.0, 0.0, 0.0], error_code=0)
+
+    def inverse_kinematics(self, current, pose_euler):
+        self.ik_calls.append((list(current), list(pose_euler)))
+        return 0, [0.0, 0.1, 0.2, 0.3, 0.4, 0.5]
+
+    def movej(self, joint_degrees, velocity_percent, blend_radius_percent, connect):
+        self.movej_calls.append((list(joint_degrees), velocity_percent, blend_radius_percent, connect))
         return 0
 
     def slow_stop(self):
@@ -83,6 +91,8 @@ def goal(**changes):
         follow=True,
         trajectory_mode=0,
         radio=0,
+        velocity_percent=0,
+        blend_radius_percent=0,
     )
     value.update(changes)
     return SimpleNamespace(**value)
@@ -106,7 +116,8 @@ def test_pose_session_forwards_new_base_frame_command():
     assert session.accept_command(pose(position=(0.01, 0.0, 0.0)))
     clock.advance(0.02)
     assert session.tick() is None
-    assert adapter.pose_calls[-1][0][:3] == pytest.approx([0.01, 0.0, 0.0])
+    assert adapter.ik_calls
+    assert adapter.movej_calls[-1][0] == pytest.approx([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
     session.cancel()
 
 

@@ -14,6 +14,9 @@ float64 max_angular_accel_radps2
 bool follow
 uint8 trajectory_mode
 uint16 radio
+# MoveJ (IK) streaming parameters; 0 means use the session default.
+uint8 velocity_percent
+uint8 blend_radius_percent
 ---
 # Result constants
 uint8 SUCCEEDED=0

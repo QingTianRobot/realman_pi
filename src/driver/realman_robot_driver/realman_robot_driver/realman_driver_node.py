@@ -221,6 +221,17 @@ class RealManDriverNode(Node):
             action_type=CartesianVelocity,
             ros_time_now_ns=lambda: self.get_clock().now().nanoseconds,
         )
+        try:
+            from .ik_solver import RealManIK
+
+            urdf_path = (
+                Path(get_package_share_directory('rm65_description'))
+                / 'urdf'
+                / f'{self.robot_model}.urdf'
+            )
+            self._ik_solver = RealManIK(str(urdf_path))
+        except Exception:
+            self._ik_solver = None
         self.pose_session = CartesianPoseSession(
             arm_id=self.arm_id,
             adapter=self.adapter,
@@ -230,6 +241,7 @@ class RealManDriverNode(Node):
             coordinate_manager=self.coordinate_manager,
             logger=self.get_logger(),
             ros_time_now_ns=lambda: self.get_clock().now().nanoseconds,
+            ik_solver=self._ik_solver,
         )
         self._coordinate_state_publisher = self.create_publisher(
             String,

@@ -6,7 +6,7 @@ robots:
     # Action deadline in seconds; bounds a stalled operation without an infinite wait.
     default_timeout_sec: 10.0
     # Cartesian translation speed in m/s; low by default for shared-cell commissioning.
-    max_linear_speed_mps: 0.05
+    max_linear_speed_mps: 0.15
     # Cartesian rotation speed in rad/s; keep below abrupt wrist motion limits.
     max_angular_speed_radps: 0.25
     # Absolute per-session driver ceiling; Pika may request up to 2 rad/s.
@@ -58,7 +58,7 @@ robots:
     # Action deadline in seconds; bounds a stalled operation without an infinite wait.
     default_timeout_sec: 10.0
     # Cartesian translation speed in m/s; low by default for shared-cell commissioning.
-    max_linear_speed_mps: 0.05
+    max_linear_speed_mps: 0.15
     # Cartesian rotation speed in rad/s; keep below abrupt wrist motion limits.
     max_angular_speed_radps: 0.25
     # Absolute per-session driver ceiling; Pika may request up to 2 rad/s.

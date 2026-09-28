@@ -22,7 +22,7 @@ def test_runtime_registry_maps_one_reference_name_to_driver_fields():
     assert "l|work/pikabase|1|pikabase|l/work/pikabase" in references
     assert "r|work/pikabase|1|pikabase|r/work/pikabase" in references
     assert "l|base|0|base|l/base_link" in references
-    assert "l|10|100|0.05|0.25|0.1|0.5|10|2" in profiles
+    assert "l|20|100|0.15|0.25|0.1|0.5|10|2" in profiles
 
 
 def test_runtime_registry_rejects_delimiter_in_reference_fields(tmp_path):

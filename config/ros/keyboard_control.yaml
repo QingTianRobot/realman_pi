@@ -17,7 +17,11 @@ input_timeout_ms: 150
 input_lost_ms: 1000
 
 # Fractions multiply per-arm maxima from realman_motion.yaml.
-linear_speed_fraction: 0.4
+# The l/r linear maximum was raised to 0.15 m/s for Pika teleop; this fraction
+# keeps a held key at 0.02 m/s (0.13333333 x 0.15), the speed keyboard control
+# was tuned and measured at. The arm keeps moving briefly after a release, so a
+# faster key speed means a longer coast; retune this, not the shared maximum.
+linear_speed_fraction: 0.13333333
 angular_speed_fraction: 0.4
 
 # Physical KeyboardEvent.code values; globally unique across arms and grippers.

@@ -177,12 +177,14 @@ Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`s
 未知键、重复键和 m 输入均被拒绝。同一 owner 重选 keyboard 不重置 sequence 或夹爪按键边沿。
 外部模式切换、epoch 改变、目录移除 keyboard 也会释放旧 lease，不能靠缓存控制权继续发送。
 每 `50 ms` 心跳都会发送左右臂各自的完整集合，包括空集合；
-后端 `150 ms` 未收到该臂新输入就清零并取消该臂 session。
+后端 `150 ms` 未收到该臂新输入就把该臂速度清零但保留 session，`1000 ms`（`input_lost_ms`）未收到才取消
+该臂 session。
 
-键位、`50 ms` 心跳、`150 ms` Web 输入超时和 `0.4` 速度比例来自
+键位、`50 ms` 心跳、`150 ms` Web 输入超时、`1000 ms` 输入丢失时限和速度比例来自
 [`config/ros/keyboard_control.yaml`](../../../config/ros/keyboard_control.yaml)。比例乘以
-[`config/ros/realman_motion.yaml`](../../../config/ros/realman_motion.yaml) 的逐臂上限；当前 l/r 都派生为
-`0.02 m/s` 线速度和 `0.10 rad/s` 角速度。WORK 名称和 frame ID 仍来自
+[`config/ros/realman_motion.yaml`](../../../config/ros/realman_motion.yaml) 的逐臂上限；l/r 线速度上限为
+Pika 提高到 `0.15 m/s`，线速度比例相应设为 `0.13333333`，当前 l/r 都派生为 `0.02 m/s` 线速度和
+`0.10 rad/s`（角速度比例 `0.4` × `0.25 rad/s`）角速度。WORK 名称和 frame ID 仍来自
 [`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml)，键盘配置不会复制
 运动上限或坐标定义。`grippers.l|r.open|close` 定义夹爪物理键；全部机械臂和夹爪键码必须全局唯一。
 实际全开／全闭位置仍只由 `config/ros/gripper.yaml` 管理。

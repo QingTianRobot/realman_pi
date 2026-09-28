@@ -152,7 +152,7 @@ def build_parser() -> argparse.ArgumentParser:
         "--key-linear-speed",
         type=float,
         default=0.02,
-        help="Speed one linear key commands; 0.4 of the ceiling, like the Web page.",
+        help="Speed one linear key commands; the Web keyboard page also uses 0.02 m/s.",
     )
     keyboard.add_argument(
         "--key-angular-speed", type=float, default=0.10, help="Speed one rotation key commands."

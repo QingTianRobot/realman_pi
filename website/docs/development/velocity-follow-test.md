@@ -101,7 +101,7 @@ python3 -m velocity_follow --arm l --execute \
 | `--follow` | 关 | 关=低跟随模式，开=高跟随模式。跟随发滞时最值得 A/B 的开关 |
 | `--frame` | work | 速度所在坐标系，`work` 或 `tool` |
 | `--work-frame` | 空 | 流控前先切到指定控制器工作坐标系 |
-| `--key-linear-speed` | 0.02 | 一个按键对应的速度，对齐 `keyboard_control.yaml` 的 0.4 比例 |
+| `--key-linear-speed` | 0.02 | 一个按键对应的速度，与 Web 键盘控制相同（`keyboard_control.yaml` 派生的 `0.02 m/s`） |
 | `--key-hold-ms` | 250 | 终端不上报抬键；某轴在最后一次自动重复后这么久停下 |
 | `--baseline-sec` | 1.0 | 开跑前静止采样多久，标定测量噪声底；0 跳过 |
 | `--velocity-window-ms` | 100 | 速度最小二乘拟合窗口；越小越跟得上快变化，越大越抗量化噪声 |

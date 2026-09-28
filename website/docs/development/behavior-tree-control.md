@@ -13,7 +13,8 @@ description: RealMan 控制模式切换、工业任务树和隔离 mock 验证�
 是粘性且最高优先级的覆盖，不出现在浏览器选择器中。
 ROS selection service 接受任何已注册模式（包括 `web`），只要求调用者提供非空 `requester_id`；
 该字段用于请求关联，并非 service 层的身份验证或授权。
-`keyboard` 分支固定为 `InputModeGuard` → `ActivateInputMode` → `KeyboardVelocityInput`。该叶节点和
+`keyboard` 分支固定为 `InputModeGuard` → 有状态 `keyboard_entry` →
+`PrepareKeyboardWork` → `ActivateInputMode` → `KeyboardVelocityInput`。该叶节点和
 Policy/Pika 输入叶一样保持 `RUNNING` 并记录控制权；实际键盘速度 session 由同一 launch 中的
 `keyboard_control_router` 管理，Pika topic 转发由 `pika_control_router` 管理。两个 router 都只为 l/r
 建立 session，绝不为 m 建立 goal、订阅或 command publisher。
@@ -29,7 +30,13 @@ l/r，绝不订阅或发送 m 的夹爪信号。
 `InputModeGuard` 的 `mode`、`label`、`selectable` 字面量在 XML 构造时注册目录，
 因此新增模式只改 XML 和相应叶注册，不能在 Web 或 Python 写静态枚举。路由根节点必须保留
 `ReactiveSequence` 和 `ReactiveFallback`，使 guard 每个 10 Hz tick 都重算并 halt 离开的
-RUNNING 分支。普通分支是 `InputModeGuard` → `ActivateInputMode` → 输入叶；Pika 分支在激活前
+RUNNING 分支。普通分支是 `InputModeGuard` → `ActivateInputMode` → 输入叶；keyboard 分支在激活前
+调用 `/l/coordinates/select_work` 和 `/r/coordinates/select_work`，请求名称来自坐标注册表中的
+`l|default_work`、`r|default_work`，而不是在行为树中硬编码 `cell`。两个响应都必须返回
+`success=true` 且 `active_name` 与各自的配置名称一致，随后才发布 `ACTIVE/keyboard`。
+任一 service 拒绝、异常或读回名称不一致都会让切换进入 `FAILED`，现有协调器下一拍安排安全模式
+`none`；因此浏览器不会在错误 WORK 下取得 keyboard lease。`dry_run=true` 时仍验证左右臂默认引用
+存在且类型为 WORK，但不创建 service client，也不改变控制器坐标。Pika 分支在激活前
 额外运行一次有状态 `Sequence` 中的 `ThreeArmMoveJ` 准备动作，准备成功后才发布 Pika `ACTIVE`。
 准备动作成功后，后续 tick 会从该 `Sequence` 的 Pika 输入叶继续，不会重新进入准备动作；只有离开
 Pika 分支后再次进入，才会重新执行准备动作。
@@ -76,12 +83,14 @@ Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。键盘�
 [`config/ros/keyboard_control.yaml`](../../../config/ros/keyboard_control.yaml)。浏览器每 `50 ms` 发送一次
 左右臂各自的完整按键集合；Web bridge 对每臂要求严格递增的 sequence，并拒绝未知物理键码、重复键码、
 非 lease owner 和任何 m 输入。Web 输入超过 `150 ms` 未刷新时，keyboard router 对该臂发布零速度并
-取消 session。driver 仍按 `config/ros/realman_motion.yaml` 的 `20 ms` 周期和 `100 ms` watchdog
+取消 session。keyboard router 缓存最新有效输入，并按 `config/ros/realman_motion.yaml` 的 `10 ms`
+周期刷新 driver；driver 仍用 `100 ms` watchdog
 执行第二层失效保护。
 
-键盘速度 Goal 固定使用 `follow=false`（RealMan SDK 的低跟随模式）。SDK 高跟随要求透传周期不超过
-`10 ms`，而浏览器/DDS 键盘链路不是实时通道；不要仅把配置周期改成 `10 ms` 就重新启用高跟随，除非
-同时验证实际 `rm_movev_canfd` 发送间隔始终满足该约束。
+键盘速度 Goal 固定使用 `follow=true`（RealMan SDK 高跟随模式），并在创建 Goal 时拒绝任何大于
+`10 ms` 的配置周期。浏览器仍每 `50 ms` 上报完整按键集合，router 将输入采样与 SDK 刷新解耦，
+由 driver 固定周期 worker 按 `10 ms` 执行最新命令。生产 A/B 测试中，旧的 `20 ms + follow=false`
+组合在启动阶段出现明显的非指令轴瞬态，因此不能恢复为键盘默认配置。
 
 离开 `keyboard`、WORK 失配、按键全部释放、Web 输入超时、owner WebSocket 关闭或 router 关闭时，
 相关臂先收敛到零速度，再取消其 Action session。浏览器 owner 断开还会释放 lease 并请求安全模式
@@ -112,9 +121,28 @@ Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/com
 
 `pikavelocity` 是实时速度流，而不是单点位置目标。其逐会话线速度向量模长上限来自
 [`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 的
-`pika_velocity.max_linear_speed_mps`，当前为 `1.0 m/s`；角速度上限仍为 `0.25 rad/s`。
-驱动配置中的普通会话上限继续是 `0.05 m/s`，所以键盘、Web 手动速度和普通行为树速度节点不会随
-Pika 一起升速。驱动仅将 l/r 的绝对逐会话硬上限设为 `1.0 m/s`，m 仍为 `0.05 m/s`。
+`pika_velocity.max_linear_speed_mps`，当前为 `1.0 m/s`；角速度上限为 `2.0 rad/s`。
+驱动配置中的普通会话上限继续是 `0.05 m/s` 和 `0.25 rad/s`，所以键盘、Web 手动速度和普通行为树速度节点不会随
+Pika 一起升速。l/r 的绝对逐会话角速度硬上限为 `2.0 rad/s`，m 仍为 `0.25 rad/s`；线速度硬上限分别为
+`1.0 m/s` 和 `0.05 m/s`。Pika 角加速度使用独立的
+`pika_velocity.max_angular_accel_radps2=4.0 rad/s²`，从静止达到 `2.0 rad/s` 约需 `0.5 s`；普通会话仍使用
+`realman_motion.yaml` 中的 `0.5 rad/s²`。driver 的 l/r 角加速度硬上限只允许显式 Pika Goal 请求该较快斜坡，
+不会改变键盘、Web 或普通行为树的 Goal。
+
+Pika ingress 的角速度三轴向量模长超过 `2.0 rad/s` 时，router 会按模长等比例缩放到上限并保留旋转方向，
+而不是丢弃整条消息。缩放诊断按每臂限频，避免高频输入持续超限时造成日志洪泛。线速度超过 `1.0 m/s` 仍按
+安全边界拒绝，因为本次修复只调整角速度跟随契约。
+
+Pika ingress 标称 `20 Hz`，生产 DDS/调度可能出现短暂抖动。router 缓存最近一条通过 frame、有限值和
+速度上限校验的命令，并按 driver 配置的 `10 ms` control period 重新打当前 ROS 时间戳后持续刷新
+`/<arm>/cartesian_velocity/command`。`pika_velocity.input_timeout_ms` 当前为 `250 ms`：上游间隔短于该值时
+不会误触发 driver 的 `100 ms` watchdog；超过该值则 router 先发布零速度再取消 Action session。
+这不会放宽 driver watchdog，router 自身崩溃或到 driver 的发布中断时，driver 仍在 `100 ms` 内停止。
+
+Pika 速度 Action 使用 `WORK` 和 `pikabase`。driver 收到该 Goal 时，如果当前已验证工作坐标不是
+`pikabase`，会在同一臂 ownership 内调用坐标管理器写入、切换并读回验证已配置的 `pikabase`，验证成功后才
+启动速度 session；因此进入 Pika 速度控制不要求操作员先手动把默认 `cell` 切成 `pikabase`。目标坐标未配置、
+写入/切换失败或读回不匹配时仍保持 motion blocked，并在 Action/driver 日志中报告失败原因。
 
 ### Pika rosbag replay
 
@@ -126,7 +154,7 @@ Pika 一起升速。驱动仅将 l/r 的绝对逐会话硬上限设为 `1.0 m/s`
 [`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml)，保持 BASE 速度向量
 数值不变。键盘和默认会话仍使用 `cell`。
 Replay 只发布 `/pika/l|r/cartesian_velocity` 与 `/pika/l|r/gripper_percentage`，夹爪值是
-`Float32` 的归一化百分比（`0` 闭合、`1` 张开），Pika 限制为 `1.0 m/s` 和 `0.25 rad/s`。
+`Float32` 的归一化百分比（`0` 闭合、`1` 张开），Pika 限制为 `1.0 m/s` 和 `2.0 rad/s`。
 进入执行并尝试选择坐标后，每次结束或失败会向两路速度 ingress 发送终端零向量，等待超过 `100 ms`
 watchdog 后把已选或可能已选的坐标恢复为 `cell`；只读预检不会选择坐标或执行这段 cleanup。
 恢复失败必须先人工确认 `/<arm>/coordinates/state`，再调用 `/<arm>/coordinates/select_work` 选择 `cell`。
@@ -158,8 +186,9 @@ twist:
 
 右臂只把 `frame_id` 改为 `r/work/pikabase` 并发布到 `/pika/r/cartesian_velocity`。线速度限制按
 `sqrt(vx^2 + vy^2 + vz^2)` 计算；例如 `(1, 1, 0)` 的模长约为 `1.414 m/s`，会被拒绝。
-输入停止超过 `100 ms` 后 driver watchdog 会零速并终止 session；正常停止也应先连续发送零向量，
-然后切换到 `none` 或其它输入模式。
+输入停止超过配置的 `250 ms` 后 router 会零速并取消 session；如果 router 到 driver 的刷新链路中断，
+driver 的 `100 ms` watchdog 仍会独立零速并终止 session。正常停止也应先连续发送零向量，然后切换到
+`none` 或其它输入模式。
 
 切入任一 Pika 模式时，行为树先用 `ThreeArmMoveJ` 将 l/m/r 移动到
 [`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 中
@@ -170,9 +199,12 @@ twist:
 
 ## 生命周期和无硬件验证
 
-`./rm65 up` 只拥有长期 driver 和 :8765 Web 服务；它不启动行为树。先启动该运行时，再显式执行
-`./rm65 bt control`，该命令使用 `control_router.launch.py` 和 `exit_on_terminal=false`，连同 :8080
-只读监视器持续到 Ctrl-C。Ctrl-C 不停止 driver；`./rm65 down` 才停止统一运行时。
+`./rm65 up` 只拥有长期 driver 和 :8765 Web 服务；它不启动行为树。只要 Docker 中已经有一个运行中的
+`realman_bringup_remote` 容器，就可以显式执行 `./rm65 bt control`；该命令使用
+`control_router.launch.py` 和 `exit_on_terminal=false`，连同 :8080 只读监视器持续到 Ctrl-C。
+启动器按 Docker 的 `com.docker.compose.service=realman_bringup_remote` 标签查找唯一运行中的 driver
+容器，再通过容器 ID 执行 `bt-start`，因此不依赖 `./rm65 up` 或当前 Compose project；没有或多于一个匹配
+bringup 时会拒绝启动，避免把控制树接入错误的驱动图。Ctrl-C 不停止 driver；`./rm65 down` 才停止统一运行时。
 
 ## 独立测试
 

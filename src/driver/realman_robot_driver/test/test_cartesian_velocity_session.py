@@ -131,6 +131,7 @@ def settings(
     max_angular_speed_radps=2.0,
     hard_max_linear_speed_mps=None,
     hard_max_angular_speed_radps=None,
+    hard_max_angular_accel_radps2=None,
     velocity_watchdog_ms=100,
 ) -> MotionSettings:
     return MotionSettings(
@@ -145,6 +146,7 @@ def settings(
         stop_timeout_sec=1.0,
         hard_max_linear_speed_mps=hard_max_linear_speed_mps,
         hard_max_angular_speed_radps=hard_max_angular_speed_radps,
+        hard_max_angular_accel_radps2=hard_max_angular_accel_radps2,
     )
 
 
@@ -194,6 +196,7 @@ def make_session(
     session_settings=None,
     ros_clock=None,
     active_frame=None,
+    prepare_reference=None,
 ):
     kwargs = {}
     if ros_clock is not None:
@@ -205,6 +208,7 @@ def make_session(
         settings=session_settings or settings(),
         active_frame=active_frame
         or (lambda reference_type: ("tcpgrip", "l/tool/tcpgrip")),
+        prepare_reference=prepare_reference,
         motion_allowed=lambda arm: True,
         monotonic=clock or Clock(),
         **kwargs,
@@ -991,6 +995,24 @@ def test_session_goal_can_request_pika_speed_up_to_the_driver_hard_limit():
     session.shutdown()
 
 
+def test_session_goal_can_request_pika_angular_acceleration_up_to_hard_limit():
+    session = make_session(
+        session_settings=settings(
+            max_angular_speed_radps=0.25,
+            hard_max_angular_speed_radps=2.0,
+            hard_max_angular_accel_radps2=4.0,
+        )
+    )
+
+    assert session.start(
+        valid_goal(
+            max_angular_speed_radps=2.0,
+            max_angular_accel_radps2=4.0,
+        )
+    ) is True
+    session.shutdown()
+
+
 def test_zero_goal_speed_uses_the_standard_session_limit():
     session = make_session(
         session_settings=settings(
@@ -1069,6 +1091,29 @@ def test_direct_start_validates_frame_only_after_claiming_ownership_and_releases
 
     assert observed_busy == [True]
     assert ownership.is_busy("l") is False
+
+
+def test_start_prepares_requested_work_reference_before_validating_active_frame():
+    active = {ReferenceType.WORK: ("cell", "l/work/cell")}
+    prepared = []
+
+    def prepare_reference(reference_type, reference_name):
+        prepared.append((reference_type, reference_name))
+        active[ReferenceType.WORK] = ("pikabase", "l/work/pikabase")
+
+    session = make_session(
+        active_frame=active,
+        prepare_reference=prepare_reference,
+    )
+
+    assert session.start(
+        valid_goal(
+            reference_type=int(ReferenceType.WORK),
+            reference_name="pikabase",
+        )
+    ) is True
+    assert prepared == [(ReferenceType.WORK, "pikabase")]
+    session.shutdown()
 
 
 def test_concurrent_goal_callbacks_reserve_exactly_one_request():

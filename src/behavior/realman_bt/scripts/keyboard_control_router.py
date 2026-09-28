@@ -356,6 +356,10 @@ class KeyboardControlRouter(Node):
 
     @staticmethod
     def _goal(profile: _ArmProfile) -> CartesianVelocity.Goal:
+        if profile.control_period_ms > 10:
+            raise ValueError(
+                "keyboard high-follow requires control_period_ms <= 10"
+            )
         goal = CartesianVelocity.Goal()
         goal.reference_type = CartesianVelocity.Goal.WORK
         goal.reference_name = profile.reference_name
@@ -365,9 +369,9 @@ class KeyboardControlRouter(Node):
         goal.max_angular_speed_radps = profile.max_angular_speed_radps
         goal.max_linear_accel_mps2 = profile.max_linear_accel_mps2
         goal.max_angular_accel_radps2 = profile.max_angular_accel_radps2
-        # Web/DDS keyboard input is not a <=10 ms real-time stream. Use the
-        # SDK low-follow mode for the configured 20 ms control period.
-        goal.follow = False
+        # The router decouples the 50 ms browser ingress from the SDK stream
+        # and refreshes the cached command at the configured <=10 ms period.
+        goal.follow = True
         goal.trajectory_mode = 0
         goal.radio = 0
         return goal
@@ -411,6 +415,8 @@ class KeyboardControlRouter(Node):
         result.add_done_callback(
             lambda completed, selected=arm: self._goal_finished(selected, completed)
         )
+        if state.latest_command is not None:
+            self._publish_driver_command(arm, state.latest_command)
         self.get_logger().info(f"Keyboard velocity session active for {arm}")
 
     def _goal_finished(self, arm: str, future: Any) -> None:

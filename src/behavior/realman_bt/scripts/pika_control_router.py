@@ -51,6 +51,7 @@ class _ArmState:
     active_kind: str = ""
     cancel_pending: Any = None
     last_input_at: float = 0.0
+    latest_velocity: TwistStamped | None = None
 
 
 def _positive_float(value: Any, field: str) -> float:
@@ -63,12 +64,40 @@ def _positive_float(value: Any, field: str) -> float:
     return parsed
 
 
+def clamp_angular_velocity(
+    source: TwistStamped, max_angular_speed_radps: float
+) -> tuple[TwistStamped, bool]:
+    """Norm-clamp angular velocity while preserving direction and metadata."""
+    limit = _positive_float(max_angular_speed_radps, "max_angular_speed_radps")
+    angular = (
+        source.twist.angular.x,
+        source.twist.angular.y,
+        source.twist.angular.z,
+    )
+    norm = math.hypot(*angular)
+    if norm <= limit:
+        return source, False
+    scale = limit / norm
+    limited = TwistStamped()
+    limited.header.frame_id = source.header.frame_id
+    limited.header.stamp.sec = source.header.stamp.sec
+    limited.header.stamp.nanosec = source.header.stamp.nanosec
+    limited.twist.linear.x = source.twist.linear.x
+    limited.twist.linear.y = source.twist.linear.y
+    limited.twist.linear.z = source.twist.linear.z
+    limited.twist.angular.x = angular[0] * scale
+    limited.twist.angular.y = angular[1] * scale
+    limited.twist.angular.z = angular[2] * scale
+    return limited, True
+
+
 def parse_arm_profiles(
     coordinate_references: list[str],
     velocity_profiles: list[str],
     work_reference: str,
     max_linear_speed_mps: float,
     max_angular_speed_radps: float,
+    max_angular_accel_radps2: float,
 ) -> dict[str, _ArmProfile]:
     references: dict[str, tuple[str, str]] = {}
     for entry in coordinate_references:
@@ -109,6 +138,9 @@ def parse_arm_profiles(
         raise ValueError("l and r configured Pika WORK references and velocity profiles are required")
     linear_limit = _positive_float(max_linear_speed_mps, "max_linear_speed_mps")
     angular_limit = _positive_float(max_angular_speed_radps, "max_angular_speed_radps")
+    angular_accel_limit = _positive_float(
+        max_angular_accel_radps2, "max_angular_accel_radps2"
+    )
     return {
         arm: _ArmProfile(
             references[arm][0],
@@ -118,7 +150,7 @@ def parse_arm_profiles(
             linear_limit,
             angular_limit,
             motion[arm][2],
-            motion[arm][3],
+            angular_accel_limit,
         )
         for arm in ("l", "r")
     }
@@ -136,12 +168,20 @@ class PikaControlRouter(Node):
         self.max_angular_speed_radps = float(self.declare_parameter("max_angular_speed_radps", 0.25).value)
         self.max_linear_accel_mps2 = float(self.declare_parameter("max_linear_accel_mps2", 0.10).value)
         self.max_angular_accel_radps2 = float(self.declare_parameter("max_angular_accel_radps2", 0.50).value)
+        self.input_timeout_ms = int(
+            self.declare_parameter("pika_velocity_input_timeout_ms", 250).value
+        )
+        if self.input_timeout_ms <= 0:
+            raise ValueError("pika_velocity_input_timeout_ms must be positive")
         profiles = parse_arm_profiles(
             list(self.declare_parameter("coordinate_references", Parameter.Type.STRING_ARRAY).value),
             list(self.declare_parameter("cartesian_velocity_profiles", Parameter.Type.STRING_ARRAY).value),
             self.declare_parameter("pika_velocity_work_reference", "work/pikabase").value,
             self.declare_parameter("pika_velocity_max_linear_speed_mps", 1.0).value,
             self.declare_parameter("pika_velocity_max_angular_speed_radps", 0.25).value,
+            self.declare_parameter(
+                "pika_velocity_max_angular_accel_radps2", 4.0
+            ).value,
         )
         self.mode = ""
         self._arms: dict[str, _ArmState] = {}
@@ -170,7 +210,8 @@ class PikaControlRouter(Node):
                 lambda message, arm=arm: self._gripper(arm, message),
                 10,
             )
-        self.create_timer(0.05, self._reconcile)
+        period_ms = min(profile.control_period_ms for profile in profiles.values())
+        self.create_timer(period_ms / 1000.0, self._reconcile)
         self.get_logger().info("Pika Cartesian router ready for l/r; middle arm is excluded")
 
     def _mode_state(self, message: InputModeState) -> None:
@@ -189,6 +230,9 @@ class PikaControlRouter(Node):
             return
         kind = "position" if self.mode == "pikaposition" else "velocity"
         for arm, state in self._arms.items():
+            if kind == "velocity":
+                self._reconcile_velocity(arm, state)
+                continue
             if state.last_input_at <= 0.0 or time.monotonic() - state.last_input_at > self.watchdog_ms / 1000.0:
                 continue
             if state.active_kind == kind and state.goal_handle is not None:
@@ -203,6 +247,42 @@ class PikaControlRouter(Node):
             goal = self._pose_goal() if kind == "position" else self._velocity_goal(state.profile)
             state.pending_goal = client.send_goal_async(goal)
             state.pending_goal.add_done_callback(lambda future, arm=arm, kind=kind: self._goal_response(arm, kind, future))
+
+    def _reconcile_velocity(self, arm: str, state: _ArmState) -> None:
+        fresh = (
+            state.last_input_at > 0.0
+            and time.monotonic() - state.last_input_at
+            < self.input_timeout_ms / 1000.0
+        )
+        if state.active_kind == "velocity" and state.goal_handle is not None:
+            if fresh and state.latest_velocity is not None:
+                self._publish_velocity(state, state.latest_velocity)
+            elif state.last_input_at > 0.0:
+                self._publish_velocity(state, TwistStamped())
+                state.last_input_at = 0.0
+                state.latest_velocity = None
+                self._cancel(state)
+            return
+        if not fresh:
+            return
+        if (
+            state.goal_handle is not None
+            or state.pending_goal is not None
+            or state.cancel_pending is not None
+        ):
+            self._cancel(state)
+            return
+        if not state.velocity_client.server_is_ready():
+            state.velocity_client.wait_for_server(timeout_sec=0.0)
+            return
+        state.pending_goal = state.velocity_client.send_goal_async(
+            self._velocity_goal(state.profile)
+        )
+        state.pending_goal.add_done_callback(
+            lambda future, selected=arm: self._goal_response(
+                selected, "velocity", future
+            )
+        )
 
     def _goal_response(self, arm: str, kind: str, future: Any) -> None:
         state = self._arms[arm]
@@ -222,14 +302,29 @@ class PikaControlRouter(Node):
         state.active_kind = kind
 
         result_future = handle.get_result_async()
-        result_future.add_done_callback(lambda _future, arm=arm: self._goal_finished(arm))
+        result_future.add_done_callback(
+            lambda completed, arm=arm: self._goal_finished(arm, completed)
+        )
+        if kind == "velocity" and state.latest_velocity is not None:
+            self._publish_velocity(state, state.latest_velocity)
         self.get_logger().info(f"Pika {kind} session active for {arm}")
 
-    def _goal_finished(self, arm: str) -> None:
+    def _goal_finished(self, arm: str, future: Any) -> None:
         state = self._arms[arm]
         state.goal_handle = None
         state.active_kind = ""
         state.cancel_pending = None
+        try:
+            response = future.result()
+            result = response.result
+            if not result.success:
+                self.get_logger().warning(
+                    f"Pika velocity session ended for {arm}: {result.message}"
+                )
+        except Exception as error:
+            self.get_logger().error(
+                f"Pika velocity result failed for {arm}: {error}"
+            )
 
     def _cancel(self, state: _ArmState) -> None:
         if state.goal_handle is None:
@@ -276,14 +371,31 @@ class PikaControlRouter(Node):
         if math.hypot(*linear) > profile.max_linear_speed_mps + 1.0e-12:
             self.get_logger().warning(f"Ignoring Pika velocity for {arm}: linear speed exceeds Pika session limit")
             return
-        if math.hypot(*angular) > profile.max_angular_speed_radps + 1.0e-12:
-            self.get_logger().warning(f"Ignoring Pika velocity for {arm}: angular speed exceeds Pika session limit")
-            return
+        limited_message, angular_clamped = clamp_angular_velocity(
+            message, profile.max_angular_speed_radps
+        )
+        if angular_clamped:
+            now = time.monotonic()
+            log_key = (arm, "angular_clamp")
+            if now - self._last_unavailable_log.get(log_key, 0.0) >= 1.0:
+                self._last_unavailable_log[log_key] = now
+                self.get_logger().warning(
+                    f"Clamping Pika velocity for {arm}: angular speed exceeds "
+                    "Pika session limit"
+                )
         state.last_input_at = time.monotonic()
-        if not self.dry_run and state.goal_handle is not None:
-            state.velocity_publisher.publish(message)
-        else:
+        state.latest_velocity = limited_message
+        if not self.dry_run and state.goal_handle is None:
             self._reconcile()
+
+    def _publish_velocity(self, state: _ArmState, command: TwistStamped) -> None:
+        if self.dry_run or state.goal_handle is None:
+            return
+        outgoing = TwistStamped()
+        outgoing.header.stamp = self.get_clock().now().to_msg()
+        outgoing.header.frame_id = state.profile.frame_id
+        outgoing.twist = command.twist
+        state.velocity_publisher.publish(outgoing)
 
     def _gripper(self, arm: str, message: Float32) -> None:
         if self.mode not in {"pikaposition", "pikavelocity"} or self.dry_run:

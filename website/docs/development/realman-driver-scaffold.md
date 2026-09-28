@@ -176,7 +176,7 @@ session 终止结果保留原始 API2 status 和 message 给 Action 调用方。
 ```bash
 ros2 action send_goal /l/cartesian_velocity \
   realman_msgs/action/CartesianVelocity \
-  "{reference_type: 0, reference_name: base, control_period_ms: 20, \
+  "{reference_type: 0, reference_name: base, control_period_ms: 10, \
     watchdog_ms: 100, max_linear_accel_mps2: 0.10, \
     max_angular_accel_radps2: 0.50, follow: false, \
     trajectory_mode: 0, radio: 0}" --feedback
@@ -219,7 +219,7 @@ BASE 的 ROS frame 由驱动固定为 `l/base_link`（中、右臂对应 `m/base
 | `default_timeout_sec` | `10.0` | 普通运动默认 deadline，秒 |
 | `max_linear_speed_mps` | `0.05` | 末端线速度上限，m/s |
 | `max_angular_speed_radps` | `0.25` | 末端角速度上限，rad/s |
-| `velocity_control_period_ms` | `20` | SDK 速度控制周期，ms |
+| `velocity_control_period_ms` | `10` | SDK 速度控制周期，ms；满足高跟随模式的最长允许周期 |
 | `velocity_watchdog_ms` | `100` | 最新有效命令超时，ms |
 | `max_linear_accel_mps2` | `0.10` | 线加速度上限，m/s² |
 | `max_angular_accel_radps2` | `0.50` | 角加速度上限，rad/s² |

@@ -395,12 +395,12 @@ Web 控制相关 Compose 服务把 `./config` 以可写方式挂到容器内，�
 
 ### 末端六轴速度
 
-先建立速度 Action，再以 20 ms 左右的周期发送 `vx, vy, vz, wx, wy, wz`。页面会默认选中
+先建立速度 Action，再以配置的 `10 ms` 周期发送 `vx, vy, vz, wx, wy, wz`。页面会默认选中
 当前 `coordinate_state` 提供的参考系：
 
 ```json
 {"type":"start_cartesian_velocity","request_id":"vel-001","arm":"l","goal":{
-  "reference_type":1,"reference_name":"cell","control_period_ms":20,"watchdog_ms":100,
+  "reference_type":1,"reference_name":"cell","control_period_ms":10,"watchdog_ms":100,
   "max_linear_accel_mps2":0.10,"max_angular_accel_radps2":0.50,
   "follow":false,"trajectory_mode":0,"radio":0}}
 ```

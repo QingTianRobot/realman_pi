@@ -48,9 +48,12 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 相机后台进程 PID 保存在 `logs/.rm65-camera.pid`，其标准输出写入 `logs/rm65-camera.log`；ROS 2
 节点仍按官方机制写入 `logs/YYYYMMDD_HHMMSS/`。
 
-`bt control` 必须在 `up` 后单独运行：它加入同一 ROS domain，保持 :8080 只读监视器、
-`realman_bt_executor`、`pika_control_router` 和 `keyboard_control_router` 到 Ctrl-C，而 `up` 继续拥有长期
-driver 与 :8765 Web control。停止 router 不会停止这些服务；使用 `./rm65 down` 才终止统一运行时。
+`bt control` 必须在一个唯一运行中的 bringup 容器上单独运行，但不要求该容器由 `./rm65 up` 启动：它加入
+同一 ROS domain，保持 :8080 只读监视器、`realman_bt_executor`、`pika_control_router` 和
+`keyboard_control_router` 到 Ctrl-C，而 bringup 继续拥有长期 driver 与 :8765 Web control。停止 router 不会停止这些服务；使用
+`./rm65 down` 才终止统一运行时。
+CLI 不依赖当前 shell 的 Compose project 名；它通过 `realman_bringup_remote` service label 解析唯一的
+运行容器并直接在其中启动 router。发现零个或多个匹配容器都会失败，必须先恢复为唯一生产 bringup。
 
 `./rm65 up` 会加载键盘配置并在 8765 静态页面中提供键盘卡片代码，但不会自行声明 `keyboard` 输入模式。
 只有运行中的 `control.xml` 目录通过 ROS 暴露可选的 `keyboard` 后，页面才显示并启用双臂键盘卡片；切到
@@ -306,6 +309,11 @@ rm65_docker_remote_rviz_status
 `restart: unless-stopped`。用 `docker compose up -d realman_bringup_remote`
 创建或重建容器后，Docker 会在主机重启、Docker daemon 重启或容器异常退出后自动恢复该
 ROS 图；如果运维人员显式执行 `docker compose stop realman_bringup_remote`，则不会自动重启。
+
+`./rm65 bt <tree>` 不要求通过 `./rm65 up` 启动这个容器。入口会在 Docker 全局运行容器中查找
+`com.docker.compose.service=realman_bringup_remote` 标签，并直接对唯一匹配的容器执行行为树；因此
+生产机也可以由独立 Compose project 或 `docker compose run --rm realman_bringup_remote` 启动 bringup。
+没有匹配容器或存在多个匹配容器时，行为树入口会拒绝启动。
 
 后台方式会立即归还终端，但 RViz 节点和窗口会持续运行。`rm65_docker_remote_rviz_logs -f`
 跟踪容器日志，`rm65_docker_remote_rviz_stop` 停止节点。需要让 RViz 生命周期跟随当前终端时，

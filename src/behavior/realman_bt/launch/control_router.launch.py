@@ -67,7 +67,7 @@ def _load_pika_joint_defaults(config_file: Path) -> dict[str, str]:
     return values
 
 
-def _load_pika_velocity_config(config_file: Path) -> dict[str, str | float]:
+def _load_pika_velocity_config(config_file: Path) -> dict[str, str | float | int]:
     with config_file.open("r", encoding="utf-8") as stream:
         document = yaml.safe_load(stream) or {}
     velocity = document.get("pika_velocity")
@@ -76,12 +76,23 @@ def _load_pika_velocity_config(config_file: Path) -> dict[str, str | float]:
     work_reference = velocity.get("work_reference")
     if not isinstance(work_reference, str) or not work_reference:
         raise ValueError(f"{config_file}: pika_velocity.work_reference must be a non-empty string")
-    result: dict[str, str | float] = {
+    result: dict[str, str | float | int] = {
         "pika_velocity_work_reference": work_reference,
     }
+    input_timeout_ms = velocity.get("input_timeout_ms")
+    if (
+        isinstance(input_timeout_ms, bool)
+        or not isinstance(input_timeout_ms, int)
+        or input_timeout_ms <= 0
+    ):
+        raise ValueError(
+            f"{config_file}: pika_velocity.input_timeout_ms must be a positive integer"
+        )
+    result["pika_velocity_input_timeout_ms"] = input_timeout_ms
     for config_name, parameter_name in (
         ("max_linear_speed_mps", "pika_velocity_max_linear_speed_mps"),
         ("max_angular_speed_radps", "pika_velocity_max_angular_speed_radps"),
+        ("max_angular_accel_radps2", "pika_velocity_max_angular_accel_radps2"),
     ):
         value = velocity.get(config_name)
         if (

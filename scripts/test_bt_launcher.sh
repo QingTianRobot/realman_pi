@@ -4,14 +4,18 @@ set -euo pipefail
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
 output="$(RM65_DRY_RUN=1 REALMAN_BT_DRY_RUN=true "$ROOT/scripts/bt.sh" r)"
 
-grep -Fq 'docker compose -f ' <<<"$output"
-grep -Fq 'ps -q realman_bringup_remote' <<<"$output"
-grep -Fq 'exec -T' <<<"$output"
+grep -Fq 'ps --filter label=com.docker.compose.service=realman_bringup_remote' <<<"$output"
+grep -Fq 'exec -i' <<<"$output"
+if grep -Fq 'docker compose' <<<"$output"; then
+  printf '%s\n' 'bt launcher still depends on Compose service lookup' >&2
+  exit 1
+fi
 grep -Fq 'BT_AUTOSTART=true' <<<"$output"
 grep -Fq 'BT_ARM_ID_OVERRIDE=r' <<<"$output"
 grep -Fq 'BT_REQUIRED_ARMS=r' <<<"$output"
 grep -Fq 'REALMAN_BT_DRY_RUN=true' <<<"$output"
 grep -Fq '/usr/local/bin/bt-start' <<<"$output"
+grep -Fq 'docker exec -i' <<<"$output"
 grep -Fq 'monitor: http://127.0.0.1:8080/' <<<"$output"
 grep -Fq 'BT_READ_ONLY=true' <<<"$output"
 grep -Fq 'BT_RUNTIME_SNAPSHOT=/tmp/realman-bt-workspace/runtime.json' <<<"$output"

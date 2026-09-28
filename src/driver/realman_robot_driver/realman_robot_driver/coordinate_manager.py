@@ -287,6 +287,7 @@ class CoordinateManager:
         name: str,
         *,
         verified_result_callback: Callable[[CoordinateVerification], None] | None = None,
+        ownership_already_acquired: bool = False,
     ) -> CoordinateVerification:
         """Select a configured tool only while the ownership callback says arm is idle."""
         profile = self._profile(arm)
@@ -302,7 +303,12 @@ class CoordinateManager:
             self._selected_tools[arm] = name
             return self.verify(adapter, arm)
 
-        return self._run_mutation(arm, operation, verified_result_callback)
+        return self._run_mutation(
+            arm,
+            operation,
+            verified_result_callback,
+            ownership_already_acquired=ownership_already_acquired,
+        )
 
     def select_work(
         self,
@@ -311,6 +317,7 @@ class CoordinateManager:
         name: str,
         *,
         verified_result_callback: Callable[[CoordinateVerification], None] | None = None,
+        ownership_already_acquired: bool = False,
     ) -> CoordinateVerification:
         """Select a configured work frame only while the ownership callback says arm is idle."""
         profile = self._profile(arm)
@@ -330,7 +337,12 @@ class CoordinateManager:
             self._selected_works[arm] = name
             return self.verify(adapter, arm)
 
-        return self._run_mutation(arm, operation, verified_result_callback)
+        return self._run_mutation(
+            arm,
+            operation,
+            verified_result_callback,
+            ownership_already_acquired=ownership_already_acquired,
+        )
 
     def motion_allowed(self, arm: str) -> bool:
         """Return true only after a successful verification of current selections."""

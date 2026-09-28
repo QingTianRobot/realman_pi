@@ -93,6 +93,7 @@ class CartesianVelocitySession:
         settings: MotionSettings,
         active_frame: Callable[[ReferenceType], Any] | Mapping[Any, Any] | None = None,
         active_reference: Callable[[ReferenceType], Any] | Mapping[Any, Any] | None = None,
+        prepare_reference: Callable[[ReferenceType, str], Any] | None = None,
         motion_allowed: Callable[[str], bool] | None = None,
         coordinate_manager: Any | None = None,
         monotonic: Callable[[], float] = time.monotonic,
@@ -116,6 +117,7 @@ class CartesianVelocitySession:
         self.ownership = ownership
         self.settings = settings
         self._active_frame = active_frame
+        self._prepare_reference = prepare_reference
         self._motion_allowed = motion_allowed
         self._coordinate_manager = coordinate_manager
         self._monotonic = monotonic
@@ -860,6 +862,12 @@ class CartesianVelocitySession:
     def _validate_owned_goal(self, goal: Any) -> _ValidatedGoal:
         if not self._owns_ownership:
             raise RuntimeError("velocity goal validation requires arm ownership")
+        requested_reference_type = _enum_value(
+            _field(goal, "reference_type"), ReferenceType, "reference_type"
+        )
+        requested_reference_name = _field(goal, "reference_name")
+        if self._prepare_reference is not None:
+            self._prepare_reference(requested_reference_type, requested_reference_name)
         if self._coordinate_manager is not None:
             allowed = bool(self._coordinate_manager.motion_allowed(self.arm_id))
         elif self._motion_allowed is not None:
@@ -911,7 +919,7 @@ class CartesianVelocitySession:
         angular_accel = _positive_float(
             _field(goal, "max_angular_accel_radps2"), "max_angular_accel_radps2"
         )
-        if angular_accel > self.settings.max_angular_accel_radps2:
+        if angular_accel > self.settings.angular_accel_hard_limit_radps2:
             raise ValueError(
                 "max_angular_accel_radps2 exceeds configured angular acceleration"
             )

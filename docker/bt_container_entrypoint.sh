@@ -5,8 +5,8 @@
 # behavior-tree launcher.
 set -eo pipefail
 
-# This is intentionally invoked through `docker compose exec` after the
-# long-lived driver launch is ready. It never starts automatically with `up`.
+# This is intentionally invoked through Docker exec after the long-lived
+# driver launch is ready. It never starts automatically with `up`.
 : "${BT_AUTOSTART:=false}"
 : "${REALMAN_BT_ARM_ID:=r}"
 : "${REALMAN_BT_DRY_RUN:=true}"

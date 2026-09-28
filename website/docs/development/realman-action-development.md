@@ -279,12 +279,12 @@ Action goal accepted
 | 字段 | 单位/约束 |
 | --- | --- |
 | `reference_type/name` | 必须对应当前已验证的 WORK 或 TOOL 坐标；速度模式拒绝 BASE |
-| `control_period_ms` | 必须等于配置周期，当前默认 20 ms |
+| `control_period_ms` | 必须等于配置周期，当前默认 10 ms；高跟随客户端不得使用更长周期 |
 | `watchdog_ms` | 正数且不超过配置上限，当前默认 100 ms |
 | `max_linear_speed_mps` | 本 session 的线速度向量模长上限；`0` 使用普通默认值，正数不得超过驱动硬上限 |
 | `max_angular_speed_radps` | 本 session 的角速度向量模长上限；`0` 使用普通默认值，正数不得超过驱动硬上限 |
 | `max_linear_accel_mps2` | 正数且不超过逐臂配置上限 |
-| `max_angular_accel_radps2` | 正数且不超过逐臂配置上限 |
+| `max_angular_accel_radps2` | 正数且不超过逐臂角加速度硬上限；普通客户端使用标准上限，Pika 可显式请求专用硬上限 |
 | `follow` | 原样传给 `rm_movev_canfd` |
 | `trajectory_mode` / `radio` | 模式 `0/1/2` 对应 `radio` 范围 `0`、`0..100`、`0..1000` |
 
@@ -392,7 +392,7 @@ session。
 递增且不超过 watchdog。驱动会归一化四元数，并按配置的线速度、角速度上限限制每个周期的
 位姿变化；无效消息不会进入 SDK。
 
-默认周期和 watchdog 与速度 session 相同（20 ms / 100 ms），位姿 Action 的 `follow=true`
+默认周期和 watchdog 与速度 session 相同（10 ms / 100 ms），位姿 Action 的 `follow=true`
 使用 `rm_movep_canfd` 进行连续透传。取消、切换模式、显式 `/stop`、断开和关闭都会停止
 session 并释放 arm ownership。
 
@@ -420,7 +420,9 @@ Pika router 的权威引用是
 [`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 中的
 `pika_velocity.work_reference: work/pikabase`；单位 WORK 的配置来自
 [`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml)。Replay 使用
-`1.0 m/s` 线速度和 `0.25 rad/s` 角速度向量模长上限。键盘保留 `cell` WORK，其它客户端保留各自的
+`1.0 m/s` 线速度和 `2.0 rad/s` 角速度向量模长上限。Pika Goal 可显式请求 `4.0 rad/s²` 角加速度，
+普通速度客户端继续受 `0.5 rad/s²` 标准上限约束；超过 Pika 角速度上限的 ingress 按向量模长等比例缩放，
+不会整条丢弃。键盘保留 `cell` WORK，其它客户端保留各自的
 引用；键盘、Web 手动速度和普通行为树速度客户端仍为 `0.05 m/s` 普通会话上限。
 Replay 执行尝试选择坐标后，结束或检测到 mode、坐标、时间戳或订阅者失效时，先发送左右速度终端零
 向量并等待超过驱动 `100 ms` watchdog，再把已选择或可能已选择的工作坐标恢复为 `cell`

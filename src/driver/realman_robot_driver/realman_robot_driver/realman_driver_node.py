@@ -216,6 +216,7 @@ class RealManDriverNode(Node):
             ownership=self.arm_ownership,
             settings=self.motion_settings,
             active_frame=self._active_velocity_frames,
+            prepare_reference=self._prepare_velocity_reference,
             coordinate_manager=self.coordinate_manager,
             logger=self.get_logger(),
             action_type=CartesianVelocity,
@@ -780,7 +781,11 @@ class RealManDriverNode(Node):
         return response
 
     def _run_coordinate_operation(
-        self, operation: CoordinateOperation, name: str = ""
+        self,
+        operation: CoordinateOperation,
+        name: str = "",
+        *,
+        ownership_already_acquired: bool = False,
     ) -> CoordinateOperationResult:
         result = run_coordinate_operation(
             self.coordinate_manager,
@@ -790,6 +795,7 @@ class RealManDriverNode(Node):
             operation,
             name,
             publish_result=self._update_active_references,
+            ownership_already_acquired=ownership_already_acquired,
         )
         if not result.success or not result.matched:
             self.get_logger().warn(
@@ -814,6 +820,30 @@ class RealManDriverNode(Node):
             frame = self._frame_for_controller(ReferenceType.WORK, result.current_work)
             if frame is not None:
                 self._active_velocity_frames[ReferenceType.WORK] = frame
+
+    def _prepare_velocity_reference(
+        self, reference_type: ReferenceType, reference_name: str
+    ) -> None:
+        """Select and verify a configured work frame before velocity startup."""
+        if reference_type is not ReferenceType.WORK:
+            return
+        active_work = self._active_velocity_frames.get(ReferenceType.WORK)
+        if (
+            active_work is not None
+            and active_work[0] == reference_name
+            and self.coordinate_manager.motion_allowed(self.arm_id)
+        ):
+            return
+        result = self._run_coordinate_operation(
+            CoordinateOperation.SELECT_WORK,
+            reference_name,
+            ownership_already_acquired=True,
+        )
+        if not result.success or not result.matched:
+            raise ValueError(
+                f"unable to select and verify work frame {reference_name!r}: "
+                f"{result.message}"
+            )
 
     def _publish_coordinate_state(
         self, result: CoordinateOperationResult | None = None

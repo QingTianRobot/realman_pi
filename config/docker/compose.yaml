@@ -27,8 +27,9 @@ x-realman-common: &realman-common
     FASTDDS_BUILTIN_TRANSPORTS: ${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
-    # `./rm65 bt` opts in through docker compose exec. Keep normal production
-    # bringup free of behavior-tree processes and any real-motion side effect.
+    # `./rm65 bt` opts in by exec'ing into an already-running bringup container.
+    # Keep normal production bringup free of behavior-tree processes and any
+    # real-motion side effect.
     BT_AUTOSTART: ${BT_AUTOSTART:-false}
     REALMAN_BT_ARM_ID: ${REALMAN_BT_ARM_ID:-r}
     REALMAN_BT_DRY_RUN: ${REALMAN_BT_DRY_RUN:-true}

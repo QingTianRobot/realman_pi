@@ -2,7 +2,6 @@
 set -euo pipefail
 
 ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
-COMPOSE_FILE="$ROOT/docker-compose.yml"
 SELECTOR="${1:-${REALMAN_BT_ARM_ID:-r}}"
 DRY_RUN="${REALMAN_BT_DRY_RUN:-true}"
 BT_PORT="${BT_SERVER_PORT:-8080}"
@@ -69,7 +68,6 @@ if [[ -n "$BT_EXIT_ON_TERMINAL_OVERRIDE" ]]; then
 fi
 
 say() { printf 'rm65 bt: %s\n' "$*"; }
-compose() { docker compose -f "$COMPOSE_FILE" "$@"; }
 run() {
   if [[ "$RM65_DRY_RUN" == "1" ]]; then
     printf '+ '
@@ -92,22 +90,41 @@ say "monitor: http://${BT_PUBLIC_HOST}:${BT_PORT}/"
 say "behavior tree runs inside the realman_bringup_remote driver container"
 
 if [[ "$RM65_DRY_RUN" == "1" ]]; then
-  run docker compose -f "$COMPOSE_FILE" ps -q realman_bringup_remote
+  run docker ps \
+    --filter label=com.docker.compose.service=realman_bringup_remote \
+    --filter status=running \
+    --format '{{.ID}}'
   container_id="dry-run"
 else
-  container_id="$(compose ps -q realman_bringup_remote)"
-  if [[ -z "$container_id" ]]; then
-    printf 'rm65 bt: realman_bringup_remote is not running; run ./rm65 up first\n' >&2
+  # Resolve the running container from Docker's service label instead of the
+  # current Compose project. Production hosts may start bringup with
+  # `docker compose run --rm` or another project name, but the container still
+  # carries the authoritative service label.
+  container_ids="$(docker ps \
+    --filter label=com.docker.compose.service=realman_bringup_remote \
+    --filter status=running \
+    --format '{{.ID}}')" || {
+      printf 'rm65 bt: unable to query Docker for a running realman_bringup_remote container\n' >&2
+      exit 1
+    }
+  mapfile -t running_containers <<<"$container_ids"
+  if [[ -z "$container_ids" || "${#running_containers[@]}" -ne 1 ]]; then
+    if [[ -z "$container_ids" ]]; then
+      printf 'rm65 bt: no running Docker container has service label realman_bringup_remote; start the bringup container first\n' >&2
+    else
+      printf 'rm65 bt: expected exactly one running realman_bringup_remote container, found %s\n' "${#running_containers[@]}" >&2
+    fi
     exit 1
   fi
+  container_id="${running_containers[0]}"
   if [[ "$(docker inspect -f '{{.State.Running}}' "$container_id" 2>/dev/null || true)" != "true" ]]; then
-    printf 'rm65 bt: realman_bringup_remote is not running; run ./rm65 up first\n' >&2
+    printf 'rm65 bt: resolved realman_bringup_remote container is no longer running\n' >&2
     exit 1
   fi
 fi
 
 exec_args=(
-  docker compose -f "$COMPOSE_FILE" exec -T
+  docker exec -i
   -e BT_AUTOSTART=true
   -e "BT_ARM_ID_OVERRIDE=$BT_ARM_ID_OVERRIDE"
   -e "REALMAN_BT_DRY_RUN=$DRY_RUN"
@@ -122,7 +139,7 @@ exec_args=(
   -e BT_READ_ONLY=true
   -e BT_RUNTIME_SNAPSHOT=/tmp/realman-bt-workspace/runtime.json
   -e "BT_RUNTIME_ARCHIVE_ROOT=$BT_RUNTIME_ARCHIVE_ROOT"
-  realman_bringup_remote /usr/local/bin/bt-start
+  "$container_id" /usr/local/bin/bt-start
 )
 
 if [[ "$RM65_DRY_RUN" == "1" ]]; then
@@ -131,9 +148,9 @@ if [[ "$RM65_DRY_RUN" == "1" ]]; then
 fi
 
 say "loading ${TREE_NAME}; waiting for Action servers declared by the XML"
-# Compose exec -T does not proxy terminal signals to its remote process. Give
-# this invocation an identity and signal only its registered wrapper in the
-# already-resolved container (never a process-name or shared-lock PID match).
+# Give this invocation an identity and signal only its registered wrapper in
+# the already-resolved container (never a process-name or shared-lock PID
+# match).
 client_workspace="$(mktemp -d "${TMPDIR:-/tmp}/rm65-bt-client.XXXXXXXX")"
 client_token="${client_workspace##*/}"
 trap 'rmdir "$client_workspace"' EXIT
@@ -184,11 +201,11 @@ except (OSError, ValueError, TypeError):
       fi
     fi
   ' -- "$client_token" || true
-  wait "$compose_pid" 2>/dev/null || true
+  wait "$exec_pid" 2>/dev/null || true
   exit "$status"
 }
 trap 'forward_interrupt 130' INT
 trap 'forward_interrupt 143' TERM
 "${exec_args[@]}" <&0 &
-compose_pid=$!
-wait "$compose_pid"
+exec_pid=$!
+wait "$exec_pid"

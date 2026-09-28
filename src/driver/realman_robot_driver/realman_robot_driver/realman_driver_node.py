@@ -230,8 +230,15 @@ class RealManDriverNode(Node):
                 / f'{self.robot_model}.urdf'
             )
             self._ik_solver = RealManIK(str(urdf_path))
-        except Exception:
+        except Exception as error:
+            # The pose session falls back to the controller's own IK, so a missing
+            # CasADi/Pinocchio install or URDF only degrades position teleop quality.
+            # Say so loudly: the fallback is otherwise invisible from the outside.
             self._ik_solver = None
+            self.get_logger().warning(
+                "Custom CasADi IK unavailable, falling back to the RealMan SDK IK "
+                f"for Cartesian pose goals: {type(error).__name__}: {error}"
+            )
         self.pose_session = CartesianPoseSession(
             arm_id=self.arm_id,
             adapter=self.adapter,

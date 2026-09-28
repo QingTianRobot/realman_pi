@@ -3,8 +3,18 @@ version: 1
 
 # The browser sends its complete pressed-key set at this interval.
 heartbeat_period_ms: 50
-# The ROS keyboard router stops an arm after this gap in Web input.
+# One velocity session lives for the whole keyboard activation: it opens as
+# soon as keyboard mode is active and the browser heartbeat arrives, before any
+# key is pressed, and key presses, releases and direction changes only change
+# the command. Re-opening a session re-runs rm_set_movev_canfd_init, and the
+# start of a session is where non-commanded-axis transients appear.
+#
+# A heartbeat older than this stops the arm (zero velocity) but keeps the
+# session, so a short network stall costs no re-initialisation.
 input_timeout_ms: 150
+# A heartbeat older than this means the browser is gone (closed, blurred or
+# hidden tab): only then is the session released. Must exceed input_timeout_ms.
+input_lost_ms: 1000
 
 # Fractions multiply per-arm maxima from realman_motion.yaml.
 linear_speed_fraction: 0.4

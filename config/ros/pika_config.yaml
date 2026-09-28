@@ -26,9 +26,15 @@ pika_velocity:
   # Use per-arm identity WORK frames so Pika BASE-expressed vectors remain unchanged.
   work_reference: work/pikabase
   # Pika publishes at 20 Hz, but production DDS scheduling can occasionally
-  # introduce gaps above the driver's 100 ms watchdog. The router keeps
-  # refreshing the latest valid command for this bounded interval, then sends
-  # zero velocity and cancels the session when upstream input is truly stale.
+  # introduce gaps above the driver's 100 ms watchdog. The router re-sends the
+  # latest valid command at the control period while it is younger than
+  # stale_ms, so such gaps never end the session. Older input is not replayed:
+  # the arm is commanded to zero (a paused Pika stream stops the arm instead of
+  # repeating its last velocity), but the session is kept. Must exceed the
+  # 50 ms Pika period and stay below input_timeout_ms.
+  stale_ms: 200
+  # Only input older than this releases the velocity session. Re-opening one
+  # re-runs rm_set_movev_canfd_init, so the session outlives short pauses.
   input_timeout_ms: 3000
   max_linear_speed_mps: 0.15
   # Gentle teleop keeps Pika angular commands at 0.25 rad/s after the Pika-side

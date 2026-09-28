@@ -13,9 +13,12 @@ robots:
     hard_max_linear_speed_mps: 1.0
     # Ordinary clients remain at 0.25 rad/s; Pika's explicit 2 rad/s profile uses this ceiling.
     hard_max_angular_speed_radps: 0.25
-    # 20 ms (50 Hz) is the gentle-teleop refresh period; the driver worker and
-    # input routers derive their refresh period here.
-    velocity_control_period_ms: 20
+    # 10 ms is the fastest period RealMan high-follow accepts, and the keyboard
+    # router requires it: a production A/B found 20 ms low-follow produced
+    # non-commanded-axis transients at session start. The driver accepts only
+    # this one period per arm, so Pika velocity (follow=false) refreshes at
+    # 10 ms too; the driver worker and input routers all derive it from here.
+    velocity_control_period_ms: 10
     # Stop velocity control after this many ms without a refresh for fail-safe behavior.
     velocity_watchdog_ms: 100
     # Cartesian translation acceleration in m/s^2; limits payload impulse.
@@ -39,8 +42,8 @@ robots:
     # Middle-arm streaming keeps the standard limit; Pika never controls this arm.
     hard_max_linear_speed_mps: 0.05
     hard_max_angular_speed_radps: 0.25
-    # Keep every arm on the same 20 ms driver contract so Action goals and
-    # the fixed-period SDK worker cannot disagree about the control period.
+    # Each driver validates Action goals against its own arm's period, so the
+    # middle arm, which has no keyboard or Pika stream, keeps the 20 ms period.
     velocity_control_period_ms: 20
     # Stop velocity control after this many ms without a refresh for fail-safe behavior.
     velocity_watchdog_ms: 100
@@ -65,9 +68,12 @@ robots:
     hard_max_linear_speed_mps: 1.0
     # Ordinary clients remain at 0.25 rad/s; Pika's explicit 2 rad/s profile uses this ceiling.
     hard_max_angular_speed_radps: 0.25
-    # 20 ms (50 Hz) is the gentle-teleop refresh period; the driver worker and
-    # input routers derive their refresh period here.
-    velocity_control_period_ms: 20
+    # 10 ms is the fastest period RealMan high-follow accepts, and the keyboard
+    # router requires it: a production A/B found 20 ms low-follow produced
+    # non-commanded-axis transients at session start. The driver accepts only
+    # this one period per arm, so Pika velocity (follow=false) refreshes at
+    # 10 ms too; the driver worker and input routers all derive it from here.
+    velocity_control_period_ms: 10
     # Stop velocity control after this many ms without a refresh for fail-safe behavior.
     velocity_watchdog_ms: 100
     # Cartesian translation acceleration in m/s^2; limits payload impulse.

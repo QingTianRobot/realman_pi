@@ -198,7 +198,8 @@ keyboard）、`GRIPPER ONLY`（WORK 均不可用但有健康夹爪）和 `WORK U
 匹配状态和失败详情。这覆盖首个样本早于 DDS endpoint discovery 的启动时序；Web 或行为树晚于驱动启动
 时无需人工再次调用 `coordinates/verify`，即可解除页面的 `WORK UNAVAILABLE` 安全门。
 
-`keyup` 会立即发送该侧更新后的完整集合；松开某一臂的全部速度键只停止该臂。对应臂 WORK 失配时也只
+`keyup` 会立即发送该侧更新后的完整集合；松开某一臂的全部速度键只让该臂减速到零，其速度 session
+在整个键盘激活期间保持（见 [行为树控制权](./behavior-tree-control)），再次按键直接复用同一 session。对应臂 WORK 失配时也只
 清空该臂速度键并发送，另一臂、健康夹爪键和活动心跳继续。夹爪离线／报警只清空该侧夹爪键。
 窗口 `blur`、页面隐藏、目录不再包含 keyboard 或离开
 `ACTIVE/keyboard` 时，浏览器清空两臂并停止心跳；WebSocket 已关闭时不能再发送消息，因此服务端通过

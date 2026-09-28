@@ -82,21 +82,44 @@ Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。键盘�
 键盘按键、速度比例和 Web 输入时序的权威配置是
 [`config/ros/keyboard_control.yaml`](../../../config/ros/keyboard_control.yaml)。浏览器每 `50 ms` 发送一次
 左右臂各自的完整按键集合；Web bridge 对每臂要求严格递增的 sequence，并拒绝未知物理键码、重复键码、
-非 lease owner 和任何 m 输入。Web 输入超过 `150 ms` 未刷新时，keyboard router 对该臂发布零速度并
-取消 session。keyboard router 缓存最新有效输入，并按 `config/ros/realman_motion.yaml` 的 `10 ms`
-周期刷新 driver；driver 仍用 `100 ms` watchdog
-执行第二层失效保护。
+非 lease owner 和任何 m 输入。keyboard router 缓存最新有效输入，并按 `config/ros/realman_motion.yaml`
+的 `10 ms` 周期刷新 driver；driver 仍用 `100 ms` watchdog 执行第二层失效保护。
 
 键盘速度 Goal 固定使用 `follow=true`（RealMan SDK 高跟随模式），并在创建 Goal 时拒绝任何大于
 `10 ms` 的配置周期。浏览器仍每 `50 ms` 上报完整按键集合，router 将输入采样与 SDK 刷新解耦，
 由 driver 固定周期 worker 按 `10 ms` 执行最新命令。生产 A/B 测试中，旧的 `20 ms + follow=false`
 组合在启动阶段出现明显的非指令轴瞬态，因此不能恢复为键盘默认配置。
 
-离开 `keyboard`、WORK 失配、按键全部释放、Web 输入超时、owner WebSocket 关闭或 router 关闭时，
-相关臂先收敛到零速度，再取消其 Action session。浏览器 owner 断开还会释放 lease 并请求安全模式
-`none`。如果停止条件发生在 Action goal response 返回之前，router 设置 `cancel_after_accept`；迟到接受的
-goal 会立即取消，不能成为 active session。`dry_run=true` 时仍校验模式、WORK、配置和输入，但不发送
-driver Goal，也不发布 driver command。
+#### 一次键盘激活只有一个速度 session
+
+每条臂的速度 session 生命周期跟随**模式**，而不是跟随按键：
+
+| 事件 | 行为 |
+| --- | --- |
+| 进入 `ACTIVE/keyboard`、WORK 已验证、浏览器心跳到达 | **立即**建立 session（选 WORK、`rm_set_movev_canfd_init`），持续刷新零速度；第一次按键不再等待 Goal 接受和初始化 |
+| 按键、松键、换方向 | 只改变命令，session 不变；换向和停止由 driver 的加速度限幅平滑过渡 |
+| 心跳晚于 `input_timeout_ms`（`150 ms`） | 刷新零速度让机械臂停下，**保留** session；短暂网络卡顿不触发重新初始化 |
+| 心跳晚于 `input_lost_ms`（`1000 ms`，浏览器关闭、失焦或页面隐藏） | 发布零速度并取消 session；页面恢复后立即重新建立 |
+| 离开 `keyboard`、WORK 失配、非法输入、router 关闭 | 发布零速度并取消 session |
+| driver 拒绝或自行结束 session | 等待 `0.5 s` 再重试，不按 `10 ms` 周期反复请求 |
+
+两个时限均来自 `config/ros/keyboard_control.yaml`，`input_lost_ms` 必须大于 `input_timeout_ms`。
+
+之所以不在松键时取消：每次取消都会下发一帧**未经加速度限幅**的零速度并调用 `rm_set_arm_slow_stop`，
+下一次按键再重新 `rm_set_movev_canfd_init`。松键后机械臂实测还会滑行约 1.8 s，重新初始化往往落在仍在运动的
+机械臂上，而 session 启动正是上面 A/B 测试里出现非指令轴瞬态的时刻；随时换向的键盘操作因此会反复出现
+跑偏和跟踪滞后。
+
+router 记录每次激活以来打开的 session 数：第一个以 info 记录，之后每次重开都以 warning 记录为
+`restart #N`。正常操作一次激活只应出现一个；出现 restart 说明有东西在打断 session，应先排查它。
+
+代价是键盘模式激活且页面在前台期间，左右臂一直被速度 session 占用，其它运动请求（如 Web 关节运动）会被
+driver 以 ownership 忙拒绝；离开键盘模式或页面失焦超过 `input_lost_ms` 即释放。
+
+如果停止条件发生在 Action goal response 返回之前，router 设置 `cancel_after_accept`；迟到接受的 goal 会立即
+取消，不能成为 active session。浏览器 owner 断开还会释放 lease 并请求安全模式 `none`。`dry_run=true` 时
+仍校验模式、WORK、配置和输入，但不发送 driver Goal，也不发布 driver command。`control_period_ms` 大于
+`10 ms` 的配置会在 router 启动时被拒绝，而不是在第一次按键时让 router 崩溃。
 
 切入 `ACTIVE/keyboard` 后，Web 控制台会在 URDF 查看区同时绘制左右臂可用的 WORK 坐标轴：
 X/Y/Z 分别为红/绿/蓝，轴的位姿来自驱动回传的 `work.xyz_m` 与 `work.quaternion_wxyz`，再叠加
@@ -119,25 +142,35 @@ Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/com
 （默认）时不发送机器人 Action 或夹爪 command。需要真实 Pika 运动时必须显式设置
 `REALMAN_BT_DRY_RUN=false`，并完成低速、急停和工作区检查。
 
-`pikavelocity` 是实时速度流，而不是单点位置目标。其逐会话线速度向量模长上限来自
-[`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 的
-`pika_velocity.max_linear_speed_mps`，当前为 `1.0 m/s`；角速度上限为 `2.0 rad/s`。
-驱动配置中的普通会话上限继续是 `0.05 m/s` 和 `0.25 rad/s`，所以键盘、Web 手动速度和普通行为树速度节点不会随
-Pika 一起升速。l/r 的绝对逐会话角速度硬上限为 `2.0 rad/s`，m 仍为 `0.25 rad/s`；线速度硬上限分别为
-`1.0 m/s` 和 `0.05 m/s`。Pika 角加速度使用独立的
-`pika_velocity.max_angular_accel_radps2=4.0 rad/s²`，从静止达到 `2.0 rad/s` 约需 `0.5 s`；普通会话仍使用
-`realman_motion.yaml` 中的 `0.5 rad/s²`。driver 的 l/r 角加速度硬上限只允许显式 Pika Goal 请求该较快斜坡，
-不会改变键盘、Web 或普通行为树的 Goal。
+`pikavelocity` 是实时速度流，而不是单点位置目标。其逐会话限值来自
+[`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 的 `pika_velocity`：线速度
+`max_linear_speed_mps=0.15 m/s`、角速度 `max_angular_speed_radps=0.25 rad/s`、角加速度
+`max_angular_accel_radps2=0.5 rad/s²`（从静止到 `0.25 rad/s` 约 `0.5 s`）。Pika 输入的线速度或角速度三轴
+向量模长超过上限时，router 按模长等比例缩放并保留方向，而不是丢弃整条消息；缩放诊断按每臂限频。
+Pika 速度 Goal 使用 `follow=false`，周期与键盘相同，为 l/r 的 `10 ms`（driver 每臂只接受一个周期）。
 
-Pika ingress 的角速度三轴向量模长超过 `2.0 rad/s` 时，router 会按模长等比例缩放到上限并保留旋转方向，
-而不是丢弃整条消息。缩放诊断按每臂限频，避免高频输入持续超限时造成日志洪泛。线速度超过 `1.0 m/s` 仍按
-安全边界拒绝，因为本次修复只调整角速度跟随契约。
+#### Pika session 同样跟随模式
 
-Pika ingress 标称 `20 Hz`，生产 DDS/调度可能出现短暂抖动。router 缓存最近一条通过 frame、有限值和
-速度上限校验的命令，并按 driver 配置的 `10 ms` control period 重新打当前 ROS 时间戳后持续刷新
-`/<arm>/cartesian_velocity/command`。`pika_velocity.input_timeout_ms` 当前为 `250 ms`：上游间隔短于该值时
-不会误触发 driver 的 `100 ms` watchdog；超过该值则 router 先发布零速度再取消 Action session。
-这不会放宽 driver watchdog，router 自身崩溃或到 driver 的发布中断时，driver 仍在 `100 ms` 内停止。
+Pika ingress 标称 `20 Hz`，生产 DDS/调度可能出现短暂抖动。两种模式都在第一条有效输入到达时建立 session，
+之后按以下规则保持：
+
+| | 速度（`pikavelocity`） | 位置（`pikaposition`） |
+| --- | --- | --- |
+| 输入新鲜 | 按 `10 ms` 周期重打时间戳后重发最新速度，DDS 抖动不会触发 driver `100 ms` watchdog | 立即转发，并按周期重发最新目标位姿 |
+| 输入晚于阈值 | 晚于 `stale_ms`（`200 ms`）即刷新**零速度**，session 保留 | 继续重发最后目标位姿，机械臂停在最后目标，session 保留 |
+| 输入丢失 | 晚于 `input_timeout_ms`（`3000 ms`）发布零速度并取消 | 晚于 router `watchdog_ms`（`3000 ms`）取消 |
+| driver 拒绝或自行结束 | 等待 `0.5 s` 再重试 | 等待 `0.5 s` 再重试 |
+
+速度模式以前在上游中断后会**持续重发最后一个速度长达 3 s**，Pika 流一停机械臂仍按原速度运动；
+`stale_ms` 把这段时间缩短到 `200 ms` 并改为零速度。位置模式以前只在 Pika 消息到达时转发，任何超过
+`100 ms` 的间隔都会触发 driver 位姿 watchdog（日志 `pose command watchdog expired`）并随后重建 session。
+位姿 Goal 的 `watchdog_ms` 使用 driver 配置的 `100 ms`，而不是 router 的 `3000 ms` 输入丢失窗口
+（driver 会拒绝超过 `velocity_watchdog_ms` 的 Goal watchdog）。转发的位姿一律使用 router 当前 ROS 时间戳，
+以保证与重发的目标严格递增。
+
+与键盘相同，每次 Pika 激活后的 session 重开会以 `restart #N` warning 记录，结束日志会写明
+`position` 或 `velocity`。这些都不放宽 driver watchdog：router 崩溃或到 driver 的发布中断时，driver 仍在
+`100 ms` 内停止。
 
 Pika 速度 Action 使用 `WORK` 和 `pikabase`。driver 收到该 Goal 时，如果当前已验证工作坐标不是
 `pikabase`，会在同一臂 ownership 内调用坐标管理器写入、切换并读回验证已配置的 `pikabase`，验证成功后才

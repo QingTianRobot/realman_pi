@@ -46,6 +46,18 @@ class _ArmState:
     last_input_at: float = 0.0
     work_available: bool = False
     cancel_after_accept: bool = False
+    # Sessions opened since keyboard mode was last activated. One per
+    # activation is the healthy steady state; more means something keeps
+    # ending the session, and each restart costs a movev re-initialisation.
+    sessions_started: int = 0
+    # Do not request a new session before this monotonic time. A goal the
+    # driver rejects or aborts is retried after a pause, never at the 10 ms
+    # reconcile rate (a Pika router that did the latter logged 112k rejections).
+    retry_after: float = 0.0
+
+
+# Pause before re-requesting a session the driver rejected or ended on its own.
+_RESTART_BACKOFF_SEC = 0.5
 
 
 def _positive_float(value: str, field: str) -> float:
@@ -127,10 +139,22 @@ class KeyboardControlRouter(Node):
         )
         if self.input_timeout_ms <= 0:
             raise ValueError("input_timeout_ms must be positive")
+        # Two tiers: input older than input_timeout_ms stops the arm (zero
+        # velocity) but keeps the session; input older than input_lost_ms means
+        # the browser is gone, and only then is the session released.
+        self.input_lost_ms = int(
+            self.declare_parameter("input_lost_ms", 1000).value
+        )
+        if self.input_lost_ms <= self.input_timeout_ms:
+            raise ValueError("input_lost_ms must exceed input_timeout_ms")
         profiles = parse_arm_profiles(
             list(self.declare_parameter("coordinate_references", Parameter.Type.STRING_ARRAY).value),
             list(self.declare_parameter("cartesian_velocity_profiles", Parameter.Type.STRING_ARRAY).value),
         )
+        for arm, profile in profiles.items():
+            # Refuse at startup rather than raise inside the timer on the first
+            # session request, which used to take the whole router down.
+            self._goal(profile)
         self.mode = ""
         self._mode_epoch = -1
         self._mode_request_id = -1
@@ -206,9 +230,12 @@ class KeyboardControlRouter(Node):
         if active != self.mode or epoch_changed:
             self.mode = active
             if not active or epoch_changed:
-                for arm in ("l", "r"):
+                for arm in self._arms:
                     self._publish_zero(arm)
                     self._cancel(arm, "input mode left keyboard")
+            for state in self._arms.values():
+                state.sessions_started = 0
+                state.retry_after = 0.0
 
     def _gripper_health(self, arm: str, field: str, message: Any) -> None:
         self._gripper_states[arm][field] = message.data
@@ -280,9 +307,11 @@ class KeyboardControlRouter(Node):
         state = self._arms[arm]
         state.latest_command = message
         state.last_input_at = time.monotonic()
-        if not self._nonzero(message):
-            self._publish_zero(arm)
-            self._cancel(arm, "keyboard keys released")
+        # Neither releasing the keys nor changing direction touches the
+        # session: they only change the command, which the driver ramps through
+        # its acceleration limit. Ending the session here used to send an
+        # unramped zero plus rm_set_arm_slow_stop, and the next press re-ran
+        # rm_set_movev_canfd_init while the arm was still coasting.
 
     def _validate_input(self, arm: str, message: TwistStamped) -> None:
         state = self._arms[arm]
@@ -323,24 +352,38 @@ class KeyboardControlRouter(Node):
         for arm in ("l", "r"):
             self._reconcile_arm(arm, now)
 
+    def _input_age(self, state: _ArmState, now: float) -> float:
+        if state.last_input_at <= 0.0:
+            return math.inf
+        return now - state.last_input_at
+
     def _reconcile_arm(self, arm: str, now: float) -> None:
+        """Hold one session for the whole keyboard activation.
+
+        The session opens as soon as keyboard mode is active, WORK is verified
+        and the browser heartbeat is alive, before any key is pressed, so the
+        first press pays no goal/WORK/movev start-up. Keys only change the
+        command. The session ends on mode loss, WORK loss, invalid input, a
+        browser gone for input_lost_ms, or the driver ending it.
+        """
         state = self._arms[arm]
         if self.mode != "keyboard" or not state.work_available:
             return
-        if (
-            state.last_input_at <= 0.0
-            or now - state.last_input_at >= self.input_timeout_ms / 1000.0
-        ):
+        age = self._input_age(state, now)
+        if age >= self.input_lost_ms / 1000.0:
             self._publish_zero(arm)
-            self._cancel(arm, "Web keyboard input timed out")
+            self._cancel(arm, "Web keyboard input lost")
             return
-        command = state.latest_command
-        if command is None:
-            return
+        fresh = age < self.input_timeout_ms / 1000.0
         if state.goal_handle is not None:
-            self._publish_driver_command(arm, command)
+            if fresh and state.latest_command is not None:
+                self._publish_driver_command(arm, state.latest_command)
+            else:
+                # A late heartbeat stops the arm but keeps the session, so a
+                # short network stall does not cost a re-initialisation.
+                self._publish_zero(arm)
             return
-        if not self._nonzero(command) or self.dry_run:
+        if self.dry_run or now < state.retry_after:
             return
         if state.pending_goal is not None or state.cancel_pending is not None:
             return
@@ -380,23 +423,29 @@ class KeyboardControlRouter(Node):
         state = self._arms[arm]
         if state.pending_goal is future:
             state.pending_goal = None
+        now = time.monotonic()
         try:
             handle = future.result()
         except Exception as error:
             state.cancel_after_accept = False
+            state.retry_after = now + _RESTART_BACKOFF_SEC
             self.get_logger().error(f"Keyboard velocity goal failed for {arm}: {error}")
             return
-        stale = (
-            state.last_input_at <= 0.0
-            or time.monotonic() - state.last_input_at
-            >= self.input_timeout_ms / 1000.0
-        )
+        if not handle.accepted:
+            state.retry_after = now + _RESTART_BACKOFF_SEC
+            self.get_logger().warning(
+                f"Keyboard velocity session for {arm} was rejected by the driver; "
+                f"retrying in {_RESTART_BACKOFF_SEC:.1f} s"
+            )
+        # A zero or slightly late command is normal for a session opened ahead
+        # of the first key press; only a browser that is gone voids it.
+        lost = self._input_age(state, now) >= self.input_lost_ms / 1000.0
         if (
             not handle.accepted
             or state.cancel_after_accept
             or self.mode != "keyboard"
             or not state.work_available
-            or stale
+            or lost
         ):
             state.cancel_after_accept = False
             if handle.accepted:
@@ -417,7 +466,18 @@ class KeyboardControlRouter(Node):
         )
         if state.latest_command is not None:
             self._publish_driver_command(arm, state.latest_command)
-        self.get_logger().info(f"Keyboard velocity session active for {arm}")
+        else:
+            self._publish_zero(arm)
+        state.sessions_started += 1
+        if state.sessions_started == 1:
+            self.get_logger().info(f"Keyboard velocity session active for {arm}")
+        else:
+            # Healthy operation opens one session per keyboard activation, so
+            # every restart is worth seeing: each one re-initialises movev.
+            self.get_logger().warning(
+                f"Keyboard velocity session active for {arm} "
+                f"(restart #{state.sessions_started - 1} in this keyboard activation)"
+            )
 
     def _goal_finished(self, arm: str, future: Any) -> None:
         state = self._arms[arm]
@@ -430,7 +490,12 @@ class KeyboardControlRouter(Node):
                 self.get_logger().warning(
                     f"Keyboard velocity session ended for {arm}: {result.message}"
                 )
+            if result.terminal_state != CartesianVelocity.Result.CANCELED:
+                # The driver ended it (watchdog, command failure): reopen, but
+                # not in a tight loop if the cause persists.
+                state.retry_after = time.monotonic() + _RESTART_BACKOFF_SEC
         except Exception as error:
+            state.retry_after = time.monotonic() + _RESTART_BACKOFF_SEC
             self.get_logger().error(
                 f"Keyboard velocity result failed for {arm}: {error}"
             )

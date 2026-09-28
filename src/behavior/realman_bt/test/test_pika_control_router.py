@@ -153,6 +153,7 @@ def test_pika_velocity_refreshes_cached_input_through_short_upstream_jitter(monk
     router = PikaControlRouter.__new__(PikaControlRouter)
     router.dry_run = False
     router.mode = "pikavelocity"
+    router.stale_ms = 200
     router.input_timeout_ms = 250
     router.watchdog_ms = 100
     router._arms = {"l": state}
@@ -198,6 +199,7 @@ def test_pika_velocity_stops_after_configured_upstream_timeout(monkeypatch):
     router = PikaControlRouter.__new__(PikaControlRouter)
     router.dry_run = False
     router.mode = "pikavelocity"
+    router.stale_ms = 200
     router.input_timeout_ms = 250
     router.watchdog_ms = 100
     router._arms = {"l": state}
@@ -257,3 +259,196 @@ def test_pika_goal_acceptance_publishes_cached_velocity_after_frame_selection():
     assert len(published) == 1
     assert published[0].header.frame_id == "l/work/pikabase"
     assert published[0].twist.linear.y == 0.05
+
+
+# ------------------------------------------------------- session lifecycle
+
+
+def _pika_router(*, mode, kind="", goal_active=False, input_ago=0.0, sends=None):
+    """One l arm with fake transports; ``sends`` collects any session request."""
+    from builtin_interfaces.msg import Time
+    from geometry_msgs.msg import PoseStamped, TwistStamped
+    from pika_control_router import PikaControlRouter, _ArmProfile, _ArmState
+
+    published = {"pose": [], "velocity": []}
+    cancelled = []
+    sends = sends if sends is not None else []
+
+    def cancel_goal_async():
+        cancelled.append(True)
+        return Future()
+
+    def client():
+        def send_goal_async(goal):
+            sends.append(goal)
+            return Future()
+        return SimpleNamespace(server_is_ready=lambda: True, send_goal_async=send_goal_async)
+
+    profile = _ArmProfile("pikabase", "l/work/pikabase", 10, 100, 0.15, 0.25, 0.1, 0.5)
+    state = _ArmState(
+        client(),
+        client(),
+        SimpleNamespace(publish=published["pose"].append),
+        SimpleNamespace(publish=published["velocity"].append),
+        SimpleNamespace(),
+        profile,
+        goal_handle=SimpleNamespace(cancel_goal_async=cancel_goal_async) if goal_active else None,
+        active_kind=kind if goal_active else "",
+        last_input_at=time.monotonic() - input_ago,
+    )
+    velocity = TwistStamped()
+    velocity.header.frame_id = profile.frame_id
+    velocity.twist.linear.x = 0.05
+    state.latest_velocity = velocity
+    pose = PoseStamped()
+    pose.header.frame_id = "l/work/pikabase"
+    pose.pose.position.x = 0.3
+    pose.pose.orientation.w = 1.0
+    state.latest_pose = pose
+
+    router = PikaControlRouter.__new__(PikaControlRouter)
+    router.dry_run = False
+    router.mode = mode
+    router.stale_ms = 200
+    router.input_timeout_ms = 3000
+    router.watchdog_ms = 3000
+    router.control_period_ms = 20
+    router.max_linear_speed_mps = 0.15
+    router.max_angular_speed_radps = 0.25
+    router.max_linear_accel_mps2 = 0.1
+    router.max_angular_accel_radps2 = 0.5
+    router._arms = {"l": state}
+    router.get_logger = lambda: SimpleNamespace(
+        info=lambda _m: None, warning=lambda _m: None, error=lambda _m: None
+    )
+    router.get_clock = lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(to_msg=lambda: Time(sec=42, nanosec=0))
+    )
+    return router, state, published, cancelled, sends
+
+
+def test_a_paused_velocity_stream_stops_the_arm_but_keeps_the_session():
+    # Replaying the last velocity for up to input_timeout_ms (3 s) kept the arm
+    # moving after the hand stopped; past stale_ms it must command zero.
+    router, state, published, cancelled, _ = _pika_router(
+        mode="pikavelocity", kind="velocity", goal_active=True, input_ago=0.5
+    )
+    router._reconcile()
+    assert cancelled == []
+    assert published["velocity"][-1].twist.linear.x == 0.0
+
+
+def test_fresh_velocity_input_is_replayed_between_pika_messages():
+    router, state, published, cancelled, _ = _pika_router(
+        mode="pikavelocity", kind="velocity", goal_active=True, input_ago=0.12
+    )
+    router._reconcile()
+    assert published["velocity"][-1].twist.linear.x == pytest.approx(0.05)
+    assert cancelled == []
+
+
+def test_a_lost_velocity_stream_releases_the_session():
+    router, state, published, cancelled, _ = _pika_router(
+        mode="pikavelocity", kind="velocity", goal_active=True, input_ago=3.5
+    )
+    router._reconcile()
+    assert cancelled == [True]
+    assert published["velocity"][-1].twist.linear.x == 0.0
+
+
+def test_a_velocity_session_is_never_opened_to_replay_stale_input():
+    router, state, published, cancelled, sends = _pika_router(
+        mode="pikavelocity", input_ago=0.5
+    )
+    router._reconcile()
+    assert sends == []
+
+
+def test_a_rejected_pika_session_is_retried_after_a_pause_not_every_tick():
+    router, state, published, cancelled, sends = _pika_router(mode="pikavelocity")
+    router._reconcile()
+    assert len(sends) == 1
+    pending = state.pending_goal
+    pending.set_result(SimpleNamespace(accepted=False))
+    router._goal_response("l", "velocity", pending)
+    for _ in range(10):
+        router._reconcile()
+    assert len(sends) == 1
+    assert state.retry_after > time.monotonic()
+
+
+def test_a_pose_target_is_held_through_a_gap_longer_than_the_driver_watchdog():
+    # Forwarding poses only on arrival let a >100 ms Pika gap trip the driver's
+    # pose watchdog, which ended and later re-opened the session.
+    router, state, published, cancelled, _ = _pika_router(
+        mode="pikaposition", kind="position", goal_active=True, input_ago=0.4
+    )
+    router._reconcile()
+    router._reconcile()
+    assert cancelled == []
+    assert len(published["pose"]) == 2
+    message = published["pose"][-1]
+    assert message.header.frame_id == "l/base_link"
+    assert message.header.stamp.sec == 42
+    assert message.pose.position.x == pytest.approx(0.3)
+
+
+def test_a_lost_pose_stream_releases_the_session():
+    router, state, published, cancelled, _ = _pika_router(
+        mode="pikaposition", kind="position", goal_active=True, input_ago=3.5
+    )
+    router._reconcile()
+    assert cancelled == [True]
+
+
+def test_the_pose_goal_uses_the_driver_watchdog_not_the_input_loss_window():
+    # The driver rejects a pose goal whose watchdog exceeds velocity_watchdog_ms.
+    router, state, published, cancelled, sends = _pika_router(mode="pikaposition")
+    router._reconcile()
+    assert len(sends) == 1
+    assert sends[0].watchdog_ms == 100
+
+
+def test_a_pose_session_publishes_the_cached_target_on_acceptance():
+    router, state, published, cancelled, sends = _pika_router(mode="pikaposition")
+    pending = Future()
+    pending.set_result(SimpleNamespace(accepted=True, get_result_async=lambda: Future()))
+    state.pending_goal = pending
+    router._goal_response("l", "position", pending)
+    assert state.active_kind == "position"
+    assert len(published["pose"]) == 1
+
+
+def test_a_driver_ended_pose_session_is_labelled_as_position_and_backs_off():
+    router, state, published, cancelled, sends = _pika_router(
+        mode="pikaposition", kind="position", goal_active=True
+    )
+    warnings = []
+    router.get_logger = lambda: SimpleNamespace(
+        info=lambda _m: None, warning=warnings.append, error=lambda _m: None
+    )
+    finished = Future()
+    finished.set_result(SimpleNamespace(result=SimpleNamespace(
+        success=False, message="pose command watchdog expired", terminal_state=3,
+    )))
+    router._goal_finished("l", "position", finished)
+    assert any(message.startswith("Pika position session ended") for message in warnings)
+    assert state.retry_after > time.monotonic()
+
+
+def test_pika_restarts_are_counted_and_reset_when_the_mode_changes():
+    from realman_msgs.msg import InputModeState
+
+    router, state, published, cancelled, sends = _pika_router(mode="pikavelocity")
+    warnings = []
+    router.get_logger = lambda: SimpleNamespace(
+        info=lambda _m: None, warning=warnings.append, error=lambda _m: None
+    )
+    for _ in range(2):
+        pending = Future()
+        pending.set_result(SimpleNamespace(accepted=True, get_result_async=lambda: Future()))
+        router._goal_response("l", "velocity", pending)
+    assert state.sessions_started == 2
+    assert any("restart #1" in message for message in warnings)
+    router._mode_state(InputModeState(active_mode="pikaposition", phase=InputModeState.ACTIVE))
+    assert state.sessions_started == 0

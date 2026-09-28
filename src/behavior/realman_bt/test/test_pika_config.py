@@ -21,6 +21,9 @@ def test_pika_velocity_has_an_isolated_one_meter_per_second_limit():
     document = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     velocity = document["pika_velocity"]
     assert velocity["work_reference"] == "work/pikabase"
+    # Replay the last velocity only while it is fresh; a paused stream must
+    # stop the arm long before the session itself is released.
+    assert velocity["stale_ms"] == 200
     assert velocity["input_timeout_ms"] == 3000
     assert velocity["max_linear_speed_mps"] == 0.15
     assert velocity["max_angular_speed_radps"] == 0.25
@@ -48,3 +51,33 @@ def test_control_router_launch_loads_pika_config_and_injects_joint_defaults():
     assert '"pika_velocity_max_angular_accel_radps2"' in source
     assert '"coordinate_references": coordinate_references' in source
     assert '"cartesian_velocity_profiles": velocity_profiles' in source
+
+
+def test_pika_velocity_loader_passes_the_stale_window_and_rejects_an_inverted_one(tmp_path):
+    import importlib.util
+    import sys
+
+    import pytest
+
+    sys.path.insert(0, str(LAUNCH.parent))
+    spec = importlib.util.spec_from_file_location("control_router_launch", LAUNCH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    loaded = module._load_pika_velocity_config(CONFIG)
+    assert loaded["pika_velocity_stale_ms"] == 200
+    assert loaded["pika_velocity_input_timeout_ms"] == 3000
+
+    inverted = tmp_path / "pika_config.yaml"
+    inverted.write_text(
+        "pika_velocity:\n"
+        "  work_reference: work/pikabase\n"
+        "  stale_ms: 3000\n"
+        "  input_timeout_ms: 200\n"
+        "  max_linear_speed_mps: 0.15\n"
+        "  max_angular_speed_radps: 0.25\n"
+        "  max_angular_accel_radps2: 0.5\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="stale_ms must be below"):
+        module._load_pika_velocity_config(inverted)

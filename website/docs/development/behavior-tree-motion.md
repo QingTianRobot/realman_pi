@@ -148,7 +148,9 @@ client，也不修改控制器坐标。
 ```
 
 l/r 的 pending goal、accepted handle、最新命令、输入时间和取消状态完全独立，m 不参与键盘控制。
-某一侧按键为空、WORK 不可用或超时，只发布并取消该侧的 session；另一侧可以继续按自己的按键和状态运行。
+某一侧按键为空时只向该侧刷新零速度，session 保持；session 在进入键盘模式时即建立，只在离开模式、WORK
+不可用、非法输入或浏览器心跳丢失超过 `input_lost_ms` 时取消（见 [行为树控制权](./behavior-tree-control)）。
+另一侧可以继续按自己的按键和状态运行。
 
 每个 Goal 固定使用 `CartesianVelocity.Goal.WORK`，名称和 frame ID 必须匹配该臂已验证的
 `default_work`。BASE 不允许，WORK 不可用时也不会自动改用 TOOL。模式离开 keyboard、坐标失配、按键释放、
@@ -208,8 +210,8 @@ driver 在收到 Pika 速度 Goal 时会自动选择并读回验证对应的 `pi
 `l/work/cell`、`r/work/cell`，其它客户端保留各自的配置引用。
 
 Pika router 不直接按 ingress 到达时刻透传。它保存最新有效速度，并按每臂 `10 ms` control period 向 driver
-刷新带新时间戳的命令。权威配置 `config/ros/pika_config.yaml` 的 `pika_velocity.input_timeout_ms=250`
-允许吸收非实时 DDS 链路的短时调度抖动；上游超过该窗口未更新时，router 发布零速度并取消 session。
+刷新带新时间戳的命令。权威配置 `config/ros/pika_config.yaml` 中，`pika_velocity.stale_ms=200` 以内重发最新
+速度以吸收 DDS 抖动，超过后改发零速度但保留 session；`pika_velocity.input_timeout_ms=3000` 以上才取消 session。
 driver 的 `100 ms` watchdog 保持不变，继续防护 router 进程停止或 command topic 中断。
 
 Replay 的 Pika 会话上限为 `1.0 m/s` 线速度和 `2.0 rad/s` 角速度。角速度超限时按三轴向量模长

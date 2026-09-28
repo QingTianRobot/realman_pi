@@ -52,6 +52,17 @@ class _ArmState:
     cancel_pending: Any = None
     last_input_at: float = 0.0
     latest_velocity: TwistStamped | None = None
+    latest_pose: PoseStamped | None = None
+    # Sessions opened since the current Pika mode was activated; one is the
+    # healthy steady state, and each restart re-initialises the controller.
+    sessions_started: int = 0
+    # No new session request before this monotonic time (driver rejected or
+    # ended the previous one); prevents retrying at the 10 ms reconcile rate.
+    retry_after: float = 0.0
+
+
+# Pause before re-requesting a session the driver rejected or ended on its own.
+_RESTART_BACKOFF_SEC = 0.5
 
 
 def _positive_float(value: Any, field: str) -> float:
@@ -195,11 +206,21 @@ class PikaControlRouter(Node):
         self.max_angular_speed_radps = float(self.declare_parameter("max_angular_speed_radps", 0.25).value)
         self.max_linear_accel_mps2 = float(self.declare_parameter("max_linear_accel_mps2", 0.10).value)
         self.max_angular_accel_radps2 = float(self.declare_parameter("max_angular_accel_radps2", 0.50).value)
+        # Velocity input older than stale_ms is no longer replayed: the arm is
+        # commanded to zero instead, so a paused Pika stream stops the arm
+        # within ~stale_ms rather than repeating the last velocity for seconds.
+        # Only input older than input_timeout_ms releases the session.
+        self.stale_ms = int(
+            self.declare_parameter("pika_velocity_stale_ms", 200).value
+        )
         self.input_timeout_ms = int(
             self.declare_parameter("pika_velocity_input_timeout_ms", 250).value
         )
-        if self.input_timeout_ms <= 0:
-            raise ValueError("pika_velocity_input_timeout_ms must be positive")
+        if self.stale_ms <= 0 or self.input_timeout_ms <= self.stale_ms:
+            raise ValueError(
+                "pika_velocity_stale_ms must be positive and below "
+                "pika_velocity_input_timeout_ms"
+            )
         profiles = parse_arm_profiles(
             list(self.declare_parameter("coordinate_references", Parameter.Type.STRING_ARRAY).value),
             list(self.declare_parameter("cartesian_velocity_profiles", Parameter.Type.STRING_ARRAY).value),
@@ -248,56 +269,61 @@ class PikaControlRouter(Node):
         if active != self.mode:
             self.get_logger().info(f"Pika router mode changed: {self.mode or 'none'} -> {active or 'none'}")
             self.mode = active
-            if not active:
-                for state in self._arms.values():
+            for state in self._arms.values():
+                if not active:
                     self._cancel(state)
+                state.sessions_started = 0
+                state.retry_after = 0.0
+
+    @staticmethod
+    def _age(state: _ArmState, now: float) -> float:
+        if state.last_input_at <= 0.0:
+            return math.inf
+        return now - state.last_input_at
 
     def _reconcile(self) -> None:
         if self.dry_run or not self.mode:
             return
-        kind = "position" if self.mode == "pikaposition" else "velocity"
+        now = time.monotonic()
         for arm, state in self._arms.items():
-            if kind == "velocity":
-                self._reconcile_velocity(arm, state)
-                continue
-            if state.last_input_at <= 0.0 or time.monotonic() - state.last_input_at > self.watchdog_ms / 1000.0:
-                continue
-            if state.active_kind == kind and state.goal_handle is not None:
-                continue
-            if state.goal_handle is not None or state.pending_goal is not None or state.cancel_pending is not None:
-                self._cancel(state)
-                continue
-            client = state.pose_client if kind == "position" else state.velocity_client
-            if not client.server_is_ready():
-                client.wait_for_server(timeout_sec=0.0)
-                continue
-            goal = self._pose_goal() if kind == "position" else self._velocity_goal(state.profile)
-            state.pending_goal = client.send_goal_async(goal)
-            state.pending_goal.add_done_callback(lambda future, arm=arm, kind=kind: self._goal_response(arm, kind, future))
+            if self.mode == "pikavelocity":
+                self._reconcile_velocity(arm, state, now)
+            else:
+                self._reconcile_position(arm, state, now)
 
-    def _reconcile_velocity(self, arm: str, state: _ArmState) -> None:
-        fresh = (
-            state.last_input_at > 0.0
-            and time.monotonic() - state.last_input_at
-            < self.input_timeout_ms / 1000.0
-        )
+    def _can_request(self, state: _ArmState, now: float) -> bool:
+        """Clear the way for a new session request, if one is allowed now."""
+        if state.pending_goal is not None or state.cancel_pending is not None:
+            return False
+        if state.goal_handle is not None:
+            # A session of the other kind is still open; release it first.
+            self._cancel(state)
+            return False
+        return now >= state.retry_after
+
+    def _reconcile_velocity(self, arm: str, state: _ArmState, now: float) -> None:
+        """Hold one velocity session while the Pika stream is alive.
+
+        Fresh input (younger than stale_ms) is replayed at the control period
+        so DDS jitter above the driver's 100 ms watchdog never ends the
+        session. Older input commands zero but keeps the session; only input
+        older than input_timeout_ms releases it.
+        """
+        age = self._age(state, now)
         if state.active_kind == "velocity" and state.goal_handle is not None:
-            if fresh and state.latest_velocity is not None:
+            if age < self.stale_ms / 1000.0 and state.latest_velocity is not None:
                 self._publish_velocity(state, state.latest_velocity)
-            elif state.last_input_at > 0.0:
+            elif age < self.input_timeout_ms / 1000.0:
                 self._publish_velocity(state, TwistStamped())
-                state.last_input_at = 0.0
+            else:
+                self._publish_velocity(state, TwistStamped())
                 state.latest_velocity = None
                 self._cancel(state)
             return
-        if not fresh:
+        if age >= self.stale_ms / 1000.0 or state.latest_velocity is None:
+            # Never open a session to replay a velocity that is already stale.
             return
-        if (
-            state.goal_handle is not None
-            or state.pending_goal is not None
-            or state.cancel_pending is not None
-        ):
-            self._cancel(state)
+        if not self._can_request(state, now):
             return
         if not state.velocity_client.server_is_ready():
             state.velocity_client.wait_for_server(timeout_sec=0.0)
@@ -311,16 +337,50 @@ class PikaControlRouter(Node):
             )
         )
 
+    def _reconcile_position(self, arm: str, state: _ArmState, now: float) -> None:
+        """Hold one pose session while the Pika stream is alive.
+
+        The latest target is re-sent at the control period, so a Pika gap
+        longer than the driver's 100 ms pose watchdog holds the arm at its
+        last target instead of ending (and later re-opening) the session.
+        """
+        age = self._age(state, now)
+        lost = age >= self.watchdog_ms / 1000.0
+        if state.active_kind == "position" and state.goal_handle is not None:
+            if lost or state.latest_pose is None:
+                self._cancel(state)
+            else:
+                self._publish_pose(arm, state, state.latest_pose)
+            return
+        if lost or state.latest_pose is None:
+            return
+        if not self._can_request(state, now):
+            return
+        if not state.pose_client.server_is_ready():
+            state.pose_client.wait_for_server(timeout_sec=0.0)
+            return
+        state.pending_goal = state.pose_client.send_goal_async(self._pose_goal(state.profile))
+        state.pending_goal.add_done_callback(
+            lambda future, selected=arm: self._goal_response(selected, "position", future)
+        )
+
     def _goal_response(self, arm: str, kind: str, future: Any) -> None:
         state = self._arms[arm]
         state.pending_goal = None
         try:
             handle = future.result()
         except Exception as error:
+            state.retry_after = time.monotonic() + _RESTART_BACKOFF_SEC
             self.get_logger().error(f"Pika {kind} goal failed for {arm}: {error}")
             return
         expected_mode = "pikaposition" if kind == "position" else "pikavelocity"
         if not handle.accepted or self.mode != expected_mode:
+            if not handle.accepted:
+                state.retry_after = time.monotonic() + _RESTART_BACKOFF_SEC
+                self.get_logger().warning(
+                    f"Pika {kind} session for {arm} was rejected by the driver; "
+                    f"retrying in {_RESTART_BACKOFF_SEC:.1f} s"
+                )
             if handle.accepted:
                 state.cancel_pending = handle.cancel_goal_async()
                 state.cancel_pending.add_done_callback(lambda _future, arm=arm: self._clear_cancel(arm))
@@ -330,13 +390,22 @@ class PikaControlRouter(Node):
 
         result_future = handle.get_result_async()
         result_future.add_done_callback(
-            lambda completed, arm=arm: self._goal_finished(arm, completed)
+            lambda completed, arm=arm, kind=kind: self._goal_finished(arm, kind, completed)
         )
         if kind == "velocity" and state.latest_velocity is not None:
             self._publish_velocity(state, state.latest_velocity)
-        self.get_logger().info(f"Pika {kind} session active for {arm}")
+        if kind == "position" and state.latest_pose is not None:
+            self._publish_pose(arm, state, state.latest_pose)
+        state.sessions_started += 1
+        if state.sessions_started == 1:
+            self.get_logger().info(f"Pika {kind} session active for {arm}")
+        else:
+            self.get_logger().warning(
+                f"Pika {kind} session active for {arm} "
+                f"(restart #{state.sessions_started - 1} in this Pika activation)"
+            )
 
-    def _goal_finished(self, arm: str, future: Any) -> None:
+    def _goal_finished(self, arm: str, kind: str, future: Any) -> None:
         state = self._arms[arm]
         state.goal_handle = None
         state.active_kind = ""
@@ -346,11 +415,15 @@ class PikaControlRouter(Node):
             result = response.result
             if not result.success:
                 self.get_logger().warning(
-                    f"Pika velocity session ended for {arm}: {result.message}"
+                    f"Pika {kind} session ended for {arm}: {result.message}"
                 )
+            # 1 is CANCELED in both CartesianPose and CartesianVelocity results.
+            if int(getattr(result, "terminal_state", 1)) != 1:
+                state.retry_after = time.monotonic() + _RESTART_BACKOFF_SEC
         except Exception as error:
+            state.retry_after = time.monotonic() + _RESTART_BACKOFF_SEC
             self.get_logger().error(
-                f"Pika velocity result failed for {arm}: {error}"
+                f"Pika {kind} result failed for {arm}: {error}"
             )
 
     def _cancel(self, state: _ArmState) -> None:
@@ -375,16 +448,26 @@ class PikaControlRouter(Node):
             return
         state = self._arms[arm]
         state.last_input_at = time.monotonic()
-        if not self.dry_run and state.goal_handle is not None:
-            outgoing = PoseStamped()
-            outgoing.header.stamp = message.header.stamp
-            # The pose session uses BASE reference and validates the active
-            # base frame id, so re-stamp the identity WORK ingress label.
-            outgoing.header.frame_id = f"{arm}/base_link"
-            outgoing.pose = message.pose
-            state.pose_publisher.publish(outgoing)
+        state.latest_pose = message
+        if not self.dry_run and state.active_kind == "position" and state.goal_handle is not None:
+            # Forward immediately for latency; _reconcile_position keeps
+            # re-sending it between Pika messages.
+            self._publish_pose(arm, state, message)
         else:
             self._reconcile()
+
+    def _publish_pose(self, arm: str, state: _ArmState, target: PoseStamped) -> None:
+        if self.dry_run or state.goal_handle is None:
+            return
+        outgoing = PoseStamped()
+        # Always the router's clock: the driver requires strictly increasing
+        # stamps, and re-sent targets interleave with forwarded Pika ones.
+        outgoing.header.stamp = self.get_clock().now().to_msg()
+        # The pose session uses BASE reference and validates the active base
+        # frame id, so re-stamp the identity WORK ingress label.
+        outgoing.header.frame_id = f"{arm}/base_link"
+        outgoing.pose = target.pose
+        state.pose_publisher.publish(outgoing)
 
     def _velocity(self, arm: str, message: TwistStamped) -> None:
         if self.mode != "pikavelocity":
@@ -449,12 +532,15 @@ class PikaControlRouter(Node):
             return
         self._arms[arm].gripper_publisher.publish(Float32(data=value))
 
-    def _pose_goal(self) -> CartesianPose.Goal:
+    def _pose_goal(self, profile: _ArmProfile) -> CartesianPose.Goal:
         goal = CartesianPose.Goal()
         goal.reference_type = CartesianPose.Goal.BASE
         goal.reference_name = "base"
         goal.control_period_ms = self.control_period_ms
-        goal.watchdog_ms = self.watchdog_ms
+        # The driver's own command watchdog (<= velocity_watchdog_ms). The
+        # router's watchdog_ms is the Pika input loss window, which is far
+        # longer and which the driver rejects as a goal watchdog.
+        goal.watchdog_ms = profile.watchdog_ms
         goal.max_linear_speed_mps = self.max_linear_speed_mps
         goal.max_angular_speed_radps = self.max_angular_speed_radps
         goal.max_linear_accel_mps2 = self.max_linear_accel_mps2

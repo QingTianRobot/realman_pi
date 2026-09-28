@@ -79,16 +79,17 @@ def _load_pika_velocity_config(config_file: Path) -> dict[str, str | float | int
     result: dict[str, str | float | int] = {
         "pika_velocity_work_reference": work_reference,
     }
-    input_timeout_ms = velocity.get("input_timeout_ms")
-    if (
-        isinstance(input_timeout_ms, bool)
-        or not isinstance(input_timeout_ms, int)
-        or input_timeout_ms <= 0
-    ):
+    for config_name in ("stale_ms", "input_timeout_ms"):
+        value = velocity.get(config_name)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(
+                f"{config_file}: pika_velocity.{config_name} must be a positive integer"
+            )
+        result[f"pika_velocity_{config_name}"] = value
+    if result["pika_velocity_stale_ms"] >= result["pika_velocity_input_timeout_ms"]:
         raise ValueError(
-            f"{config_file}: pika_velocity.input_timeout_ms must be a positive integer"
+            f"{config_file}: pika_velocity.stale_ms must be below input_timeout_ms"
         )
-    result["pika_velocity_input_timeout_ms"] = input_timeout_ms
     for config_name, parameter_name in (
         ("max_linear_speed_mps", "pika_velocity_max_linear_speed_mps"),
         ("max_angular_speed_radps", "pika_velocity_max_angular_speed_radps"),
@@ -106,13 +107,19 @@ def _load_pika_velocity_config(config_file: Path) -> dict[str, str | float | int
     return result
 
 
-def _load_keyboard_input_timeout(config_file: Path) -> int:
+def _load_keyboard_timing(config_file: Path) -> tuple[int, int]:
+    """Return (input_timeout_ms, input_lost_ms) from the keyboard layout file."""
     with config_file.open("r", encoding="utf-8") as stream:
         document = yaml.safe_load(stream) or {}
-    value = document.get("input_timeout_ms")
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{config_file}: input_timeout_ms must be a positive integer")
-    return value
+    values = []
+    for field in ("input_timeout_ms", "input_lost_ms"):
+        value = document.get(field)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{config_file}: {field} must be a positive integer")
+        values.append(value)
+    if values[1] <= values[0]:
+        raise ValueError(f"{config_file}: input_lost_ms must exceed input_timeout_ms")
+    return values[0], values[1]
 
 
 def generate_launch_description():
@@ -124,7 +131,7 @@ def generate_launch_description():
         config_root / "ros" / "realman_coordinates.yaml",
         config_root / "ros" / "realman_motion.yaml",
     )
-    keyboard_input_timeout_ms = _load_keyboard_input_timeout(
+    keyboard_input_timeout_ms, keyboard_input_lost_ms = _load_keyboard_timing(
         config_root / "ros" / "keyboard_control.yaml"
     )
     tree_file = DeclareLaunchArgument(
@@ -202,6 +209,7 @@ def generate_launch_description():
         parameters=[{
             "dry_run": LaunchConfiguration("dry_run"),
             "input_timeout_ms": keyboard_input_timeout_ms,
+            "input_lost_ms": keyboard_input_lost_ms,
             "coordinate_references": coordinate_references,
             "cartesian_velocity_profiles": velocity_profiles,
         }],

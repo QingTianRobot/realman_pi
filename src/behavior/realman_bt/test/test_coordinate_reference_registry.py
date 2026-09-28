@@ -22,7 +22,11 @@ def test_runtime_registry_maps_one_reference_name_to_driver_fields():
     assert "l|work/pikabase|1|pikabase|l/work/pikabase" in references
     assert "r|work/pikabase|1|pikabase|r/work/pikabase" in references
     assert "l|base|0|base|l/base_link" in references
-    assert "l|20|100|0.15|0.25|0.1|0.5|10|2" in profiles
+    # Keyboard high-follow needs <= 10 ms, and the driver accepts one period per
+    # arm, so both teleoperated arms run at 10 ms; the middle arm keeps 20 ms.
+    assert "l|10|100|0.15|0.25|0.1|0.5|10|2" in profiles
+    assert any(profile.startswith("r|10|") for profile in profiles)
+    assert any(profile.startswith("m|20|") for profile in profiles)
 
 
 def test_runtime_registry_rejects_delimiter_in_reference_fields(tmp_path):

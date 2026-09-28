@@ -78,6 +78,7 @@ export default defineConfig({
           { text: "行为树机械臂移动 Demo", link: "/development/behavior-tree-motion" },
           { text: "Changingtek 夹爪控制", link: "/development/gripper-control" },
           { text: "VLA 策略桥接节点", link: "/development/policy-bridge" },
+          { text: "笛卡尔速度跟随测试", link: "/development/velocity-follow-test" },
         ],
       },
     ],

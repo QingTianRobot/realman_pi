@@ -4,6 +4,7 @@ log/
 Log/
 
 **/__pycache__/
+**/.pytest_cache/
 *.py[cod]
 *.DS_Store
 

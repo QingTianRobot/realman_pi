@@ -133,6 +133,7 @@ test("documentation routes render", async ({ page }) => {
     "development/behavior-tree-motion",
     "development/gripper-control",
     "development/policy-bridge",
+    "development/velocity-follow-test",
     "troubleshooting",
   ]) {
     await page.goto(route);

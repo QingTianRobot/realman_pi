@@ -19,8 +19,9 @@ pika_default_pose:
   timeout_sec: 120
 
 # Pika owns a real-time l/r Cartesian velocity stream while pikavelocity is
-# active. The driver applies this per-session limit; ordinary Web and keyboard
-# sessions retain the 0.05 m/s limit from realman_motion.yaml.
+# active. The driver applies this per-session limit, which currently matches the
+# 0.15 m/s l/r default in realman_motion.yaml but is declared separately so
+# gentle teleop can be retuned without moving every client's limit.
 pika_velocity:
   # Use per-arm identity WORK frames so Pika BASE-expressed vectors remain unchanged.
   work_reference: work/pikabase

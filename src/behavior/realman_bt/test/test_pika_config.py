@@ -21,10 +21,10 @@ def test_pika_velocity_has_an_isolated_one_meter_per_second_limit():
     document = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     velocity = document["pika_velocity"]
     assert velocity["work_reference"] == "work/pikabase"
-    assert velocity["input_timeout_ms"] == 250
-    assert velocity["max_linear_speed_mps"] == 1.0
-    assert velocity["max_angular_speed_radps"] == 2.0
-    assert velocity["max_angular_accel_radps2"] == 4.0
+    assert velocity["input_timeout_ms"] == 3000
+    assert velocity["max_linear_speed_mps"] == 0.15
+    assert velocity["max_angular_speed_radps"] == 0.25
+    assert velocity["max_angular_accel_radps2"] == 0.5
 
 
 def test_control_tree_reads_pika_joint_defaults_from_blackboard():

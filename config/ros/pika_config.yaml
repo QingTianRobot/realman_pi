@@ -28,11 +28,11 @@ pika_velocity:
   # introduce gaps above the driver's 100 ms watchdog. The router keeps
   # refreshing the latest valid command for this bounded interval, then sends
   # zero velocity and cancels the session when upstream input is truly stale.
-  input_timeout_ms: 250
-  max_linear_speed_mps: 1.0
-  # Pika angular commands are accepted up to 2 rad/s after the Pika-side unit
-  # conversion. Ordinary Web/keyboard sessions keep their lower driver limit.
-  max_angular_speed_radps: 2.0
-  # Pika needs a faster angular ramp than ordinary manual control. At 4 rad/s^2,
-  # a 2 rad/s command is reached in about 0.5 seconds from rest.
-  max_angular_accel_radps2: 4.0
+  input_timeout_ms: 3000
+  max_linear_speed_mps: 0.15
+  # Gentle teleop keeps Pika angular commands at 0.25 rad/s after the Pika-side
+  # unit conversion so hand tremor does not translate into fast wrist motion.
+  max_angular_speed_radps: 0.25
+  # The matching ramp reaches the 0.25 rad/s limit in about 0.5 seconds from
+  # rest, which stays smooth without feeling unresponsive.
+  max_angular_accel_radps2: 0.5

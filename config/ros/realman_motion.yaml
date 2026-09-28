@@ -12,10 +12,10 @@ robots:
     # Absolute per-session driver ceiling; Pika may request up to 2 rad/s.
     hard_max_linear_speed_mps: 1.0
     # Ordinary clients remain at 0.25 rad/s; Pika's explicit 2 rad/s profile uses this ceiling.
-    hard_max_angular_speed_radps: 2.0
-    # 10 ms is the maximum interval supported by RealMan high-follow mode;
-    # the driver worker and input routers derive their refresh period here.
-    velocity_control_period_ms: 10
+    hard_max_angular_speed_radps: 0.25
+    # 20 ms (50 Hz) is the gentle-teleop refresh period; the driver worker and
+    # input routers derive their refresh period here.
+    velocity_control_period_ms: 20
     # Stop velocity control after this many ms without a refresh for fail-safe behavior.
     velocity_watchdog_ms: 100
     # Cartesian translation acceleration in m/s^2; limits payload impulse.
@@ -24,7 +24,7 @@ robots:
     max_angular_accel_radps2: 0.50
     # Pika sessions may explicitly request a faster angular ramp; ordinary
     # keyboard, Web, and BT sessions remain capped by the standard value above.
-    hard_max_angular_accel_radps2: 4.0
+    hard_max_angular_accel_radps2: 0.50
     # Per-joint terminal tolerance in degrees; success requires every joint to converge.
     joint_goal_tolerance_deg: 0.25
     # Maximum seconds to wait for one commanded stop to be reported complete.
@@ -39,9 +39,9 @@ robots:
     # Middle-arm streaming keeps the standard limit; Pika never controls this arm.
     hard_max_linear_speed_mps: 0.05
     hard_max_angular_speed_radps: 0.25
-    # Keep every arm on the same 10 ms driver contract so Action goals and
+    # Keep every arm on the same 20 ms driver contract so Action goals and
     # the fixed-period SDK worker cannot disagree about the control period.
-    velocity_control_period_ms: 10
+    velocity_control_period_ms: 20
     # Stop velocity control after this many ms without a refresh for fail-safe behavior.
     velocity_watchdog_ms: 100
     # Cartesian translation acceleration in m/s^2; limits payload impulse.
@@ -64,10 +64,10 @@ robots:
     # Absolute per-session driver ceiling; Pika may request up to 2 rad/s.
     hard_max_linear_speed_mps: 1.0
     # Ordinary clients remain at 0.25 rad/s; Pika's explicit 2 rad/s profile uses this ceiling.
-    hard_max_angular_speed_radps: 2.0
-    # 10 ms is the maximum interval supported by RealMan high-follow mode;
-    # the driver worker and input routers derive their refresh period here.
-    velocity_control_period_ms: 10
+    hard_max_angular_speed_radps: 0.25
+    # 20 ms (50 Hz) is the gentle-teleop refresh period; the driver worker and
+    # input routers derive their refresh period here.
+    velocity_control_period_ms: 20
     # Stop velocity control after this many ms without a refresh for fail-safe behavior.
     velocity_watchdog_ms: 100
     # Cartesian translation acceleration in m/s^2; limits payload impulse.
@@ -76,7 +76,7 @@ robots:
     max_angular_accel_radps2: 0.50
     # Pika sessions may explicitly request a faster angular ramp; ordinary
     # keyboard, Web, and BT sessions remain capped by the standard value above.
-    hard_max_angular_accel_radps2: 4.0
+    hard_max_angular_accel_radps2: 0.50
     # Per-joint terminal tolerance in degrees; success requires every joint to converge.
     joint_goal_tolerance_deg: 0.25
     # Maximum seconds to wait for one commanded stop to be reported complete.

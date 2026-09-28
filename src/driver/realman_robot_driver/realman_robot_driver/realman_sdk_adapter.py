@@ -190,6 +190,46 @@ class RealManSdkAdapter:
         with self._lifecycle_lock:
             return self._disconnect_locked()
 
+    def reconnect(self) -> int:
+        """Recreate the SDK handle without destroying the RoboticArm object.
+
+        rm_destroy() tears down the SDK global state so the next
+        rm_create_robot_arm() returns an invalid handle (id=-1). A recovery
+        reconnect must therefore delete only the handle and recreate it on
+        the same object.
+        """
+        with self._lifecycle_lock:
+            with self._lock:
+                robot = self._robot
+                handle = self._handle
+                if robot is None:
+                    return self.connect()
+                self._connected = False
+                self._disconnecting = True
+            try:
+                if handle is not None:
+                    robot.rm_delete_robot_arm()
+            except Exception:
+                pass
+            new_handle = robot.rm_create_robot_arm(self.ip, self.port)
+            if not _is_valid_handle(new_handle):
+                with self._lock:
+                    self._robot = None
+                    self._handle = None
+                    self._connected = False
+                    self._disconnecting = False
+                    self._set_failure_locked(
+                        -1, "SDK returned an invalid robot handle on reconnect"
+                    )
+                return -1
+            with self._lock:
+                self._handle = new_handle
+                self._connected = True
+                self._disconnecting = False
+                self._generation += 1
+                self._set_success_locked()
+            return 0
+
     def _disconnect_locked(self) -> int:
         """Drain calls for the current robot before deleting and destroying it."""
         with self._lock:

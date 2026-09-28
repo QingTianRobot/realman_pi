@@ -692,8 +692,7 @@ def test_velocity_command_uses_dedicated_serial_qos_and_freshness_boundary():
     assert "QoSProfile" in source
     assert "QoSHistoryPolicy.KEEP_LAST" in source
     assert "QoSDurabilityPolicy.VOLATILE" in source
-    assert "lifespan" in source
-    assert "velocity_watchdog_ms" in source
+    assert "No lifespan" in source
     assert "header.stamp" in source or "stamp" in source
 
 
@@ -926,7 +925,7 @@ def test_mock_node_velocity_command_has_depth_one_volatile_watchdog_qos():
         assert node.velocity_command_callback_group is not node.motion_callback_group
         assert qos.depth == 1
         assert qos.durability == QoSDurabilityPolicy.VOLATILE
-        assert qos.lifespan.nanoseconds == node.motion_settings.velocity_watchdog_ms * 1_000_000
+        assert qos.lifespan.nanoseconds == 0  # wall-clock lifespan removed (drift-safe)
     finally:
         _destroy_ros_nodes_and_shutdown(node)
 
@@ -1166,7 +1165,6 @@ def test_event_channel_recovery_serializes_disconnect_delay_and_reconnect():
     assert RealManDriverNode._recover_event_channel(node) is True
     assert events == [
         "ownership_acquire",
-        "disconnect",
         "connect",
         "ownership_release",
     ]

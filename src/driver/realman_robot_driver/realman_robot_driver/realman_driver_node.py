@@ -13,7 +13,6 @@ from ament_index_python.packages import get_package_share_directory
 import rclpy
 from rclpy.action import ActionServer
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import (
@@ -292,9 +291,9 @@ class RealManDriverNode(Node):
                 history=QoSHistoryPolicy.KEEP_LAST,
                 depth=1,
                 durability=QoSDurabilityPolicy.VOLATILE,
-                lifespan=Duration(
-                    nanoseconds=self.motion_settings.velocity_watchdog_ms * 1_000_000
-                ),
+                # No lifespan here: QoS lifespan keys off wall-clock time, which drifts
+                # between hosts and silently drops valid commands. Staleness is enforced
+                # by the session monotonic watchdog and relative stamp check instead.
             ),
             callback_group=self.velocity_command_callback_group,
         )
@@ -306,9 +305,9 @@ class RealManDriverNode(Node):
                 history=QoSHistoryPolicy.KEEP_LAST,
                 depth=1,
                 durability=QoSDurabilityPolicy.VOLATILE,
-                lifespan=Duration(
-                    nanoseconds=self.motion_settings.velocity_watchdog_ms * 1_000_000
-                ),
+                # No lifespan here: QoS lifespan keys off wall-clock time, which drifts
+                # between hosts and silently drops valid commands. Staleness is enforced
+                # by the session monotonic watchdog and relative stamp check instead.
             ),
             callback_group=self.velocity_command_callback_group,
         )
@@ -950,7 +949,7 @@ class RealManDriverNode(Node):
                 raise ValueError("PoseStamped header.stamp must be set")
             self.pose_session.accept_command(command)
         except (RuntimeError, ValueError) as error:
-            self.get_logger().debug(f"Cartesian pose command rejected: {error}")
+            self.get_logger().warning(f"Cartesian pose command rejected: {error}")
 
     @staticmethod
     def _fill_verify_response(
@@ -978,8 +977,23 @@ class RealManDriverNode(Node):
         self._last_connect_attempt = time.monotonic()
         try:
             was_connected = self.adapter.connected
-            code = self.adapter.connect()
+            if event_recovery:
+                code = self.adapter.reconnect()
+            else:
+                code = self.adapter.connect()
             if code == 0:
+                if event_recovery:
+                    # A clean stop can leave the controller reporting an active
+                    # trajectory even though nothing is moving. Clear it before the
+                    # reconcile read, otherwise the channel stays quarantined.
+                    stop_status = int(self.adapter.stop())
+                    if stop_status != 0:
+                        self.get_logger().warn(
+                            "RealMan trajectory stop before recovery returned API2 "
+                            f"status {stop_status}"
+                        )
+                    else:
+                        time.sleep(0.3)
                 callback_status = self.adapter.register_event_callback(
                     self.motion_coordinator.handle_event
                 )
@@ -1062,14 +1076,6 @@ class RealManDriverNode(Node):
                 "Resetting RealMan SDK connection after a clean stop left the "
                 "trajectory event channel without a generation marker"
             )
-            if self.adapter.connected:
-                disconnect_status = self.adapter.disconnect()
-                if disconnect_status != 0:
-                    self.get_logger().error(
-                        "RealMan event channel reset disconnect failed with API2 "
-                        f"status {disconnect_status}"
-                    )
-                    return False
             # The controller can keep the old TCP session briefly after the
             # SDK handle is destroyed. Give it a bounded quiet interval before
             # creating a replacement handle.

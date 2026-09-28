@@ -189,6 +189,7 @@ def generate_launch_description():
             "dry_run": LaunchConfiguration("dry_run"),
             "coordinate_references": coordinate_references,
             "cartesian_velocity_profiles": velocity_profiles,
+            "watchdog_ms": 3000,
             **pika_velocity_config,
         }],
     )

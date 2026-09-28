@@ -379,7 +379,7 @@ class CartesianVelocitySession:
                 self._command = _ZERO
                 self._limited_command = _ZERO
                 self._command_received_at = now
-                self._session_epoch_ns = self._read_ros_time_ns()
+                self._session_epoch_ns = None
                 self._last_command_stamp_ns = None
                 self._last_tick_at = now
                 self._last_api2_status = 0
@@ -459,21 +459,13 @@ class CartesianVelocitySession:
                 raise ValueError(
                     f"TwistStamped header.frame_id must equal active frame_id {self._goal.ros_frame_id!r}"
                 )
-            command_age_sec = 0.0
             if self._ros_time_now_ns is not None:
                 if stamp_ns is None or stamp_ns <= 0:
                     raise ValueError("TwistStamped header.stamp must be set")
-                now_ns = self._read_ros_time_ns()
-                epoch_ns = self._session_epoch_ns
-                if epoch_ns is None:
-                    raise ValueError("TwistStamped stamp has no active session epoch")
-                if stamp_ns < epoch_ns:
+                if self._session_epoch_ns is None:
+                    self._session_epoch_ns = stamp_ns
+                elif stamp_ns < self._session_epoch_ns:
                     raise ValueError("TwistStamped stamp belongs to a previous session")
-                age_ns = now_ns - stamp_ns
-                if age_ns < 0:
-                    raise ValueError("TwistStamped stamp is in the future")
-                if age_ns > self._goal.watchdog_ms * 1_000_000:
-                    raise ValueError("TwistStamped command is stale")
                 if (
                     self._last_command_stamp_ns is not None
                     and stamp_ns <= self._last_command_stamp_ns
@@ -481,7 +473,7 @@ class CartesianVelocitySession:
                     raise ValueError(
                         "TwistStamped stamp must be newer than the last accepted command"
                     )
-                command_age_sec = age_ns / 1_000_000_000.0
+                self._last_command_stamp_ns = stamp_ns
             linear_speed = math.hypot(*vector[:3])
             angular_speed = math.hypot(*vector[3:])
             if linear_speed > self._goal.max_linear_speed_mps + 1.0e-12:
@@ -489,9 +481,7 @@ class CartesianVelocitySession:
             if angular_speed > self._goal.max_angular_speed_radps + 1.0e-12:
                 raise ValueError("angular speed exceeds session limit")
             self._command = vector
-            self._command_received_at = self._monotonic() - command_age_sec
-            if self._ros_time_now_ns is not None:
-                self._last_command_stamp_ns = stamp_ns
+            self._command_received_at = self._monotonic()
             self._condition.notify_all()
             return True
 

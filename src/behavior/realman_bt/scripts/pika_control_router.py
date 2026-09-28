@@ -91,6 +91,33 @@ def clamp_angular_velocity(
     return limited, True
 
 
+def clamp_linear_velocity(
+    source: TwistStamped, max_linear_speed_mps: float
+) -> tuple[TwistStamped, bool]:
+    """Norm-clamp linear velocity while preserving direction and metadata."""
+    limit = _positive_float(max_linear_speed_mps, "max_linear_speed_mps")
+    linear = (
+        source.twist.linear.x,
+        source.twist.linear.y,
+        source.twist.linear.z,
+    )
+    norm = math.hypot(*linear)
+    if norm <= limit:
+        return source, False
+    scale = limit / norm
+    limited = TwistStamped()
+    limited.header.frame_id = source.header.frame_id
+    limited.header.stamp.sec = source.header.stamp.sec
+    limited.header.stamp.nanosec = source.header.stamp.nanosec
+    limited.twist.linear.x = linear[0] * scale
+    limited.twist.linear.y = linear[1] * scale
+    limited.twist.linear.z = linear[2] * scale
+    limited.twist.angular.x = source.twist.angular.x
+    limited.twist.angular.y = source.twist.angular.y
+    limited.twist.angular.z = source.twist.angular.z
+    return limited, True
+
+
 def parse_arm_profiles(
     coordinate_references: list[str],
     velocity_profiles: list[str],
@@ -162,7 +189,7 @@ class PikaControlRouter(Node):
     def __init__(self) -> None:
         super().__init__("pika_control_router")
         self.control_period_ms = int(self.declare_parameter("control_period_ms", 20).value)
-        self.watchdog_ms = int(self.declare_parameter("watchdog_ms", 100).value)
+        self.watchdog_ms = int(self.declare_parameter("watchdog_ms", 250).value)
         self.dry_run = bool(self.declare_parameter("dry_run", True).value)
         self.max_linear_speed_mps = float(self.declare_parameter("max_linear_speed_mps", 0.05).value)
         self.max_angular_speed_radps = float(self.declare_parameter("max_angular_speed_radps", 0.25).value)
@@ -349,7 +376,13 @@ class PikaControlRouter(Node):
         state = self._arms[arm]
         state.last_input_at = time.monotonic()
         if not self.dry_run and state.goal_handle is not None:
-            state.pose_publisher.publish(message)
+            outgoing = PoseStamped()
+            outgoing.header.stamp = message.header.stamp
+            # The pose session uses BASE reference and validates the active
+            # base frame id, so re-stamp the identity WORK ingress label.
+            outgoing.header.frame_id = f"{arm}/base_link"
+            outgoing.pose = message.pose
+            state.pose_publisher.publish(outgoing)
         else:
             self._reconcile()
 
@@ -368,11 +401,19 @@ class PikaControlRouter(Node):
         if not all(math.isfinite(value) for value in (*linear, *angular)):
             self.get_logger().warning(f"Ignoring Pika velocity for {arm}: components must be finite")
             return
-        if math.hypot(*linear) > profile.max_linear_speed_mps + 1.0e-12:
-            self.get_logger().warning(f"Ignoring Pika velocity for {arm}: linear speed exceeds Pika session limit")
-            return
+        limited_message, linear_clamped = clamp_linear_velocity(
+            message, profile.max_linear_speed_mps
+        )
+        if linear_clamped:
+            now = time.monotonic()
+            log_key = (arm, "linear_clamp")
+            if now - self._last_unavailable_log.get(log_key, 0.0) >= 1.0:
+                self._last_unavailable_log[log_key] = now
+                self.get_logger().warning(
+                    f"Clamping Pika velocity for {arm}: linear speed exceeds Pika session limit"
+                )
         limited_message, angular_clamped = clamp_angular_velocity(
-            message, profile.max_angular_speed_radps
+            limited_message, profile.max_angular_speed_radps
         )
         if angular_clamped:
             now = time.monotonic()
@@ -418,9 +459,13 @@ class PikaControlRouter(Node):
         goal.max_angular_speed_radps = self.max_angular_speed_radps
         goal.max_linear_accel_mps2 = self.max_linear_accel_mps2
         goal.max_angular_accel_radps2 = self.max_angular_accel_radps2
-        goal.follow = True
+        goal.follow = False
         goal.trajectory_mode = 0
         goal.radio = 0
+        # MoveJ (official IK) streaming: moderate speed and full blend radius so
+        # successive joint targets fuse into a smooth continuous motion.
+        goal.velocity_percent = 50
+        goal.blend_radius_percent = 100
         return goal
 
     @staticmethod
@@ -434,7 +479,7 @@ class PikaControlRouter(Node):
         goal.max_angular_speed_radps = profile.max_angular_speed_radps
         goal.max_linear_accel_mps2 = profile.max_linear_accel_mps2
         goal.max_angular_accel_radps2 = profile.max_angular_accel_radps2
-        goal.follow = True
+        goal.follow = False
         goal.trajectory_mode = 0
         goal.radio = 0
         return goal

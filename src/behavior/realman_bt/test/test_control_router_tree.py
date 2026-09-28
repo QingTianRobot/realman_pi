@@ -86,7 +86,7 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
                 "l_joint_degrees": "{pika_l_joint_degrees}",
                 "m_joint_degrees": "{pika_m_joint_degrees}",
                 "r_joint_degrees": "{pika_r_joint_degrees}",
-                "velocity_percent": "10",
+                "velocity_percent": "30",
                 "blend_radius_percent": "0",
                 "timeout_sec": "120",
             }

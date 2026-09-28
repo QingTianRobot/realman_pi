@@ -320,7 +320,7 @@ class GripperNode(Node):
         # pct=0 → close_pos(闭合), pct=1 → open_pos(张开)
         return int(round(close_pos + pct * (open_pos - close_pos)))
 
-    def _move_to(self, target: int, timeout: float = 20.0):
+    def _move_to(self, target: int, timeout: float = 20.0, block: bool = True):
         """在 motion_lock 保护下运动到目标位置，返回 (result, pos_fb)。
 
         result 为 'position' / 'torque' / 'timeout'（来自 wait_until_pos_or_torque）。
@@ -331,6 +331,8 @@ class GripperNode(Node):
             try:
                 self._sdk.temp_move(target, self._speed, self._force,
                                     self._accel, self._decel, True)
+                if not block:
+                    return 'sent', None
                 res = self._sdk.wait_until_pos_or_torque(timeout)
                 fb = self._sdk.feedback_position()
                 return res, fb
@@ -344,12 +346,7 @@ class GripperNode(Node):
             return
         try:
             pos = self._sdk.feedback_position()
-            torque = self._sdk.torque_reached()
-            alarm = self._sdk.read_alarm()
-
             self._pub_status.publish(Float64(data=float(pos)))
-            self._pub_torque.publish(Bool(data=torque))
-            self._pub_alarm.publish(Int32(data=alarm))
         except Exception as e:
             self.get_logger().debug(f'Status read error: {e}')
 
@@ -496,14 +493,9 @@ class GripperNode(Node):
         target = self._percentage_to_position(pct)
 
         try:
-            self.get_logger().info(
-                f'Percentage move: pct={pct:.3f} -> pos={target}')
-            res, fb = self._move_to(target)
+            res, fb = self._move_to(target, block=False)
             response.success = True
-            response.message = (
-                f'pct={pct:.3f} -> pos={target} ({res}, pos_fb={fb})'
-            )
-            self.get_logger().info(response.message)
+            response.message = f'pct={pct:.3f} -> pos={target} ({res})'
         except Exception as e:
             response.success = False
             response.message = f'Percentage error: {e}'

@@ -47,7 +47,7 @@ pika_velocity:
 # Pika / Mixed: XYZ follows the Pika linear velocity from
 # /pika/<arm>/cartesian_velocity, while the orientation follows the Pika
 # absolute quaternion from /pika/<arm>/cartesian_pose. Both drive one absolute
-# pose session (the same IK + MoveJ path as Pika position mode), so the tool
+# pose session (the same IK + joint passthrough path as Pika position mode), so the tool
 # orientation tracks the hand without the drift of integrating angular
 # velocity. The Pika sender must publish both topics while this mode is active;
 # the angular part of the velocity stream and the position part of the pose

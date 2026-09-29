@@ -373,9 +373,12 @@ runtime diagnostics。Action 的 `CANCELED` 仅表示开放式 session 按请求
 Action goal accepted
         │  claim ArmOwnership, validate base frame and limits
         ▼
-/l/cartesian_pose/command  --latest target--> control worker --rm_movep_canfd-->
-        │                                               │
-        └── no fresh target ---------------------- watchdog -> slow-stop
+/l/cartesian_pose/command --latest target--> control worker
+        │                                          │ IK（以上次关节指令为种子）
+        │                                          │ 每关节限速 pose_max_joint_speed_dps
+        │                                          ▼
+        │                                     rm_movej_canfd（关节透传，立即执行）
+        └── no fresh target ------------------ watchdog -> slow-stop
 ```
 
 Pika 使用 `/pika/l/cartesian_pose` 和 `/pika/r/cartesian_pose`；Web 选择
@@ -389,12 +392,24 @@ session。
 
 `PoseStamped.header.frame_id` 必须是对应基座 frame（例如 `l/base_link`），位置单位是米，
 姿态是 ROS 四元数（驱动内部使用 WXYZ 语义）。时间戳必须非零、不早于 session epoch、严格
-递增且不超过 watchdog。驱动会归一化四元数，并按配置的线速度、角速度上限限制每个周期的
-位姿变化；无效消息不会进入 SDK。
+递增且不超过 watchdog。驱动会归一化四元数；无效消息不会进入 SDK。
 
-默认周期和 watchdog 与速度 session 相同（10 ms / 100 ms），位姿 Action 的 `follow=true`
-使用 `rm_movep_canfd` 进行连续透传。取消、切换模式、显式 `/stop`、断开和关闭都会停止
-session 并释放 arm ownership。
+执行方式：每个控制周期对最新目标求 IK（生产环境为 SDK IK），种子是上一次下发的关节指令，
+因此不需要每个周期额外读一次关节；然后把每个关节朝 IK 解移动，单周期最多
+`pose_max_joint_speed_dps × dt`（[`config/ros/realman_motion.yaml`](../../../config/ros/realman_motion.yaml)，
+默认 `30°/s`；卡顿的周期最多按两个周期计），再用 `rm_movej_canfd` 透传。透传不做轨迹规划、立即执行，
+所以这个逐关节限速就是位姿 session 唯一的运动限幅；笛卡尔层面的平滑由上游负责（例如 Pika Mixed
+的 router 积分限速）。
+
+- session 启动时读取机械臂当前关节作为第一个起点，读不到就拒绝 goal，不会从假设位置起步；
+- IK 失败（奇异或不可达）时重发上一次关节指令，机械臂原地保持，session 不中断；失败日志每秒最多一条；
+- 透传返回非零状态时中止 session 并执行 slow-stop；
+- `follow` 由 goal 决定（Pika router 使用低跟随、`20 ms` 周期）；goal 中的 `velocity_percent`、
+  `blend_radius_percent` 仍做校验，但透传不使用它们。
+
+此前位姿 session 用 `rm_movej(..., connect=1)` 下发。SDK 对 `connect=1` 的定义是"将当前轨迹与下一条轨迹
+一起规划，但不立即执行"，所以连续的 connect=1 指令从未真正执行，机械臂不动而驱动仍报告
+`status=0`。取消、切换模式、显式 `/stop`、断开和关闭都会停止 session 并释放 arm ownership。
 
 ## Pika rosbag replay 的 ingress 与坐标桥接
 

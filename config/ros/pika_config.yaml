@@ -37,12 +37,14 @@ pika_velocity:
   # re-runs rm_set_movev_canfd_init, so the session outlives short pauses.
   input_timeout_ms: 3000
   max_linear_speed_mps: 0.15
-  # Gentle teleop keeps Pika angular commands at 0.25 rad/s after the Pika-side
-  # unit conversion so hand tremor does not translate into fast wrist motion.
-  max_angular_speed_radps: 0.25
-  # The matching ramp reaches the 0.25 rad/s limit in about 0.5 seconds from
+  # Pika angular commands are accepted up to 2.0 rad/s after the Pika-side unit
+  # conversion. A 0.25 rad/s cap clamped ordinary hand rotation (measured
+  # ~0.45 rad/s on production) and made the wrist feel sluggish. Ordinary
+  # Web/keyboard sessions keep their lower driver limit.
+  max_angular_speed_radps: 2.0
+  # The matching ramp reaches the 2.0 rad/s limit in about 0.5 seconds from
   # rest, which stays smooth without feeling unresponsive.
-  max_angular_accel_radps2: 0.5
+  max_angular_accel_radps2: 4.0
 
 # Pika / Mixed: XYZ follows the Pika linear velocity from
 # /pika/<arm>/cartesian_velocity, while the orientation follows the Pika

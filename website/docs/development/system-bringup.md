@@ -58,7 +58,7 @@ CLI 不依赖当前 shell 的 Compose project 名；它通过 `realman_bringup_r
 `./rm65 up` 会加载键盘配置并在 8765 静态页面中提供键盘卡片代码，但不会自行声明 `keyboard` 输入模式。
 只有运行中的 `control.xml` 目录通过 ROS 暴露可选的 `keyboard` 后，页面才显示并启用双臂键盘卡片；切到
 `ACTIVE/keyboard` 后才能发送 l/r 独立按键。当前 XML registry 还提供可选的 `none`、`policy`、
-`pikaposition`/`pikavelocity` 和粘性、非可选的 Web override；详见
+`pikaposition`/`pikavelocity`/`pikamixed` 和粘性、非可选的 Web override；详见
 [行为树控制权与 Mock 测试](./behavior-tree-control)。
 
 ### 驱动与远程 RViz 的边界

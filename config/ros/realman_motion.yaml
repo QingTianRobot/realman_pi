@@ -32,6 +32,11 @@ robots:
     joint_goal_tolerance_deg: 0.25
     # Maximum seconds to wait for one commanded stop to be reported complete.
     stop_timeout_sec: 2.0
+    # Cartesian pose sessions (Pika position and mixed modes) stream IK joint
+    # targets by CANFD passthrough, which executes each target unplanned. The
+    # driver moves every joint toward the IK solution by at most this many
+    # degrees per second, so a distant or jumping target is approached smoothly.
+    pose_max_joint_speed_dps: 30.0
   m:
     # Action deadline in seconds; bounds a stalled operation without an infinite wait.
     default_timeout_sec: 10.0
@@ -57,6 +62,11 @@ robots:
     joint_goal_tolerance_deg: 0.25
     # Maximum seconds to wait for one commanded stop to be reported complete.
     stop_timeout_sec: 2.0
+    # Cartesian pose sessions (Pika position and mixed modes) stream IK joint
+    # targets by CANFD passthrough, which executes each target unplanned. The
+    # driver moves every joint toward the IK solution by at most this many
+    # degrees per second, so a distant or jumping target is approached smoothly.
+    pose_max_joint_speed_dps: 30.0
   r:
     # Action deadline in seconds; bounds a stalled operation without an infinite wait.
     default_timeout_sec: 10.0
@@ -87,3 +97,8 @@ robots:
     joint_goal_tolerance_deg: 0.25
     # Maximum seconds to wait for one commanded stop to be reported complete.
     stop_timeout_sec: 2.0
+    # Cartesian pose sessions (Pika position and mixed modes) stream IK joint
+    # targets by CANFD passthrough, which executes each target unplanned. The
+    # driver moves every joint toward the IK solution by at most this many
+    # degrees per second, so a distant or jumping target is approached smoothly.
+    pose_max_joint_speed_dps: 30.0

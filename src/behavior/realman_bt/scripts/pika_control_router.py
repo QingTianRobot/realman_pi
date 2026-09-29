@@ -17,6 +17,7 @@ from rclpy.parameter import Parameter
 from rclpy.qos import QoSDurabilityPolicy, QoSProfile
 from realman_msgs.action import CartesianPose, CartesianVelocity
 from realman_msgs.msg import InputModeState
+from realman_msgs.srv import GetCurrentPose
 from std_msgs.msg import Float32
 
 
@@ -53,6 +54,20 @@ class _ArmState:
     last_input_at: float = 0.0
     latest_velocity: TwistStamped | None = None
     latest_pose: PoseStamped | None = None
+    # Per-stream arrival times. Mixed mode reads both streams and judges each
+    # one's freshness separately; last_input_at stays the newest of the two.
+    velocity_input_at: float = 0.0
+    pose_input_at: float = 0.0
+    # Mixed mode: the integrated target, the pose it was anchored at, and the
+    # most recent measured TCP position used to leash the target.
+    current_pose_client: Any = None
+    mixed: "MixedTarget | None" = None
+    anchor_future: Any = None
+    measure_future: Any = None
+    measured_position: tuple[float, float, float] | None = None
+    measured_at: float = 0.0
+    next_measure_at: float = 0.0
+    last_mixed_step_at: float = 0.0
     # Sessions opened since the current Pika mode was activated; one is the
     # healthy steady state, and each restart re-initialises the controller.
     sessions_started: int = 0
@@ -194,6 +209,125 @@ def parse_arm_profiles(
     }
 
 
+MODES = ("pikaposition", "pikavelocity", "pikamixed")
+_KIND_OF_MODE = {"pikaposition": "position", "pikavelocity": "velocity", "pikamixed": "mixed"}
+_MODE_OF_KIND = {kind: mode for mode, kind in _KIND_OF_MODE.items()}
+# A leash measurement older than this is not trusted: the target stops
+# advancing until the arm's position is known again.
+_MEASUREMENT_MAX_AGE_SEC = 1.0
+
+
+def normalize_quaternion(quaternion: Any) -> tuple[float, float, float, float]:
+    """Return a unit wxyz quaternion, rejecting non-finite or zero input."""
+    values = tuple(float(value) for value in quaternion)
+    if len(values) != 4 or not all(math.isfinite(value) for value in values):
+        raise ValueError("quaternion must have four finite components")
+    norm = math.sqrt(sum(value * value for value in values))
+    if norm < 1.0e-9:
+        raise ValueError("quaternion must be non-zero")
+    return tuple(value / norm for value in values)
+
+
+def rotate_towards(
+    current: Any, target: Any, max_angle_rad: float
+) -> tuple[float, float, float, float]:
+    """Slerp from ``current`` toward ``target`` by at most ``max_angle_rad``.
+
+    Takes the shorter of the two equivalent quaternion paths, so a target that
+    differs only by sign never produces a full turn.
+    """
+    q0 = normalize_quaternion(current)
+    q1 = normalize_quaternion(target)
+    dot = sum(a * b for a, b in zip(q0, q1))
+    if dot < 0.0:
+        q1 = tuple(-value for value in q1)
+        dot = -dot
+    dot = min(1.0, dot)
+    half_angle = math.acos(dot)
+    angle = 2.0 * half_angle
+    if angle <= max(0.0, max_angle_rad) or half_angle < 1.0e-9:
+        return q1
+    fraction = max(0.0, max_angle_rad) / angle
+    sin_half = math.sin(half_angle)
+    a = math.sin((1.0 - fraction) * half_angle) / sin_half
+    b = math.sin(fraction * half_angle) / sin_half
+    return normalize_quaternion(tuple(a * x + b * y for x, y in zip(q0, q1)))
+
+
+def _norm3(vector: Any) -> float:
+    return math.sqrt(sum(float(value) ** 2 for value in vector))
+
+
+class MixedTarget:
+    """Absolute pose target for Pika mixed mode.
+
+    Position is the integral of the Pika linear velocity, speed-clamped and
+    acceleration-limited, and leashed to the measured TCP so a target the arm
+    cannot follow (IK failure, singularity) never runs away and then snaps.
+    Orientation is the Pika absolute quaternion, approached at a bounded
+    angular rate so an offset at session start becomes a smooth rotation.
+    """
+
+    def __init__(
+        self,
+        position: Any,
+        orientation_wxyz: Any,
+    ) -> None:
+        values = tuple(float(value) for value in position)
+        if len(values) != 3 or not all(math.isfinite(value) for value in values):
+            raise ValueError("position must have three finite components")
+        self.position: tuple[float, float, float] = values
+        self.orientation: tuple[float, float, float, float] = normalize_quaternion(
+            orientation_wxyz
+        )
+        self.velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
+
+    def step(
+        self,
+        *,
+        dt: float,
+        commanded_velocity: Any,
+        goal_orientation: Any | None,
+        max_speed: float,
+        max_accel: float,
+        max_angular_speed: float,
+        measured_position: Any | None,
+        max_lead: float,
+    ) -> None:
+        if dt <= 0.0:
+            return
+        command = tuple(float(value) for value in commanded_velocity)
+        speed = _norm3(command)
+        if speed > max_speed > 0.0:
+            command = tuple(value * max_speed / speed for value in command)
+        delta = tuple(c - v for c, v in zip(command, self.velocity))
+        delta_norm = _norm3(delta)
+        max_delta = max_accel * dt
+        if delta_norm > max_delta > 0.0:
+            delta = tuple(value * max_delta / delta_norm for value in delta)
+        self.velocity = tuple(v + d for v, d in zip(self.velocity, delta))
+
+        if measured_position is None:
+            # Without a recent measurement the leash cannot be enforced, so
+            # the target holds and any motion restarts from rest.
+            self.velocity = (0.0, 0.0, 0.0)
+        else:
+            candidate = tuple(p + v * dt for p, v in zip(self.position, self.velocity))
+            measured = tuple(float(value) for value in measured_position)
+            lead = tuple(c - m for c, m in zip(candidate, measured))
+            lead_norm = _norm3(lead)
+            if lead_norm > max_lead > 0.0:
+                candidate = tuple(
+                    m + value * max_lead / lead_norm for m, value in zip(measured, lead)
+                )
+            self.position = candidate
+
+        if goal_orientation is not None:
+            self.orientation = rotate_towards(
+                self.orientation, goal_orientation, max_angular_speed * dt
+            )
+
+
 class PikaControlRouter(Node):
     """Bridge selected Pika topics to driver sessions without touching m."""
 
@@ -221,6 +355,28 @@ class PikaControlRouter(Node):
                 "pika_velocity_stale_ms must be positive and below "
                 "pika_velocity_input_timeout_ms"
             )
+        # Mixed mode: XYZ integrated from Pika linear velocity, orientation
+        # from the Pika absolute quaternion, executed as one pose session.
+        self.mixed_stale_ms = int(self.declare_parameter("pika_mixed_stale_ms", 200).value)
+        self.mixed_input_timeout_ms = int(
+            self.declare_parameter("pika_mixed_input_timeout_ms", 3000).value
+        )
+        self.mixed_max_linear_speed_mps = float(
+            self.declare_parameter("pika_mixed_max_linear_speed_mps", 0.15).value
+        )
+        self.mixed_max_linear_accel_mps2 = float(
+            self.declare_parameter("pika_mixed_max_linear_accel_mps2", 0.10).value
+        )
+        self.mixed_max_angular_speed_radps = float(
+            self.declare_parameter("pika_mixed_max_angular_speed_radps", 0.25).value
+        )
+        self.mixed_max_position_lead_m = float(
+            self.declare_parameter("pika_mixed_max_position_lead_m", 0.05).value
+        )
+        self.mixed_pose_poll_hz = float(
+            self.declare_parameter("pika_mixed_pose_poll_hz", 10.0).value
+        )
+        self._validate_mixed_parameters()
         profiles = parse_arm_profiles(
             list(self.declare_parameter("coordinate_references", Parameter.Type.STRING_ARRAY).value),
             list(self.declare_parameter("cartesian_velocity_profiles", Parameter.Type.STRING_ARRAY).value),
@@ -249,6 +405,9 @@ class PikaControlRouter(Node):
                 velocity_publisher,
                 gripper_publisher,
                 profiles[arm],
+                current_pose_client=self.create_client(
+                    GetCurrentPose, f"/{arm}/get_current_pose"
+                ),
             )
             self.create_subscription(PoseStamped, f"/pika/{arm}/cartesian_pose", lambda message, arm=arm: self._pose(arm, message), 1)
             self.create_subscription(TwistStamped, f"/pika/{arm}/cartesian_velocity", lambda message, arm=arm: self._velocity(arm, message), 1)
@@ -262,9 +421,31 @@ class PikaControlRouter(Node):
         self.create_timer(period_ms / 1000.0, self._reconcile)
         self.get_logger().info("Pika Cartesian router ready for l/r; middle arm is excluded")
 
+    def _validate_mixed_parameters(self) -> None:
+        if self.mixed_stale_ms <= 0 or self.mixed_input_timeout_ms <= self.mixed_stale_ms:
+            raise ValueError(
+                "pika_mixed_stale_ms must be positive and below pika_mixed_input_timeout_ms"
+            )
+        for name in (
+            "mixed_max_linear_speed_mps",
+            "mixed_max_linear_accel_mps2",
+            "mixed_max_angular_speed_radps",
+            "mixed_max_position_lead_m",
+            "mixed_pose_poll_hz",
+        ):
+            value = getattr(self, name)
+            if not math.isfinite(value) or value <= 0.0:
+                raise ValueError(f"pika_{name} must be positive and finite")
+        # The pose goal carries the router-wide ceilings, which the driver
+        # validates against realman_motion.yaml; mixed shaping must stay inside.
+        if self.mixed_max_linear_speed_mps > self.max_linear_speed_mps:
+            raise ValueError("pika_mixed_max_linear_speed_mps exceeds max_linear_speed_mps")
+        if self.mixed_max_angular_speed_radps > self.max_angular_speed_radps:
+            raise ValueError("pika_mixed_max_angular_speed_radps exceeds max_angular_speed_radps")
+
     def _mode_state(self, message: InputModeState) -> None:
         active = str(message.active_mode) if int(message.phase) == InputModeState.ACTIVE else ""
-        if active not in {"pikaposition", "pikavelocity"}:
+        if active not in MODES:
             active = ""
         if active != self.mode:
             self.get_logger().info(f"Pika router mode changed: {self.mode or 'none'} -> {active or 'none'}")
@@ -274,6 +455,17 @@ class PikaControlRouter(Node):
                     self._cancel(state)
                 state.sessions_started = 0
                 state.retry_after = 0.0
+                self._reset_mixed(state)
+
+    @staticmethod
+    def _reset_mixed(state: _ArmState) -> None:
+        state.mixed = None
+        state.anchor_future = None
+        state.measure_future = None
+        state.measured_position = None
+        state.measured_at = 0.0
+        state.next_measure_at = 0.0
+        state.last_mixed_step_at = 0.0
 
     @staticmethod
     def _age(state: _ArmState, now: float) -> float:
@@ -288,6 +480,8 @@ class PikaControlRouter(Node):
         for arm, state in self._arms.items():
             if self.mode == "pikavelocity":
                 self._reconcile_velocity(arm, state, now)
+            elif self.mode == "pikamixed":
+                self._reconcile_mixed(arm, state, now)
             else:
                 self._reconcile_position(arm, state, now)
 
@@ -364,6 +558,164 @@ class PikaControlRouter(Node):
             lambda future, selected=arm: self._goal_response(selected, "position", future)
         )
 
+    @staticmethod
+    def _age_of(stamp: float, now: float) -> float:
+        return math.inf if stamp <= 0.0 else now - stamp
+
+    def _reconcile_mixed(self, arm: str, state: _ArmState, now: float) -> None:
+        """One pose session: XYZ from Pika velocity, orientation from Pika pose.
+
+        Velocity older than stale_ms is treated as zero (the target holds) and
+        a stale orientation is held; the session is released only when both
+        streams are older than input_timeout_ms.
+        """
+        stale = self.mixed_stale_ms / 1000.0
+        velocity_age = self._age_of(state.velocity_input_at, now)
+        pose_age = self._age_of(state.pose_input_at, now)
+        lost = min(velocity_age, pose_age) >= self.mixed_input_timeout_ms / 1000.0
+        if state.active_kind == "mixed" and state.goal_handle is not None:
+            if lost or state.mixed is None:
+                self._cancel(state)
+                self._reset_mixed(state)
+                return
+            self._poll_measured_pose(arm, state, now)
+            dt = now - state.last_mixed_step_at if state.last_mixed_step_at > 0.0 else 0.0
+            state.last_mixed_step_at = now
+            velocity = (0.0, 0.0, 0.0)
+            if velocity_age < stale and state.latest_velocity is not None:
+                linear = state.latest_velocity.twist.linear
+                velocity = (linear.x, linear.y, linear.z)
+            goal_orientation = None
+            if pose_age < stale and state.latest_pose is not None:
+                orientation = state.latest_pose.pose.orientation
+                goal_orientation = (orientation.w, orientation.x, orientation.y, orientation.z)
+            measured = (
+                state.measured_position
+                if state.measured_position is not None
+                and now - state.measured_at <= _MEASUREMENT_MAX_AGE_SEC
+                else None
+            )
+            state.mixed.step(
+                dt=min(max(dt, 0.0), 0.1),
+                commanded_velocity=velocity,
+                goal_orientation=goal_orientation,
+                max_speed=self.mixed_max_linear_speed_mps,
+                max_accel=self.mixed_max_linear_accel_mps2,
+                max_angular_speed=self.mixed_max_angular_speed_radps,
+                measured_position=measured,
+                max_lead=self.mixed_max_position_lead_m,
+            )
+            self._publish_mixed_target(arm, state)
+            return
+        if lost:
+            return
+        if not self._can_request(state, now):
+            return
+        if state.mixed is None:
+            # Anchor the integrated position at the arm's current TCP, so the
+            # session starts exactly where the arm is.
+            self._request_anchor(arm, state)
+            return
+        if not state.pose_client.server_is_ready():
+            state.pose_client.wait_for_server(timeout_sec=0.0)
+            return
+        state.pending_goal = state.pose_client.send_goal_async(self._pose_goal(state.profile))
+        state.pending_goal.add_done_callback(
+            lambda future, selected=arm: self._goal_response(selected, "mixed", future)
+        )
+
+    def _current_pose_request(self) -> Any:
+        request = GetCurrentPose.Request()
+        request.reference_type = GetCurrentPose.Request.BASE
+        request.reference_name = "base"
+        return request
+
+    def _request_anchor(self, arm: str, state: _ArmState) -> None:
+        client = state.current_pose_client
+        if client is None or state.anchor_future is not None:
+            return
+        if not client.service_is_ready():
+            client.wait_for_service(timeout_sec=0.0)
+            return
+        state.anchor_future = client.call_async(self._current_pose_request())
+        state.anchor_future.add_done_callback(
+            lambda future, selected=arm: self._on_anchor(selected, future)
+        )
+
+    @staticmethod
+    def _pose_from_response(response: Any) -> tuple[tuple[float, ...], tuple[float, ...]] | None:
+        if response is None or not bool(getattr(response, "success", False)):
+            return None
+        try:
+            position = tuple(float(value) for value in response.pose_position_m)
+            orientation = normalize_quaternion(response.pose_quaternion_wxyz)
+        except (TypeError, ValueError):
+            return None
+        if len(position) != 3 or not all(math.isfinite(value) for value in position):
+            return None
+        return position, orientation
+
+    def _on_anchor(self, arm: str, future: Any) -> None:
+        state = self._arms[arm]
+        if future is None or state.anchor_future is not future:
+            # The mode changed while the request was in flight; a pose read for
+            # an earlier activation must not seed this one.
+            return
+        state.anchor_future = None
+        try:
+            pose = self._pose_from_response(future.result())
+        except Exception as error:
+            pose = None
+            self.get_logger().error(f"Pika mixed anchor pose failed for {arm}: {error}")
+        if pose is None:
+            state.retry_after = time.monotonic() + _RESTART_BACKOFF_SEC
+            self.get_logger().warning(
+                f"Pika mixed mode could not read the current pose of {arm}; "
+                f"retrying in {_RESTART_BACKOFF_SEC:.1f} s"
+            )
+            return
+        position, orientation = pose
+        state.mixed = MixedTarget(position, orientation)
+        state.measured_position = position
+        state.measured_at = time.monotonic()
+
+    def _poll_measured_pose(self, arm: str, state: _ArmState, now: float) -> None:
+        client = state.current_pose_client
+        if client is None or state.measure_future is not None or now < state.next_measure_at:
+            return
+        state.next_measure_at = now + 1.0 / self.mixed_pose_poll_hz
+        if not client.service_is_ready():
+            return
+        state.measure_future = client.call_async(self._current_pose_request())
+        state.measure_future.add_done_callback(
+            lambda future, selected=arm: self._on_measured_pose(selected, future)
+        )
+
+    def _on_measured_pose(self, arm: str, future: Any) -> None:
+        state = self._arms[arm]
+        if future is None or state.measure_future is not future:
+            return
+        state.measure_future = None
+        try:
+            pose = self._pose_from_response(future.result())
+        except Exception:
+            pose = None
+        if pose is not None:
+            state.measured_position = pose[0]
+            state.measured_at = time.monotonic()
+
+    def _publish_mixed_target(self, arm: str, state: _ArmState) -> None:
+        if state.mixed is None:
+            return
+        target = PoseStamped()
+        (target.pose.position.x, target.pose.position.y, target.pose.position.z) = state.mixed.position
+        w, x, y, z = state.mixed.orientation
+        target.pose.orientation.w = w
+        target.pose.orientation.x = x
+        target.pose.orientation.y = y
+        target.pose.orientation.z = z
+        self._publish_pose(arm, state, target)
+
     def _goal_response(self, arm: str, kind: str, future: Any) -> None:
         state = self._arms[arm]
         state.pending_goal = None
@@ -373,8 +725,11 @@ class PikaControlRouter(Node):
             state.retry_after = time.monotonic() + _RESTART_BACKOFF_SEC
             self.get_logger().error(f"Pika {kind} goal failed for {arm}: {error}")
             return
-        expected_mode = "pikaposition" if kind == "position" else "pikavelocity"
+        expected_mode = _MODE_OF_KIND[kind]
         if not handle.accepted or self.mode != expected_mode:
+            if kind == "mixed":
+                # Re-anchor next time: the arm may move before the retry.
+                self._reset_mixed(state)
             if not handle.accepted:
                 state.retry_after = time.monotonic() + _RESTART_BACKOFF_SEC
                 self.get_logger().warning(
@@ -396,6 +751,11 @@ class PikaControlRouter(Node):
             self._publish_velocity(state, state.latest_velocity)
         if kind == "position" and state.latest_pose is not None:
             self._publish_pose(arm, state, state.latest_pose)
+        if kind == "mixed":
+            # The first target is the anchor itself, so the session starts at
+            # rest exactly where the arm is.
+            state.last_mixed_step_at = time.monotonic()
+            self._publish_mixed_target(arm, state)
         state.sessions_started += 1
         if state.sessions_started == 1:
             self.get_logger().info(f"Pika {kind} session active for {arm}")
@@ -410,6 +770,8 @@ class PikaControlRouter(Node):
         state.goal_handle = None
         state.active_kind = ""
         state.cancel_pending = None
+        if kind == "mixed":
+            self._reset_mixed(state)
         try:
             response = future.result()
             result = response.result
@@ -444,11 +806,26 @@ class PikaControlRouter(Node):
         self._clear_state_cancel(self._arms[arm])
 
     def _pose(self, arm: str, message: PoseStamped) -> None:
-        if self.mode != "pikaposition":
+        if self.mode != "pikaposition" and self.mode != "pikamixed":
             return
         state = self._arms[arm]
-        state.last_input_at = time.monotonic()
+        if self.mode == "pikamixed":
+            orientation = message.pose.orientation
+            try:
+                normalize_quaternion((orientation.w, orientation.x, orientation.y, orientation.z))
+            except ValueError as error:
+                self.get_logger().warning(f"Ignoring Pika mixed orientation for {arm}: {error}")
+                return
+        now = time.monotonic()
+        state.last_input_at = now
+        state.pose_input_at = now
         state.latest_pose = message
+        if self.mode == "pikamixed":
+            # Mixed mode uses only the orientation; the target is advanced by
+            # _reconcile_mixed at the control period.
+            if not self.dry_run and state.goal_handle is None:
+                self._reconcile()
+            return
         if not self.dry_run and state.active_kind == "position" and state.goal_handle is not None:
             # Forward immediately for latency; _reconcile_position keeps
             # re-sending it between Pika messages.
@@ -470,7 +847,7 @@ class PikaControlRouter(Node):
         state.pose_publisher.publish(outgoing)
 
     def _velocity(self, arm: str, message: TwistStamped) -> None:
-        if self.mode != "pikavelocity":
+        if self.mode != "pikavelocity" and self.mode != "pikamixed":
             return
         state = self._arms[arm]
         profile = state.profile
@@ -507,7 +884,9 @@ class PikaControlRouter(Node):
                     f"Clamping Pika velocity for {arm}: angular speed exceeds "
                     "Pika session limit"
                 )
-        state.last_input_at = time.monotonic()
+        now = time.monotonic()
+        state.last_input_at = now
+        state.velocity_input_at = now
         state.latest_velocity = limited_message
         if not self.dry_run and state.goal_handle is None:
             self._reconcile()
@@ -522,7 +901,7 @@ class PikaControlRouter(Node):
         state.velocity_publisher.publish(outgoing)
 
     def _gripper(self, arm: str, message: Float32) -> None:
-        if self.mode not in {"pikaposition", "pikavelocity"} or self.dry_run:
+        if self.mode not in MODES or self.dry_run:
             return
         value = float(message.data)
         if not math.isfinite(value) or not 0.0 <= value <= 1.0:
@@ -545,11 +924,13 @@ class PikaControlRouter(Node):
         goal.max_angular_speed_radps = self.max_angular_speed_radps
         goal.max_linear_accel_mps2 = self.max_linear_accel_mps2
         goal.max_angular_accel_radps2 = self.max_angular_accel_radps2
+        # The driver streams IK joint targets by CANFD passthrough; low-follow
+        # suits this 20 ms period (high-follow requires <= 10 ms).
         goal.follow = False
         goal.trajectory_mode = 0
         goal.radio = 0
-        # MoveJ (official IK) streaming: moderate speed and full blend radius so
-        # successive joint targets fuse into a smooth continuous motion.
+        # Still validated by the driver, but unused by joint passthrough; the
+        # driver's pose_max_joint_speed_dps is what bounds joint motion.
         goal.velocity_percent = 50
         goal.blend_radius_percent = 100
         return goal

@@ -81,3 +81,43 @@ def test_pika_velocity_loader_passes_the_stale_window_and_rejects_an_inverted_on
     )
     with pytest.raises(ValueError, match="stale_ms must be below"):
         module._load_pika_velocity_config(inverted)
+
+
+def test_pika_mixed_config_is_declared_and_inside_the_pose_goal_ceilings():
+    document = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+    mixed = document["pika_mixed"]
+    assert mixed["stale_ms"] < mixed["input_timeout_ms"]
+    # The pose goal carries the router-wide 0.15 m/s and 0.25 rad/s ceilings.
+    assert mixed["max_linear_speed_mps"] <= 0.15
+    assert mixed["max_angular_speed_radps"] <= 0.25
+    assert mixed["max_position_lead_m"] > 0.0
+    assert mixed["pose_poll_hz"] > 0.0
+
+
+def test_pika_mixed_loader_passes_every_router_parameter(tmp_path):
+    import importlib.util
+    import sys
+
+    import pytest
+
+    sys.path.insert(0, str(LAUNCH.parent))
+    spec = importlib.util.spec_from_file_location("control_router_launch", LAUNCH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    loaded = module._load_pika_mixed_config(CONFIG)
+    assert set(loaded) == {
+        "pika_mixed_stale_ms",
+        "pika_mixed_input_timeout_ms",
+        "pika_mixed_max_linear_speed_mps",
+        "pika_mixed_max_linear_accel_mps2",
+        "pika_mixed_max_angular_speed_radps",
+        "pika_mixed_max_position_lead_m",
+        "pika_mixed_pose_poll_hz",
+    }
+    assert "**pika_mixed_config" in LAUNCH.read_text(encoding="utf-8")
+
+    missing = tmp_path / "pika_config.yaml"
+    missing.write_text("pika_velocity: {}\n", encoding="utf-8")
+    with pytest.raises(ValueError, match="missing pika_mixed"):
+        module._load_pika_mixed_config(missing)

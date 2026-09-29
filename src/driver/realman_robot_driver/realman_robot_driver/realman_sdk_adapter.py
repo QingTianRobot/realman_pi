@@ -323,6 +323,28 @@ class RealManSdkAdapter:
             0,
         )
 
+    def movej_canfd(
+        self,
+        joint_degrees: list[float],
+        follow: bool,
+        trajectory_mode: int,
+        radio: int,
+    ) -> int:
+        """Stream one joint target by CANFD passthrough; executed immediately.
+
+        Unlike ``rm_movej`` there is no planning or blending, so the caller
+        must bound how far each target is from the previous one.
+        """
+        return self._command(
+            "rm_movej_canfd",
+            "SDK joint passthrough request failed",
+            list(joint_degrees),
+            bool(follow),
+            0,
+            int(trajectory_mode),
+            int(radio),
+        )
+
     def movel(
         self,
         pose: Any,

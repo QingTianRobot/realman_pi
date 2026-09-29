@@ -21,7 +21,7 @@ Do not let a BT leaf call the SDK directly or let Web/Pika bypass the driver Act
 
 - controls: `Sequence`, `ReactiveSequence`, `ReactiveFallback`;
 - routing: `SelectInputMode`, `InputModeGuard`, `ActivateInputMode`;
-- input leaves: `WebInputStub`, `PolicyInputStub`, `PikaInputStub`, `PikaPositionInput`, `PikaVelocityInput`, `IdleInput`;
+- input leaves: `WebInputStub`, `PolicyInputStub`, `PikaInputStub`, `PikaPositionInput`, `PikaVelocityInput`, `PikaMixedInput`, `IdleInput`;
 - motion: `MoveJ`, `ThreeArmMoveJ`, `CartesianVelocityForDuration`.
 
 Do not use upstream `Fallback`, `Parallel`, `Retry`, `SubTree`, `SetBlackboard`, or task-specific tags merely because examples exist in the repository or upstream library. Implement and register them first. `approach_and_grasp.xml` and `pick_task.xml` are templates, not current production runtime trees.
@@ -43,7 +43,7 @@ Use `ReactiveFallback` for an ordered set of guarded branches whose priority and
 
 Keep these invariants:
 
-- catalog order: `web`, `policy`, `pikaposition`, `pikavelocity`, `none` unless product behavior deliberately changes;
+- catalog order: `web`, `keyboard`, `policy`, `pikaposition`, `pikavelocity`, `pikamixed`, `none` unless product behavior deliberately changes;
 - `web` is first, sticky/high priority, and `selectable="false"`;
 - `none` exists, is selectable, and is the configured safe fallback;
 - `InputModeGuard` metadata is literal; only `selected_mode` is remapped;

@@ -23,7 +23,7 @@ Continuous Cartesian control is deliberately two-stage: an Action establishes ow
 | ROS interface file/type | PascalCase | `SelectInputMode.srv`, `CartesianVelocity.action` |
 | ROS graph name | lowercase snake_case path segments | `/realman_bt_executor/input_mode_state` |
 | YAML key | snake_case | `pika_default_pose`, `safe_fallback_mode` |
-| Input-mode ID | lowercase ASCII letters/digits only | `pikaposition`, `pikavelocity` |
+| Input-mode ID | lowercase ASCII letters/digits only | `pikaposition`, `pikavelocity`, `pikamixed` |
 
 Input-mode IDs are protocol identifiers, not ROS graph names: they cannot contain `_`, `/`, `-`, spaces, or uppercase letters. A user-facing label may be localized, such as `Pika / 位置控制`.
 
@@ -42,14 +42,14 @@ The word `pika` has different valid forms by layer:
 
 | Layer | Required form |
 | --- | --- |
-| Mode IDs | `pikaposition`, `pikavelocity` |
-| Display labels | `Pika / 位置控制`, `Pika / 速度控制` |
+| Mode IDs | `pikaposition`, `pikavelocity`, `pikamixed` |
+| Display labels | `Pika / 位置控制`, `Pika / 速度控制`, `Pika / Mixed 控制` |
 | ROS node | `pika_control_router` |
 | External ingress namespace | `/pika/l/...`, `/pika/r/...` |
 | Config root | `pika_default_pose` |
 | Executor parameters/blackboard | `pika_l_joint_degrees`, `pika_m_joint_degrees`, `pika_r_joint_degrees` |
-| XML instance/sequence names | `pika_default_pose`, `pika_position_entry`, `pika_velocity_entry` |
-| C++ BT tags/types | `PikaPositionInput`, `PikaVelocityInput`; `PikaPositionInputNode`, `PikaVelocityInputNode` |
+| XML instance/sequence names | `pika_default_pose`, `pika_position_entry`, `pika_velocity_entry`, `pika_mixed_entry` |
+| C++ BT tags/types | `PikaPositionInput`, `PikaVelocityInput`, `PikaMixedInput`; `PikaPositionInputNode`, `PikaVelocityInputNode`, `PikaMixedInputNode` |
 
 Current Pika ingress is l/r only:
 

@@ -507,8 +507,13 @@ _MOTION_FIELDS = frozenset(
         "hard_max_angular_accel_radps2",
         "joint_goal_tolerance_deg",
         "stop_timeout_sec",
+        "pose_max_joint_speed_dps",
     }
 )
+
+# Joint passthrough is unplanned: the controller executes each target as sent.
+# The pose session therefore moves every joint by at most this rate itself.
+DEFAULT_POSE_MAX_JOINT_SPEED_DPS = 30.0
 
 _REQUIRED_MOTION_FIELDS = frozenset(
     {
@@ -537,6 +542,7 @@ class MotionSettings:
     hard_max_linear_speed_mps: float | None = None
     hard_max_angular_speed_radps: float | None = None
     hard_max_angular_accel_radps2: float | None = None
+    pose_max_joint_speed_dps: float = DEFAULT_POSE_MAX_JOINT_SPEED_DPS
 
     @property
     def linear_speed_hard_limit_mps(self) -> float:
@@ -664,6 +670,10 @@ class MotionSettings:
                 hard_max_linear_speed_mps=hard_linear_speed,
                 hard_max_angular_speed_radps=hard_angular_speed,
                 hard_max_angular_accel_radps2=hard_angular_accel,
+                pose_max_joint_speed_dps=_positive_finite(
+                    values.get("pose_max_joint_speed_dps", DEFAULT_POSE_MAX_JOINT_SPEED_DPS),
+                    f"robots.{robot}.pose_max_joint_speed_dps",
+                ),
             )
         return parsed[arm]
 

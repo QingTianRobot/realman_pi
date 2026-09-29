@@ -113,6 +113,7 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   factory_.registerNodeType<PikaInputStubNode>("PikaInputStub");
   factory_.registerNodeType<PikaPositionInputNode>("PikaPositionInput");
   factory_.registerNodeType<PikaVelocityInputNode>("PikaVelocityInput");
+  factory_.registerNodeType<PikaMixedInputNode>("PikaMixedInput");
   factory_.registerNodeType<IdleInputNode>("IdleInput");
   factory_.registerNodeType<MoveJNode>("MoveJ");
   factory_.registerNodeType<ThreeArmMoveJNode>("ThreeArmMoveJ");

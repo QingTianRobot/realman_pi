@@ -373,12 +373,12 @@ runtime diagnostics。Action 的 `CANCELED` 仅表示开放式 session 按请求
 Action goal accepted
         │  claim ArmOwnership, validate base frame and limits
         ▼
-/l/cartesian_pose/command  --latest target--> control worker
-        │                                               │  IK (seed = current joints)
-        │                                               ▼
-        │                                     rm_movej (non-blocking, joint degrees)
-        │                                               │
-        └── no fresh target ---------------------- watchdog -> slow-stop
+/l/cartesian_pose/command --latest target--> control worker
+        │                                          │ IK（以上次关节指令为种子）
+        │                                          │ 每关节限速 pose_max_joint_speed_dps
+        │                                          ▼
+        │                                     rm_movej_canfd（关节透传，立即执行）
+        └── no fresh target ------------------ watchdog -> slow-stop
 ```
 
 Pika 使用 `/pika/l/cartesian_pose` 和 `/pika/r/cartesian_pose`；Web 选择
@@ -392,15 +392,24 @@ session。
 
 `PoseStamped.header.frame_id` 必须是对应基座 frame（例如 `l/base_link`），位置单位是米，
 姿态是 ROS 四元数（驱动内部使用 WXYZ 语义）。时间戳必须非零、不早于 session epoch、严格
-递增且不超过 watchdog。驱动会归一化四元数；无效消息不会进入 SDK。Goal 中的线速度、角速度
-上限只按配置硬上限校验，当前关节空间路径不会按周期插值位姿，实际速度由 `velocity_percent`
-决定。
+递增且不超过 watchdog。驱动会归一化四元数；无效消息不会进入 SDK。
 
-默认周期和 watchdog 与速度 session 相同（10 ms / 100 ms）。每个周期取最新目标位姿，以当前
-实体关节角为种子求一次逆解，再用非阻塞 `rm_movej` 在关节空间下发（仿照 PikaAnyArm，
-不使用笛卡尔 `rm_movep_canfd`）。逆解失败（奇异、不可达或读不到当前关节）时保持上一个关节
-目标，不下发运动。取消、切换模式、显式 `/stop`、断开和关闭都会停止 session 并释放 arm
-ownership。
+执行方式：每个控制周期对最新目标求 IK（生产环境为 SDK IK），种子是上一次下发的关节指令，
+因此不需要每个周期额外读一次关节；然后把每个关节朝 IK 解移动，单周期最多
+`pose_max_joint_speed_dps × dt`（[`config/ros/realman_motion.yaml`](../../../config/ros/realman_motion.yaml)，
+默认 `30°/s`；卡顿的周期最多按两个周期计），再用 `rm_movej_canfd` 透传。透传不做轨迹规划、立即执行，
+所以这个逐关节限速就是位姿 session 唯一的运动限幅；笛卡尔层面的平滑由上游负责（例如 Pika Mixed
+的 router 积分限速）。
+
+- session 启动时读取机械臂当前关节作为第一个起点，读不到就拒绝 goal，不会从假设位置起步；
+- IK 失败（奇异或不可达）时重发上一次关节指令，机械臂原地保持，session 不中断；失败日志每秒最多一条；
+- 透传返回非零状态时中止 session 并执行 slow-stop；
+- `follow` 由 goal 决定（Pika router 使用低跟随、`20 ms` 周期）；goal 中的 `velocity_percent`、
+  `blend_radius_percent` 仍做校验，但透传不使用它们。
+
+此前位姿 session 用 `rm_movej(..., connect=1)` 下发。SDK 对 `connect=1` 的定义是"将当前轨迹与下一条轨迹
+一起规划，但不立即执行"，所以连续的 connect=1 指令从未真正执行，机械臂不动而驱动仍报告
+`status=0`。取消、切换模式、显式 `/stop`、断开和关闭都会停止 session 并释放 arm ownership。
 
 ### 位姿 session 的逆解
 
@@ -419,16 +428,18 @@ ownership。
 [`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml) 中该臂的
 `default_tool`（`tcpgrip`，`xyz_m` 与 `quaternion_wxyz`）。启动时坐标管理器会把控制器激活工具
 协调为同一个 `tcpgrip`，所以两边指向同一个 TCP。由于运行中仍可通过 `select_tool_frame` 切换
-激活工具，每个位姿 session 第一次求解前都会用当前关节比较自定义 FK 与 SDK FK：位置差超过
+激活工具，每个位姿 session 第一次求解前都会在种子关节（session 起点即实测关节）上比较自定义 FK 与
+SDK FK：位置差超过
 `2 mm` 或姿态差超过 `1°`、或 SDK FK 失败时，driver 记录 error 并在该 session 内改用 SDK 逆解。
 这保证以 `get_current_pose` 为锚点的目标（例如 Pika Mixed 的起始目标）不会因 TCP 不一致而跳变。
 
 自定义求解器最小化位置误差、`0.01 × ‖R − R_target‖²` 姿态误差和一个极小的“靠近种子”正则项，
-并以当前关节热启动，因此保持当前 TCP 的目标会得到当前关节，连续目标不会跳到其它逆解分支。
+并以上次关节指令热启动，因此保持当前 TCP 的目标会得到当前关节，连续目标不会跳到其它逆解分支。
 结果离目标超过 `2 mm` 或 `1°`（不可达或未收敛）时返回失败，与 SDK 逆解失败一样保持上一个
-关节目标。解相对种子（当前关节；无种子时为上一次接受的解）任一关节变化超过 `30°` 时，视为
-逆解分支翻转或穿越奇异，同样返回失败并保持，不会把大幅关节运动下发给 `rm_movej`；因此目标
-一次领先当前姿态过多（例如快速穿过腕部奇异）时，机械臂会停在原处，直到目标回到 `30°` 以内。
+关节目标。解相对种子（上次关节指令；无种子时为上一次接受的解）任一关节变化超过 `30°` 时，视为
+逆解分支翻转或穿越奇异，同样返回失败并保持，透传不会朝另一个分支限速移动；因此目标领先
+上次关节指令过多（例如快速穿过腕部奇异，或 session 首个目标离当前姿态很远）时，机械臂会停在
+原处，直到目标回到 `30°` 以内。
 
 `test/test_ik_solver.py` 在没有 `casadi` 时只运行静态检查并跳过求解用例；装有 `casadi` 和
 `pinocchio.casadi` 的开发环境会按 RM65-B DH 检查零位 FK（`z = 0.8505 m + tcpgrip`，偏航 `π`）以及

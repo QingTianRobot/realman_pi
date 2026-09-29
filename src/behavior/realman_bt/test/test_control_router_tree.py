@@ -60,6 +60,14 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
             "pika_velocity_entry",
             True,
         ),
+        (
+            "pikamixed",
+            "Pika / Mixed 控制",
+            "true",
+            "PikaMixedInput",
+            "pika_mixed_entry",
+            True,
+        ),
         ("none", "无输入", "true", "IdleInput", None, False),
     ]
     assert len(list(router)) == len(expected)
@@ -111,7 +119,7 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
         for attribute, value in node.attrib.items()
         if value.startswith("{") or value.endswith("}")
     ]
-    assert remapped == [("selected_mode", "{selected_mode}")] * 7
+    assert remapped == [("selected_mode", "{selected_mode}")] * 8
 
 
 def test_control_router_is_installed_with_the_package():

@@ -85,7 +85,7 @@ Use the continuous-session pattern for streamed control:
 
 Long-lived input leaves return `RUNNING`. Their `onHalted()` must stop or transfer owned work and reset once-per-entry state. A placeholder may record a once-per-entry diagnostic, but it must not create a hidden command path.
 
-Pika's `PikaPositionInput` and `PikaVelocityInput` leaves are intentionally ownership/diagnostic markers; `pika_control_router` owns the l/r Action sessions and stream forwarding. Do not duplicate that routing inside the leaf.
+Pika's `PikaPositionInput`, `PikaVelocityInput` and `PikaMixedInput` leaves are intentionally ownership/diagnostic markers; `pika_control_router` owns the l/r Action sessions and stream forwarding. Do not duplicate that routing inside the leaf.
 
 ## Test Matrix
 

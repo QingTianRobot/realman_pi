@@ -101,6 +101,19 @@ class PikaVelocityInputNode final : public bt_core::ActionNode {
   bool entry_recorded_{false};
 };
 
+// Ownership/diagnostic marker for the mixed Pika mode: XYZ from the Pika
+// linear velocity, orientation from the Pika absolute quaternion. The
+// pika_control_router owns the pose session and the stream shaping.
+class PikaMixedInputNode final : public bt_core::ActionNode {
+ public:
+  using bt_core::ActionNode::ActionNode;
+  bt_core::NodeStatus tick() override;
+  void onHalted() override;
+
+ private:
+  bool entry_recorded_{false};
+};
+
 class IdleInputNode final : public bt_core::ActionNode {
  public:
   using bt_core::ActionNode::ActionNode;

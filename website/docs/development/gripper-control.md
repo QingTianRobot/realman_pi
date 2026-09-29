@@ -74,7 +74,7 @@ Web `percentage` 的范围是 `0.0..1.0`：`0` 映射到 `close_position`，`1` 
 它不改变同步 `/<name>/percentage` service 的等待和结果语义。
 
 行为树的 Pika router 订阅 `/pika/l/gripper_percentage`、`/pika/r/gripper_percentage`，在
-`pikaposition` 或 `pikavelocity` 为 `ACTIVE` 时分别转发到 `gripper_left`、`gripper_right` 的 command topic。
+`pikaposition`、`pikavelocity` 或 `pikamixed` 为 `ACTIVE` 时分别转发到 `gripper_left`、`gripper_right` 的 command topic。
 Pika 不控制 `gripper_mid`；切出 Pika 模式后不会自动发送开、合或停止命令。
 
 ## 键盘双夹爪全开／全闭

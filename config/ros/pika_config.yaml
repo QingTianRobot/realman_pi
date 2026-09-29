@@ -43,3 +43,34 @@ pika_velocity:
   # The matching ramp reaches the 0.25 rad/s limit in about 0.5 seconds from
   # rest, which stays smooth without feeling unresponsive.
   max_angular_accel_radps2: 0.5
+
+# Pika / Mixed: XYZ follows the Pika linear velocity from
+# /pika/<arm>/cartesian_velocity, while the orientation follows the Pika
+# absolute quaternion from /pika/<arm>/cartesian_pose. Both drive one absolute
+# pose session (the same IK + MoveJ path as Pika position mode), so the tool
+# orientation tracks the hand without the drift of integrating angular
+# velocity. The Pika sender must publish both topics while this mode is active;
+# the angular part of the velocity stream and the position part of the pose
+# stream are ignored.
+pika_mixed:
+  # Velocity older than this counts as zero, so the target decelerates and
+  # holds; an orientation older than this is held. Must exceed the 50 ms Pika
+  # period and stay below input_timeout_ms.
+  stale_ms: 200
+  # The session is released only when both streams are older than this.
+  input_timeout_ms: 3000
+  # Integration limits for the XYZ target. The speed must not exceed the
+  # router-wide max_linear_speed_mps the pose goal carries (0.15 m/s).
+  max_linear_speed_mps: 0.15
+  max_linear_accel_mps2: 0.10
+  # Rate at which the commanded orientation turns toward the Pika quaternion.
+  # An orientation offset at session start becomes a smooth rotation at this
+  # rate instead of a jump. Must not exceed the router's 0.25 rad/s ceiling.
+  max_angular_speed_radps: 0.25
+  # The XYZ target may lead the measured TCP by at most this distance. If the
+  # arm stops following (IK failure, singularity), the target stops too instead
+  # of running ahead and snapping the arm forward when motion resumes.
+  max_position_lead_m: 0.05
+  # How often the measured TCP pose is read for that leash, in Hz. Each read is
+  # one get_current_pose call (joint read + forward kinematics) on the driver.
+  pose_poll_hz: 10.0

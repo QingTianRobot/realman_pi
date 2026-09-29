@@ -107,6 +107,40 @@ def _load_pika_velocity_config(config_file: Path) -> dict[str, str | float | int
     return result
 
 
+def _load_pika_mixed_config(config_file: Path) -> dict[str, float | int]:
+    """Return the Pika / Mixed router parameters from pika_config.yaml."""
+    with config_file.open("r", encoding="utf-8") as stream:
+        document = yaml.safe_load(stream) or {}
+    mixed = document.get("pika_mixed")
+    if not isinstance(mixed, dict):
+        raise ValueError(f"missing pika_mixed in {config_file}")
+    result: dict[str, float | int] = {}
+    for config_name in ("stale_ms", "input_timeout_ms"):
+        value = mixed.get(config_name)
+        if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
+            raise ValueError(f"{config_file}: pika_mixed.{config_name} must be a positive integer")
+        result[f"pika_mixed_{config_name}"] = value
+    if result["pika_mixed_stale_ms"] >= result["pika_mixed_input_timeout_ms"]:
+        raise ValueError(f"{config_file}: pika_mixed.stale_ms must be below input_timeout_ms")
+    for config_name in (
+        "max_linear_speed_mps",
+        "max_linear_accel_mps2",
+        "max_angular_speed_radps",
+        "max_position_lead_m",
+        "pose_poll_hz",
+    ):
+        value = mixed.get(config_name)
+        if (
+            isinstance(value, bool)
+            or not isinstance(value, (int, float))
+            or not math.isfinite(float(value))
+            or float(value) <= 0.0
+        ):
+            raise ValueError(f"{config_file}: pika_mixed.{config_name} must be positive")
+        result[f"pika_mixed_{config_name}"] = float(value)
+    return result
+
+
 def _load_keyboard_timing(config_file: Path) -> tuple[int, int]:
     """Return (input_timeout_ms, input_lost_ms) from the keyboard layout file."""
     with config_file.open("r", encoding="utf-8") as stream:
@@ -127,6 +161,7 @@ def generate_launch_description():
     pika_config_file = config_root / "ros" / "pika_config.yaml"
     pika_joint_defaults = _load_pika_joint_defaults(pika_config_file)
     pika_velocity_config = _load_pika_velocity_config(pika_config_file)
+    pika_mixed_config = _load_pika_mixed_config(pika_config_file)
     coordinate_references, velocity_profiles = load_runtime_registries(
         config_root / "ros" / "realman_coordinates.yaml",
         config_root / "ros" / "realman_motion.yaml",
@@ -198,6 +233,7 @@ def generate_launch_description():
             "cartesian_velocity_profiles": velocity_profiles,
             "watchdog_ms": 3000,
             **pika_velocity_config,
+            **pika_mixed_config,
         }],
     )
 

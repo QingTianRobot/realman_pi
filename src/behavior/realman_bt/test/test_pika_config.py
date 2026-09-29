@@ -91,6 +91,7 @@ def test_pika_mixed_config_is_declared_and_inside_the_pose_goal_ceilings():
     assert mixed["max_linear_speed_mps"] <= 0.15
     assert mixed["max_angular_speed_radps"] <= 0.25
     assert mixed["max_position_lead_m"] > 0.0
+    assert mixed["max_orientation_lead_rad"] > 0.0
     assert mixed["pose_poll_hz"] > 0.0
 
 
@@ -113,6 +114,7 @@ def test_pika_mixed_loader_passes_every_router_parameter(tmp_path):
         "pika_mixed_max_linear_accel_mps2",
         "pika_mixed_max_angular_speed_radps",
         "pika_mixed_max_position_lead_m",
+        "pika_mixed_max_orientation_lead_rad",
         "pika_mixed_pose_poll_hz",
     }
     assert "**pika_mixed_config" in LAUNCH.read_text(encoding="utf-8")

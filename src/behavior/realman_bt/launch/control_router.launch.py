@@ -127,6 +127,7 @@ def _load_pika_mixed_config(config_file: Path) -> dict[str, float | int]:
         "max_linear_accel_mps2",
         "max_angular_speed_radps",
         "max_position_lead_m",
+        "max_orientation_lead_rad",
         "pose_poll_hz",
     ):
         value = mixed.get(config_name)

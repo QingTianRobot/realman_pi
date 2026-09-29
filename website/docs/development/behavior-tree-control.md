@@ -180,10 +180,16 @@ IK + 关节透传执行路径）：
 | 自由度 | 来源 | 处理 |
 | --- | --- | --- |
 | XYZ | `/pika/<arm>/cartesian_velocity` 的线速度（`l|r/work/pikabase`，即基座方向） | router 按模长限速、按加速度限幅，积分成绝对目标位置；角速度分量被忽略 |
-| 姿态 | `/pika/<arm>/cartesian_pose` 的四元数（基座系绝对姿态） | 以不超过 `max_angular_speed_radps` 的角速度 slerp 逼近；位置分量被忽略 |
+| 姿态 | `/pika/<arm>/cartesian_pose` 的四元数，取**相对 session 开始时的转动量** | 目标姿态 = `q_pika · q_pika0⁻¹ · q_arm0`，以不超过 `max_angular_speed_radps` 的角速度 slerp 逼近；位置分量被忽略 |
 
-因为姿态直接跟随 Pika 的绝对四元数，而不是积分角速度，手腕姿态不会随时间漂移；XYZ 仍是速度控制，
-可以离合、换向，不要求 Pika 与机械臂的绝对位置标定。**Pika 发送端在该模式下必须同时发布这两个 topic。**
+姿态采用相对映射：session 开始后第一条有效 Pika 姿态 `q_pika0` 与锚点时的机械臂姿态 `q_arm0` 配对，之后
+Pika 在基座系中转了多少（`q_pika · q_pika0⁻¹`），机械臂就在基座系中转多少，与 XYZ 线速度使用同一坐标系。
+因此 Pika 的坐标系不需要与机械臂基座对齐，激活时手腕也不会先转向 Pika 的绝对姿态。早期版本直接跟随 Pika
+绝对四元数：两者相差约 40° 时，激活后手腕要先转向 Pika 的绝对姿态，生产日志中表现为激活 1.5–3 s 后
+IK 持续失败、机械臂停住。
+
+姿态由 Pika 的四元数直接算出，而不是积分角速度，所以长时间使用不会漂移；XYZ 仍是速度控制，可以离合、换向，
+不要求 Pika 与机械臂的绝对位置标定。**Pika 发送端在该模式下必须同时发布这两个 topic。**
 
 生命周期：
 
@@ -193,9 +199,10 @@ IK + 关节透传执行路径）：
    重试，不会盲目起步。
 3. 之后每个控制周期（`10 ms`）积分一步并发布目标。速度输入晚于 `stale_ms` 视为零（目标按加速度限幅减速并
    停住），姿态输入晚于 `stale_ms` 保持当前姿态；两路都晚于 `input_timeout_ms` 才释放 session。
-4. **牵引约束**：router 以 `pose_poll_hz` 读取实测 TCP 位置，目标最多领先实测 `max_position_lead_m`。
-   IK 失败或奇异导致机械臂停住时，目标也随之停住，恢复时不会突然跳向积分出的远处目标。超过 `1 s` 没有有效
-   实测时目标停止前进。
+4. **牵引约束**：router 以 `pose_poll_hz` 读取实测 TCP 位姿，目标位置最多领先实测 `max_position_lead_m`，
+   目标姿态最多领先实测 `max_orientation_lead_rad`。IK 失败（例如姿态不可达）或奇异导致机械臂停住时，
+   目标也随之停住，不会继续转向或跑远；把 Pika 转回或移回后立即恢复，不会突然跳向远处目标。超过 `1 s`
+   没有有效实测时，位置和姿态目标都停止前进。
 
 权威配置是 [`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 的 `pika_mixed`：
 
@@ -207,6 +214,7 @@ IK + 关节透传执行路径）：
 | `max_linear_accel_mps2` | `0.10` | XYZ 目标加速度上限 |
 | `max_angular_speed_radps` | `0.25` | 姿态逼近角速度上限，不得超过 router 的 `0.25 rad/s` |
 | `max_position_lead_m` | `0.05` | 目标可领先实测 TCP 的最大距离 |
+| `max_orientation_lead_rad` | `0.15` | 目标姿态可领先实测 TCP 姿态的最大角度 |
 | `pose_poll_hz` | `10` | 牵引约束的实测位姿读取频率 |
 
 超出 router 上限的配置会在 router 启动时被拒绝。当前生产 driver 的自定义 CasADi IK 因依赖缺失未加载，

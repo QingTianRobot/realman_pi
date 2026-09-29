@@ -373,7 +373,10 @@ runtime diagnostics。Action 的 `CANCELED` 仅表示开放式 session 按请求
 Action goal accepted
         │  claim ArmOwnership, validate base frame and limits
         ▼
-/l/cartesian_pose/command  --latest target--> control worker --rm_movep_canfd-->
+/l/cartesian_pose/command  --latest target--> control worker
+        │                                               │  IK (seed = current joints)
+        │                                               ▼
+        │                                     rm_movej (non-blocking, joint degrees)
         │                                               │
         └── no fresh target ---------------------- watchdog -> slow-stop
 ```
@@ -389,12 +392,47 @@ session。
 
 `PoseStamped.header.frame_id` 必须是对应基座 frame（例如 `l/base_link`），位置单位是米，
 姿态是 ROS 四元数（驱动内部使用 WXYZ 语义）。时间戳必须非零、不早于 session epoch、严格
-递增且不超过 watchdog。驱动会归一化四元数，并按配置的线速度、角速度上限限制每个周期的
-位姿变化；无效消息不会进入 SDK。
+递增且不超过 watchdog。驱动会归一化四元数；无效消息不会进入 SDK。Goal 中的线速度、角速度
+上限只按配置硬上限校验，当前关节空间路径不会按周期插值位姿，实际速度由 `velocity_percent`
+决定。
 
-默认周期和 watchdog 与速度 session 相同（10 ms / 100 ms），位姿 Action 的 `follow=true`
-使用 `rm_movep_canfd` 进行连续透传。取消、切换模式、显式 `/stop`、断开和关闭都会停止
-session 并释放 arm ownership。
+默认周期和 watchdog 与速度 session 相同（10 ms / 100 ms）。每个周期取最新目标位姿，以当前
+实体关节角为种子求一次逆解，再用非阻塞 `rm_movej` 在关节空间下发（仿照 PikaAnyArm，
+不使用笛卡尔 `rm_movep_canfd`）。逆解失败（奇异、不可达或读不到当前关节）时保持上一个关节
+目标，不下发运动。取消、切换模式、显式 `/stop`、断开和关闭都会停止 session 并释放 arm
+ownership。
+
+### 位姿 session 的逆解
+
+逆解有两个实现，边界单位一致：关节 degree，位置 m，姿态为 base 系 WXYZ 四元数；TCP 与
+`get_current_pose`/SDK FK 相同，即法兰加当前激活的工具坐标系。
+
+| 实现 | 何时使用 | 说明 |
+| --- | --- | --- |
+| RealMan SDK `rm_algo_inverse_kinematics()` | 默认；生产镜像当前就是这一路 | 已连接机械臂时，SDK 算法库使用控制器当前参数（含激活工具 `tcpgrip`） |
+| 自定义 CasADi + IPOPT（`ik_solver.py`） | 仅当镜像里有 `casadi` 和 `pinocchio.casadi`，且本 session 的 TCP 校验通过 | Pinocchio 加载 `rm65_description/urdf/<robot_model>.urdf`，`joint_6` 即 RealMan 法兰 |
+
+生产镜像不含 `casadi`/`pinocchio.casadi`，driver 启动时会记录
+`Custom CasADi IK unavailable, falling back to the RealMan SDK IK` 并使用 SDK 逆解。
+
+自定义逆解的工具偏移不写死：driver 取
+[`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml) 中该臂的
+`default_tool`（`tcpgrip`，`xyz_m` 与 `quaternion_wxyz`）。启动时坐标管理器会把控制器激活工具
+协调为同一个 `tcpgrip`，所以两边指向同一个 TCP。由于运行中仍可通过 `select_tool_frame` 切换
+激活工具，每个位姿 session 第一次求解前都会用当前关节比较自定义 FK 与 SDK FK：位置差超过
+`2 mm` 或姿态差超过 `1°`、或 SDK FK 失败时，driver 记录 error 并在该 session 内改用 SDK 逆解。
+这保证以 `get_current_pose` 为锚点的目标（例如 Pika Mixed 的起始目标）不会因 TCP 不一致而跳变。
+
+自定义求解器最小化位置误差、`0.01 × ‖R − R_target‖²` 姿态误差和一个极小的“靠近种子”正则项，
+并以当前关节热启动，因此保持当前 TCP 的目标会得到当前关节，连续目标不会跳到其它逆解分支。
+结果离目标超过 `2 mm` 或 `1°`（不可达或未收敛）时返回失败，与 SDK 逆解失败一样保持上一个
+关节目标。相邻两次解任一关节变化超过 `30°` 时，下一次无种子求解从零位重新热启动。
+
+`test/test_ik_solver.py` 在没有 `casadi` 时只运行静态检查并跳过求解用例；装有 `casadi` 和
+`pinocchio.casadi` 的开发环境会按 RM65-B DH 检查零位 FK（`z = 0.8505 m + tcpgrip`，偏航 `π`）以及
+FK(IK(pose)) 在 degree/SDK 欧拉约定下的往返误差。启用自定义逆解前，还应在真机上确认 driver
+日志出现 `Custom IK TCP matches SDK FK`，并在目标机器上确认单次求解耗时（开发机中位数约
+`10 ms`，大于 `control_period_ms` 时周期会顺延）。
 
 ## Pika rosbag replay 的 ingress 与坐标桥接
 

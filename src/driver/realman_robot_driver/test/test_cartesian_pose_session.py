@@ -161,3 +161,131 @@ def test_pose_session_rejects_stale_and_non_unit_quaternion():
     assert session.accept_command(pose(stamp_ns=1_000_000_000))
     with pytest.raises(ValueError, match="newer"):
         session.accept_command(pose(stamp_ns=1_000_000_000))
+
+
+class FkAdapter(Adapter):
+    """Adapter whose SDK FK reports the tcpgrip TCP at the zero joint pose."""
+
+    def __init__(self, sdk_pose=(0.0, 0.0, 0.9705, 0.0, 0.0, 3.141592653589793)):
+        super().__init__()
+        self.sdk_pose = list(sdk_pose)
+        self.fk_calls = []
+
+    def forward_kinematics(self, joint_degrees):
+        self.fk_calls.append(list(joint_degrees))
+        return 0, list(self.sdk_pose)
+
+
+class CustomIk:
+    """Custom IK double: FK at the zero pose plus a fixed degree solution."""
+
+    def __init__(self, tcp=((0.0, 0.0, 0.9705), (0.0, 0.0, 0.0, 1.0))):
+        self.tcp = tcp
+        self.solve_calls = []
+
+    def forward_kinematics(self, joint_degrees):
+        return self.tcp
+
+    def solve(self, position, quaternion, seed_joint_degrees=None):
+        self.solve_calls.append((position, quaternion, list(seed_joint_degrees)))
+        return [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+
+
+class Logger:
+    def __init__(self):
+        self.errors = []
+
+    def info(self, message):
+        pass
+
+    def warning(self, message):
+        pass
+
+    def error(self, message):
+        self.errors.append(message)
+
+
+def custom_ik_session(adapter, ik_solver, logger=None):
+    return CartesianPoseSession(
+        arm_id="l",
+        adapter=adapter,
+        ownership=ArmOwnership(),
+        settings=settings(),
+        active_frame={ReferenceType.BASE: ("base", "l/base_link")},
+        monotonic=Clock(),
+        ros_time_now_ns=RosClock(),
+        logger=logger,
+        ik_solver=ik_solver,
+    )
+
+
+def test_pose_session_uses_custom_ik_when_its_tcp_matches_sdk_fk():
+    adapter = FkAdapter()
+    ik_solver = CustomIk()
+    session = custom_ik_session(adapter, ik_solver)
+
+    assert session.start(goal())
+    assert session.accept_command(pose(position=(0.0, 0.0, 0.9)))
+    assert session.tick() is None
+    session.cancel()
+
+    assert ik_solver.solve_calls
+    assert ik_solver.solve_calls[0][2] == [0.0] * 6
+    assert not adapter.ik_calls
+    assert adapter.movej_calls[0][0] == [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    # One TCP comparison per session, however many ticks ran.
+    assert len(adapter.fk_calls) == 1
+
+
+def test_pose_session_falls_back_to_sdk_ik_when_custom_tcp_differs():
+    # A custom IK built on the bare flange sits 120 mm short of the tcpgrip TCP.
+    adapter = FkAdapter()
+    ik_solver = CustomIk(tcp=((0.0, 0.0, 0.8505), (0.0, 0.0, 0.0, 1.0)))
+    logger = Logger()
+    session = custom_ik_session(adapter, ik_solver, logger)
+
+    assert session.start(goal())
+    assert session.accept_command(pose(position=(0.0, 0.0, 0.9)))
+    assert session.tick() is None
+    session.cancel()
+
+    assert not ik_solver.solve_calls
+    assert adapter.ik_calls
+    assert adapter.movej_calls[0][0] == pytest.approx([0.0, 0.1, 0.2, 0.3, 0.4, 0.5])
+    assert any("120.0 mm" in message for message in logger.errors)
+
+
+def test_pose_session_falls_back_when_custom_orientation_differs_or_fk_fails():
+    adapter = FkAdapter()
+    # Identity instead of the SDK's 180 degree yaw: the swapped-quaternion bug.
+    ik_solver = CustomIk(tcp=((0.0, 0.0, 0.9705), (1.0, 0.0, 0.0, 0.0)))
+    session = custom_ik_session(adapter, ik_solver)
+    assert session.start(goal())
+    assert session.accept_command(pose(position=(0.0, 0.0, 0.9)))
+    assert session.tick() is None
+    session.cancel()
+    assert not ik_solver.solve_calls
+
+    failing = FkAdapter()
+    failing.forward_kinematics = lambda joints: (-1, [])
+    ik_solver = CustomIk()
+    session = custom_ik_session(failing, ik_solver)
+    assert session.start(goal())
+    assert session.accept_command(pose(position=(0.0, 0.0, 0.9)))
+    assert session.tick() is None
+    session.cancel()
+    assert not ik_solver.solve_calls
+    assert failing.ik_calls
+
+
+def test_pose_session_rechecks_custom_tcp_for_each_session():
+    adapter = FkAdapter()
+    session = custom_ik_session(adapter, CustomIk())
+
+    for _ in range(2):
+        assert session.start(goal())
+        assert session.accept_command(pose(position=(0.0, 0.0, 0.9)))
+        assert session.tick() is None
+        session.cancel()
+
+    assert len(adapter.fk_calls) == 2

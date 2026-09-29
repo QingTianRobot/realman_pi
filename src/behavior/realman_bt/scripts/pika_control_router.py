@@ -924,11 +924,13 @@ class PikaControlRouter(Node):
         goal.max_angular_speed_radps = self.max_angular_speed_radps
         goal.max_linear_accel_mps2 = self.max_linear_accel_mps2
         goal.max_angular_accel_radps2 = self.max_angular_accel_radps2
+        # The driver streams IK joint targets by CANFD passthrough; low-follow
+        # suits this 20 ms period (high-follow requires <= 10 ms).
         goal.follow = False
         goal.trajectory_mode = 0
         goal.radio = 0
-        # MoveJ (official IK) streaming: moderate speed and full blend radius so
-        # successive joint targets fuse into a smooth continuous motion.
+        # Still validated by the driver, but unused by joint passthrough; the
+        # driver's pose_max_joint_speed_dps is what bounds joint motion.
         goal.velocity_percent = 50
         goal.blend_radius_percent = 100
         return goal

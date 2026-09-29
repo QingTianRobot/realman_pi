@@ -1,4 +1,12 @@
-"""Cancellable, watchdog-protected Cartesian pose streaming session."""
+"""Cancellable, watchdog-protected Cartesian pose streaming session.
+
+Each tick solves IK for the latest target and streams the joint result with
+``rm_movej_canfd`` passthrough. Passthrough executes immediately and does no
+planning, so the session itself bounds how far every joint may move per tick
+(``pose_max_joint_speed_dps`` in realman_motion.yaml). The previous
+``rm_movej(..., connect=1)`` stream never moved the arm: connect=1 plans a
+trajectory together with the next one and does not execute it.
+"""
 
 from __future__ import annotations
 
@@ -56,6 +64,27 @@ class _Goal:
 _ZERO_POSE = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0))
 
 
+def step_towards(
+    current: Sequence[float], target: Sequence[float], max_step_deg: float
+) -> list[float]:
+    """Move each joint toward ``target`` by at most ``max_step_deg``."""
+    limit = max(0.0, float(max_step_deg))
+    return [
+        float(c) + max(-limit, min(limit, float(t) - float(c)))
+        for c, t in zip(current, target)
+    ]
+
+
+def _valid_joints(values: Any) -> list[float] | None:
+    try:
+        joints = [float(value) for value in values]
+    except (TypeError, ValueError):
+        return None
+    if len(joints) != 6 or not all(math.isfinite(value) for value in joints):
+        return None
+    return joints
+
+
 class CartesianPoseSession:
     """Own one arm while repeatedly transmitting an absolute target pose."""
 
@@ -102,6 +131,9 @@ class CartesianPoseSession:
         self._last_command_stamp_ns: int | None = None
         self._last_tick_at = 0.0
         self._last_ik_failure_log = 0.0
+        # Joint target most recently accepted by the controller; the next step
+        # starts here and the next IK solve is seeded from it.
+        self._commanded_joints: list[float] | None = None
         self._last_api2_status = 0
         self._phase = PoseFeedbackPhase.VALIDATING
         self._move_in_progress = False
@@ -129,6 +161,11 @@ class CartesianPoseSession:
                 if self._coordinate_manager is not None and not self._coordinate_manager.motion_allowed(self.arm_id):
                     raise ValueError("active coordinates are not verified")
                 self._goal = self._validate_goal(goal)
+                # Passthrough steps are relative to the last command, so the
+                # first one must start from where the arm actually is.
+                current = self._read_current_joints()
+                if current is None:
+                    raise ValueError("current joint state is unavailable")
             except Exception as error:
                 self.ownership.release(self.arm_id)
                 self._owns_ownership = False
@@ -143,6 +180,7 @@ class CartesianPoseSession:
             self._command_received_at = now
             self._command_received = False
             self._last_tick_at = now
+            self._commanded_joints = current
             self._session_epoch_ns = None
             self._last_command_stamp_ns = None
             self._stop_event.clear()
@@ -198,32 +236,38 @@ class CartesianPoseSession:
             if not expired:
                 if self._move_in_progress:
                     return None
-                if not self._command_received:
+                if not self._command_received or self._commanded_joints is None:
                     return None
                 self._move_in_progress = True
                 goal = self._goal
                 position = self._target_position
                 quaternion = self._target_quaternion
+                seed = list(self._commanded_joints)
+                # A stalled tick must not turn into one large unplanned step.
+                dt = min(max(now - self._last_tick_at, 0.0), 2.0 * goal.control_period_ms / 1000.0)
+                self._last_tick_at = now
         if expired:
             return self._stop_and_join(PoseTerminalState.WATCHDOG_STOP, "pose command watchdog expired")
+        command = seed
         try:
-            joints = self._solve_ik(position, quaternion)
-            if joints is None:
-                # IK failed (singularity / unreachable): hold the previous joint target.
-                status = 0
-            else:
-                # PikaAnyArm-style: solve IK once (seeded by current joints to avoid branch jumps) then MoveJ in joint space, not Cartesian movep.
-                status = int(self.adapter.movej(joints, goal.velocity_percent, goal.blend_radius_percent, True))
-            if self._logger is not None:
-                self._logger.warning("DIAG %s movej status=%s" % (self.arm_id, status))
+            solution = self._solve_ik(position, quaternion, seed)
+            if solution is not None:
+                command = step_towards(
+                    seed, solution, self.settings.pose_max_joint_speed_dps * dt
+                )
+            # IK failure (singularity / unreachable) re-sends the previous
+            # target, which holds the arm and keeps the passthrough stream alive.
+            status = int(
+                self.adapter.movej_canfd(command, goal.follow, goal.trajectory_mode, goal.radio)
+            )
         except Exception:
             status = -1
-            if self._logger is not None:
-                self._logger.warning("DIAG %s movej exception" % self.arm_id)
         with self._condition:
             self._move_in_progress = False
             if not self._running or self._goal is not goal:
                 return self._result
+            if status == 0:
+                self._commanded_joints = command
             self._limited_position = position
             self._limited_quaternion = quaternion
             self._last_api2_status = status
@@ -232,43 +276,48 @@ class CartesianPoseSession:
             return self._stop_and_join(PoseTerminalState.ABORTED, "Cartesian pose command failed", api2_status=status)
         return None
 
-    def _solve_ik(
-        self,
-        position: tuple[float, float, float],
-        quaternion: tuple[float, float, float, float],
-    ) -> list[float] | None:
-        """Solve IK from the current joints toward the target pose.
-
-        Returns target joint degrees, or ``None`` when the current joint state
-        is unavailable or the IK solver fails (singularity / unreachable pose).
-        On failure the caller holds the previous joint target instead of moving.
-        """
-        if self._ik_solver is not None:
-            try:
-                state = self.adapter.get_state()
-            except Exception:
-                current = None
-            else:
-                current = getattr(state, "joint_degrees", None)
-                if getattr(state, "error_code", -1) != 0 or not current or len(current) != 6:
-                    current = None
-            return self._ik_solver.solve(position, quaternion, seed_joint_degrees=current)
+    def _read_current_joints(self) -> list[float] | None:
         try:
             state = self.adapter.get_state()
         except Exception:
             return None
-        current = getattr(state, "joint_degrees", None)
-        if getattr(state, "error_code", -1) != 0 or not current or len(current) != 6:
+        if getattr(state, "error_code", -1) != 0:
             return None
+        return _valid_joints(getattr(state, "joint_degrees", None))
+
+    def _solve_ik(
+        self,
+        position: tuple[float, float, float],
+        quaternion: tuple[float, float, float, float],
+        seed_joint_degrees: list[float],
+    ) -> list[float] | None:
+        """Solve IK toward the target, seeded from the last commanded joints.
+
+        Seeding from the command instead of reading the arm every tick keeps the
+        solution on the current branch and spares one controller round trip per
+        tick. Returns ``None`` on failure; the caller then holds the arm.
+        """
+        if self._ik_solver is not None:
+            try:
+                joints = self._ik_solver.solve(
+                    position, quaternion, seed_joint_degrees=seed_joint_degrees
+                )
+            except Exception:
+                joints = None
+            solution = _valid_joints(joints) if joints is not None else None
+            if solution is None:
+                self._log_ik_failure(-1)
+            return solution
         pose_euler = [*position, *quaternion_to_euler(quaternion)]
         try:
-            status, joints = self.adapter.inverse_kinematics(list(current), pose_euler)
+            status, joints = self.adapter.inverse_kinematics(list(seed_joint_degrees), pose_euler)
         except Exception:
+            self._log_ik_failure(-1)
             return None
-        if status != 0 or not joints or len(joints) != 6:
+        solution = _valid_joints(joints) if status == 0 and joints else None
+        if solution is None:
             self._log_ik_failure(status)
-            return None
-        return [float(value) for value in joints]
+        return solution
 
     def _log_ik_failure(self, status: int) -> None:
         now = self._monotonic()

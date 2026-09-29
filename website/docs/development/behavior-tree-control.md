@@ -175,7 +175,7 @@ Pika ingress 标称 `20 Hz`，生产 DDS/调度可能出现短暂抖动。两种
 #### Pika / Mixed 控制（`pikamixed`）
 
 Mixed 模式把两路 Pika 输入组合成**一个绝对位姿 session**（`/<arm>/cartesian_pose`，与 Pika 位置模式相同的
-IK + MoveJ 执行路径）：
+IK + 关节透传执行路径）：
 
 | 自由度 | 来源 | 处理 |
 | --- | --- | --- |

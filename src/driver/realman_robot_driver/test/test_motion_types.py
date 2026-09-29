@@ -429,6 +429,7 @@ def test_motion_type_hints_resolve_private_mapping_helper():
         "hard_max_angular_accel_radps2",
         "joint_goal_tolerance_deg",
         "stop_timeout_sec",
+        "pose_max_joint_speed_dps",
     ],
 )
 def test_motion_settings_reject_non_positive_or_non_finite_values(tmp_path: Path, field: str):
@@ -445,3 +446,13 @@ def test_motion_settings_reject_unknown_keys_and_unknown_arm(tmp_path: Path):
 
     with pytest.raises(ValueError, match="unknown arm"):
         MotionSettings.from_yaml(write_settings(tmp_path), "x")
+
+
+def test_pose_joint_speed_is_optional_and_loaded_when_set(tmp_path: Path):
+    from realman_robot_driver.motion_types import DEFAULT_POSE_MAX_JOINT_SPEED_DPS
+
+    assert MotionSettings.from_yaml(write_settings(tmp_path), "l").pose_max_joint_speed_dps == (
+        DEFAULT_POSE_MAX_JOINT_SPEED_DPS
+    )
+    path = write_settings(tmp_path, pose_max_joint_speed_dps=45.0)
+    assert MotionSettings.from_yaml(path, "l").pose_max_joint_speed_dps == 45.0

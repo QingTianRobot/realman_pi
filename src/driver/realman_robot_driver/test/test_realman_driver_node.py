@@ -1070,7 +1070,7 @@ def test_connect_reconciles_physical_lockout_with_read_only_trajectory_state():
     source = NODE_PATH.read_text(encoding="utf-8")
 
     assert "was_connected = self.adapter.connected" in source
-    assert "connection_reset=not was_connected" in source
+    assert "connection_reset=event_recovery or not was_connected" in source
     assert "recover_event_channel=lambda: self._recover_event_channel()" in source
     assert "self.motion_coordinator.event_channel_recovery_required" in source
     assert "self.adapter.disconnect()" in source
@@ -1167,6 +1167,54 @@ def test_event_channel_recovery_serializes_disconnect_delay_and_reconnect():
         "ownership_acquire",
         "connect",
         "ownership_release",
+    ]
+
+
+@requires_ros_action_runtime
+def test_event_channel_recovery_connect_clears_quarantine_on_live_handle(monkeypatch):
+    # Recovery replaces the SDK handle in place, so the adapter still reports
+    # connected before the reconnect. The fresh callback channel must still be
+    # reconciled as a connection reset, or the quarantine is never cleared and
+    # every later motion goal is rejected.
+    reconcile_calls = []
+
+    class Adapter:
+        connected = True
+        last_error_message = ""
+
+        def reconnect(self):
+            return 0
+
+        def stop(self):
+            return 0
+
+        def register_event_callback(self, _callback):
+            return 0
+
+    def reconcile_after_connect(**kwargs):
+        reconcile_calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "realman_robot_driver.realman_driver_node.time.sleep", lambda _seconds: None
+    )
+    node = SimpleNamespace(
+        adapter=Adapter(),
+        motion_coordinator=SimpleNamespace(
+            handle_event=lambda _event: None,
+            reconcile_after_connect=reconcile_after_connect,
+        ),
+        _last_connect_attempt=0.0,
+        get_logger=lambda: SimpleNamespace(
+            info=lambda _message: None,
+            warn=lambda _message: None,
+            error=lambda _message: None,
+        ),
+    )
+
+    assert RealManDriverNode._connect_to_robot(node, event_recovery=True) == 0
+    assert reconcile_calls == [
+        {"connection_reset": True, "recovery_owns_arm": True}
     ]
 
 

@@ -520,7 +520,7 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ、定时笛卡尔速度，以及 `control.xml` 的
 `SelectInputMode`、`InputModeGuard`、`ActivateInputMode`、`KeyboardVelocityInput` 和其它输入叶。切入
 `keyboard` 时，ReactiveFallback 激活键盘叶并由独立 router 管理 l/r WORK 速度 session；切入
-`pikaposition` 或 `pikavelocity` 时，输入树会先执行一次有状态 Sequence 中的三臂 ThreeArmMoveJ 默认姿态准备动作，
+`pikaposition`、`pikavelocity` 或 `pikamixed` 时，输入树会先执行一次有状态 Sequence 中的三臂 ThreeArmMoveJ 默认姿态准备动作，
 成功后才激活 Pika；该姿态来自 `config/ros/pika_config.yaml` 的 `joint_degrees`，由
 `control_router.launch.py` 启动时注入，不是每次切换时动态读取。Pika 分支保持运行时，
 准备动作不会被 ReactiveSequence 的后续 tick 重复执行；离开后重新进入才会再次准备。新增节点仍须在执行器中显式

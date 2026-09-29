@@ -8,8 +8,8 @@ description: RealMan 控制模式切换、工业任务树和隔离 mock 验证�
 行为树运行时位于 `realman_bt`，底层仍使用 RealMan Action 和
 `motion_coordinator`。持久输入路由器的权威定义是
 [`config/behavior-trees/control.xml`](../../../config/behavior-trees/control.xml)：
-当前目录顺序为 `web`、`keyboard`、`policy`、`pikaposition`、`pikavelocity`、`none`。其中
-`keyboard`、`policy`、`pikaposition`、`pikavelocity` 和 `none` 可由浏览器选择器请求；`web`
+当前目录顺序为 `web`、`keyboard`、`policy`、`pikaposition`、`pikavelocity`、`pikamixed`、`none`。其中
+`keyboard`、`policy`、`pikaposition`、`pikavelocity`、`pikamixed` 和 `none` 可由浏览器选择器请求；`web`
 是粘性且最高优先级的覆盖，不出现在浏览器选择器中。
 ROS selection service 接受任何已注册模式（包括 `web`），只要求调用者提供非空 `requester_id`；
 该字段用于请求关联，并非 service 层的身份验证或授权。
@@ -19,8 +19,8 @@ Policy/Pika 输入叶一样保持 `RUNNING` 并记录控制权；实际键盘速
 `keyboard_control_router` 管理，Pika topic 转发由 `pika_control_router` 管理。两个 router 都只为 l/r
 建立 session，绝不为 m 建立 goal、订阅或 command publisher。
 
-选择器显示 `Pika / 位置控制`（模式 ID `pikaposition`）和 `Pika / 速度控制`（模式 ID
-`pikavelocity`）两个独立选项。Pika 生产 topic 为 `/pika/l|r/cartesian_pose`（`PoseStamped`）
+选择器显示 `Pika / 位置控制`（模式 ID `pikaposition`）、`Pika / 速度控制`（模式 ID
+`pikavelocity`）和 `Pika / Mixed 控制`（模式 ID `pikamixed`）三个独立选项。Pika 生产 topic 为 `/pika/l|r/cartesian_pose`（`PoseStamped`）
 和 `/pika/l|r/cartesian_velocity`（`TwistStamped`）；位置数据使用各臂 BASE frame（`l/base_link`、
 `r/base_link`），速度数据使用已验证的 identity WORK frame（`l/work/pikabase`、`r/work/pikabase`）。
 键盘仍要求已验证的默认 `l/work/cell`、`r/work/cell`。夹爪开合度由 `/pika/l|r/gripper_percentage`
@@ -137,7 +137,7 @@ Web bridge 检查 lease/sequence 并识别新按下边沿，发布 `/keyboard/l|
 
 同一 launch 还启动 `pika_control_router`。它接收 executor 的 active mode，并只为 l/r 管理 Pika
 Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/command` 和
-`/gripper_right/percentage/command`。只有 `pikaposition` 或 `pikavelocity` 处于 `ACTIVE` 时才转发；
+`/gripper_right/percentage/command`。只有 `pikaposition`、`pikavelocity` 或 `pikamixed` 处于 `ACTIVE` 时才转发；
 其它模式会丢弃输入，不自动开合。夹爪 command topic 是非阻塞的连续控制路径，`dry_run=true`
 （默认）时不发送机器人 Action 或夹爪 command。需要真实 Pika 运动时必须显式设置
 `REALMAN_BT_DRY_RUN=false`，并完成低速、急停和工作区检查。
@@ -171,6 +171,46 @@ Pika ingress 标称 `20 Hz`，生产 DDS/调度可能出现短暂抖动。两种
 与键盘相同，每次 Pika 激活后的 session 重开会以 `restart #N` warning 记录，结束日志会写明
 `position` 或 `velocity`。这些都不放宽 driver watchdog：router 崩溃或到 driver 的发布中断时，driver 仍在
 `100 ms` 内停止。
+
+#### Pika / Mixed 控制（`pikamixed`）
+
+Mixed 模式把两路 Pika 输入组合成**一个绝对位姿 session**（`/<arm>/cartesian_pose`，与 Pika 位置模式相同的
+IK + MoveJ 执行路径）：
+
+| 自由度 | 来源 | 处理 |
+| --- | --- | --- |
+| XYZ | `/pika/<arm>/cartesian_velocity` 的线速度（`l|r/work/pikabase`，即基座方向） | router 按模长限速、按加速度限幅，积分成绝对目标位置；角速度分量被忽略 |
+| 姿态 | `/pika/<arm>/cartesian_pose` 的四元数（基座系绝对姿态） | 以不超过 `max_angular_speed_radps` 的角速度 slerp 逼近；位置分量被忽略 |
+
+因为姿态直接跟随 Pika 的绝对四元数，而不是积分角速度，手腕姿态不会随时间漂移；XYZ 仍是速度控制，
+可以离合、换向，不要求 Pika 与机械臂的绝对位置标定。**Pika 发送端在该模式下必须同时发布这两个 topic。**
+
+生命周期：
+
+1. 进入模式时和其它 Pika 模式一样，先由 `ThreeArmMoveJ` 到 `pika_default_pose`，再激活。
+2. 第一条有效输入到达后，router 调用 `/<arm>/get_current_pose`（BASE）读取当前 TCP 位姿作为锚点，然后
+   建立位姿 session；第一个目标就是锚点本身，所以 session 从静止、原地开始。锚点读取失败时退避 `0.5 s`
+   重试，不会盲目起步。
+3. 之后每个控制周期（`10 ms`）积分一步并发布目标。速度输入晚于 `stale_ms` 视为零（目标按加速度限幅减速并
+   停住），姿态输入晚于 `stale_ms` 保持当前姿态；两路都晚于 `input_timeout_ms` 才释放 session。
+4. **牵引约束**：router 以 `pose_poll_hz` 读取实测 TCP 位置，目标最多领先实测 `max_position_lead_m`。
+   IK 失败或奇异导致机械臂停住时，目标也随之停住，恢复时不会突然跳向积分出的远处目标。超过 `1 s` 没有有效
+   实测时目标停止前进。
+
+权威配置是 [`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 的 `pika_mixed`：
+
+| 字段 | 默认 | 说明 |
+| --- | --- | --- |
+| `stale_ms` | `200` | 输入视为过期的时间，须大于 Pika `50 ms` 周期 |
+| `input_timeout_ms` | `3000` | 两路输入都超过此值才释放 session |
+| `max_linear_speed_mps` | `0.15` | XYZ 目标速度上限，不得超过 router 的 `0.15 m/s` |
+| `max_linear_accel_mps2` | `0.10` | XYZ 目标加速度上限 |
+| `max_angular_speed_radps` | `0.25` | 姿态逼近角速度上限，不得超过 router 的 `0.25 rad/s` |
+| `max_position_lead_m` | `0.05` | 目标可领先实测 TCP 的最大距离 |
+| `pose_poll_hz` | `10` | 牵引约束的实测位姿读取频率 |
+
+超出 router 上限的配置会在 router 启动时被拒绝。当前生产 driver 的自定义 CasADi IK 因依赖缺失未加载，
+位姿 session 使用 SDK IK；锚点读取（SDK 正解）与执行（SDK 逆解）因此参考同一末端点。
 
 Pika 速度 Action 使用 `WORK` 和 `pikabase`。driver 收到该 Goal 时，如果当前已验证工作坐标不是
 `pikabase`，会在同一臂 ownership 内调用坐标管理器写入、切换并读回验证已配置的 `pikabase`，验证成功后才

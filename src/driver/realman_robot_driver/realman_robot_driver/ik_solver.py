@@ -34,8 +34,9 @@ _SEED_WEIGHT = 1e-6
 # pose session holds the previous joint target like it does for SDK IK errors.
 _MAX_POSITION_ERROR_M = 0.002
 _MAX_ORIENTATION_ERROR_DEG = 1.0
-# A larger per-joint change between successive solutions (in degrees) means a
-# bad warm-start, so an unseeded solve restarts from the home pose.
+# A solution that moves any joint farther than this (in degrees) from the seed,
+# or from the last accepted solution when unseeded, is a branch flip or a
+# singularity, so it is reported as a failure and the session holds.
 _MAX_JUMP_DEG = 30.0
 
 
@@ -135,9 +136,9 @@ class RealManIK:
             },
         )
 
-        # Warm start in radians (Pinocchio); history in degrees (public units).
+        # Warm start and last accepted solution, both in radians (Pinocchio).
         self._init_data = np.zeros(self.model.nq)
-        self._history_degrees = np.zeros(self.model.nq)
+        self._last_solution: np.ndarray | None = None
 
     def forward_kinematics(
         self, joint_degrees: Sequence[float]
@@ -162,10 +163,12 @@ class RealManIK:
     ) -> list[float] | None:
         """Return joint degrees for the target tool pose, or None on failure."""
         nq = self.model.nq
+        reference = self._last_solution
         if seed_joint_degrees is not None:
             seed = np.radians(np.asarray(seed_joint_degrees, dtype=float))
             if seed.shape == (nq,) and np.all(np.isfinite(seed)):
                 self._init_data = seed
+                reference = seed
         target = pin.SE3(
             _quaternion(quaternion_wxyz).matrix(), np.asarray(position, dtype=float)
         )
@@ -184,12 +187,13 @@ class RealManIK:
         if not self._reaches(sol_degrees, target):
             # Unreachable target or stalled solve: hold instead of approximating.
             return None
-        max_diff = float(np.max(np.abs(self._history_degrees - sol_degrees)))
-        self._history_degrees = sol_degrees
+        if reference is not None:
+            jump = float(np.max(np.abs(sol_degrees - np.degrees(reference))))
+            if jump > _MAX_JUMP_DEG:
+                # Hold rather than swing the arm to another branch; keep the warm start.
+                return None
+        self._last_solution = sol_q
         self._init_data = sol_q
-        if max_diff > _MAX_JUMP_DEG:
-            # A sudden jump likely means a bad warm-start; reset toward home.
-            self._init_data = np.zeros(nq)
         return [float(value) for value in sol_degrees]
 
     def _placement(self, joint_degrees: Sequence[float]) -> pin.SE3:

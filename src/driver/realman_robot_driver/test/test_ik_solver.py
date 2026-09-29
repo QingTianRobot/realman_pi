@@ -160,17 +160,29 @@ def test_unreachable_target_returns_none(ik):
     assert ik.solve((2.0, 0.0, 0.5), (1.0, 0.0, 0.0, 0.0), [0.0] * 6) is None
 
 
-def test_jump_check_compares_degrees(ik):
-    # The history starts at home, so a 70 degree joint 3 exceeds the 30 degree
-    # limit and the warm start resets toward home.
+def test_jump_over_30_degrees_from_the_seed_holds(ik):
+    current = [0.0, 10.0, 70.0, 0.0, 40.0, 0.0]
+    # Joint 1 would swing 45 degrees: hold instead of sending the solution.
+    position, quaternion = ik.forward_kinematics([45.0, 10.0, 70.0, 0.0, 40.0, 0.0])
+    assert ik.solve(position, quaternion, seed_joint_degrees=current) is None
+
+    # 25 degrees is within the limit, so the solution is returned.
+    near = [25.0, 10.0, 70.0, 0.0, 40.0, 0.0]
+    position, quaternion = ik.forward_kinematics(near)
+    assert ik.solve(position, quaternion, seed_joint_degrees=current) == pytest.approx(near, abs=0.5)
+
+
+def test_unseeded_jump_is_measured_from_the_last_solution(ik):
     first = [20.0, 10.0, 70.0, 0.0, 40.0, 0.0]
     position, quaternion = ik.forward_kinematics(first)
-    assert ik.solve(position, quaternion, seed_joint_degrees=first) is not None
-    assert not any(ik._init_data)
+    accepted = ik.solve(position, quaternion, seed_joint_degrees=first)
+    assert accepted == pytest.approx(first, abs=0.5)
 
-    # A 5 degree step stays under it, so the solution becomes the warm start.
-    second = [20.0, 15.0, 70.0, 0.0, 40.0, 0.0]
-    position, quaternion = ik.forward_kinematics(second)
-    solution = ik.solve(position, quaternion, seed_joint_degrees=second)
-    assert solution == pytest.approx(second, abs=0.5)
-    assert ik._init_data == pytest.approx([math.radians(value) for value in solution])
+    position, quaternion = ik.forward_kinematics([60.0, 10.0, 70.0, 0.0, 40.0, 0.0])
+    assert ik.solve(position, quaternion) is None
+    # A held jump keeps the warm start at the last accepted solution.
+    assert ik._init_data == pytest.approx([math.radians(value) for value in accepted])
+
+    step = [25.0, 12.0, 70.0, 0.0, 40.0, 0.0]
+    position, quaternion = ik.forward_kinematics(step)
+    assert ik.solve(position, quaternion) == pytest.approx(step, abs=0.5)

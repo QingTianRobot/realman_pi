@@ -1023,8 +1023,12 @@ class RealManDriverNode(Node):
                     )
                     self.adapter.disconnect()
                     return callback_status
+                # Recovery recreates the SDK handle while the adapter still
+                # reports connected, but the callback channel is just as fresh
+                # as after a cold connect. Without the reset flag the
+                # quarantine is never cleared and every motion goal is rejected.
                 if not self.motion_coordinator.reconcile_after_connect(
-                    connection_reset=not was_connected,
+                    connection_reset=event_recovery or not was_connected,
                     recovery_owns_arm=event_recovery,
                 ):
                     self.get_logger().warn(

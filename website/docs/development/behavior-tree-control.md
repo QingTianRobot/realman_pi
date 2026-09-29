@@ -144,8 +144,8 @@ Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/com
 
 `pikavelocity` 是实时速度流，而不是单点位置目标。其逐会话限值来自
 [`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 的 `pika_velocity`：线速度
-`max_linear_speed_mps=0.15 m/s`、角速度 `max_angular_speed_radps=0.25 rad/s`、角加速度
-`max_angular_accel_radps2=0.5 rad/s²`（从静止到 `0.25 rad/s` 约 `0.5 s`）。Pika 输入的线速度或角速度三轴
+`max_linear_speed_mps=0.15 m/s`、角速度 `max_angular_speed_radps=2.0 rad/s`、角加速度
+`max_angular_accel_radps2=4.0 rad/s²`（从静止到 `2.0 rad/s` 约 `0.5 s`）。Pika 输入的线速度或角速度三轴
 向量模长超过上限时，router 按模长等比例缩放并保留方向，而不是丢弃整条消息；缩放诊断按每臂限频。
 Pika 速度 Goal 使用 `follow=false`，周期与键盘相同，为 l/r 的 `10 ms`（driver 每臂只接受一个周期）。
 

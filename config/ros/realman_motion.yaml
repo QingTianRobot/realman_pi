@@ -28,6 +28,10 @@ robots:
     # Pika sessions may explicitly request a faster angular ramp; ordinary
     # keyboard, Web, and BT sessions remain capped by the standard value above.
     hard_max_angular_accel_radps2: 4.0
+    # Pika velocity sessions may request a faster linear ramp; ordinary keyboard, Web,
+    # and BT sessions stay capped by max_linear_accel_mps2 above. Without this the
+    # 0.10 m/s^2 ramp made a 1 s hand motion move the arm only ~5 cm.
+    hard_max_linear_accel_mps2: 2.0
     # Per-joint terminal tolerance in degrees; success requires every joint to converge.
     joint_goal_tolerance_deg: 0.25
     # Maximum seconds to wait for one commanded stop to be reported complete.
@@ -93,6 +97,10 @@ robots:
     # Pika sessions may explicitly request a faster angular ramp; ordinary
     # keyboard, Web, and BT sessions remain capped by the standard value above.
     hard_max_angular_accel_radps2: 4.0
+    # Pika velocity sessions may request a faster linear ramp; ordinary keyboard, Web,
+    # and BT sessions stay capped by max_linear_accel_mps2 above. Without this the
+    # 0.10 m/s^2 ramp made a 1 s hand motion move the arm only ~5 cm.
+    hard_max_linear_accel_mps2: 2.0
     # Per-joint terminal tolerance in degrees; success requires every joint to converge.
     joint_goal_tolerance_deg: 0.25
     # Maximum seconds to wait for one commanded stop to be reported complete.

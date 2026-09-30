@@ -152,6 +152,7 @@ def parse_arm_profiles(
     max_linear_speed_mps: float,
     max_angular_speed_radps: float,
     max_angular_accel_radps2: float,
+    max_linear_accel_mps2: float | None = None,
 ) -> dict[str, _ArmProfile]:
     references: dict[str, tuple[str, str]] = {}
     for entry in coordinate_references:
@@ -195,6 +196,12 @@ def parse_arm_profiles(
     angular_accel_limit = _positive_float(
         max_angular_accel_radps2, "max_angular_accel_radps2"
     )
+    # None keeps the per-arm value from cartesian_velocity_profiles (0.10 m/s^2).
+    linear_accel_limit = (
+        None
+        if max_linear_accel_mps2 is None
+        else _positive_float(max_linear_accel_mps2, "max_linear_accel_mps2")
+    )
     return {
         arm: _ArmProfile(
             references[arm][0],
@@ -203,7 +210,7 @@ def parse_arm_profiles(
             motion[arm][1],
             linear_limit,
             angular_limit,
-            motion[arm][2],
+            motion[arm][2] if linear_accel_limit is None else linear_accel_limit,
             angular_accel_limit,
         )
         for arm in ("l", "r")
@@ -441,6 +448,9 @@ class PikaControlRouter(Node):
             self.declare_parameter(
                 "pika_velocity_max_angular_accel_radps2", 4.0
             ).value,
+            # 0.0 (unset) keeps the profile value.
+            self.declare_parameter("pika_velocity_max_linear_accel_mps2", 0.0).value
+            or None,
         )
         self.mode = ""
         self._arms: dict[str, _ArmState] = {}

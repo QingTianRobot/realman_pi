@@ -83,6 +83,25 @@ def test_profile_parser_selects_configured_pikabase_work_reference():
     assert profiles["r"].max_angular_accel_radps2 == 4.0
 
 
+def test_profile_parser_overrides_linear_acceleration_only_when_configured():
+    from pika_control_router import parse_arm_profiles
+
+    references = [
+        "l|work/pikabase|1|pikabase|l/work/pikabase",
+        "r|work/pikabase|1|pikabase|r/work/pikabase",
+    ]
+    velocity = ["l|10|100|0.15|0.25|0.1|0.5|10|2", "r|10|100|0.15|0.25|0.1|0.5|10|2"]
+
+    default = parse_arm_profiles(references, velocity, "work/pikabase", 1.0, 2.0, 4.0)
+    raised = parse_arm_profiles(
+        references, velocity, "work/pikabase", 1.0, 2.0, 4.0, 2.0
+    )
+
+    assert default["r"].max_linear_accel_mps2 == 0.1
+    assert raised["l"].max_linear_accel_mps2 == 2.0
+    assert raised["r"].max_linear_accel_mps2 == 2.0
+
+
 def test_pika_angular_velocity_above_limit_is_scaled_without_changing_direction():
     """Catches discarding a usable high-rate rotation instead of norm-clamping it."""
     from geometry_msgs.msg import TwistStamped

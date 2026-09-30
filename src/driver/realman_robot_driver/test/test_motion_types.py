@@ -336,6 +336,34 @@ def test_motion_settings_separates_standard_and_hard_angular_acceleration_limits
     assert settings.angular_accel_hard_limit_radps2 == 4.0
 
 
+def test_motion_settings_separates_standard_and_hard_linear_acceleration_limits(
+    tmp_path: Path,
+):
+    path = write_settings(tmp_path, hard_max_linear_accel_mps2=2.0)
+
+    settings = MotionSettings.from_yaml(path, "l")
+
+    assert settings.max_linear_accel_mps2 == 0.1
+    assert settings.linear_accel_hard_limit_mps2 == 2.0
+
+
+def test_motion_settings_linear_acceleration_hard_limit_defaults_to_standard(
+    tmp_path: Path,
+):
+    settings = MotionSettings.from_yaml(write_settings(tmp_path), "l")
+
+    assert settings.linear_accel_hard_limit_mps2 == settings.max_linear_accel_mps2
+
+
+def test_motion_settings_rejects_hard_linear_acceleration_below_standard_limit(
+    tmp_path: Path,
+):
+    path = write_settings(tmp_path, hard_max_linear_accel_mps2=0.05)
+
+    with pytest.raises(ValueError, match="at least max_linear_accel_mps2"):
+        MotionSettings.from_yaml(path, "l")
+
+
 def test_motion_settings_rejects_hard_limit_below_standard_limit(tmp_path: Path):
     path = write_settings(tmp_path, hard_max_linear_speed_mps=0.049)
 

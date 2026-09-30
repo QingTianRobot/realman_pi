@@ -118,7 +118,10 @@ class GripperDevice:
 class GripperBus:
     def __init__(self, port: str, baudrate: int = 115200, timeout: float = 0.3,
                  poll_hz: float = 25.0, auto_reconnect: bool = True,
-                 reconnect_interval: float = 5.0):
+                 reconnect_interval: float = 5.0, command_quiet_s: float = 0.2,
+                 streaming_poll_interval: float = 0.5,
+                 min_command_interval_s: float = 0.25,
+                 command_deadband: float = 0.01):
         self.port, self.baudrate, self.timeout = port, int(baudrate), float(timeout)
         self.poll_hz, self.auto_reconnect = float(poll_hz), bool(auto_reconnect)
         self.reconnect_interval = float(reconnect_interval)
@@ -131,6 +134,21 @@ class GripperBus:
         self._pending, self._cmd_lock = {}, threading.Lock()
         self._running, self._thread, self._hz = False, None, 0.0
         self._last_error = None
+        # Streaming targets have bus priority over feedback reads: while
+        # commands keep arriving, feedback is refreshed only every
+        # ``streaming_poll_interval`` seconds (also keeps ``connected`` fresh).
+        self.command_quiet_s = float(command_quiet_s)
+        self.streaming_poll_interval = float(streaming_poll_interval)
+        # Streaming targets are re-triggered at most every ``min_command_interval_s``
+        # (a trigger restarts the gripper's motion profile, so a 20 Hz stream never
+        # lets it move) and skipped when within ``command_deadband`` (fraction of
+        # the open..close span) of the last sent target. The newest target is kept
+        # until it is due, so the final position is always sent.
+        self.min_command_interval_s = float(min_command_interval_s)
+        self.command_deadband = float(command_deadband)
+        self._last_sent = {}
+        self._wake = threading.Event()
+        self._last_command = self._last_poll = 0.0
 
     def add_gripper(self, slave_id: int, **kwargs):
         device = GripperDevice(self, slave_id, **kwargs)
@@ -175,6 +193,7 @@ class GripperBus:
     def request_move(self, slave_id: int, position: int):
         with self._cmd_lock:
             self._pending[int(slave_id)] = int(position)
+        self._wake.set()
 
     def set_active(self, slave_id):
         self.active_slave_id = None if slave_id is None else int(slave_id)
@@ -198,8 +217,7 @@ class GripperBus:
         while self._running:
             started = time.time()
             try:
-                self._process_pending()
-                self._poll_devices()
+                self._cycle(started)
                 self._connected, self._last_error = True, None
             except Exception as error:
                 self._connected, self._last_error = False, str(error)
@@ -212,14 +230,59 @@ class GripperBus:
             else:
                 self._hz = 0.0
             previous = started
-            time.sleep(max(0.0, period - (time.time() - started)))
+            # A new target wakes the loop immediately instead of waiting out the period.
+            due = self._next_due(time.time())
+            wait = period - (time.time() - started)
+            self._wake.wait(max(0.0, wait if due is None else min(wait, due)))
+            self._wake.clear()
 
-    def _process_pending(self):
+    def _cycle(self, now: float):
+        if self._process_pending(now):
+            self._last_command = now
+        streaming = now - self._last_command < self.command_quiet_s
+        if streaming and now - self._last_poll < self.streaming_poll_interval:
+            return
+        self._last_poll = now
+        self._poll_devices()
+
+    def _process_pending(self, now: float | None = None) -> bool:
+        now = time.time() if now is None else now
+        sent = False
         with self._cmd_lock:
-            pending, self._pending = dict(self._pending), {}
+            pending = dict(self._pending)
         for slave_id, position in pending.items():
-            if slave_id in self.devices:
-                self.devices[slave_id].move_to(position)
+            device = self.devices.get(slave_id)
+            last = self._last_sent.get(slave_id)
+            if device is None:
+                self._drop_pending(slave_id, position)
+                continue
+            if last is not None:
+                if now - last[0] < self.min_command_interval_s:
+                    continue  # keep the newest target until it is due
+                span = abs(device.close_position - device.open_position)
+                at_end = position in (device.open_position, device.close_position)
+                if position == last[1] or (
+                        not at_end and abs(position - last[1]) < self.command_deadband * span):
+                    self._drop_pending(slave_id, position)
+                    continue
+            self._drop_pending(slave_id, position)
+            device.move_to(position)
+            self._last_sent[slave_id] = (now, position)
+            sent = True
+        return sent
+
+    def _drop_pending(self, slave_id: int, position: int):
+        with self._cmd_lock:
+            if self._pending.get(slave_id) == position:
+                del self._pending[slave_id]
+
+    def _next_due(self, now: float) -> float | None:
+        """Seconds until the earliest held target may be sent, or None."""
+        with self._cmd_lock:
+            held = list(self._pending)
+        waits = [max(0.0, self._last_sent[i][0] + self.min_command_interval_s - now)
+                 for i in held if i in self._last_sent]
+        return min(waits) if waits else None
 
     def _poll_devices(self):
         if not self.polling_enabled:
@@ -236,6 +299,7 @@ class GripperBus:
             with self._lock:
                 self._sdk = None
         if self.connect():
+            self._last_sent.clear()
             for device in self.devices.values():
                 device._last_params = None
                 if device._enabled:
@@ -324,7 +388,11 @@ class GripperManager:
                             timeout=bus_config.get("timeout", 0.3),
                             poll_hz=bus_config.get("poll_hz", 25.0),
                             auto_reconnect=bus_config.get("auto_reconnect", True),
-                            reconnect_interval=bus_config.get("reconnect_interval", 5.0))
+                            reconnect_interval=bus_config.get("reconnect_interval", 5.0),
+                            command_quiet_s=bus_config.get("command_quiet_s", 0.2),
+                            streaming_poll_interval=bus_config.get("streaming_poll_interval", 0.5),
+                            min_command_interval_s=bus_config.get("min_command_interval_s", 0.25),
+                            command_deadband=bus_config.get("command_deadband", 0.01))
             for item in bus_config.get("grippers", []):
                 values = {key: value for key, value in defaults.items() if key in DEVICE_FIELDS}
                 values.update({key: value for key, value in item.items() if key in DEVICE_FIELDS})

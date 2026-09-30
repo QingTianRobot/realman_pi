@@ -8,6 +8,10 @@ buses:
     poll_hz: 20.0
     auto_reconnect: true
     reconnect_interval: 5.0
+    command_quiet_s: 0.2           # 目标持续到达的判定间隔
+    streaming_poll_interval: 0.5   # 连续控制期间的反馈轮询周期（越大下发越稳）
+    min_command_interval_s: 0.25   # 连续目标的最小触发间隔；实测 20 Hz 触发夹爪不动，4 Hz 最快
+    command_deadband: 0.01         # 与上次目标相差小于行程该比例则不重发（全开/全闭端点除外）
     grippers:
       - name: gripper_right
         slave_id: 1
@@ -25,6 +29,10 @@ buses:
     poll_hz: 20.0
     auto_reconnect: true
     reconnect_interval: 5.0
+    command_quiet_s: 0.2           # 目标持续到达的判定间隔
+    streaming_poll_interval: 0.5   # 连续控制期间的反馈轮询周期（越大下发越稳）
+    min_command_interval_s: 0.25   # 连续目标的最小触发间隔；实测 20 Hz 触发夹爪不动，4 Hz 最快
+    command_deadband: 0.01         # 与上次目标相差小于行程该比例则不重发（全开/全闭端点除外）
     grippers:
       - name: gripper_left
         slave_id: 1
@@ -42,6 +50,10 @@ buses:
     poll_hz: 20.0
     auto_reconnect: true
     reconnect_interval: 5.0
+    command_quiet_s: 0.2           # 目标持续到达的判定间隔
+    streaming_poll_interval: 0.5   # 连续控制期间的反馈轮询周期（越大下发越稳）
+    min_command_interval_s: 0.25   # 连续目标的最小触发间隔；实测 20 Hz 触发夹爪不动，4 Hz 最快
+    command_deadband: 0.01         # 与上次目标相差小于行程该比例则不重发（全开/全闭端点除外）
     grippers:
       - name: gripper_mid
         slave_id: 1

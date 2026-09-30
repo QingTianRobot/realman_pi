@@ -19,9 +19,10 @@ pika_default_pose:
   timeout_sec: 120
 
 # Pika owns a real-time l/r Cartesian velocity stream while pikavelocity is
-# active. The driver applies this per-session limit, which currently matches the
-# 0.15 m/s l/r default in realman_motion.yaml but is declared separately so
-# gentle teleop can be retuned without moving every client's limit.
+# active. The driver applies this per-session limit. It is raised to 1.0 m/s,
+# the l/r hard_max_linear_speed_mps in realman_motion.yaml, so a hand moving
+# faster than 0.15 m/s is no longer clamped; it is declared separately so Pika
+# teleop can be retuned without moving every client's limit.
 pika_velocity:
   # Use per-arm identity WORK frames so Pika BASE-expressed vectors remain unchanged.
   work_reference: work/pikabase
@@ -36,7 +37,7 @@ pika_velocity:
   # Only input older than this releases the velocity session. Re-opening one
   # re-runs rm_set_movev_canfd_init, so the session outlives short pauses.
   input_timeout_ms: 3000
-  max_linear_speed_mps: 0.15
+  max_linear_speed_mps: 1.0
   # Pika angular commands are accepted up to 2.0 rad/s after the Pika-side unit
   # conversion. A 0.25 rad/s cap clamped ordinary hand rotation (measured
   # ~0.45 rad/s on production) and made the wrist feel sluggish. Ordinary

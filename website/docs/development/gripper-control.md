@@ -73,9 +73,22 @@ Web `percentage` 的范围是 `0.0..1.0`：`0` 映射到 `close_position`，`1` 
 将百分比转换为配置中的设备位置并把最新目标交给总线线程，不等待夹爪到位反馈；同一总线上的新目标会覆盖尚未处理的旧目标。
 它不改变同步 `/<name>/percentage` service 的等待和结果语义。
 
+总线线程对连续目标优先：收到新目标会立即唤醒总线线程，且目标持续到达（间隔小于 `command_quiet_s`=0.2 s）时，
+反馈轮询降为每 `streaming_poll_interval`=0.5 s 一次（两者均可在 `gripper.yaml` 的 bus 下配置），避免 Modbus 半双工上的反馈读取（每次 3 个事务）挤占目标写入，
+造成夹爪运动顿挫。
+
+连续目标还受 `min_command_interval_s`（默认 0.25 s）和 `command_deadband`（默认 0.01，占开合行程的比例）限制：
+每次触发都会让夹爪重新规划运动，实测（右夹爪，24 mm 行程）单次服务阶跃 0.81 s 到位；连续 topic 以 20 Hz 触发几乎不动（+9 单位），8 Hz 约 3.4 s，4 Hz 约 1.3 s，因此同一夹爪的触发间隔不小于该值，
+间隔内到达的新目标只保留最新一个，到期后发送，保证最终位置一定下发；与上次目标差异小于死区的目标被丢弃，
+但恰好等于全开或全闭位置的目标不会被丢弃。目标停止后恢复按 `poll_hz` 轮询，因此 `position` 等反馈话题在连续控制期间更新较慢。
+
 行为树的 Pika router 订阅 `/pika/l/gripper_percentage`、`/pika/r/gripper_percentage`，在
 `pikaposition`、`pikavelocity` 或 `pikamixed` 为 `ACTIVE` 时分别转发到 `gripper_left`、`gripper_right` 的 command topic。
 Pika 不控制 `gripper_mid`；切出 Pika 模式后不会自动发送开、合或停止命令。
+
+夹爪端限频为 4 Hz（`min_command_interval_s: 0.25`）。生产端 PikaRemote 的 `pika_realman_mapper`
+同样按 `gripper_publish_rate_hz`（默认 4.0）发布 `/pika/{l,r}/gripper_percentage`，其余位姿和速度话题仍按
+`command_rate_hz` 发布；两端保持一致，避免夹爪端丢弃中间目标。router 不再需要额外限速。
 
 ## 键盘双夹爪全开／全闭
 

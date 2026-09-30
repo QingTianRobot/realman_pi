@@ -89,6 +89,77 @@ class DriverTest(unittest.TestCase):
         kinds = [call[0] for call in device.bus._sdk.calls]
         self.assertEqual(kinds, ["set_pos", "trigger"])
 
+    def test_streaming_targets_take_bus_priority_over_feedback(self):
+        bus = self.manager().get_bus("/bus")
+        reads = []
+        original = bus.devices[4].read_feedback
+        bus.devices[4].read_feedback = lambda: reads.append(1) or original()
+        bus._last_poll = 100.0
+        for step in range(10):  # 10 targets at 50 Hz => 0.2 s of streaming
+            bus.request_move(4, 1000 + step)
+            bus._cycle(100.0 + step * 0.02)
+        self.assertEqual(reads, [])
+        bus._cycle(100.6)  # streaming stopped; one feedback refresh resumes
+        self.assertEqual(len(reads), 1)
+
+    def test_idle_bus_polls_every_cycle(self):
+        bus = self.manager().get_bus("/bus")
+        reads = []
+        original = bus.devices[4].read_feedback
+        bus.devices[4].read_feedback = lambda: reads.append(1) or original()
+        bus._cycle(50.0)
+        bus._cycle(50.05)
+        self.assertEqual(len(reads), 2)
+
+    def _stream_bus(self):
+        manager = gd.GripperManager()
+        manager.add_bus("/bus", min_command_interval_s=0.25, command_deadband=0.01)
+        manager.add_gripper("/bus", 1, name="g", open_position=4000,
+                            close_position=12000, max_position=12000)
+        manager.connect_all()
+        return manager.get_bus("/bus")
+
+    def test_trigger_rate_is_limited_and_newest_target_wins(self):
+        bus = self._stream_bus()
+        for step in range(10):  # 20 Hz stream for 0.5 s
+            bus.request_move(1, 5000 + step * 500)
+            bus._process_pending(100.0 + step * 0.05)
+        triggers = [c for c in bus._sdk.calls if c[0] in ("temp_move", "trigger")]
+        self.assertLessEqual(len(triggers), 3)
+        self.assertGreaterEqual(len(triggers), 2)
+        bus._process_pending(101.0)  # held target is flushed once it is due
+        self.assertEqual(bus._last_sent[1][1], 5000 + 9 * 500)
+
+    def test_targets_inside_deadband_are_dropped_but_endpoints_are_sent(self):
+        bus = self._stream_bus()
+        bus.request_move(1, 8000)
+        bus._process_pending(100.0)
+        bus._sdk.calls.clear()
+        bus.request_move(1, 8040)  # 0.5% of the 8000-unit span
+        bus._process_pending(101.0)
+        self.assertEqual(bus._sdk.calls, [])
+        self.assertEqual(bus._pending, {})
+        bus.request_move(1, 12000)  # exact close endpoint is never skipped
+        bus._process_pending(102.0)
+        self.assertEqual(bus._last_sent[1][1], 12000)
+
+    def test_identical_target_is_not_retriggered_even_at_endpoints(self):
+        bus = self._stream_bus()
+        bus.request_move(1, 12000)
+        bus._process_pending(100.0)
+        bus._sdk.calls.clear()
+        bus.request_move(1, 12000)
+        bus._process_pending(101.0)
+        self.assertEqual(bus._sdk.calls, [])
+
+    def test_next_due_reports_wait_for_held_target(self):
+        bus = self._stream_bus()
+        bus.request_move(1, 5000)
+        bus._process_pending(100.0)
+        bus.request_move(1, 9000)
+        bus._process_pending(100.05)
+        self.assertAlmostEqual(bus._next_due(100.05), 0.20, places=3)
+
     def test_missing_port_can_reconnect(self):
         FakeSDK.fail_ports = {"/bad"}
         manager = gd.GripperManager()

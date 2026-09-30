@@ -21,8 +21,8 @@ buses:
         max_position: 12000
         speed_pct: 100
         force_pct: 60
-        accel: 100
-        decel: 100
+        accel: 2000
+        decel: 2000
   - port: /dev/realman/gripper_left
     baudrate: 115200
     timeout: 0.3
@@ -42,8 +42,8 @@ buses:
         max_position: 949
         speed_pct: 100
         force_pct: 60
-        accel: 100
-        decel: 100
+        accel: 2000
+        decel: 2000
   - port: /dev/realman/gripper_mid
     baudrate: 115200
     timeout: 0.3

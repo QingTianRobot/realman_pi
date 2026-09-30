@@ -21,6 +21,8 @@ Log/
 # Version this project-local behavior-tree authoring skill; other local skills stay ignored.
 !.agents/skills/developing-realman-behavior-trees/
 !.agents/skills/developing-realman-behavior-trees/**
+!.agents/skills/debugging-pika-teleop-two-ends/
+!.agents/skills/debugging-pika-teleop-two-ends/**
 .codex/
 src/.agents/
 src/.codex/

@@ -1046,6 +1046,104 @@ class UnexpectedReplacementRobot:
         type(self).instances.append(self)
 
 
+class RecreatableRobot(FakeRobot):
+    """Stale robot whose handle can be recreated in place."""
+
+    def __init__(self, create_handles):
+        super().__init__()
+        self.create_handles = list(create_handles)
+
+    def rm_create_robot_arm(self, ip, port):
+        self.calls.append(("rm_create_robot_arm", ip, port))
+        return self.create_handles.pop(0)
+
+
+def _stale_adapter(robot, **kwargs):
+    adapter = RealManSdkAdapter(
+        ip="192.0.2.123",
+        port=8080,
+        thread_mode="RM_TRIPLE_MODE_E",
+        robot_model="RM65-B",
+        mock_mode=False,
+        **kwargs,
+    )
+    adapter._robot = robot
+    adapter._handle = SimpleNamespace(id=17)
+    return adapter
+
+
+def test_connect_after_connection_loss_recreates_handle_without_global_destroy(
+    monkeypatch,
+):
+    UnexpectedReplacementRobot.instances = []
+    _install_connecting_sdk(monkeypatch, UnexpectedReplacementRobot)
+    stale_robot = RecreatableRobot([SimpleNamespace(id=18)])
+    adapter = _stale_adapter(stale_robot)
+
+    assert adapter.connect() == 0
+
+    # rm_destroy() tears down the SDK's global state; only the handle is replaced.
+    assert stale_robot.calls == [
+        ("rm_delete_robot_arm",),
+        ("rm_create_robot_arm", "192.0.2.123", 8080),
+    ]
+    assert UnexpectedReplacementRobot.instances == []
+    assert adapter._robot is stale_robot
+    assert adapter._handle.id == 18
+    assert adapter.connected is True
+    assert adapter.last_error == 0
+
+
+def test_failed_in_place_reconnect_is_retried_in_place_before_a_hard_reset(monkeypatch):
+    UnexpectedReplacementRobot.instances = []
+    _install_connecting_sdk(monkeypatch, UnexpectedReplacementRobot)
+    invalid = SimpleNamespace(id=-1)
+    stale_robot = RecreatableRobot([invalid, invalid, SimpleNamespace(id=19)])
+    adapter = _stale_adapter(stale_robot, soft_reconnect_attempts=3)
+
+    assert adapter.connect() == -1
+    assert adapter.connected is False
+    assert adapter._robot is stale_robot
+    assert adapter._handle is None
+    assert adapter.last_error_message == "SDK returned an invalid robot handle"
+
+    assert adapter.connect() == -1
+    assert adapter.connect() == 0
+
+    assert [call[0] for call in stale_robot.calls] == [
+        "rm_delete_robot_arm",
+        "rm_create_robot_arm",
+        "rm_create_robot_arm",
+        "rm_create_robot_arm",
+    ]
+    assert "rm_destroy" not in [call[0] for call in stale_robot.calls]
+    assert adapter._handle.id == 19
+    assert adapter.connected is True
+
+
+def test_persistent_in_place_failure_escalates_to_a_hard_reset(monkeypatch):
+    InvalidHandleRobot.instances = []
+    _install_connecting_sdk(monkeypatch, InvalidHandleRobot)
+    invalid = SimpleNamespace(id=-1)
+    stale_robot = RecreatableRobot([invalid, invalid])
+    adapter = _stale_adapter(stale_robot, soft_reconnect_attempts=2)
+
+    assert adapter.connect() == -1
+    assert adapter.connect() == -1
+    # The in-place budget is spent: the next attempt destroys the SDK and
+    # starts over with a fresh RoboticArm.
+    assert adapter.connect() == -1
+
+    assert [call[0] for call in stale_robot.calls] == [
+        "rm_delete_robot_arm",
+        "rm_create_robot_arm",
+        "rm_create_robot_arm",
+        "rm_destroy",
+    ]
+    assert len(InvalidHandleRobot.instances) == 1
+    assert adapter._robot is None
+
+
 def test_connect_aborts_when_stale_robot_teardown_fails(monkeypatch):
     UnexpectedReplacementRobot.instances = []
     _install_connecting_sdk(monkeypatch, UnexpectedReplacementRobot)
@@ -1055,6 +1153,7 @@ def test_connect_aborts_when_stale_robot_teardown_fails(monkeypatch):
         thread_mode="RM_TRIPLE_MODE_E",
         robot_model="RM65-B",
         mock_mode=False,
+        soft_reconnect_attempts=0,
     )
     stale_robot = FakeRobot()
     stale_robot.results["rm_destroy"] = 71

@@ -238,3 +238,53 @@ test("joint sliders take over an arm from the idle animation", async ({ page }) 
   await page.locator(".joint-auto").click();
   await expect(page.locator(".joint-arms button.active small")).toHaveText("自动");
 });
+
+test("mermaid labels stay inside their boxes and the SVG", async ({ page }) => {
+  for (const route of [
+    "architecture/overview",
+    "development/behavior-tree-control",
+    "development/pika-teleop",
+    "development/realman-driver-scaffold",
+  ]) {
+    await page.goto(route);
+    await expect(page.locator(".vp-doc .mermaid svg").first()).toBeVisible({ timeout: 15_000 });
+    await page.waitForTimeout(800);
+
+    const problems = await page.evaluate(() => {
+      const found: string[] = [];
+      document.querySelectorAll<SVGSVGElement>(".vp-doc .mermaid svg").forEach((svg, index) => {
+        const svgBox = svg.getBoundingClientRect();
+        svg.querySelectorAll<SVGElement>("foreignObject, text").forEach((element) => {
+          const label = element.textContent?.trim() ?? "";
+          if (!label) return;
+          const range = document.createRange();
+          range.selectNodeContents(
+            element.tagName === "foreignObject"
+              ? element.querySelector("span.nodeLabel, span.edgeLabel, p, span") ?? element
+              : element,
+          );
+          const text = range.getBoundingClientRect();
+          if (!text.width) return;
+          // 2px tolerance for sub-pixel layout.
+          if (text.left < svgBox.left - 2 || text.right > svgBox.right + 2 || text.top < svgBox.top - 2 || text.bottom > svgBox.bottom + 2) {
+            found.push(`diagram ${index}: "${label.slice(0, 30)}" leaves the SVG`);
+          }
+          const node = element.closest("g.node");
+          // Nodes contain several shapes (some empty); the node outline is the largest one.
+          const shapes = node ? [...node.querySelectorAll("rect, polygon, path, circle, ellipse")] : [];
+          const outline = shapes
+            .map((shape) => shape.getBoundingClientRect())
+            .sort((a, b) => b.width * b.height - a.width * a.height)[0];
+          if (node && outline) {
+            const box = outline;
+            if (text.width > box.width + 2 || text.height > box.height + 2) {
+              found.push(`diagram ${index}: "${label.slice(0, 30)}" is larger than its node`);
+            }
+          }
+        });
+      });
+      return found;
+    });
+    expect(problems, `${route}: ${problems.join("; ")}`).toEqual([]);
+  }
+});

@@ -12,6 +12,17 @@ export default withMermaid(defineConfig({
   description: "三台 RealMan RM65 机械臂的 ROS 2 Humble 控制平台：驱动、遥操作、行为树、夹爪、相机标定与策略桥接",
   // GitHub Pages hosts this repository as a project site rather than at the domain root.
   base: "/realman_pi/",
+  // Mermaid sizes boxes by measuring text in its own font. Its default (trebuchet/verdana) has no CJK glyphs,
+  // so Chinese labels fall back to a wider font after measuring and spill out of their boxes and the SVG.
+  // Pin one CJK-capable stack for both measuring and rendering, and wrap long sequence messages.
+  mermaid: {
+    fontFamily: '"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", system-ui, sans-serif',
+    themeVariables: {
+      fontFamily: '"PingFang SC", "Microsoft YaHei", "Noto Sans CJK SC", "Source Han Sans SC", system-ui, sans-serif',
+    },
+    flowchart: { htmlLabels: true, padding: 16, nodeSpacing: 40, rankSpacing: 50 },
+    sequence: { wrap: true, width: 180, actorMargin: 60, messageMargin: 40, noteMargin: 12 },
+  },
   // Stable extension-free URLs keep links consistent between local preview and Pages.
   cleanUrls: true,
   lastUpdated: true,

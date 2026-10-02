@@ -638,7 +638,7 @@
 .vp-doc .mermaid {
   position: relative;
   margin: 16px 0;
-  padding: 12px;
+  padding: 16px;
   max-height: 70vh;
   overflow: auto;
   text-align: center;
@@ -650,6 +650,13 @@
 .vp-doc .mermaid svg {
   display: inline-block;
   height: auto;
+  /* Never clip a label that still overflows its box; the frame scrolls instead. */
+  overflow: visible;
+}
+.vp-doc .mermaid .nodeLabel,
+.vp-doc .mermaid .edgeLabel,
+.vp-doc .mermaid .label {
+  overflow-wrap: anywhere;
 }
 .mermaid-zoom-hint {
   position: sticky;

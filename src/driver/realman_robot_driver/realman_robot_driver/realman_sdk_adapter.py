@@ -41,6 +41,7 @@ class RealManSdkAdapter:
         robot_model: str,
         mock_mode: bool,
         arm_id: str = "",
+        soft_reconnect_attempts: int = 3,
     ) -> None:
         self.ip = ip
         self.port = port
@@ -48,6 +49,12 @@ class RealManSdkAdapter:
         self.robot_model = robot_model
         self.mock_mode = mock_mode
         self.arm_id = arm_id
+        # After a lost connection the SDK handle is first recreated in place:
+        # rm_destroy() tears down the SDK's global state, which is the last
+        # resort rather than the first. Only after this many consecutive
+        # in-place failures does connect() fall back to a full SDK reset.
+        self.soft_reconnect_attempts = max(0, int(soft_reconnect_attempts))
+        self._soft_reconnect_failures = 0
         self._lock = threading.RLock()
         self._state_condition = threading.Condition(self._lock)
         self._lifecycle_lock = threading.RLock()
@@ -99,7 +106,14 @@ class RealManSdkAdapter:
                 if self._connected and not self._disconnecting:
                     return 0
                 has_stale_robot = self._robot is not None
+            if (
+                has_stale_robot
+                and not self.mock_mode
+                and self._soft_reconnect_failures < self.soft_reconnect_attempts
+            ):
+                return self._recreate_handle_locked()
             if has_stale_robot:
+                self._soft_reconnect_failures = 0
                 teardown_status = self._disconnect_locked()
                 if teardown_status != 0:
                     return teardown_status
@@ -185,9 +199,59 @@ class RealManSdkAdapter:
                         self._set_failure_locked(-1, str(error))
                 return -1
 
+    def _recreate_handle_locked(self) -> int:
+        """Replace a lost handle on the existing SDK object; caller holds the lifecycle lock.
+
+        Unlike _disconnect_locked() this never calls rm_destroy(), so the SDK's
+        global state survives and a controller that is reachable again can be
+        reconnected. A failed attempt keeps the robot object for the next try.
+        """
+        with self._lock:
+            robot = self._robot
+            handle = self._handle
+            self._connected = False
+            self._disconnecting = True
+            self._destroying = False
+            # Calls already inside the SDK must drain before the handle goes away.
+            while self._active_calls:
+                self._state_condition.wait()
+            self._destroying = True
+        try:
+            if handle is not None:
+                robot.rm_delete_robot_arm()
+        except Exception:
+            pass
+        new_handle: Any | None = None
+        failure_message = "SDK returned an invalid robot handle"
+        try:
+            new_handle = robot.rm_create_robot_arm(self.ip, self.port)
+        except Exception as error:
+            failure_message = str(error)
+        valid = _is_valid_handle(new_handle)
+        with self._lock:
+            self._generation += 1
+            self._disconnecting = False
+            self._destroying = False
+            self._event_callback = None
+            self._vendor_event_callback = None
+            self._pending_event_callback = None
+            self._pending_event_callback_marker = None
+            if valid:
+                self._handle = new_handle
+                self._connected = True
+                self._soft_reconnect_failures = 0
+                self._set_success_locked()
+                return 0
+            self._handle = None
+            self._connected = False
+            self._soft_reconnect_failures += 1
+            self._set_failure_locked(-1, failure_message)
+            return -1
+
     def disconnect(self) -> int:
         """Release the SDK handle and all SDK connections."""
         with self._lifecycle_lock:
+            self._soft_reconnect_failures = 0
             return self._disconnect_locked()
 
     def reconnect(self) -> int:

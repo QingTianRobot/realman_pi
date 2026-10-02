@@ -26,7 +26,7 @@
 
 ## 配置
 
-权威配置是 [`config/ros/gripper.yaml`](../../../../config/ros/gripper.yaml)，容器映射在 [`config/docker/compose.yaml`](../../../../config/docker/compose.yaml)。不要在源码包或生产主机维护第二份夹爪 YAML。
+权威配置是 [`config/ros/gripper.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/gripper.yaml)，容器映射在 [`config/docker/compose.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/docker/compose.yaml)。不要在源码包或生产主机维护第二份夹爪 YAML。
 
 | ROS 名称 | 宿主机和容器内稳定路径 | `slave_id` | 打开/闭合位置 |
 | --- | --- | --- | --- |

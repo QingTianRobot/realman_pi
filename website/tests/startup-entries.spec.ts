@@ -8,6 +8,7 @@ const execFileAsync = promisify(execFile);
 const functionsZshPath = fileURLToPath(new URL("../../functions.zsh", import.meta.url));
 const deployWorkflowPath = fileURLToPath(new URL("../../.github/workflows/deploy-pages.yml", import.meta.url));
 const unifiedEntryPath = fileURLToPath(new URL("../../rm65", import.meta.url));
+const projectEnvPath = fileURLToPath(new URL("../../.env", import.meta.url));
 
 async function publicHelperNames() {
   const source = await readFile(functionsZshPath, "utf8");
@@ -67,7 +68,11 @@ test("functions load ROS runtime defaults from project env", async () => {
     { maxBuffer: 1_000_000 },
   );
 
-  expect(stdout).toContain("domain=0");
+  // The expected domain is whatever the committed .env selects (production isolates it from the default 0).
+  const projectEnv = await readFile(projectEnvPath, "utf8");
+  const envDomain = projectEnv.match(/^ROS_DOMAIN_ID=(\d+)\s*$/m)?.[1];
+  expect(envDomain).toBeDefined();
+  expect(stdout).toContain(`domain=${envDomain}`);
   expect(stdout).toContain("localhost=0");
   expect(stdout).toContain("display=unset");
   expect(stdout).toContain("xauthority=unset");

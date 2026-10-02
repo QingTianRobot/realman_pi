@@ -13,7 +13,7 @@ Treat developer documentation as part of the feature. Do not report a functional
 2. Select the existing page that owns the behavior. Create a focused feature page only when no clear owner exists.
 3. After implementation, update the documentation to describe the resulting behavior, not the sequence of edits.
 4. Update affected diagrams, commands, configuration references, navigation, and cross-links.
-5. Add the new route to `website/tests/site.spec.ts` when creating a page.
+5. Add the new route to `website/tests/site.spec.ts` and the VitePress sidebar (`config/website/vitepress.config.mts`) when creating a page, and list it in the task index of `website/docs/development/index.md`.
 6. Run `npm run build` from `website/`. Run relevant Web tests when navigation, rendering, examples, or generated assets changed.
 7. Include the documentation paths and validation result in the final work summary.
 
@@ -33,11 +33,15 @@ Use clickable relative links between Web manual pages. Keep code paths and ident
 
 ## Manual Structure
 
+- Site layout: `guide/` (operators), `architecture/` (overview, repo structure, TF), `development/` (per-feature contracts), `reference/` (ROS interface table, configuration table, CLI and env vars), `troubleshooting.md`.
+- Interface, config-file, or CLI/env changes must also update the matching `website/docs/reference/` table; `development/documentation-workflow.md` lists which pages each kind of change touches.
+- Do not copy numeric limits into prose unless the page names the config file they come from; prefer pointing at the config.
+
 - Use `website/docs/development/index.md` as the developer manual index and contribution contract.
 - Put feature pages in `website/docs/development/` with stable lowercase hyphenated names.
 - Update an existing feature page for incremental changes. Avoid date-stamped duplicate pages and changelog-only entries.
 - Keep end-user instructions in their existing guide or troubleshooting page, then link to deeper developer details.
-- Add developer pages to the VitePress navigation and `开发者手册` sidebar section.
+- Add developer pages to the VitePress sidebar group that matches their module.
 
 ## Completion Gate
 

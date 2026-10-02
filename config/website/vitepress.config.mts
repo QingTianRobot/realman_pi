@@ -7,7 +7,7 @@ const repositoryDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "..
 export default defineConfig({
   lang: "zh-CN",
   title: "RM65 ROS 2",
-  description: "RealMan RM65 的 ROS 2 Humble URDF、TF 与 RViz 2 Docker 环境",
+  description: "三台 RealMan RM65 机械臂的 ROS 2 Humble 控制平台：驱动、遥操作、行为树、夹爪、相机标定与策略桥接",
   // GitHub Pages hosts this repository as a project site rather than at the domain root.
   base: "/realman_pi/",
   // Stable extension-free URLs keep links consistent between local preview and Pages.
@@ -26,19 +26,13 @@ export default defineConfig({
     ["meta", { name: "color-scheme", content: "light dark" }],
   ],
   themeConfig: {
-    // Navigation separates operator guides from implementation-facing developer material.
+    // Navigation separates operator guides, architecture, the developer manual and lookup tables.
     siteTitle: "RM65 / ROS 2",
     nav: [
       { text: "快速开始", link: "/guide/getting-started" },
-      { text: "型号", link: "/models/" },
+      { text: "架构", link: "/architecture/overview" },
       { text: "开发者手册", link: "/development/" },
-      {
-        text: "架构",
-        items: [
-          { text: "TF 树", link: "/architecture/tf-tree" },
-          { text: "仓库结构", link: "/architecture/package" },
-        ],
-      },
+      { text: "参考", link: "/reference/ros-interfaces" },
       { text: "故障排查", link: "/troubleshooting" },
     ],
     sidebar: [
@@ -47,38 +41,69 @@ export default defineConfig({
         items: [
           { text: "项目概览", link: "/" },
           { text: "快速开始", link: "/guide/getting-started" },
+          { text: "相机", link: "/guide/cameras" },
+          { text: "远程 RViz", link: "/guide/remote-rviz" },
+          { text: "故障排查", link: "/troubleshooting" },
         ],
       },
       {
-        text: "机器人描述",
+        text: "架构",
         items: [
-          { text: "支持型号", link: "/models/" },
+          { text: "系统架构总览", link: "/architecture/overview" },
+          { text: "仓库结构", link: "/architecture/package" },
           { text: "完整 TF 树", link: "/architecture/tf-tree" },
-          { text: "仓库与 ROS 图", link: "/architecture/package" },
+          { text: "支持型号", link: "/models/" },
         ],
-      },
-      {
-        text: "运行维护",
-        items: [{ text: "故障排查", link: "/troubleshooting" }],
       },
       {
         text: "开发者手册",
         items: [
-          { text: "维护入口", link: "/development/" },
+          { text: "手册入口", link: "/development/" },
+          { text: "测试与验证", link: "/development/testing" },
           { text: "功能文档同步", link: "/development/documentation-workflow" },
+        ],
+      },
+      {
+        text: "运行与部署",
+        items: [
           { text: "启动入口索引", link: "/development/startup-entries" },
-          { text: "三臂 ChArUco 手眼标定", link: "/development/camera-calibration" },
-          { text: "睿尔曼 Python 驱动查询", link: "/development/realman-python-driver" },
-          { text: "睿尔曼三臂驱动与运动控制", link: "/development/realman-driver-scaffold" },
-          { text: "睿尔曼 Action 开发与测试", link: "/development/realman-action-development" },
-          { text: "三臂配置驱动可视化", link: "/development/three-arm-visualization" },
-          { text: "Xbox 手柄输入", link: "/development/xbox-controller" },
           { text: "系统 Bringup", link: "/development/system-bringup" },
-          { text: "行为树控制权与 Mock 测试", link: "/development/behavior-tree-control" },
+        ],
+      },
+      {
+        text: "驱动与运动",
+        items: [
+          { text: "驱动与运动控制", link: "/development/realman-driver-scaffold" },
+          { text: "Action 开发与测试", link: "/development/realman-action-development" },
+          { text: "Python 驱动查询", link: "/development/realman-python-driver" },
+        ],
+      },
+      {
+        text: "控制与输入",
+        items: [
+          { text: "行为树控制权与 Mock", link: "/development/behavior-tree-control" },
           { text: "行为树机械臂移动 Demo", link: "/development/behavior-tree-motion" },
-          { text: "Changingtek 夹爪控制", link: "/development/gripper-control" },
-          { text: "VLA 策略桥接节点", link: "/development/policy-bridge" },
+          { text: "Pika 遥操作", link: "/development/pika-teleop" },
+          { text: "Web 控制与 URDF 影子", link: "/development/realman-web-control" },
+          { text: "Xbox 手柄输入", link: "/development/xbox-controller" },
           { text: "笛卡尔速度跟随测试", link: "/development/velocity-follow-test" },
+        ],
+      },
+      {
+        text: "末端、感知与策略",
+        items: [
+          { text: "Changingtek 夹爪控制", link: "/development/gripper-control" },
+          { text: "三臂 ChArUco 手眼标定", link: "/development/camera-calibration" },
+          { text: "三臂配置驱动可视化", link: "/development/three-arm-visualization" },
+          { text: "VLA 策略桥接节点", link: "/development/policy-bridge" },
+        ],
+      },
+      {
+        text: "参考",
+        items: [
+          { text: "ROS 2 接口总表", link: "/reference/ros-interfaces" },
+          { text: "配置文件总表", link: "/reference/configuration" },
+          { text: "CLI 与环境变量", link: "/reference/cli-and-env" },
         ],
       },
     ],
@@ -110,7 +135,7 @@ export default defineConfig({
       { icon: "github", link: "https://github.com/QingTianRobot/realman_pi" },
     ],
     footer: {
-      message: "基于 ROS 2 Humble 的 RealMan RM65 描述包",
+      message: "基于 ROS 2 Humble 的 RealMan RM65 三臂控制平台",
       copyright: "QingTianRobot",
     },
   },

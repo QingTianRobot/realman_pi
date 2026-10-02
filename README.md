@@ -1,231 +1,96 @@
-# RealMan RM65 ROS 2 Description
+# realman_pi
 
-ROS 2 Humble description package and RViz 2 Docker environment for RealMan
-RM65 robots.
+ROS 2 Humble 控制平台，面向三台 RealMan RM65 机械臂（左 `l`、中 `m`、右 `r`）：
 
-## Documentation
+- **驱动与运动**：RealMan Python SDK 三臂驱动，可取消的 MoveJ / MoveL / 连续轨迹，笛卡尔速度与位姿 session，坐标 motion gate，断线原地重连。
+- **遥操作**：Web 键盘、Pika 手持设备（位置 / 速度 / Mixed）、Xbox 手柄，由行为树输入模式统一选择控制权。
+- **行为树**：常驻输入路由器、分阶段 MoveJ 任务树、只读运行监视器。
+- **末端与感知**：Changingtek 夹爪（Modbus RTU）、三路 Orbbec 腕部相机 + RealSense D435、ChArUco 手眼标定。
+- **策略**：OpenPI WebSocket ⇄ ROS 2 的 VLA 策略桥。
+- **底座**：RM65 URDF、三臂 TF 与 RViz 2；Web 控制台带 URDF 影子。
 
-Project documentation: https://qingtianrobot.github.io/realman_pi/
+所有组件运行在可复现的 Docker 环境中，权威配置只有一份：根目录 `config/`。
 
-The VitePress source is stored in `website/` and deployed to GitHub Pages by
-`.github/workflows/deploy-pages.yml`.
+## 文档
 
-## Zsh helper functions
+**https://qingtianrobot.github.io/realman_pi/**（VitePress 源码在 `website/`，由 `.github/workflows/deploy-pages.yml` 部署）
 
-Load the optional project helpers from any Zsh session:
+| 想做什么 | 入口 |
+| --- | --- |
+| 启动系统 | [快速开始](https://qingtianrobot.github.io/realman_pi/guide/getting-started) |
+| 理解整体设计 | [系统架构总览](https://qingtianrobot.github.io/realman_pi/architecture/overview) |
+| 改代码 / 加功能 | [开发者手册](https://qingtianrobot.github.io/realman_pi/development/) |
+| 查接口、配置、命令 | [ROS 2 接口](https://qingtianrobot.github.io/realman_pi/reference/ros-interfaces)、[配置](https://qingtianrobot.github.io/realman_pi/reference/configuration)、[CLI 与环境变量](https://qingtianrobot.github.io/realman_pi/reference/cli-and-env) |
+| 现场出问题 | [故障排查](https://qingtianrobot.github.io/realman_pi/troubleshooting) |
 
-```zsh
-source /path/to/realman_pi/functions.zsh
-rm65_project_help
-```
+## 快速开始
 
-The functions use prefixes to separate responsibilities: `rm65_project_*`,
-`rm65_docker_*`, `rm65_ros_*`, `rm65_web_*`, and `rm65_deploy_*`. They locate
-the repository root from `functions.zsh`, so they keep working after changing
-directories. The direct Docker, colcon, npm, and SSH commands below remain
-available when additional options are required.
-
-## Supported models
-
-- `RM65-B` (default)
-- `RM65-B-V`
-- `RM65-6F`
-- `RM65-6FB`
-- `RM65-6FB-V`
-
-Each URDF has a complete TF tree rooted at `world`. The default RM65-B tree is:
-
-```text
-world -> base_link -> link_1 -> link_2 -> link_3 -> link_4 -> link_5 -> link_6
-```
-
-## Run with Docker
-
-Docker Compose automatically loads the repository-root `.env` file. It contains
-commented candidate values for ROS domain, robot model, RViz/X11, Web control,
-and domestic build mirrors. Keep `REALMAN_WEB_CONTROL_TOKEN` empty for the
-default read-only Web console, and set a private random value only in a trusted
-deployment environment.
-
-Graphical RViz services require the active desktop session to provide both
-`DISPLAY` and `XAUTHORITY`. The headless `realman_bringup_remote` service does
-not require either variable.
+在连接三台控制器（`192.168.30.123/125/124`，端口 `8080`）的工控机上，从仓库根目录：
 
 ```bash
-docker compose build rm65_rviz
-docker compose run --rm rm65_rviz
+./rm65 build          # 首次或代码更新后：重建驱动与 Web 控制镜像
+./rm65 up             # ROS 2 彩色相机 + 三臂驱动 + Web 控制台（:8765），默认无 RViz
+./rm65 status         # 查看相机与服务状态
+./rm65 logs
+./rm65 down
 ```
 
-### Unified bringup with an Xbox controller
-
-`realman_bringup` starts the three-arm scene, RViz 2, the ROS 2
-`game_controller_node`, and the C++ Xbox input node. The service scans the
-host's `*-event-joystick` devices and waits if the controller is not connected:
+键盘 / Pika / 策略输入需要另行启动持久输入路由器（默认 dry-run，不会真的运动）：
 
 ```bash
-docker compose build realman_bringup
-docker compose run --rm realman_bringup
+./rm65 bt control                            # 路由器 + :8080 只读监视器，Ctrl-C 结束
+REALMAN_BT_DRY_RUN=false ./rm65 bt control   # 真实运动；先完成低速、急停和工作区检查
 ```
 
-Press and release events are printed by `/input/xbox_controller`. Set
-`REALMAN_JOY_DEVICE` to use a specific device path or glob:
+没有机器人时：
 
 ```bash
-REALMAN_JOY_DEVICE=/dev/input/by-id/usb-Xbox_Controller-event-joystick \
-  docker compose run --rm realman_bringup
+./rm65 up model                                   # 三臂模型 + RViz（需要 DISPLAY/XAUTHORITY）
+docker compose run --rm realman_driver_test       # mock 三臂驱动，不访问任何控制器
 ```
 
-For headless remote debugging, run the target without a local joystick or GUI:
+`./rm65` 的完整命令、`.env` 变量和端口见[CLI 与环境变量](https://qingtianrobot.github.io/realman_pi/reference/cli-and-env)。`functions.zsh` 提供可选的 `rm65_*` Zsh 函数（`source functions.zsh && rm65_project_help`），用于专项调试。
 
-```bash
-ROS_DOMAIN_ID=65 docker compose run --rm realman_bringup_remote
-```
+> **安全提示**：Web 控制台没有认证，任何能访问 `:8765` 的浏览器都能发送运动和停止命令，只能部署在受信任的机器人局域网内。软件"停止"不是控制柜物理急停。
 
-Another ROS 2 Humble host on the same network and domain can publish
-`sensor_msgs/msg/Joy` on `/input/joy`. Both hosts must use
-`ROS_LOCALHOST_ONLY=0`, and the network firewall must permit DDS UDP traffic.
-
-Bringup enables ROS 2's official colored rcutils output and writes each run to
-`logs/YYYYMMDD_HHMMSS/`. ROS 2 creates node log files such as
-`xbox_controller_node_<pid>_<timestamp>.log` in that directory.
-
-### Standalone Xbox controller test
-
-To test the physical controller without starting robot TF or RViz, use the
-dedicated service:
-
-```bash
-docker compose build xbox_controller_test
-REALMAN_JOY_DEVICE=/dev/input/by-id/usb-Xbox_Controller-event-joystick \
-  docker compose run --rm xbox_controller_test
-```
-
-The terminal should show the Xbox input node startup and entries such as
-`button[0] a PRESSED` and `button[0] a RELEASED` when A is pressed and released.
-If the controller is not connected yet, the service keeps polling the
-`*-event-joystick` devices under `/dev/input` and starts the Joy driver when the
-controller appears.
-
-### RealMan joint-state driver and RViz
-
-The Python driver reads the current joint angles from the three RM65-B
-controllers and publishes `/l/joint_states`, `/m/joint_states`, and
-`/r/joint_states`. The default addresses are configured in
-`config/ros/realman_driver.yaml`:
-
-```text
-l: 192.168.30.123
-m: 192.168.30.125
-r: 192.168.30.124
-```
-
-Start the real driver and RViz 2 without the Xbox input chain:
-
-```bash
-docker compose build realman_driver_rviz
-docker compose run --rm realman_driver_rviz
-```
-
-The driver uses `rm_get_joint_degree()` and converts vendor degrees to ROS
-radians before publishing. The SDK version is pinned in
-`config/python/realman-sdk-requirements.txt`.
-
-For an offline test that cannot contact a controller, use the separate mock
-configuration:
-
-```bash
-docker compose build realman_driver_test
-docker compose run --rm realman_driver_test
-```
-
-In another ROS 2 Humble terminal on the same domain, inspect the mock state:
-
-```bash
-ros2 topic echo /r/connected
-ros2 topic echo /r/joint_states
-```
-
-The driver owns connection lifecycle, read-only joint state, reconnect and
-stop services. It does not yet expose motion actions, force control, IO or
-production motion behavior.
-
-### Three-arm layout
-
-The repository-root `config/ros/three_robots.yaml` is the authoritative layout
-for the left (`l`), middle (`m`), and right (`r`) robots. The default layout
-places the arms at X positions `-1.0`, `0.0`, and `1.0` metres. Left and right
-face the same direction; middle uses yaw `pi` and faces the opposite direction.
-
-```bash
-docker compose build rm65_three_rviz
-docker compose run --rm rm65_three_rviz
-```
-
-Each robot has both a ROS namespace and a collision-free TF prefix:
-
-```text
-/l  -> l/world -> l/base_link -> ... -> l/link_6
-/m  -> m/world -> m/base_link -> ... -> m/link_6
-/r  -> r/world -> r/base_link -> ... -> r/link_6
-```
-
-All three prefixed trees attach to the global `world` frame using the transforms
-from `config/ros/three_robots.yaml`. Edit that file and restart the container to
-change positions, orientations, or per-arm RM65 models; rebuilding is not needed.
-
-Select another model with `RM65_MODEL`:
-
-```bash
-RM65_MODEL=RM65-6FB-V docker compose run --rm rm65_rviz
-```
-
-The standalone viewer uses `ROS_DOMAIN_ID=65` by default. Set the same domain
-as an external ROS 2 graph when connecting to other nodes.
-
-## Local ROS 2 build
-
-```bash
-source /opt/ros/humble/setup.bash
-colcon build --symlink-install \
-  --packages-up-to realman_bringup realman_robot_driver
-source install/setup.bash
-ros2 launch realman_bringup system.launch.py
-```
-
-## Website development
-
-```bash
-cd website
-npm ci
-npm run dev
-```
-
-Production build output is written to `website/docs/.vitepress/dist`.
-
-## Repository structure
+## 仓库结构
 
 ```text
 realman_pi/
-├── .github/workflows/    GitHub Pages deployment
-├── config/               Annotated Docker, ROS, TF, and RViz configuration
-├── docker/               Container entrypoint scripts
+├── config/        权威配置：ros/、behavior-trees/、docker/、python/、rviz/、web-control/、website/
 ├── src/
-│   ├── driver/           Robot hardware and operator input drivers
-│   │   └── realman_robot_driver/ Python SDK joint-state driver
-│   ├── realman_bringup/  Top-level launch orchestration
-│   └── rm65_description/ Robot descriptions, TF, and RViz launch
-├── functions.zsh         Optional Zsh development and deployment helpers
-└── website/              VitePress documentation site
+│   ├── driver/    realman_robot_driver、realman_msgs、realman_web_control、xbox_controller_driver
+│   ├── behavior/  realman_bt（执行器 + 键盘/Pika router）、realman_bt_mock
+│   ├── gripper/   gripper_ros2、gripper_ros2_msgs
+│   ├── policy_bridge/  VLA 策略桥
+│   ├── sensor/ sensor_bringup/  相机、标定与 launch（含 vendor 驱动）
+│   ├── realman_bringup/  系统 launch 编排
+│   └── rm65_description/ URDF、mesh、TF、RViz
+├── website/       VitePress 文档站
+├── scripts/ tests/ tools/  启动器与其测试、速度跟随测量工具
+├── doc/           睿尔曼官方 Python API 中文整理（厂商 API 速查）
+├── docs/superpowers/  历史设计规格与实施计划
+├── third_party/   behavior_tree_cpp 快照
+├── rm65  functions.zsh  docker-compose.yml  .env
 ```
 
-The Web developer manual documents the
-[Xbox input contract](https://qingtianrobot.github.io/realman_pi/development/xbox-controller)
-and [system bringup contract](https://qingtianrobot.github.io/realman_pi/development/system-bringup)
-separately.
+详细的包职责、文档来源与 Docker 边界见[仓库结构](https://qingtianrobot.github.io/realman_pi/architecture/package)。
 
-## Model source
+## 开发
 
-The converted RM65 URDF and mesh assets originate from the RealManRobot model
-repository:
+```bash
+# 文档站
+cd website && npm ci && npm run dev        # 本地预览
+npm run build && npm run test:e2e           # 提交文档改动前
 
-https://gitee.com/RealManRobot/rm_models/tree/main/RM65
+# 本地 ROS 2 构建（已安装 Humble）
+source /opt/ros/humble/setup.bash
+colcon build --symlink-install --packages-up-to realman_bringup
+source install/setup.bash
+```
+
+本仓库**没有 ROS 测试的 CI**（`.github/workflows/` 只做文档站部署），提交前请按[测试与验证](https://qingtianrobot.github.io/realman_pi/development/testing)自行运行对应组件的测试。约定：权威配置只放根 `config/` 并写清注释；功能变化与文档在同一次提交中更新；`src/sensor/OrbbecSDK_ROS2`、`src/sensor/realsense`、`third_party/behavior_tree_cpp` 为 vendor 快照，不在其中做项目改动。
+
+## 模型来源
+
+转换后的 RM65 URDF 与 mesh 资源来自 RealMan 官方模型仓库：https://gitee.com/RealManRobot/rm_models/tree/main/RM65

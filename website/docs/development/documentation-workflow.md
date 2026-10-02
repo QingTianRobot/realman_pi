@@ -22,19 +22,34 @@ description: 使用项目级 Skill 保证每次功能完成后同步更新 Web �
 
 | 路径 | 职责 |
 | --- | --- |
-| `website/docs/development/index.md` | 开发者手册入口和完成标准 |
+| `README.md` | 项目定位、最短启动路径和文档入口；不复制手册内容 |
+| `website/docs/guide/` | 用户运行和操作流程（快速开始、相机、远程 RViz） |
+| `website/docs/architecture/` | 系统总览、仓库结构、TF 树 |
+| `website/docs/development/index.md` | 开发者手册入口、任务索引和完成标准 |
 | `website/docs/development/*.md` | 各功能当前有效的契约、实现、配置与验证 |
-| `website/docs/guide/` | 用户运行和操作流程 |
+| `website/docs/reference/` | 接口总表、配置文件总表、CLI 与环境变量（速查，指向专题页） |
 | `website/docs/troubleshooting.md` | 用户可执行的故障诊断与恢复 |
-| `.agents/skills/document-feature-updates/SKILL.md` | AI 开发任务中的强制维护流程 |
+| `config/website/vitepress.config.mts` | 导航与侧栏 |
+| `.agents/skills/` | AI 开发任务中的强制维护流程和代码地图 |
 
 功能增量优先更新已有页面。不要只追加提交日志，因为开发者需要从页面直接获得当前系统行为。
+
+### 哪类改动要碰哪些页面
+
+| 改动 | 至少更新 |
+| --- | --- |
+| 新增 / 修改 Action、Service、Topic、msg | `reference/ros-interfaces.md` + 所属专题页 |
+| 新增 / 修改 `config/` 文件或字段 | 配置文件自身注释 + `reference/configuration.md`（新文件）+ 所属专题页 |
+| 修改 `rm65`、Compose 服务、`.env` 变量 | `reference/cli-and-env.md`、`development/startup-entries.md`、`development/system-bringup.md` |
+| 新增 / 删除 / 重命名包或目录 | `architecture/package.md`、`architecture/overview.md` |
+| 修改限速、watchdog、周期 | 配置文件注释；驱动页的参数表；受影响的 router 页面（键盘、Pika） |
+| 新增页面 | 侧栏、`development/index.md` 的任务索引、`website/tests/site.spec.ts` 的路由列表 |
 
 ## 完成流程
 
 1. 实现前阅读对应开发者页面，确认现有契约和边界。
 2. 完成功能后更新用途、数据流、源文件、配置、命令、验证和已知限制。
-3. 新增页面时同步更新 VitePress 导航和 `website/tests/site.spec.ts` 路由列表。
+3. 新增页面时同步更新 VitePress 侧栏（`config/website/vitepress.config.mts`）、开发者手册入口的任务索引和 `website/tests/site.spec.ts` 路由列表。
 4. 配置变化同时应用 `project-config-layout` Skill，确保权威配置位于根目录 `config/` 并带有清晰注释。
 5. 从 `website/` 运行构建；涉及页面行为、生成资源或导航时运行端到端测试。
 

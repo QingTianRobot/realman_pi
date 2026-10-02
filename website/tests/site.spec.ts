@@ -115,10 +115,18 @@ test("authoritative layout retains the calibrated production arrangement", async
 test("documentation routes render", async ({ page }) => {
   for (const route of [
     "guide/getting-started",
+    "guide/cameras",
+    "guide/remote-rviz",
     "models/",
+    "architecture/overview",
     "architecture/tf-tree",
     "architecture/package",
+    "reference/ros-interfaces",
+    "reference/configuration",
+    "reference/cli-and-env",
     "development/",
+    "development/testing",
+    "development/pika-teleop",
     "development/documentation-workflow",
     "development/startup-entries",
     "development/camera-calibration",
@@ -179,6 +187,7 @@ test("repository tree preserves its multiline structure", async ({ page }) => {
 
   const lines = (await repositoryTree.textContent())?.trim().split("\n") ?? [];
   expect(lines.length).toBeGreaterThan(20);
-  expect(lines).toContain("├── config/");
+  // Lines carry trailing descriptions, so match the tree branch prefix.
+  expect(lines.some((line) => line.startsWith("├── config/"))).toBe(true);
   expect(lines).toContain("└── README.md");
 });

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, ref } from "vue";
+import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
 
 type RobotConfig = {
   id: "l" | "m" | "r";
@@ -32,10 +32,39 @@ const rootFrame = ref("world");
 const visualizationReferenceArm = ref("m");
 const animated = ref(false);
 
+// Joint panel. Angles are radians; the sliders show degrees. While an arm is idle its angles
+// follow the animation (so the sliders stay truthful); touching a slider switches that arm to
+// manual and the animation never overwrites the user's pose until "自动" is pressed.
+type ArmId = RobotConfig["id"];
+const armIds: ArmId[] = ["l", "m", "r"];
+const jointCount = 6;
+const selectedArm = ref<ArmId>("l");
+const panelOpen = ref(true);
+const angles = reactive<Record<ArmId, number[]>>({
+  l: Array(jointCount).fill(0),
+  m: Array(jointCount).fill(0),
+  r: Array(jointCount).fill(0),
+});
+const manual = reactive<Record<ArmId, boolean>>({ l: false, m: false, r: false });
+const limits = reactive<Record<ArmId, { lower: number; upper: number }[]>>({
+  l: Array.from({ length: jointCount }, () => ({ lower: -3.14, upper: 3.14 })),
+  m: Array.from({ length: jointCount }, () => ({ lower: -3.14, upper: 3.14 })),
+  r: Array.from({ length: jointCount }, () => ({ lower: -3.14, upper: 3.14 })),
+});
+const toDegrees = (radians: number) => Math.round((radians * 180) / Math.PI);
+const onSlider = (index: number, event: Event) => {
+  const degrees = Number((event.target as HTMLInputElement).value);
+  angles[selectedArm.value][index] = (degrees * Math.PI) / 180;
+  manual[selectedArm.value] = true;
+};
+const resumeAuto = () => { manual[selectedArm.value] = false; };
+
 let dispose: (() => void) | undefined;
 
 onMounted(async () => {
   if (!canvas.value || !viewport.value) return;
+  // Phones start with the joint panel collapsed so it does not cover the scene.
+  panelOpen.value = window.innerWidth > 640;
 
   try {
     const base = import.meta.env.BASE_URL;
@@ -119,24 +148,23 @@ onMounted(async () => {
     const idleAmplitude = [0.5, 0.22, 0.3, 0.55, 0.3, 0.7];
     const idlePeriod = [11, 8, 9.5, 7, 8.5, 6];
     const armPhase: Record<RobotConfig["id"], number> = { l: 0, m: 2.1, r: 4.2 };
-    const poseRobot = (
-      robot: { joints: Record<string, { limit?: { lower: number; upper: number } }>; setJointValue: (name: string, value: number) => unknown },
-      id: RobotConfig["id"],
+    // Returns the (limit-clamped) joint values so the panel can mirror them.
+    const idleAngles = (
+      robot: { joints: Record<string, { limit?: { lower: number; upper: number } }> },
+      id: ArmId,
       seconds: number,
-      animated: boolean,
-    ) => {
-      idleOffset.forEach((offset, index) => {
-        const name = `joint_${index + 1}`;
-        const swing = animated
-          ? idleAmplitude[index] * Math.sin((2 * Math.PI * seconds) / idlePeriod[index] + armPhase[id] + index * 0.9)
-          : 0;
-        let value = offset + swing;
-        const limit = robot.joints[name]?.limit;
-        // Joint limits are 0 / 0 for continuous joints in some URDFs; only clamp real ranges.
-        if (limit && limit.upper > limit.lower) value = Math.min(Math.max(value, limit.lower), limit.upper);
-        robot.setJointValue(name, value);
-      });
-    };
+    ) => idleOffset.map((offset, index) => {
+      const swing = idleAmplitude[index]
+        * Math.sin((2 * Math.PI * seconds) / idlePeriod[index] + armPhase[id] + index * 0.9);
+      const limit = robot.joints[`joint_${index + 1}`]?.limit;
+      const value = offset + swing;
+      // Continuous joints report equal bounds; only clamp real ranges.
+      return limit && limit.upper > limit.lower ? Math.min(Math.max(value, limit.lower), limit.upper) : value;
+    });
+    const applyAngles = (
+      robot: { setJointValue: (name: string, value: number) => unknown },
+      values: number[],
+    ) => values.forEach((value, index) => robot.setJointValue(`joint_${index + 1}`, value));
     const loadedRobots = await Promise.all(
       config.robots.map(async (robotConfig) => {
         const robot = await loader.loadAsync(`${base}models/${robotConfig.model}.urdf`);
@@ -151,7 +179,14 @@ onMounted(async () => {
           robotConfig.transform.yaw,
           "ZYX",
         );
-        poseRobot(robot, robotConfig.id, 0, false);
+        // Start from the relaxed posture (no swing) and publish the real URDF limits to the panel.
+        const id = robotConfig.id;
+        for (let index = 0; index < jointCount; index += 1) {
+          const limit = robot.joints[`joint_${index + 1}`]?.limit;
+          if (limit && limit.upper > limit.lower) limits[id][index] = { lower: limit.lower, upper: limit.upper };
+          angles[id][index] = Math.min(Math.max(idleOffset[index], limits[id][index].lower), limits[id][index].upper);
+        }
+        applyAngles(robot, angles[id]);
         robotsGroup.add(robot);
         return { robot, config: robotConfig };
       }),
@@ -252,12 +287,25 @@ onMounted(async () => {
     visibility.observe(host);
     const startedAt = performance.now();
     let frame = 0;
-    const render = () => {
+    let lastPanelSync = 0;
+    const render = (now = performance.now()) => {
       frame = window.requestAnimationFrame(render);
       if (!visible) return;
-      if (!reducedMotion && state.value === "ready") {
+      if (state.value === "ready") {
         const seconds = (performance.now() - startedAt) / 1000;
-        loadedRobots.forEach(({ robot, config: robotConfig }) => poseRobot(robot, robotConfig.id, seconds, true));
+        const mirror = now - lastPanelSync > 100;
+        if (mirror) lastPanelSync = now;
+        loadedRobots.forEach(({ robot, config: robotConfig }) => {
+          const id = robotConfig.id;
+          if (manual[id]) {
+            applyAngles(robot, angles[id]);
+          } else if (!reducedMotion) {
+            const values = idleAngles(robot, id, seconds);
+            applyAngles(robot, values);
+            // Mirror into the reactive state at 10 Hz so the sliders follow without per-frame re-renders.
+            if (mirror) values.forEach((value, index) => { angles[id][index] = value; });
+          }
+        });
       }
       controls.update();
       renderer.render(scene, camera);
@@ -301,6 +349,38 @@ onBeforeUnmount(() => dispose?.());
     <div class="model-readout" aria-hidden="true">
       <span>{{ modelNames || "RM65" }} / {{ robotCount ? "L / M / R" : "..." }}</span>
       <span>{{ state === "ready" ? "CONFIG / LIVE" : "CONFIG / LOADING" }}</span>
+    </div>
+    <div v-if="state === 'ready'" class="joint-panel" :class="{ collapsed: !panelOpen }">
+      <button class="joint-panel-toggle" type="button" :aria-expanded="panelOpen" @click="panelOpen = !panelOpen">
+        {{ panelOpen ? "收起关节控制" : "关节控制" }}
+      </button>
+      <template v-if="panelOpen">
+        <div class="joint-arms" role="tablist" aria-label="选择机械臂">
+          <button
+            v-for="id in armIds"
+            :key="id"
+            type="button"
+            role="tab"
+            :aria-selected="selectedArm === id"
+            :class="{ active: selectedArm === id, manual: manual[id] }"
+            @click="selectedArm = id"
+          >{{ id.toUpperCase() }}<small>{{ manual[id] ? "手动" : "自动" }}</small></button>
+        </div>
+        <label v-for="index in jointCount" :key="index" class="joint-row">
+          <span class="joint-name">J{{ index }}</span>
+          <input
+            type="range"
+            step="1"
+            :aria-label="`${selectedArm} 臂关节 ${index}`"
+            :min="toDegrees(limits[selectedArm][index - 1].lower)"
+            :max="toDegrees(limits[selectedArm][index - 1].upper)"
+            :value="toDegrees(angles[selectedArm][index - 1])"
+            @input="onSlider(index - 1, $event)"
+          />
+          <span class="joint-value">{{ toDegrees(angles[selectedArm][index - 1]) }}°</span>
+        </label>
+        <button class="joint-auto" type="button" :disabled="!manual[selectedArm]" @click="resumeAuto">恢复自动摆动</button>
+      </template>
     </div>
     <p v-if="state === 'loading'" class="viewer-state">正在加载三机械臂模型</p>
     <p v-else-if="state === 'error'" class="viewer-state viewer-error">模型预览暂不可用</p>

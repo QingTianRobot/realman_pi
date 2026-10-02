@@ -21,6 +21,8 @@ export default withMermaid(defineConfig({
   vite: {
     // Generated model assets stay ignored; sync-three-robots.mjs rebuilds them from root config/ before each run.
     publicDir: resolve(repositoryDirectory, "website/docs/.vitepress/cache/public"),
+    // The dev server cannot load these CommonJS deps of the Mermaid plugin unless they are pre-bundled.
+    optimizeDeps: { include: ["mermaid", "fastdom"] },
   },
   head: [
     // Keep browser chrome and native controls aligned with the site theme.

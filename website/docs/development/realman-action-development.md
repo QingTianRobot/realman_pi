@@ -296,10 +296,11 @@ ROS 接口的 `ReferenceType` 与厂商速度初始化枚举不是同一个数�
 `TOOL -> rm_set_movev_canfd_init frame_type 0`，`WORK -> frame_type 1`。不得把 ROS 的
 `TOOL=2` 原样传入 SDK。厂商接口没有独立 BASE 值，因此速度 Goal 使用 BASE 时在初始化前拒绝。
 
-`config/ros/realman_motion.yaml` 将普通会话速度与绝对硬上限分开。`max_linear_speed_mps` 当前仍为
-`0.05`，由 Web、键盘和普通行为树客户端写入 Goal；l/r 的 `hard_max_linear_speed_mps` 为 `1.0`，
-只供 Pika 的显式逐会话请求使用。m 的两个值都保持 `0.05`。驱动按 Goal 中已验证的 session 上限
-检查和裁剪每条 `TwistStamped`，不会因为提高 l/r 硬上限而自动放宽其它客户端。
+`config/ros/realman_motion.yaml` 将普通会话速度与绝对硬上限分开。`max_linear_speed_mps`
+（l/r 当前 `0.15`，m `0.05`）由 Web、键盘和普通行为树客户端写入 Goal；l/r 的
+`hard_max_linear_speed_mps` 为 `1.0`，只供 Pika 的显式逐会话请求使用。m 的硬上限与普通上限相同（`0.05`）。
+键盘的实际按键速度是该普通上限乘以 `keyboard_control.yaml` 的 `linear_speed_fraction`，当前约 `0.02 m/s`。
+驱动按 Goal 中已验证的 session 上限检查和裁剪每条 `TwistStamped`，不会因为提高 l/r 硬上限而自动放宽其它客户端。
 
 速度 feedback 还会返回命令向量、经过速度/加速度限制后的向量、`command_age_ms`、
 活动坐标和 API2 status。IDL 保留 `SUCCEEDED=0`，但当前速度 session 是开放式控制，
@@ -324,7 +325,7 @@ ros2 topic echo --once /l/cartesian_velocity/state
 
 ### 命令新鲜度与 QoS
 
-订阅为 `KEEP_LAST=1`、`VOLATILE`，DDS lifespan 等于 watchdog。每条命令必须满足：
+订阅为 `KEEP_LAST=1`、`VOLATILE`，不设置 DDS lifespan（lifespan 依赖墙钟，跨主机时钟漂移会静默丢弃有效命令）；新鲜度由 session 的单调 watchdog 与下列相对时间戳检查保证。每条命令必须满足：
 
 - `header.stamp` 非零；
 - 使用当前节点 ROS clock，不能晚于当前时间；
@@ -396,7 +397,7 @@ session。
 
 执行方式：每个控制周期对最新目标求 IK（生产环境为 SDK IK），种子是上一次下发的关节指令，
 因此不需要每个周期额外读一次关节；然后把每个关节朝 IK 解移动，单周期最多
-`pose_max_joint_speed_dps × dt`（[`config/ros/realman_motion.yaml`](../../../config/ros/realman_motion.yaml)，
+`pose_max_joint_speed_dps × dt`（[`config/ros/realman_motion.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/realman_motion.yaml)，
 默认 `30°/s`；卡顿的周期最多按两个周期计），再用 `rm_movej_canfd` 透传。透传不做轨迹规划、立即执行，
 所以这个逐关节限速就是位姿 session 唯一的运动限幅；笛卡尔层面的平滑由上游负责（例如 Pika Mixed
 的 router 积分限速）。
@@ -404,7 +405,7 @@ session。
 - session 启动时读取机械臂当前关节作为第一个起点，读不到就拒绝 goal，不会从假设位置起步；
 - IK 失败（奇异或不可达）时重发上一次关节指令，机械臂原地保持，session 不中断；失败日志每秒最多一条；
 - 透传返回非零状态时中止 session 并执行 slow-stop；
-- `follow` 由 goal 决定（Pika router 使用低跟随、`20 ms` 周期）；goal 中的 `velocity_percent`、
+- `follow` 由 goal 决定（Pika router 使用 `follow=false`，周期为 l/r 的 `10 ms`，driver 每臂只接受一个周期）；goal 中的 `velocity_percent`、
   `blend_radius_percent` 仍做校验，但透传不使用它们。
 
 此前位姿 session 用 `rm_movej(..., connect=1)` 下发。SDK 对 `connect=1` 的定义是"将当前轨迹与下一条轨迹
@@ -432,13 +433,13 @@ Replay 因此选择 identity WORK aliases `l/work/pikabase`、`r/work/pikabase`�
 | right gripper | `/pika/r/gripper_percentage` | `Float32`, `0` closed, `1` open |
 
 Pika router 的权威引用是
-[`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 中的
+[`config/ros/pika_config.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/pika_config.yaml) 中的
 `pika_velocity.work_reference: work/pikabase`；单位 WORK 的配置来自
-[`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml)。Replay 使用
+[`config/ros/realman_coordinates.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/realman_coordinates.yaml)。Replay 使用
 `1.0 m/s` 线速度和 `2.0 rad/s` 角速度向量模长上限。Pika Goal 可显式请求 `4.0 rad/s²` 角加速度，
 普通速度客户端继续受 `0.5 rad/s²` 标准上限约束；超过 Pika 角速度上限的 ingress 按向量模长等比例缩放，
 不会整条丢弃。键盘保留 `cell` WORK，其它客户端保留各自的
-引用；键盘、Web 手动速度和普通行为树速度客户端仍为 `0.05 m/s` 普通会话上限。
+引用；键盘、Web 手动速度和普通行为树速度客户端仍使用普通会话上限（l/r `0.15 m/s`）。
 Replay 执行尝试选择坐标后，结束或检测到 mode、坐标、时间戳或订阅者失效时，先发送左右速度终端零
 向量并等待超过驱动 `100 ms` watchdog，再把已选择或可能已选择的工作坐标恢复为 `cell`
 （`l/work/cell`、`r/work/cell`）。夹爪不发送零值作为停止，因为 `0` 是闭合目标。若恢复失败，
@@ -449,7 +450,7 @@ Replay 执行尝试选择坐标后，结束或检测到 mode、坐标、时间�
 只有操作员明确加上 `--execute` 才会选择 `pikabase` 并发布 ingress。自动化测试、`inspect` 和部署后的
 验证绝不运行真实 `--execute`；执行分支测试使用 fake 节点。Replay 的
 `ReplayNode.spin_once()` 仅供内部调度器使用，公开 operator API 是 `replay.sh`。
-完整操作顺序见 [Pika rosbag replay](./behavior-tree-control#pika-rosbag-replay)，
+完整操作顺序见 [Pika rosbag replay](./pika-teleop#pika-rosbag-replay)，
 生命周期边界见 [Pika replay 边界](./behavior-tree-motion#pika-rosbag-replay-边界)。
 
 ## 坐标与 motion gate

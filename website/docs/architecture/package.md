@@ -1,87 +1,85 @@
 ---
-title: 仓库与 ROS 图
-description: realman_pi 的网站、Docker 环境、ROS 2 描述包和运行节点结构。
+title: 仓库结构
+description: realman_pi 仓库的目录职责、ROS 2 包清单、文档来源和 Docker 边界。
 ---
 
-# 仓库与 ROS 图
+# 仓库结构
 
-仓库把运行环境、ROS 2 包和文档网站分开管理。前端依赖不会进入 ROS 工作空间，容器构建也不会安装网站依赖。
+仓库把运行环境、ROS 2 包、文档和权威配置分开管理：前端依赖不会进入 ROS 工作空间，容器构建也不会安装网站依赖。组件之间的关系先看[系统架构总览](./overview)。
 
-## 代码仓库结构
+## 目录
 
 ```text
 realman_pi/
-├── .github/
-│   └── workflows/
-│       └── deploy-pages.yml       # GitHub Pages 自动部署
-├── config/
-│   ├── docker/                    # Compose 与 Humble 镜像配置
-│   ├── python/                    # 睿尔曼 Python SDK 版本锁定
-│   ├── ros/                       # 三臂 TF、驱动连接和 Xbox 参数
-│   ├── rviz/                      # 单臂和三臂显示配置
-│   └── website/                   # VitePress 与 Playwright 实质配置
-├── docker/
-│   └── ros_entrypoint.sh          # 容器运行入口脚本
+├── .agents/skills/           项目级 AI 开发 skill（架构、驱动、行为树、夹爪、日志、文档同步…）
+├── .github/workflows/        GitHub Pages 部署（只做 website/ 的构建与发布）
+├── config/                   全部权威配置：ros/、behavior-trees/、docker/、python/、rviz/、web-control/、website/
+├── doc/                      睿尔曼官方 Python API 的中文整理（厂商 API 速查，不是本项目文档）
+├── docker/                   容器入口脚本：ros_entrypoint.sh、行为树容器入口
+├── docs/superpowers/         历史设计规格（specs/）与实施计划（plans/），记录"为什么这样设计"
+├── scripts/                  行为树启动器 bt.sh、bt-test.sh 及其 shell 测试、Pika 位姿模拟
 ├── src/
-│   ├── driver/
-│   │   ├── realman_robot_driver/   # Python 三臂关节状态驱动
-│   │   └── xbox_controller_driver/ # C++ Xbox 输入处理包
-│   ├── realman_bringup/            # 系统级启动编排包
-│   └── rm65_description/           # 机器人描述与可视化包
-│       ├── launch/
-│       ├── meshes/
-│       └── urdf/
-├── website/                       # VitePress 文档站
-│   ├── docs/
-│   │   ├── .vitepress/
-│   │   ├── architecture/
-│   │   ├── development/          # 功能契约与开发者手册
-│   │   ├── guide/
-│   │   ├── models/
-│   │   └── troubleshooting.md
-│   └── package.json
-├── docker-compose.yml
-├── functions.zsh                 # 可选 Zsh 开发与部署函数
+│   ├── behavior/             realman_bt（执行器与 router）、realman_bt_mock
+│   ├── driver/               realman_robot_driver、realman_msgs、realman_web_control、xbox_controller_driver
+│   ├── gripper/              gripper_ros2、gripper_ros2_msgs（Changingtek 夹爪）
+│   ├── policy_bridge/        VLA 策略 WebSocket ⇄ ROS 2 协议桥
+│   ├── realman_bringup/      系统 launch 编排
+│   ├── rm65_description/     URDF、mesh、TF、RViz launch
+│   ├── sensor/               realman_camera_calibration + Orbbec / RealSense 厂商驱动（vendor）
+│   ├── sensor_bringup/       相机 launch
+│   └── camera_stream/        已弃用的 RTSP/TCP 相机推流
+├── tests/                    行为树启动器、容器入口、./rm65 入口的集成测试
+├── third_party/              behavior_tree_cpp 快照（行为树库 + 只读编辑器前端）
+├── tools/                    velocity_follow：不依赖 ROS 的速度跟随测量工具
+├── website/                  VitePress 文档站与网页端测试
+├── docker-compose.yml        指向 config/docker/compose.yaml 的 discovery adapter
+├── functions.zsh             可选的 Zsh 开发与部署函数（rm65_* 前缀）
+├── rm65                      统一入口（up / down / bt / sync …）
+├── start_sensors.sh          宿主机相机启动脚本
 └── README.md
 ```
 
-## ROS 2 包结构
+`.env`（仓库根，已纳入版本控制）只放非机密的运行时变量；见 [CLI 与环境变量](../reference/cli-and-env)。
 
-| 包 | 职责 | 主要入口 |
+## ROS 2 包
+
+| 包 | 语言 | 职责 | 主要入口 |
+| --- | --- | --- | --- |
+| `realman_msgs` | IDL | Action / Service / Msg：运动、坐标、输入模式、标定 | — |
+| `realman_robot_driver` | Python | 三臂连接、回读、运动协调、速度/位姿 session、坐标管理、IK、`controller_info` | `three_realman_drivers.launch.py`、`realman_driver_node` |
+| `realman_web_control` | Python | 浏览器 ⇄ ROS 桥、URDF 影子、键盘 lease、标定页 | `web_control.launch.py`、`web_control_node` |
+| `realman_bt` | C++ / Python | 行为树执行器、输入模式、`keyboard_control_router`、`pika_control_router` | `control_router.launch.py`、`arm_move.launch.py` |
+| `realman_bt_mock` | Python | 无硬件 mock 图 | `behavior_tree_mock.launch.py` |
+| `gripper_ros2`、`gripper_ros2_msgs` | Python / IDL | 夹爪 manager：串口独占、service/topic | `gripper_manager` |
+| `policy_bridge` | Python | 策略 WebSocket 桥与 mock 策略服务 | `policy_bridge_node`、`mock_policy_server` |
+| `realman_camera_calibration` | Python | ChArUco 采样与手眼求解 | `camera_calibration_node` |
+| `sensor_bringup` | launch | Orbbec ×3 + D435 的 ROS 2 出图 | `cameras_ros2.launch.py` |
+| `xbox_controller_driver` | C++ | 订阅 `/input/joy`，输出按键边沿日志 | `xbox_controller_node` |
+| `realman_bringup` | launch | 统一组合驱动、TF、RViz、夹爪、Web、标定 | `system.launch.py`、`remote_rviz.launch.py` |
+| `rm65_description` | 资源 / launch | RM65 URDF、mesh、三臂 TF、RViz | `display.launch.py`、`three_robots.launch.py` |
+
+`src/sensor/OrbbecSDK_ROS2`、`src/sensor/realsense/*` 和 `third_party/behavior_tree_cpp` 是 vendor 快照，**不要在其中做项目改动**；需要的差异通过配置、launch 参数或本项目自己的包表达。
+
+## 文档来源
+
+| 位置 | 内容 | 是否权威 |
 | --- | --- | --- |
-| `rm65_description` | RM65 URDF、mesh、单臂/三臂 TF 与 RViz 2 | `display.launch.py`、`three_robots.launch.py` |
-| `realman_robot_driver` | 三台控制器连接、关节角回读、弧度转换和 namespaced `JointState` | `three_realman_drivers.launch.py`、`realman_driver_node` |
-| `xbox_controller_driver` | 订阅标准 Joy 消息并输出 Xbox 按键状态变化 | `xbox_controller_node` |
-| `realman_bringup` | 统一组合三臂驱动、TF、RViz、`game_controller_node` 与输入处理节点 | `system.launch.py` |
+| `website/docs/` | 本站：用户指南、架构、开发者手册、参考 | **是**：描述当前行为 |
+| `.agents/skills/` | 给 AI 助手的操作规则和代码地图 | 与本站同步维护，以仓库实现为准 |
+| `docs/superpowers/specs|plans/` | 历史设计与实施计划 | 否：记录当时的设计意图，行为以代码和本站为准 |
+| `.superpowers/sdd/` | 子任务实施报告 | 否：过程记录 |
+| `doc/` | RealMan 官方 Python API 中文整理 | 厂商接口速查，驱动开发时配合 `realman-python-driver` skill 使用 |
 
-资源和配置职责如下：
+## Docker 边界
 
-| 路径 | 用途 |
-| --- | --- |
-| `launch/display.launch.py` | 校验型号并启动三个可视化节点 |
-| `launch/three_robots.launch.py` | 从根配置创建 `/l`、`/m`、`/r` 三组节点与 TF |
-| `urdf/*.urdf` | 五个型号的机器人描述与完整 TF 关系 |
-| `meshes/<model>/*.STL` | 每个 link 的视觉与碰撞网格 |
-| `config/ros/three_robots.yaml` | 三台机械臂的位置、朝向、型号和命名配置 |
-| `config/ros/realman_driver.yaml` | 三台真实控制器的 IP、SDK 模式、轮询和重连参数 |
-| `config/ros/realman_driver_mock.yaml` | 不访问控制器的离线三臂驱动参数 |
-| `config/ros/xbox_controller.yaml` | Linux 手柄读取参数、按键名称和日志策略 |
-| `config/python/realman-sdk-requirements.txt` | Docker 安装的睿尔曼 Python SDK 固定版本 |
-| `config/rviz/*.rviz` | Fixed Frame、视角、RobotModel 与 TF 配置 |
-| `config/website/vitepress.config.mts` | 网站导航、侧栏、搜索和构建路径配置 |
-| `config/website/playwright.config.mjs` | 网站桌面/移动端浏览器测试、Chrome 和预览服务配置 |
-| `CMakeLists.txt` | 安装 launch、URDF、mesh 与 RViz 资源 |
-| `package.xml` | Humble 运行依赖和 ament 包元数据 |
+Compose 使用 host network 与 host IPC；`./config` 以只读方式挂到 `/opt/rm65_ws/config`，`./logs` 可写。需要写入的目录（`config/web-control/joint-records`、`realman_bringup_remote` 的 `config/ros`）单独声明为可写。完整服务列表见[系统 Bringup](../development/system-bringup#docker-服务)。
 
-URDF 使用标准 ROS 包 URI 引用网格：
+- 容器从 `.env` 读取 `ROS_DOMAIN_ID`、`ROS_LOCALHOST_ONLY`、`FASTDDS_BUILTIN_TRANSPORTS=UDPv4`。host network 下，同网络的 Humble 主机可加入该 ROS 图；防火墙必须放行 DDS UDP。
+- 带 RViz 的服务额外挂载 `/tmp/.X11-unix` 与 `$XAUTHORITY`；`realman_bringup_remote`、`realman_web_control` 不需要显示变量。
+- `realman_bringup_remote` 额外映射 `/dev/realman/gripper_{right,left,mid}` 稳定别名，不要把易变的 `/dev/ttyUSB*` 写进生产配置。
+- Bringup 设置 `RCUTILS_COLORIZED_OUTPUT=1` 和 `ROS_LOG_DIR`，每次运行在 `logs/YYYYMMDD_HHMMSS/` 保存官方节点日志。规范见 `ros2-logging-conventions` skill。
 
-```xml
-<mesh filename="package://rm65_description/meshes/RM65-B/link_1.STL" />
-```
-
-安装后由 ament 索引定位 `rm65_description` 的共享目录，因此工作空间可以放在任意绝对路径。
-
-## 运行节点
+## 运行节点（描述与关节状态）
 
 ```text
 RealMan SDK ──▶ /l|m|r/realman_driver
@@ -90,36 +88,24 @@ RealMan SDK ──▶ /l|m|r/realman_driver
                                                                │
                                              /tf + /tf_static  │
                                                                ▼
-                                                             rviz2
+                                                     rviz2 / Web URDF 影子
 
-/l|m|r/robot_state_publisher ── /l|m|r/robot_description ─────▶ rviz2
-
-/dev/input/*-event-joystick ──▶ game_controller_node ── /input/joy ──▶ xbox_controller_node
-                                                         └──▶ 按键边沿日志
+/l|m|r/robot_state_publisher ── /l|m|r/robot_description ──▶ rviz2
 ```
 
-`system.launch.py` 默认启动三台真实关节状态驱动，并让每个 namespaced
-`robot_state_publisher` 只订阅对应驱动的话题。设置 `start_driver:=false` 时才切换到
-`joint_state_publisher` 或 GUI 假状态源。RViz 使用三个 namespaced
-`robot_description` 加载同一组模型资源。
+`system.launch.py` 默认启动三台真实驱动，并让每个 namespaced `robot_state_publisher` 只订阅对应驱动的 `joint_states`；设置 `start_driver:=false` 才改用 `joint_state_publisher`（模型查看模式）。
 
-## Docker 边界
+## 描述包资源
 
-Compose 使用 host network 和 host IPC，并挂载两个只读/受限的显示资源：
+| 路径 | 用途 |
+| --- | --- |
+| `launch/display.launch.py` | 校验型号并启动单臂可视化 |
+| `launch/three_robots.launch.py` | 从 `config/ros/three_robots.yaml` 创建 `/l`、`/m`、`/r` 三组节点与 TF |
+| `urdf/*.urdf` | 五个型号的描述与完整 TF 关系 |
+| `meshes/<model>/*.STL` | 每个 link 的视觉与碰撞网格 |
 
-| 主机资源 | 容器路径 | 模式 |
-| --- | --- | --- |
-| `/tmp/.X11-unix` | `/tmp/.X11-unix` | 读写 socket |
-| `$XAUTHORITY` | `/tmp/.Xauthority` | 只读 |
+URDF 使用标准 ROS 包 URI 引用网格，安装后由 ament 索引定位共享目录，工作空间可放在任意绝对路径：
 
-容器从根目录 `.env` 读取 `ROS_DOMAIN_ID`，模板值为 `0`，并默认设置 `ROS_LOCALHOST_ONLY=0`。使用 host network 后，同一网络中的 Humble 主机可以加入该 ROS 图进行远程调试；主机防火墙必须允许 DDS UDP 流量。带 RViz 的服务额外设置 `QT_X11_NO_MITSHM=1` 和 `LIBGL_ALWAYS_SOFTWARE=1`，降低主机与容器的 OpenGL 驱动冲突概率。
-
-`realman_bringup` 把主机 `/dev/input` 只读映射到容器，并等待
-`*-event-joystick` 设备出现后启动 Joy 驱动。`realman_bringup_remote` 不启动设备驱动和 GUI，
-只保留 ROS 节点供远程 Joy 发布者调试。设备和按键契约见 [Xbox 手柄输入](../development/xbox-controller)，
-系统组合方式见[系统 Bringup](../development/system-bringup)。
-
-`xbox_controller_test` 是独立的实体手柄验证服务，只启动 `/input/joy_node` 和
-`/input/xbox_controller`，不创建机械臂、TF 或 RViz 节点。
-
-Bringup 同时设置 `RCUTILS_COLORIZED_OUTPUT=1` 和 `ROS_LOG_DIR`。每次运行在宿主机 `logs/YYYYMMDD_HHMMSS/` 下保存 ROS 2 官方日志；RealMan launch 使用每个 namespace 的进程名生成 `l_realman_driver_<pid>_<timestamp>.log` 等节点文件。日志规范由项目 skill `.agents/skills/ros2-logging-conventions/SKILL.md` 维护。
+```xml
+<mesh filename="package://rm65_description/meshes/RM65-B/link_1.STL" />
+```

@@ -21,7 +21,7 @@ policy_bridge_node ── 上行 ObservationBuilder（订阅配置的 topic）
 realman_bt_executor ── /realman_bt_executor/input_mode_state ──▶ ModeWatcher（唯一模式来源）
 ```
 
-模式只由 `ModeWatcher` 订阅的 `InputModeState` 决定；合法的 `active_mode` 字面量唯一来源是 [`config/behavior-trees/control_router.xml`](../../../../config/behavior-trees/control_router.xml) 的 `InputModeGuard`，桥接节点自身不定义模式枚举。
+模式只由 `ModeWatcher` 订阅的 `InputModeState` 决定；合法的 `active_mode` 字面量唯一来源是 [`config/behavior-trees/control_router.xml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/behavior-trees/control_router.xml) 的 `InputModeGuard`，桥接节点自身不定义模式枚举。
 
 实现入口：
 
@@ -35,7 +35,7 @@ realman_bt_executor ── /realman_bt_executor/input_mode_state ──▶ ModeW
 
 ## 配置
 
-权威配置是 [`config/ros/policy_bridge.yaml`](../../../../config/ros/policy_bridge.yaml)，容器映射在 [`config/docker/compose.yaml`](../../../../config/docker/compose.yaml)。不要在源码包内维护第二份运行配置。所有 topic 名都是字符串配置，驱动缺少对应生产者/消费者时改配置即可，不改代码；启动时**不校验 topic 是否存在**。
+权威配置是 [`config/ros/policy_bridge.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/policy_bridge.yaml)，容器映射在 [`config/docker/compose.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/docker/compose.yaml)。不要在源码包内维护第二份运行配置。所有 topic 名都是字符串配置，驱动缺少对应生产者/消费者时改配置即可，不改代码；启动时**不校验 topic 是否存在**。
 
 | 段 | 字段 | 单位/范围 | 作用 |
 | --- | --- | --- | --- |

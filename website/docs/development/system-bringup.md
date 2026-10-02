@@ -327,7 +327,7 @@ Wayland 没有导出 `XAUTHORITY`，函数会自动查找运行时目录下的
 `realman_remote_rviz` 只启动 `rviz2`，直接订阅远程的 `/l|m|r/robot_description`、TF 和
 `/l|m|r/joint_states`；它不会在桌面机创建 RealMan SDK 连接，也不会启动假关节状态源。
 两台主机必须能互相发现 DDS 的 UDP 流量；跨 NAT 或只允许单播的网络需要额外的 DDS
-discovery 配置。具体的 Zsh 函数参数、生命周期和故障判断见[快速开始：远程 RViz 函数详解](../guide/getting-started#远程-rviz-函数详解)。
+discovery 配置。具体的 Zsh 函数参数、生命周期和故障判断见[远程 RViz：函数详解](../guide/remote-rviz#远程-rviz-函数详解)。
 
 所有服务使用 host network、`.env` 中的 `ROS_DOMAIN_ID` 和 `ROS_LOCALHOST_ONLY=0`。远程主机必须使用相同域；DDS 自动发现还要求网络允许组播和 UDP。跨网段部署需要额外的 DDS discovery 配置。
 

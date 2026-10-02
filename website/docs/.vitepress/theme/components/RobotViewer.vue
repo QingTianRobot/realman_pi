@@ -30,6 +30,7 @@ const robotCount = ref(0);
 const modelNames = ref("");
 const rootFrame = ref("world");
 const visualizationReferenceArm = ref("m");
+const animated = ref(false);
 
 let dispose: (() => void) | undefined;
 
@@ -111,6 +112,31 @@ onMounted(async () => {
       m: [0xc76a3e, 0xe18750, 0xa94e2e, 0xe1b092, 0xc7d1cc, 0x86402b, 0xf0c39e],
       r: [0x48565b, 0x647277, 0x344146, 0x9ca8a5, 0xc8d0cd, 0x273338, 0x7e8b8c],
     };
+    // Idle choreography: each joint swings gently around a relaxed, bent posture so the arms read as
+    // alive instead of standing rigid at the zero pose. Offsets/amplitudes are radians; the result is
+    // clamped to the URDF joint limits. Arms are phase-shifted so they never move in lockstep.
+    const idleOffset = [0.0, 0.45, 1.05, 0.0, 1.0, 0.0];
+    const idleAmplitude = [0.5, 0.22, 0.3, 0.55, 0.3, 0.7];
+    const idlePeriod = [11, 8, 9.5, 7, 8.5, 6];
+    const armPhase: Record<RobotConfig["id"], number> = { l: 0, m: 2.1, r: 4.2 };
+    const poseRobot = (
+      robot: { joints: Record<string, { limit?: { lower: number; upper: number } }>; setJointValue: (name: string, value: number) => unknown },
+      id: RobotConfig["id"],
+      seconds: number,
+      animated: boolean,
+    ) => {
+      idleOffset.forEach((offset, index) => {
+        const name = `joint_${index + 1}`;
+        const swing = animated
+          ? idleAmplitude[index] * Math.sin((2 * Math.PI * seconds) / idlePeriod[index] + armPhase[id] + index * 0.9)
+          : 0;
+        let value = offset + swing;
+        const limit = robot.joints[name]?.limit;
+        // Joint limits are 0 / 0 for continuous joints in some URDFs; only clamp real ranges.
+        if (limit && limit.upper > limit.lower) value = Math.min(Math.max(value, limit.lower), limit.upper);
+        robot.setJointValue(name, value);
+      });
+    };
     const loadedRobots = await Promise.all(
       config.robots.map(async (robotConfig) => {
         const robot = await loader.loadAsync(`${base}models/${robotConfig.model}.urdf`);
@@ -125,14 +151,7 @@ onMounted(async () => {
           robotConfig.transform.yaw,
           "ZYX",
         );
-        robot.setJointValues({
-          joint_1: config.defaultJointPosition,
-          joint_2: config.defaultJointPosition,
-          joint_3: config.defaultJointPosition,
-          joint_4: config.defaultJointPosition,
-          joint_5: config.defaultJointPosition,
-          joint_6: config.defaultJointPosition,
-        });
+        poseRobot(robot, robotConfig.id, 0, false);
         robotsGroup.add(robot);
         return { robot, config: robotConfig };
       }),
@@ -215,15 +234,31 @@ onMounted(async () => {
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
       camera.zoom = width <= 640 ? 0.82 : 1;
+      // On wide screens the headline sits on the left; push the scene into the right half so the
+      // bent, swinging arms do not cover the text.
+      if (width > 900) camera.setViewOffset(width, height, -width * 0.2, 0, width, height);
+      else camera.clearViewOffset();
       camera.updateProjectionMatrix();
     };
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(host);
     resize();
 
+    const reducedMotion = window.matchMedia("(prefers-reduced-motion: reduce)").matches;
+    animated.value = !reducedMotion;
+    // Skip work while the hero is scrolled out of view.
+    let visible = true;
+    const visibility = new IntersectionObserver(([entry]) => { visible = entry.isIntersecting; });
+    visibility.observe(host);
+    const startedAt = performance.now();
     let frame = 0;
     const render = () => {
       frame = window.requestAnimationFrame(render);
+      if (!visible) return;
+      if (!reducedMotion && state.value === "ready") {
+        const seconds = (performance.now() - startedAt) / 1000;
+        loadedRobots.forEach(({ robot, config: robotConfig }) => poseRobot(robot, robotConfig.id, seconds, true));
+      }
       controls.update();
       renderer.render(scene, camera);
     };
@@ -233,6 +268,7 @@ onMounted(async () => {
       window.cancelAnimationFrame(frame);
       window.clearTimeout(modelTimer);
       resizeObserver.disconnect();
+      visibility.disconnect();
       controls.dispose();
       scene.traverse((object) => {
         if (!(object instanceof THREE.Mesh)) return;
@@ -259,6 +295,7 @@ onBeforeUnmount(() => dispose?.());
     :data-robot-count="robotCount"
     :data-root-frame="rootFrame"
     :data-visualization-reference-arm="visualizationReferenceArm"
+    :data-animated="animated"
   >
     <canvas ref="canvas" aria-label="基于配置的 RM65 三机械臂 URDF 三维模型" role="img" />
     <div class="model-readout" aria-hidden="true">

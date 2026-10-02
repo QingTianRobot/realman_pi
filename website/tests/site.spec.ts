@@ -191,3 +191,31 @@ test("repository tree preserves its multiline structure", async ({ page }) => {
   expect(lines.some((line) => line.startsWith("├── config/"))).toBe(true);
   expect(lines).toContain("└── README.md");
 });
+
+test("mermaid diagrams render inside the column and open a zoom viewer", async ({ page }) => {
+  await page.goto("architecture/overview");
+  const diagram = page.locator(".vp-doc .mermaid svg").first();
+  await expect(diagram).toBeVisible({ timeout: 15_000 });
+
+  const layout = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+    frames: [...document.querySelectorAll<HTMLElement>(".vp-doc .mermaid")].map((frame) => {
+      const rect = frame.getBoundingClientRect();
+      return { right: rect.right, height: rect.height };
+    }),
+  }));
+  expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
+  for (const frame of layout.frames) {
+    expect(frame.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
+    // Tall diagrams scroll inside their frame instead of stretching the page.
+    expect(frame.height).toBeLessThanOrEqual(page.viewportSize()!.height * 0.7 + 60);
+  }
+
+  await page.locator(".vp-doc .mermaid").first().click();
+  const viewer = page.locator(".mermaid-lightbox");
+  await expect(viewer).toBeVisible();
+  await expect(viewer.locator("svg")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(viewer).toHaveCount(0);
+});

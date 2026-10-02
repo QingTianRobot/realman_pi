@@ -633,14 +633,85 @@
   }
 }
 
-/* Mermaid diagrams: scroll instead of shrinking unreadably on narrow screens. */
+/* Mermaid diagrams render at their natural size (Mermaid sets max-width itself) and shrink to the
+   column on narrow screens; tall ones scroll inside the frame. Click or press the button to zoom. */
 .vp-doc .mermaid {
-  overflow-x: auto;
+  position: relative;
   margin: 16px 0;
+  padding: 12px;
+  max-height: 70vh;
+  overflow: auto;
+  text-align: center;
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  cursor: zoom-in;
 }
 .vp-doc .mermaid svg {
-  /* Mermaid caps width at the container; keep text near its natural size and scroll instead. */
-  width: max(100%, 760px) !important;
+  display: inline-block;
+  height: auto;
+}
+.mermaid-zoom-hint {
+  position: sticky;
+  float: right;
+  top: 0;
+  margin: -4px -4px 0 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--vp-c-text-2);
+  background: var(--vp-c-bg);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.mermaid-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  background: var(--vp-c-bg);
+}
+.mermaid-lightbox-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--vp-c-divider);
+  background: var(--vp-c-bg-soft);
+}
+.mermaid-lightbox-bar button {
+  min-width: 36px;
+  height: 32px;
+  padding: 0 10px;
+  color: var(--vp-c-text-1);
+  background: var(--vp-c-bg);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.mermaid-lightbox-bar button:hover {
+  border-color: var(--vp-c-brand-1);
+}
+.mermaid-lightbox-bar .spacer {
+  flex: 1;
+}
+.mermaid-lightbox-bar .scale {
+  min-width: 48px;
+  font-size: 13px;
+  color: var(--vp-c-text-2);
+  text-align: center;
+}
+.mermaid-lightbox-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+}
+.mermaid-lightbox-body svg {
+  display: block;
+  margin: 0 auto;
   max-width: none !important;
   height: auto;
 }

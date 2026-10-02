@@ -93,6 +93,17 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 因此单臂控制器失败不会退出整个驱动节点。`connected` 表示连接生命周期，调用方还应检查
 `/status` 返回的 `last_error`。
 
+```mermaid
+flowchart TD
+  L["通信错误 -1/-2 或 SDK 异常<br/>connected=false"] --> T["每 reconnect_interval（5 s）重试"]
+  T --> S["原对象上只重建句柄<br/>不调用 rm_destroy"]
+  S -- 成功 --> V["重新回读并校验坐标"]
+  S -- 连续失败 3 次 --> F["rm_destroy + 全新对象完整重置"]
+  F --> V
+  V -- 匹配/修复成功 --> OK["开放 motion gate"]
+  V -- 读写失败或回读不符 --> BLK["motion gate 关闭<br/>仅 MOVEJ 可用"]
+```
+
 断线后的重连先在原 `RoboticArm` 对象上只删除并重建句柄，不调用 `rm_destroy()`（它会销毁 SDK
 全局状态，之后建连可能一直返回无效句柄，只能重启容器才能恢复）。连续原地重建失败 3 次后才升级为
 `rm_destroy()` 加全新对象的完整重置；任一次成功即清零计数。适配器参数 `soft_reconnect_attempts`
@@ -178,6 +189,28 @@ ros2 service call /l/coordinates/select_work realman_msgs/srv/SelectFrame \
 执行 `coordinates/apply` 不需要人工先删除控制器中的同名坐标。
 
 ## 笛卡尔速度 session
+```mermaid
+sequenceDiagram
+  participant C as 客户端
+  participant D as 驱动 session
+  participant S as SDK
+  C->>D: CartesianVelocity Goal（WORK/TOOL，control_period_ms）
+  D->>D: 校验周期/限值，取得 ownership，确认坐标 gate
+  D-->>C: 接受
+  D->>S: rm_set_movev_canfd_init
+  loop 每个控制周期
+    C->>D: command（非零且严格递增的 stamp）
+    D->>S: 限速、限加速度后的速度
+  end
+  alt 超过 watchdog 无命令
+    D->>S: 受控停止
+    D-->>C: WATCHDOG_STOP
+  else 客户端取消
+    D->>S: 受控停止
+    D-->>C: CANCELED
+  end
+```
+
 
 `cartesian_velocity` Action 持有单臂运动 ownership，`cartesian_velocity/command` 只更新该 session 的最新六轴目标。`TwistStamped.twist` 的前三项是线速度 `vx/vy/vz`（m/s），后三项是角速度 `wx/wy/wz`（rad/s）；实现不使用 Euler 角。
 

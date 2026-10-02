@@ -1,10 +1,12 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitepress";
+import { withMermaid } from "vitepress-plugin-mermaid";
 
 const repositoryDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
-export default defineConfig({
+// withMermaid renders ```mermaid fences client-side and follows the light/dark theme.
+export default withMermaid(defineConfig({
   lang: "zh-CN",
   title: "RM65 ROS 2",
   description: "三台 RealMan RM65 机械臂的 ROS 2 Humble 控制平台：驱动、遥操作、行为树、夹爪、相机标定与策略桥接",
@@ -139,4 +141,4 @@ export default defineConfig({
       copyright: "QingTianRobot",
     },
   },
-});
+}));

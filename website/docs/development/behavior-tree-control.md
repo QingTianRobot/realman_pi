@@ -66,6 +66,23 @@ Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。键盘�
 请求它的 WebSocket 在收到匹配的 `ACTIVE/keyboard` 后取得独占 lease；其它浏览器的按键消息会被拒绝。
 
 ## 输入路由 ROS 契约
+选择与切换的状态流转（`phase` 取值 `ACTIVE` / `SWITCHING` / `FAILED`）：
+
+```mermaid
+stateDiagram-v2
+  [*] --> ACTIVE_none
+  ACTIVE_none: ACTIVE（none）
+  ACTIVE_X: ACTIVE（目标模式）
+  SWITCHING: SWITCHING（先选中性分支 none）
+  FAILED: FAILED
+  ACTIVE_none --> SWITCHING: select_input_mode(X)
+  ACTIVE_X --> SWITCHING: 选择另一模式
+  SWITCHING --> ACTIVE_X: 下一 tick 激活并运行目标分支
+  SWITCHING --> FAILED: 准备动作 / WORK 校验失败 / 超时
+  FAILED --> ACTIVE_none: 协调器安排安全模式 none
+  ACTIVE_X --> ACTIVE_none: Web override 或离开
+```
+
 
 路由器运行时由 `realman_bt_executor` 提供两个 service 和一个可靠、transient-local topic：
 

@@ -9,25 +9,26 @@ realman_pi 是一套面向**三台 RealMan RM65 机械臂**（左 `l`、中 `m`�
 
 ## 运行拓扑
 
-```text
-宿主机（工控机，USB 相机在这里）
-  └─ rm65_camera_ros2  ── /camera_left|middle|right/color/…   (Orbbec ×3)
-                       └─ /camera_global/d435/color/…          (RealSense D435)
-
-Docker Compose（host network，生产 ROS_DOMAIN_ID=65）
-  ├─ realman_bringup_remote   （常驻，restart: unless-stopped）
-  │    ├─ /l /m /r realman_driver ── RealMan Python SDK ──► 三台控制器 192.168.30.x:8080
-  │    ├─ robot_state_publisher ×3 + world_transform        TF：world → l/m/r → link_6
-  │    ├─ camera_calibration                                 ChArUco 采样/求解，发布 camera_health
-  │    └─ gripper_manager ── /dev/realman/gripper_* ──► Changingtek 夹爪（Modbus RTU）
-  ├─ realman_web_control      HTTP/WebSocket :8765，浏览器 ⇄ ROS Action/Service
-  ├─ [可选] policy_bridge     OpenPI WebSocket ⇄ ROS 2（./rm65 up policy）
-  ├─ [可选] realman_remote_rviz   RViz-only 查看器（./rm65 up desktop）
-  └─ ./rm65 bt …  在 realman_bringup_remote 内 docker exec 启动行为树执行器与路由器
-       ├─ realman_bt_executor   输入模式选择 + 分阶段 MoveJ
-       ├─ keyboard_control_router   Web 键盘 → l/r 速度 session / 夹爪
-       ├─ pika_control_router       Pika → l/r 位置/速度/Mixed session / 夹爪
-       └─ 只读监视器 :8080
+```mermaid
+flowchart TB
+  BROW(["浏览器"]) <-->|WebSocket| WEB["realman_web_control :8765"]
+  PIKA(["Pika 主机"]) -->|"/pika/*"| BT
+  VLA(["OpenPI 策略服务"]) <-->|WebSocket| POL["policy_bridge（可选）"]
+  WEB -->|"键盘 ingress"| BT
+  POL -->|"/pi05_policy/*"| BT
+  BT["行为树：executor + keyboard / pika router<br/>（./rm65 bt …，监视器 :8080）"]
+  BT -->|"Action session + command"| DRV
+  BT -->|"percentage/command"| GM
+  CAM["宿主机 rm65_camera_ros2<br/>Orbbec ×3 + D435"] -->|"/camera_*/color/*"| CAL
+  subgraph REMOTE["Docker：realman_bringup_remote（常驻）"]
+    DRV["/l /m /r realman_driver"]
+    GM["gripper_manager"]
+    CAL["camera_calibration"]
+    TF["robot_state_publisher ×3"]
+  end
+  DRV -->|"RealMan SDK"| ARM[("三台控制器 192.168.30.x:8080")]
+  GM -->|"Modbus RTU"| GRIP[("Changingtek 夹爪")]
+  DRV -->|"joint_states"| TF
 ```
 
 生产入口只有一个：`./rm65 up`（宿主机相机 → Docker 服务），行为树按需另行 `./rm65 bt control`。详见 [CLI 与环境变量](../reference/cli-and-env)。
@@ -44,6 +45,15 @@ Docker Compose（host network，生产 ROS_DOMAIN_ID=65）
 | 硬件 | RealMan SDK 适配器、`gripper_manager` | SDK 句柄/串口、重连、单位换算 | 不做任务逻辑 |
 | 基础设施 | `realman_bringup`、Compose、`config/` | 启动编排、配置、日志 | 不拥有 URDF 数值或硬件状态机 |
 
+```mermaid
+flowchart TB
+  IN["输入<br/>Web / 键盘 / Pika / 策略 / Xbox"] --> RT["路由<br/>realman_bt：谁拥有控制权"]
+  RT --> MO["运动<br/>driver：每臂唯一 owner、限速、watchdog、坐标 gate"]
+  MO --> HW["硬件<br/>RealMan SDK / gripper 串口"]
+  HW -. "停止 / 断线 / 失配 否决" .-> MO
+  MO -. "拒绝 / 取消 / WATCHDOG_STOP" .-> RT
+```
+
 几条贯穿全局的不变量：
 
 1. **一臂一 owner。** 普通运动、轨迹、速度 session、位姿 session 共享单臂 ownership；`stop` 抢占它。
@@ -54,6 +64,26 @@ Docker Compose（host network，生产 ROS_DOMAIN_ID=65）
 6. **m 臂不参与遥操作。** 键盘与 Pika router 只为 `l`/`r` 建 session，绝不为 `m` 建 Goal、订阅或 publisher。
 
 ## 典型数据流
+下面以 Web 键盘为例展示一条完整链路；Pika、行为树和标定见其后的文字说明与各专题页。
+
+```mermaid
+sequenceDiagram
+  participant B as 浏览器
+  participant W as realman_web_control
+  participant R as keyboard_control_router
+  participant D as realman_driver
+  participant S as RealMan SDK
+  B->>W: 完整按键集合（每 50 ms）
+  W->>R: /keyboard/‹arm›/cartesian_velocity
+  R->>D: CartesianVelocity Goal（WORK=cell）
+  D-->>R: Goal 接受（坐标已验证）
+  loop 每 10 ms
+    R->>D: ‹arm›/cartesian_velocity/command
+    D->>S: rm_set_movev_canfd
+  end
+  Note over R,D: router 150 ms 无输入 → 速度置零；driver 100 ms 无命令 → WATCHDOG_STOP
+```
+
 
 **Web 键盘控制**：浏览器每 `50 ms` 上报完整按键集合 → `realman_web_control` 做 lease/心跳仲裁后发布 `/keyboard/<arm>/cartesian_velocity` → `keyboard_control_router`（模式为 `keyboard` 时）建立 `/<arm>/cartesian_velocity` Action，按 `10 ms` 周期刷新 `/command` → driver 速度 session → SDK `rm_set_movev_canfd_*`。
 

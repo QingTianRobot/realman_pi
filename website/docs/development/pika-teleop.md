@@ -30,6 +30,17 @@ pika_control_router（realman_bt，与 realman_bt_executor 同一 launch）
 调试 Pika 发送端与机械臂两端的方法见仓库 skill `debugging-pika-teleop-two-ends`；回放录制数据见本页[rosbag replay](#pika-rosbag-replay)。
 
 ## 三种模式
+```mermaid
+flowchart LR
+  SEL["Web 选择 Pika 模式"] --> PREP["ThreeArmMoveJ<br/>到 pika_default_pose"]
+  PREP -- 失败/取消 --> FAIL["不进入 ACTIVE"]
+  PREP -- 成功 --> ACT["ACTIVE"]
+  ACT --> M{"模式"}
+  M -- pikavelocity --> V["CartesianVelocity<br/>follow=false，10 ms"]
+  M -- pikaposition --> P["CartesianPose<br/>IK + CANFD 透传"]
+  M -- pikamixed --> X["单个 CartesianPose<br/>XYZ=速度积分，姿态=相对转动"]
+```
+
 
 | 模式 ID | 浏览器选项 | 输入 | driver 侧 session | 适用场景 |
 | --- | --- | --- | --- | --- |
@@ -67,6 +78,19 @@ motion blocked，并在 Action/driver 日志中报告失败原因。限值上限
 `pika_config.yaml` 的 `pika_velocity` 不得超过它们。
 
 ## Session 保持与重发规则
+输入新鲜度决定 session 的命运（速度模式的阈值；位置模式见下表）：
+
+```mermaid
+stateDiagram-v2
+  [*] --> 运行: 首条有效输入建立 session
+  运行 --> 零速保持: 输入晚于 stale_ms（200 ms）
+  零速保持 --> 运行: 输入恢复
+  零速保持 --> 已释放: 晚于 input_timeout_ms（3000 ms）
+  运行 --> 退避重试: driver 拒绝或自行结束
+  退避重试 --> 运行: 等待 0.5 s 后重建
+  已释放 --> [*]
+```
+
 
 
 Pika ingress 标称 `20 Hz`，生产 DDS/调度可能出现短暂抖动。两种模式都在第一条有效输入到达时建立 session，

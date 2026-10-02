@@ -632,3 +632,15 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Mermaid diagrams: scroll instead of shrinking unreadably on narrow screens. */
+.vp-doc .mermaid {
+  overflow-x: auto;
+  margin: 16px 0;
+}
+.vp-doc .mermaid svg {
+  /* Mermaid caps width at the container; keep text near its natural size and scroll instead. */
+  width: max(100%, 760px) !important;
+  max-width: none !important;
+  height: auto;
+}

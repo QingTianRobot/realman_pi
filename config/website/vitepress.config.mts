@@ -1,10 +1,12 @@
 import { dirname, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import { defineConfig } from "vitepress";
+import { withMermaid } from "vitepress-plugin-mermaid";
 
 const repositoryDirectory = resolve(dirname(fileURLToPath(import.meta.url)), "../..");
 
-export default defineConfig({
+// withMermaid renders ```mermaid fences client-side and follows the light/dark theme.
+export default withMermaid(defineConfig({
   lang: "zh-CN",
   title: "RM65 ROS 2",
   description: "三台 RealMan RM65 机械臂的 ROS 2 Humble 控制平台：驱动、遥操作、行为树、夹爪、相机标定与策略桥接",
@@ -19,6 +21,8 @@ export default defineConfig({
   vite: {
     // Generated model assets stay ignored; sync-three-robots.mjs rebuilds them from root config/ before each run.
     publicDir: resolve(repositoryDirectory, "website/docs/.vitepress/cache/public"),
+    // The dev server cannot load these CommonJS deps of the Mermaid plugin unless they are pre-bundled.
+    optimizeDeps: { include: ["mermaid", "fastdom"] },
   },
   head: [
     // Keep browser chrome and native controls aligned with the site theme.
@@ -139,4 +143,4 @@ export default defineConfig({
       copyright: "QingTianRobot",
     },
   },
-});
+}));

@@ -352,6 +352,7 @@ class RealManDriverNode(Node):
                 self._recover_motion,
             ),
             self.create_service(Trigger, "status", self._status),
+            self.create_service(Trigger, "controller_info", self._controller_info),
             self.create_service(
                 VerifyCoordinates,
                 "coordinates/verify",
@@ -521,6 +522,24 @@ class RealManDriverNode(Node):
         )
         if self.adapter.last_error_message:
             response.message += f" detail={self.adapter.last_error_message}"
+        return response
+
+    def _controller_info(
+        self, _request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        """Return read-only controller version/parameter getters as JSON."""
+        try:
+            info = self.adapter.controller_info()
+            response.success = self.adapter.connected and bool(info)
+            response.message = json.dumps(
+                {"arm": self.arm_id, "robot_ip": self.robot_ip, "info": info},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        except Exception as error:
+            self.get_logger().error(f"RealMan controller info query failed: {error}")
+            response.success = False
+            response.message = json.dumps({"arm": self.arm_id, "error": str(error)})
         return response
 
     def _verify_coordinates(

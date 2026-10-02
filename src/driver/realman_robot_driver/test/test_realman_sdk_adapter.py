@@ -1386,3 +1386,76 @@ def test_disconnect_retains_callback_during_post_registration_teardown(
     assert registration_result == [-1]
     assert adapter._event_callback is None
     assert adapter._pending_event_callback is None
+
+
+class InfoRobot(FakeRobot):
+    """Read-only controller getters with the SDK's mixed return shapes."""
+
+    def rm_get_arm_software_info(self):
+        self.calls.append(("rm_get_arm_software_info",))
+        return 0, {"product_version": "RM65-B", "plan_version": "4.3.8"}
+
+    def rm_get_install_pose(self):
+        self.calls.append(("rm_get_install_pose",))
+        return {"return_code": 0, "x": 0.0, "y": 180.0, "z": 0.0}
+
+    def rm_get_joint_max_speed(self):
+        self.calls.append(("rm_get_joint_max_speed",))
+        return 0, (180.0, 180.0, 225.0, 225.0, 225.0, 225.0)
+
+    def rm_get_joint_err_flag(self):
+        self.calls.append(("rm_get_joint_err_flag",))
+        raise RuntimeError("controller timeout")
+
+
+def test_controller_info_reads_only_allowlisted_getters_and_normalizes_results(adapter):
+    robot = InfoRobot()
+    adapter._robot = robot
+
+    info = adapter.controller_info()
+
+    assert info["rm_get_arm_software_info"] == {
+        "status": 0,
+        "value": {"product_version": "RM65-B", "plan_version": "4.3.8"},
+    }
+    # Dict-style getters carry their status in return_code.
+    assert info["rm_get_install_pose"]["status"] == 0
+    assert info["rm_get_install_pose"]["value"]["y"] == 180.0
+    # Tuples become JSON-friendly lists.
+    assert info["rm_get_joint_max_speed"]["value"] == [
+        180.0, 180.0, 225.0, 225.0, 225.0, 225.0
+    ]
+    # One failing getter is reported without hiding the rest.
+    assert info["rm_get_joint_err_flag"]["status"] == -1
+    assert "controller timeout" in info["rm_get_joint_err_flag"]["error"]
+    # A getter missing from the installed SDK is reported, not raised.
+    assert info["rm_get_robot_info"]["status"] == -1
+    # Nothing outside the read-only allowlist was invoked.
+    called = {call[0] for call in robot.calls}
+    assert called <= set(RealManSdkAdapter.CONTROLLER_INFO_QUERIES)
+    assert not any(
+        name.startswith(("rm_set", "rm_move", "rm_change", "rm_update"))
+        for name in RealManSdkAdapter.CONTROLLER_INFO_QUERIES
+    )
+
+
+def test_controller_info_when_disconnected_reports_not_ready(adapter):
+    adapter._connected = False
+
+    info = adapter.controller_info()
+
+    assert all(entry["status"] == -1 for entry in info.values())
+    assert set(info) == set(RealManSdkAdapter.CONTROLLER_INFO_QUERIES)
+
+
+def test_controller_info_in_mock_mode_makes_no_sdk_calls():
+    adapter = RealManSdkAdapter(
+        ip="192.0.2.123",
+        port=8080,
+        thread_mode="RM_TRIPLE_MODE_E",
+        robot_model="RM65-B",
+        mock_mode=True,
+    )
+    assert adapter.connect() == 0
+
+    assert adapter.controller_info() == {}

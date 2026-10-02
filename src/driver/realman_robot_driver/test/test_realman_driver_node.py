@@ -1513,3 +1513,40 @@ def test_node_fails_closed_for_unknown_namespace_and_nontriple_thread_mode():
             )
     finally:
         _destroy_ros_nodes_and_shutdown(*nodes)
+
+
+def test_controller_info_service_returns_adapter_getters_as_json():
+    info = {"rm_get_arm_software_info": {"status": 0, "value": {"plan_version": "4.3.8"}}}
+    node = SimpleNamespace(
+        arm_id="r",
+        robot_ip="192.0.2.124",
+        adapter=SimpleNamespace(connected=True, controller_info=lambda: info),
+        get_logger=lambda: SimpleNamespace(error=lambda message: None),
+    )
+    response = SimpleNamespace(success=False, message="")
+
+    result = RealManDriverNode._controller_info(node, SimpleNamespace(), response)
+
+    assert result.success is True
+    payload = json.loads(result.message)
+    assert payload == {"arm": "r", "robot_ip": "192.0.2.124", "info": info}
+
+
+def test_controller_info_service_reports_adapter_errors_without_raising():
+    def boom():
+        raise RuntimeError("sdk exploded")
+
+    messages = []
+    node = SimpleNamespace(
+        arm_id="r",
+        robot_ip="192.0.2.124",
+        adapter=SimpleNamespace(connected=True, controller_info=boom),
+        get_logger=lambda: SimpleNamespace(error=messages.append),
+    )
+    response = SimpleNamespace(success=True, message="")
+
+    result = RealManDriverNode._controller_info(node, SimpleNamespace(), response)
+
+    assert result.success is False
+    assert json.loads(result.message)["error"] == "sdk exploded"
+    assert messages

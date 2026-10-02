@@ -32,6 +32,30 @@ class _CallToken:
 class RealManSdkAdapter:
     """One SDK handle with state-safe, mock-friendly vendor call boundaries."""
 
+    # Read-only controller getters used for l/r comparison. Every name must be
+    # a pure query: nothing here may move, stop, or reconfigure the arm.
+    CONTROLLER_INFO_QUERIES = (
+        "rm_get_arm_software_info",
+        "rm_get_robot_info",
+        "rm_get_install_pose",
+        "rm_get_DH_data",
+        "rm_get_joint_max_speed",
+        "rm_get_joint_max_acc",
+        "rm_get_joint_min_pos",
+        "rm_get_joint_max_pos",
+        "rm_get_arm_max_line_speed",
+        "rm_get_arm_max_line_acc",
+        "rm_get_arm_max_angular_speed",
+        "rm_get_arm_max_angular_acc",
+        "rm_get_arm_run_mode",
+        "rm_get_self_collision_enable",
+        "rm_get_current_tool_frame",
+        "rm_get_current_work_frame",
+        "rm_get_joint_en_state",
+        "rm_get_joint_err_flag",
+        "rm_get_arm_all_state",
+    )
+
     def __init__(
         self,
         *,
@@ -519,6 +543,28 @@ class RealManSdkAdapter:
 
     def current_arm_state(self) -> Any:
         return self._query("rm_get_current_arm_state", "SDK arm state query failed")
+
+    def controller_info(self) -> dict[str, dict[str, Any]]:
+        """Read version and parameter getters, one entry per query.
+
+        Each entry is ``{"status": int, "value": ...}`` or, when the call could
+        not be made, ``{"status": int, "error": str}``. A failing getter never
+        hides the others. Mock mode has no controller and returns ``{}``.
+        """
+        with self._lock:
+            if self.mock_mode:
+                return {}
+        info: dict[str, dict[str, Any]] = {}
+        for name in self.CONTROLLER_INFO_QUERIES:
+            result, _token, error, _current, readiness = self._invoke_vendor(name, ())
+            if readiness is not None:
+                info[name] = {"status": readiness, "error": "robot is not connected"}
+            elif error is not None:
+                info[name] = {"status": -1, "error": str(error)}
+            else:
+                status, value = _split_info_result(result)
+                info[name] = {"status": status, "value": _jsonable(value)}
+        return info
 
     def forward_kinematics(self, joint_degrees: list[float]) -> tuple[int, list[float]]:
         """Return the SDK FK pose as ``[x,y,z,rx,ry,rz]`` in m/rad."""
@@ -1315,6 +1361,32 @@ def _event_to_mapping(event: Any) -> dict[str, Any]:
         "program_id",
     )
     return {field: getattr(event, field) for field in fields}
+
+
+def _split_info_result(result: Any) -> tuple[int, Any]:
+    """Return (status, value) for the SDK getters' mixed result shapes."""
+    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], int):
+        return int(result[0]), result[1]
+    if isinstance(result, dict) and isinstance(result.get("return_code"), int):
+        value = {key: item for key, item in result.items() if key != "return_code"}
+        return int(result["return_code"]), value
+    return 0, result
+
+
+def _jsonable(value: Any) -> Any:
+    """Convert SDK results (ctypes values, tuples, arrays) to JSON-safe data."""
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    try:
+        return _jsonable(list(value))
+    except TypeError:
+        return str(value)
 
 
 def _unpack_result(result: Any) -> tuple[int, Any]:

@@ -219,3 +219,22 @@ test("mermaid diagrams render inside the column and open a zoom viewer", async (
   await page.keyboard.press("Escape");
   await expect(viewer).toHaveCount(0);
 });
+
+test("joint sliders take over an arm from the idle animation", async ({ page }) => {
+  await page.goto("./");
+  await expect(page.locator(".robot-viewport")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+  const toggle = page.locator(".joint-panel-toggle");
+  if ((await toggle.textContent())?.includes("关节控制") && !(await toggle.textContent())?.includes("收起")) await toggle.click();
+
+  const first = page.locator(".joint-row input").first();
+  await expect(first).toBeVisible();
+  await first.fill("45");
+  await expect(page.locator(".joint-arms button.active small")).toHaveText("手动");
+
+  // The manual arm holds the user's value while the animation keeps running for the others.
+  await page.waitForTimeout(1200);
+  await expect(first).toHaveValue("45");
+  await expect(page.locator(".joint-auto")).toBeEnabled();
+  await page.locator(".joint-auto").click();
+  await expect(page.locator(".joint-arms button.active small")).toHaveText("自动");
+});

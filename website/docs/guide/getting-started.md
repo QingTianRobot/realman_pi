@@ -10,7 +10,7 @@ description: 用 ./rm65 启动生产运行时、打开 Web 控制台，或在没
 | 我想… | 路径 |
 | --- | --- |
 | 在工控机上运行三臂真实系统（相机 + 驱动 + Web 控制） | [启动生产运行时](#启动生产运行时) → [打开 Web 控制台](#浏览器-web-控制台) |
-| 用键盘 / Pika / 策略控制机械臂 | 先运行生产运行时，再 `./rm65 bt control`，见[行为树控制权](../development/behavior-tree-control) |
+| 用键盘 / Pika / 策略控制机械臂，或跑分阶段任务 | 先运行生产运行时，再[启动行为树](#启动行为树) |
 | 没有机器人，只想看模型或跑 mock | [离线模型与 mock](#离线模型与-mock) |
 | 查看相机画面 | [相机](./cameras) |
 | 在笔记本上看生产机的 RViz | [远程 RViz](./remote-rviz) |
@@ -70,7 +70,7 @@ docker compose exec realman_bringup_remote bash -lc '
 `/l|m|r/status` 报告连接和 `last_error`；`/l|m|r/connected` 只表示连接生命周期。比对两台控制器配置时用 `/l/controller_info` 与 `/r/controller_info`（只读）。ROS domain 来自 `.env`，笔记本上的调试终端必须使用相同的值。
 
 ::: warning 行为树默认不运行
-`./rm65 up` 只拥有长期的 driver 和 Web 服务，不启动行为树。键盘、Pika、策略输入需要另行 `./rm65 bt control`，并且默认处于 dry-run；真实运动必须显式 `REALMAN_BT_DRY_RUN=false`，且先完成低速、急停和工作区检查。
+`./rm65 up` 只拥有长期的 driver 和 Web 服务，不启动行为树。键盘、Pika、策略输入需要另行[启动行为树](#启动行为树)，并且默认处于 dry-run。
 :::
 
 ## 浏览器 Web 控制台
@@ -128,6 +128,63 @@ WebSocket 消息与 URDF 影子实现见[WebSocket 浏览器控制与 URDF 影�
 ros2 service call /l/recover_motion realman_msgs/srv/RecoverMotion "{}"
 ```
 
+
+## 启动行为树
+
+行为树不随 `./rm65 up` 启动，需要在 `./rm65 up` 已经运行的前提下**另开一个终端**手动启动。入口是 `./rm65 bt <树>`：它在已运行的 `realman_bringup_remote` 容器里执行行为树，并启动只读监视器。容器必须**恰好有一个**（由 `./rm65 up` 或 `docker compose up -d realman_bringup_remote` 启动都可以）。
+
+| 命令 | 树文件 | 用途 | 结束方式 |
+| --- | --- | --- | --- |
+| `./rm65 bt control` | `control.xml` | **持久输入路由器**：让 Web 键盘、Pika、策略输入按"输入模式"取得控制权 | 一直运行，`Ctrl-C` 结束 |
+| `./rm65 bt three` | `three.xml` | 三臂分阶段 MoveJ（每阶段三臂全部成功才进入下一阶段） | one-shot：到达终态后自动退出 |
+| `./rm65 bt l`（或 `m` / `r`） | `move.xml` | 单臂 MoveJ 演示 | one-shot |
+| `./rm65 bt <名称>` | `config/behavior-trees/<名称>.xml` | 任意树，扩展名可省略 | 取决于树 |
+
+### 默认是 dry-run
+
+行为树默认 **dry-run**：执行器只走流程、校验参数，**不会向机械臂或夹爪发送任何真实运动**。真实运动必须显式设置环境变量，启动时会打印醒目警告：
+
+```bash
+# 终端 1：生产运行时已在运行
+./rm65 up
+
+# 终端 2：先 dry-run 检查（默认），再决定是否真实运动
+./rm65 bt control
+REALMAN_BT_DRY_RUN=false ./rm65 bt control      # 真实运动
+```
+
+真实运动前先确认：工作区已清空、急停可达、速度和目标已人工核对。键盘和 Pika 的速度/位姿 session 只有在 `REALMAN_BT_DRY_RUN=false` 时才会真正驱动机械臂。
+
+### 用键盘 / Pika 控制（`control`）
+
+1. 启动 `./rm65 bt control`（真实运动加上 `REALMAN_BT_DRY_RUN=false`），等待终端打印监视器地址 `http://<host>:8080/`。
+2. 浏览器打开 Web 控制台 `http://<工控机地址>:8765/`，在 **"GLOBAL INPUT / 输入模式"** 卡片的下拉框里选择：
+   `keyboard`（Web 键盘速度控制）、`pikaposition` / `pikavelocity` / `pikamixed`（Pika 三种模式）、`policy`（策略桥）或 `none`（不控制）。
+3. 选择键盘或 Pika 后，行为树会先做准备（键盘校验默认 WORK 坐标；Pika 先把三臂移到 `pika_default_pose`），成功后状态变为 `ACTIVE`，此时对应输入才会生效。
+4. 没有正在运行的路由器时，输入模式卡片是隐藏的；这是正常现象，说明 `./rm65 bt control` 还没启动。
+
+键位、安全限值和 Pika 各模式的行为见[行为树控制权](../development/behavior-tree-control)和[Pika 遥操作](../development/pika-teleop)。
+
+### 运行分阶段任务（`three` / `l` `m` `r`）
+
+```bash
+./rm65 bt three                                   # dry-run：只检查流程
+REALMAN_BT_DRY_RUN=false ./rm65 bt three          # 真实 MoveJ
+```
+
+启动器先等待所需的 Action server 就绪（三臂树等 `/l|m|r/execute_motion`，每路最多约 30 秒），再执行。到达终态后执行器和监视器退出，最终 XML 与快照归档到 `logs/behavior-trees/<时间>_<PID>/`，驱动继续运行。
+
+### 确认与排查
+
+| 想确认 | 方法 |
+| --- | --- |
+| 树在跑、状态如何 | 浏览器打开监视器 `http://<host>:8080/`（只读，不能编辑或触发）；或 `ros2 topic echo /realman_bt_executor/bt_status` |
+| 当前输入模式 | `ros2 topic echo --once /realman_bt_executor/input_mode_state` |
+| 退出码 | `0` 成功；`1` 树失败/终态无效/启动失败；`73` 同一容器已有行为树在运行或清理；`74` 成功但归档失败 |
+| 提示找不到或有多个 bringup 容器 | 先 `./rm65 status`；容器必须恰好一个 |
+| Action 返回 `UNKNOWN` | 同一 ROS domain 有多套同名 driver，见[故障排查](../troubleshooting#行为树) |
+
+`./rm65 bt` 启动器不依赖 `./rm65 up` 的相机/Web 生命周期；停止驱动用 `./rm65 down`，`Ctrl-C` 只结束行为树，不会停掉驱动。更多参数（`BT_EXIT_ON_TERMINAL`、`BT_SERVER_PORT` 等）见 [CLI 与环境变量](../reference/cli-and-env#行为树启动器-rm65-bt)，详细机制见[行为树机械臂移动 Demo](../development/behavior-tree-motion)。
 
 ## 离线模型与 mock
 

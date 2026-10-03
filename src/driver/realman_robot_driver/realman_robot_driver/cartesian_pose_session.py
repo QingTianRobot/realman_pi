@@ -18,8 +18,8 @@ import time
 from typing import Any, Callable, Mapping, Sequence
 
 from .motion_types import MotionSettings, ReferenceType
-from .quaternion_math import normalize
-from .pose_math import quaternion_to_euler
+from .quaternion_math import conjugate, multiply, normalize
+from .pose_math import euler_to_quaternion, quaternion_to_euler
 
 
 class PoseTerminalState(IntEnum):
@@ -62,6 +62,10 @@ class _Goal:
 
 
 _ZERO_POSE = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0))
+# The custom IK must place the TCP where SDK FK (get_current_pose) does; a larger
+# gap means a different tool or flange, and targets anchored on SDK FK would jump.
+_TCP_MATCH_POSITION_M = 0.002
+_TCP_MATCH_ANGLE_RAD = math.radians(1.0)
 
 
 def step_towards(
@@ -131,6 +135,8 @@ class CartesianPoseSession:
         self._last_command_stamp_ns: int | None = None
         self._last_tick_at = 0.0
         self._last_ik_failure_log = 0.0
+        # None until the custom IK's TCP is compared with SDK FK in this session.
+        self._custom_ik_verified: bool | None = None
         # Joint target most recently accepted by the controller; the next step
         # starts here and the next IK solve is seeded from it.
         self._commanded_joints: list[float] | None = None
@@ -183,6 +189,8 @@ class CartesianPoseSession:
             self._commanded_joints = current
             self._session_epoch_ns = None
             self._last_command_stamp_ns = None
+            # The active tool can change between sessions, so verify per session.
+            self._custom_ik_verified = None
             self._stop_event.clear()
             self._done_event.clear()
             self._thread = threading.Thread(
@@ -297,7 +305,7 @@ class CartesianPoseSession:
         solution on the current branch and spares one controller round trip per
         tick. Returns ``None`` on failure; the caller then holds the arm.
         """
-        if self._ik_solver is not None:
+        if self._ik_solver is not None and self._custom_ik_matches_sdk(seed_joint_degrees):
             try:
                 joints = self._ik_solver.solve(
                     position, quaternion, seed_joint_degrees=seed_joint_degrees
@@ -318,6 +326,47 @@ class CartesianPoseSession:
         if solution is None:
             self._log_ik_failure(status)
         return solution
+
+    def _custom_ik_matches_sdk(self, joint_degrees: Sequence[float]) -> bool:
+        """Compare the custom IK's TCP with SDK FK once per session.
+
+        Both are evaluated at the same joints (the seed, which starts the session
+        at the measured joints), so any gap is a TCP definition mismatch.
+
+        The session target is expressed in the SDK FK frame (Pika Mixed anchors
+        it on get_current_pose), so a custom IK with a different tool offset
+        would move the arm by that offset. On a mismatch or a failed check the
+        session uses the SDK IK instead.
+        """
+        if self._custom_ik_verified is not None:
+            return self._custom_ik_verified
+        reason = ""
+        try:
+            status, sdk_pose = self.adapter.forward_kinematics(list(joint_degrees))
+            if status != 0 or len(sdk_pose) != 6:
+                reason = f"SDK forward kinematics failed (api2_status={status})"
+            else:
+                ik_position, ik_quaternion = self._ik_solver.forward_kinematics(list(joint_degrees))
+                sdk_quaternion = euler_to_quaternion(*sdk_pose[3:])
+                distance = math.dist(ik_position, sdk_pose[:3])
+                delta = multiply(conjugate(sdk_quaternion), normalize(ik_quaternion))
+                angle = 2.0 * math.acos(min(1.0, abs(delta[0])))
+                if distance > _TCP_MATCH_POSITION_M or angle > _TCP_MATCH_ANGLE_RAD:
+                    reason = (
+                        f"custom IK TCP differs from SDK FK by {distance * 1000.0:.1f} mm "
+                        f"and {math.degrees(angle):.2f} deg"
+                    )
+        except Exception as error:
+            reason = f"TCP check failed: {type(error).__name__}: {error}"
+        self._custom_ik_verified = not reason
+        if self._logger is not None:
+            if reason:
+                self._logger.error(
+                    f"{reason} for {self.arm_id}; using the RealMan SDK IK for this pose session"
+                )
+            else:
+                self._logger.info(f"Custom IK TCP matches SDK FK for {self.arm_id}")
+        return self._custom_ik_verified
 
     def _log_ik_failure(self, status: int) -> None:
         now = self._monotonic()

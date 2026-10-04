@@ -24,14 +24,11 @@ Provides:
     status_rate  — status publish rate in Hz (default 10.0)
 """
 
-import sys
 import os
-import math
 import threading
 
 import rclpy
 from rclpy.node import Node
-from rclpy.parameter import Parameter
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 
 from std_msgs.msg import Float64, Int32, Bool

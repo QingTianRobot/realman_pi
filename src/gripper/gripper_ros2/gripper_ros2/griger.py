@@ -15,7 +15,6 @@ import logging
 import os
 import time
 import threading
-from exceptiongroup import catch
 import minimalmodbus
 import serial
 
@@ -427,7 +426,7 @@ def open_r(POS_OPEN_RIGHT):
         logger.info(f"  -> Result: {res_open} [Pos Feedback: {fb_open}]")
     except  Exception as e:
         logger.info(f"Error in open_r: {e}")
-        logger.info(f"重试一次...")
+        logger.info("重试一次...")
         logger.info(f"[Open] Moving to {POS_OPEN_RIGHT} ...")
         sdk_r.temp_move(POS_OPEN_RIGHT, SPEED, FORCE, 100, 100, True)
         # 等待到位
@@ -447,7 +446,7 @@ def close_r(POS_CLOSE_RIGHT):
         logger.info(f"  -> Result: {res_close} [Pos Feedback: {fb_close}] [Torque Reached: {'Yes' if is_torque_reached else 'No'}]")
     except  Exception as e:
         logger.info(f"Error in close_r: {e}")
-        logger.info(f"重试一次...")
+        logger.info("重试一次...")
         logger.info(f"[Close] Moving to {POS_CLOSE_RIGHT} ...")
         sdk_r.temp_move(POS_CLOSE_RIGHT, SPEED, FORCE, 100, 100, True)
         # 等待到位 (如果是夹取物体，可能会触发 torque 力控到位)
@@ -483,7 +482,7 @@ def open_l(POS_OPEN_LEFT):
         logger.info(f"  -> Result: {res_open} [Pos Feedback: {fb_open}]")
     except  Exception as e:
         logger.info(f"Error in open_l: {e}")
-        logger.info(f"重试一次...")
+        logger.info("重试一次...")
         logger.info(f"[Open] v1 Moving to POS_OPEN_LEFT:{POS_OPEN_LEFT} ...")
         sdk_l.temp_move(POS_OPEN_LEFT, SPEED, FORCE, 100, 100, True)
         # 等待到位
@@ -504,7 +503,7 @@ def close_l(POS_CLOSE_LEFT):
 
     except Exception as e:
         logger.info(f"Error in close_l: {e}")
-        logger.info(f"重试一次...")
+        logger.info("重试一次...")
         logger.info(f"[Close] v1 Moving to POS_CLOSE_LEFT:{POS_CLOSE_LEFT} ...")
         sdk_l.temp_move(POS_CLOSE_LEFT, SPEED, FORCE, 100, 100, True)
         # 等待到位 (如果是夹取物体，可能会触发 torque 力控到位)

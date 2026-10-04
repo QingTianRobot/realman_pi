@@ -45,3 +45,6 @@ config/ros/*.yaml.bak
 
 # Machine-local overrides layered on top of versioned ROS config YAML.
 config/ros/*.local.yaml
+
+# Legacy gripper SDK runtime logs are never source.
+src/gripper/**/backend/logs/

@@ -32,7 +32,7 @@ class RealManIK:
         urdf_path: str,
         tool_position: Sequence[float] = (0.0, 0.0, 0.120),
         tool_quaternion_wxyz: Sequence[float] = (1.0, 0.0, 0.0, 0.0),
-        end_joint: str = joint_6,
+        end_joint: str = "joint_6",
     ) -> None:
         np.set_printoptions(precision=5, suppress=True, linewidth=200)
         package_dir = os.path.dirname(os.path.dirname(urdf_path))
@@ -42,7 +42,7 @@ class RealManIK:
         quat = _quaternion_xyzw(tool_quaternion_wxyz)
         self.robot.model.addFrame(
             pin.Frame(
-                ee,
+                "ee",
                 self.robot.model.getJointId(end_joint),
                 pin.SE3(quat, np.array(tool_position, dtype=float)),
                 pin.FrameType.OP_FRAME,
@@ -52,13 +52,13 @@ class RealManIK:
         # Symbolic model + forward kinematics.
         self.cmodel = cpin.Model(self.robot.model)
         self.cdata = self.cmodel.createData()
-        self.cq = casadi.SX.sym(q, self.robot.model.nq, 1)
-        self.cTf = casadi.SX.sym(tf, 4, 4)
+        self.cq = casadi.SX.sym("q", self.robot.model.nq, 1)
+        self.cTf = casadi.SX.sym("tf", 4, 4)
         cpin.framesForwardKinematics(self.cmodel, self.cdata, self.cq)
 
-        ee_id = self.robot.model.getFrameId(ee)
+        ee_id = self.robot.model.getFrameId("ee")
         self._error = casadi.Function(
-            error,
+            "error",
             [self.cq, self.cTf],
             [
                 casadi.vertcat(
@@ -86,10 +86,10 @@ class RealManIK:
         )
         self.opti.minimize(20.0 * totalcost + 0.01 * regularization)
         self.opti.solver(
-            ipopt,
+            "ipopt",
             {
-                ipopt: {print_level: 0, max_iter: 50, tol: 1e-4},
-                print_time: False,
+                "ipopt": {"print_level": 0, "max_iter": 50, "tol": 1e-4},
+                "print_time": False,
             },
         )
 
@@ -113,7 +113,7 @@ class RealManIK:
         self.opti.set_initial(self.var_q, self._init_data)
         self.opti.set_value(self.param_tf, target)
         try:
-            sol = self.opti.solve_limited()
+            self.opti.solve_limited()
             sol_q = np.asarray(self.opti.value(self.var_q)).flatten()
         except Exception:
             return None

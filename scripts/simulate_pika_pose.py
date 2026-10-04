@@ -22,7 +22,6 @@ Safety: this publishes a real target pose, so the arm WILL move if the chain is
 healthy. Run it with the e-stop / operator aware, and keep delta_mm small.
 """
 import sys
-import math
 import time
 
 import rclpy

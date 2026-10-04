@@ -40,7 +40,6 @@ def generate_launch_description():
     driver_share = Path(get_package_share_directory("realman_robot_driver"))
     web_control_share = Path(get_package_share_directory("realman_web_control"))
     calibration_share = Path(get_package_share_directory("realman_camera_calibration"))
-    gripper_share = Path(get_package_share_directory("gripper_ros2"))
     three_drivers_launch = driver_share / "launch" / "three_realman_drivers.launch.py"
     # Docker mounts the repository configuration at REALMAN_CONFIG_ROOT so edits
     # are picked up on restart. Installed config remains the local build fallback.

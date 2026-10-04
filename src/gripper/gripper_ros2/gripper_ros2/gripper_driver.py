@@ -12,7 +12,7 @@ import time
 
 from .changingtek import Changingtek_rtu_psdk
 from .changingtek.rtu_psdk import (
-    REG_ALARM, REG_CURRENT_FB, REG_POS_FB_H, REG_SPEED_FB,
+    REG_ALARM, REG_SPEED_FB,
     REG_TORQUE_REACHED,
 )
 

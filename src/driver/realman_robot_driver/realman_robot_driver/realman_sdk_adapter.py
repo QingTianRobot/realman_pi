@@ -32,6 +32,30 @@ class _CallToken:
 class RealManSdkAdapter:
     """One SDK handle with state-safe, mock-friendly vendor call boundaries."""
 
+    # Read-only controller getters used for l/r comparison. Every name must be
+    # a pure query: nothing here may move, stop, or reconfigure the arm.
+    CONTROLLER_INFO_QUERIES = (
+        "rm_get_arm_software_info",
+        "rm_get_robot_info",
+        "rm_get_install_pose",
+        "rm_get_DH_data",
+        "rm_get_joint_max_speed",
+        "rm_get_joint_max_acc",
+        "rm_get_joint_min_pos",
+        "rm_get_joint_max_pos",
+        "rm_get_arm_max_line_speed",
+        "rm_get_arm_max_line_acc",
+        "rm_get_arm_max_angular_speed",
+        "rm_get_arm_max_angular_acc",
+        "rm_get_arm_run_mode",
+        "rm_get_self_collision_enable",
+        "rm_get_current_tool_frame",
+        "rm_get_current_work_frame",
+        "rm_get_joint_en_state",
+        "rm_get_joint_err_flag",
+        "rm_get_arm_all_state",
+    )
+
     def __init__(
         self,
         *,
@@ -41,6 +65,7 @@ class RealManSdkAdapter:
         robot_model: str,
         mock_mode: bool,
         arm_id: str = "",
+        soft_reconnect_attempts: int = 3,
     ) -> None:
         self.ip = ip
         self.port = port
@@ -48,6 +73,12 @@ class RealManSdkAdapter:
         self.robot_model = robot_model
         self.mock_mode = mock_mode
         self.arm_id = arm_id
+        # After a lost connection the SDK handle is first recreated in place:
+        # rm_destroy() tears down the SDK's global state, which is the last
+        # resort rather than the first. Only after this many consecutive
+        # in-place failures does connect() fall back to a full SDK reset.
+        self.soft_reconnect_attempts = max(0, int(soft_reconnect_attempts))
+        self._soft_reconnect_failures = 0
         self._lock = threading.RLock()
         self._state_condition = threading.Condition(self._lock)
         self._lifecycle_lock = threading.RLock()
@@ -99,7 +130,14 @@ class RealManSdkAdapter:
                 if self._connected and not self._disconnecting:
                     return 0
                 has_stale_robot = self._robot is not None
+            if (
+                has_stale_robot
+                and not self.mock_mode
+                and self._soft_reconnect_failures < self.soft_reconnect_attempts
+            ):
+                return self._recreate_handle_locked()
             if has_stale_robot:
+                self._soft_reconnect_failures = 0
                 teardown_status = self._disconnect_locked()
                 if teardown_status != 0:
                     return teardown_status
@@ -185,9 +223,59 @@ class RealManSdkAdapter:
                         self._set_failure_locked(-1, str(error))
                 return -1
 
+    def _recreate_handle_locked(self) -> int:
+        """Replace a lost handle on the existing SDK object; caller holds the lifecycle lock.
+
+        Unlike _disconnect_locked() this never calls rm_destroy(), so the SDK's
+        global state survives and a controller that is reachable again can be
+        reconnected. A failed attempt keeps the robot object for the next try.
+        """
+        with self._lock:
+            robot = self._robot
+            handle = self._handle
+            self._connected = False
+            self._disconnecting = True
+            self._destroying = False
+            # Calls already inside the SDK must drain before the handle goes away.
+            while self._active_calls:
+                self._state_condition.wait()
+            self._destroying = True
+        try:
+            if handle is not None:
+                robot.rm_delete_robot_arm()
+        except Exception:
+            pass
+        new_handle: Any | None = None
+        failure_message = "SDK returned an invalid robot handle"
+        try:
+            new_handle = robot.rm_create_robot_arm(self.ip, self.port)
+        except Exception as error:
+            failure_message = str(error)
+        valid = _is_valid_handle(new_handle)
+        with self._lock:
+            self._generation += 1
+            self._disconnecting = False
+            self._destroying = False
+            self._event_callback = None
+            self._vendor_event_callback = None
+            self._pending_event_callback = None
+            self._pending_event_callback_marker = None
+            if valid:
+                self._handle = new_handle
+                self._connected = True
+                self._soft_reconnect_failures = 0
+                self._set_success_locked()
+                return 0
+            self._handle = None
+            self._connected = False
+            self._soft_reconnect_failures += 1
+            self._set_failure_locked(-1, failure_message)
+            return -1
+
     def disconnect(self) -> int:
         """Release the SDK handle and all SDK connections."""
         with self._lifecycle_lock:
+            self._soft_reconnect_failures = 0
             return self._disconnect_locked()
 
     def reconnect(self) -> int:
@@ -455,6 +543,28 @@ class RealManSdkAdapter:
 
     def current_arm_state(self) -> Any:
         return self._query("rm_get_current_arm_state", "SDK arm state query failed")
+
+    def controller_info(self) -> dict[str, dict[str, Any]]:
+        """Read version and parameter getters, one entry per query.
+
+        Each entry is ``{"status": int, "value": ...}`` or, when the call could
+        not be made, ``{"status": int, "error": str}``. A failing getter never
+        hides the others. Mock mode has no controller and returns ``{}``.
+        """
+        with self._lock:
+            if self.mock_mode:
+                return {}
+        info: dict[str, dict[str, Any]] = {}
+        for name in self.CONTROLLER_INFO_QUERIES:
+            result, _token, error, _current, readiness = self._invoke_vendor(name, ())
+            if readiness is not None:
+                info[name] = {"status": readiness, "error": "robot is not connected"}
+            elif error is not None:
+                info[name] = {"status": -1, "error": str(error)}
+            else:
+                status, value = _split_info_result(result)
+                info[name] = {"status": status, "value": _jsonable(value)}
+        return info
 
     def forward_kinematics(self, joint_degrees: list[float]) -> tuple[int, list[float]]:
         """Return the SDK FK pose as ``[x,y,z,rx,ry,rz]`` in m/rad."""
@@ -1251,6 +1361,32 @@ def _event_to_mapping(event: Any) -> dict[str, Any]:
         "program_id",
     )
     return {field: getattr(event, field) for field in fields}
+
+
+def _split_info_result(result: Any) -> tuple[int, Any]:
+    """Return (status, value) for the SDK getters' mixed result shapes."""
+    if isinstance(result, tuple) and len(result) == 2 and isinstance(result[0], int):
+        return int(result[0]), result[1]
+    if isinstance(result, dict) and isinstance(result.get("return_code"), int):
+        value = {key: item for key, item in result.items() if key != "return_code"}
+        return int(result["return_code"]), value
+    return 0, result
+
+
+def _jsonable(value: Any) -> Any:
+    """Convert SDK results (ctypes values, tuples, arrays) to JSON-safe data."""
+    if value is None or isinstance(value, (bool, int, str)):
+        return value
+    if isinstance(value, float):
+        return value if math.isfinite(value) else str(value)
+    if isinstance(value, dict):
+        return {str(key): _jsonable(item) for key, item in value.items()}
+    if isinstance(value, (list, tuple)):
+        return [_jsonable(item) for item in value]
+    try:
+        return _jsonable(list(value))
+    except TypeError:
+        return str(value)
 
 
 def _unpack_result(result: Any) -> tuple[int, Any]:

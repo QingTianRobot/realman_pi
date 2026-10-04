@@ -11,6 +11,12 @@ Supported `model` values:
 - `RM65-B-V`
 - `RM65-6FB-V`
 
+End effector: `urdf/ctag2f90c.urdf` and `meshes/ctag2f90c/` hold the Changingtek
+AG2F90-C gripper (vendored from the manufacturer's `crt_ctag2f90c_gripper_visualization`
+package, BSD license in `meshes/ctag2f90c/LICENSE`). It is not part of the arm URDFs;
+`config/ros/end_effectors.yaml` describes where it is mounted and the documentation
+site attaches it to each arm's `link_6`. See the gripper page of the developer manual.
+
 After building and sourcing the workspace, launch RViz 2 with:
 
 ```bash

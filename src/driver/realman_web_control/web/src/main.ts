@@ -45,7 +45,21 @@ type Robot = {
   frames: Record<string, Frame>;
   motion: Record<string, number>;
 };
+// Gripper mounted on an arm flange (config/ros/end_effectors.yaml). gripper_name links the model to the
+// gripper_manager name whose live position drives the opening.
+type EndEffector = {
+  gripper: string;
+  gripper_name: string;
+  urdf_url: string;
+  parent_link: string;
+  xyz: [number, number, number];
+  rpy: [number, number, number];
+  driving_joint: string;
+  closed_rad: number;
+  open_rad: number;
+};
 type Manifest = {
+  end_effectors?: Partial<Record<ArmId, EndEffector>>;
   root_frame: string;
   default_joint_position_rad: number;
   robots: Robot[];
@@ -277,6 +291,9 @@ let targetJoints: number[] = [];
 let currentJoints: number[] = [];
 let socket: WebSocket | undefined;
 const gripperStates: Record<string, any> = {};
+// Static gripper config (open/close endpoints in device units) from the gripper_list event.
+const gripperConfigs: Record<string, any> = {};
+const gripperModels: Partial<Record<ArmId, any>> = {};
 let selectedGripper = "";
 let readOnly = false;
 let inputModeCatalog: InputModeOption[] | undefined;
@@ -1009,6 +1026,15 @@ function applyMaterials(target: any, shadow: boolean, arm: ArmId) {
     object.frustumCulled = !shadow;
   });
 }
+// Neutral dark finish so the gripper reads as a separate tool from the colored arm links.
+function applyGripperMaterial(target: any) {
+  target?.traverse((object: any) => {
+    if (!(object instanceof THREE.Mesh)) return;
+    object.material = new THREE.MeshStandardMaterial({ color: 0x2b3438, metalness: 0.35, roughness: 0.5 });
+    object.castShadow = true;
+    object.receiveShadow = true;
+  });
+}
 function setShadowVisibility(arm: ArmId) {
   const previous = selectedShadowArm ? robotScenes[selectedShadowArm]?.shadow : null;
   previous?.traverse((object: any) => {
@@ -1071,11 +1097,14 @@ async function loadFleet() {
   viewerState.removeAttribute("hidden");
   const loader = new URDFLoader();
   loader.packages = { rm65_description: `${location.origin}/models` };
+  for (const arm of Object.keys(gripperModels) as ArmId[]) delete gripperModels[arm];
   try {
     const snapshots = await Promise.all(manifest!.robots.map(async (config) => {
       const live = await loader.loadAsync(`${location.origin}${config.urdf_url}`);
       const shadow = await loader.loadAsync(`${location.origin}${config.urdf_url}`);
-      return { config, live, shadow };
+      const mount = manifest!.end_effectors?.[config.id];
+      const gripper = mount ? await loader.loadAsync(`${location.origin}${mount.urdf_url}`) : null;
+      return { config, live, shadow, mount, gripper };
     }));
     if (generation !== loadGeneration) return;
     if (!scene) throw new Error("WebGL scene was not initialized");
@@ -1091,7 +1120,7 @@ async function loadFleet() {
     const allMeshes: any[] = [];
     const middleTransform = manifest!.robots.find((robot) => robot.id === "m")?.transform;
     if (!middleTransform) throw new Error("middle-arm transform is missing from the layout manifest");
-    snapshots.forEach(({ config, live, shadow }) => {
+    snapshots.forEach(({ config, live, shadow, mount, gripper }) => {
       // Center the visualization on m without mutating calibrated TF/world coordinates.
       live.position.set(
         config.transform.x - middleTransform.x,
@@ -1105,14 +1134,26 @@ async function loadFleet() {
         config.transform.z - middleTransform.z,
       );
       shadow.rotation.set(config.transform.roll, config.transform.pitch, config.transform.yaw, "ZYX");
+      // The gripper is a child of the flange link, so it follows the live arm; the target shadow stays bare.
+      const parent = mount && gripper ? live.links?.[mount.parent_link] : null;
+      if (mount && gripper && parent) {
+        gripper.position.set(...mount.xyz);
+        gripper.rotation.set(mount.rpy[0], mount.rpy[1], mount.rpy[2], "ZYX");
+        parent.add(gripper);
+        gripperModels[config.id] = gripper;
+        // Start fully open until the first position feedback arrives.
+        gripper.setJointValue(mount.driving_joint, mount.open_rad);
+      }
       scene.add(live);
       scene.add(shadow);
       robotScenes[config.id] = { live, shadow };
       allMeshes.push(live, shadow);
     });
     await waitForMeshes(allMeshes);
+    await waitForMeshes(Object.values(gripperModels), 9);
     snapshots.forEach(({ config, live, shadow }) => {
       applyMaterials(live, false, config.id);
+      applyGripperMaterial(gripperModels[config.id]);
       applyMaterials(shadow, true, config.id);
       setRobotJoints(live, armJointSnapshot(config.id));
       setRobotJoints(shadow, armTargetSnapshot(config.id));
@@ -1124,6 +1165,8 @@ async function loadFleet() {
     frameScene(false);
     viewer.dataset.liveMeshes = String(snapshots.reduce((count, { live }) => count + meshCount(live), 0));
     viewer.dataset.shadowMeshes = String(snapshots.reduce((count, { shadow }) => count + meshCount(shadow), 0));
+    viewer.dataset.gripperMeshes = String(Object.values(gripperModels).reduce((count, model) => count + meshCount(model), 0));
+    updateGripperModels();
     viewer.dataset.visualizationReferenceArm = "m";
     viewerState.setAttribute("hidden", "");
     $("#model-label").textContent = `${selectedConfig.model} / ${selectedArm.toUpperCase()} + 3 arms`;
@@ -1185,15 +1228,40 @@ function sendGripper(command: string, extra: Record<string, unknown> = {}) {
   if (!selectedGripper || !canWrite()) return;
   send({ type: "gripper_command", request_id: requestId("gripper"), name: selectedGripper, command, ...extra });
 }
+// Opening of a gripper in 0..1 (0 closed, 1 fully open) from its live position and configured endpoints.
+function gripperOpening(name: string): number | null {
+  const position = Number(gripperStates[name]?.position);
+  const open = Number(gripperConfigs[name]?.open_position);
+  const close = Number(gripperConfigs[name]?.close_position);
+  if (!Number.isFinite(position) || !Number.isFinite(open) || !Number.isFinite(close) || open === close) return null;
+  return Math.min(Math.max((position - close) / (open - close), 0), 1);
+}
+// Move each mounted gripper model to its latest feedback. Models keep their last pose while the
+// gripper is offline or its configuration is unknown.
+function updateGripperModels() {
+  for (const arm of ["l", "m", "r"] as ArmId[]) {
+    const model = gripperModels[arm];
+    const mount = manifest?.end_effectors?.[arm];
+    if (!model || !mount) continue;
+    const opening = gripperOpening(mount.gripper_name);
+    if (opening === null) continue;
+    model.setJointValue(mount.driving_joint, mount.closed_rad + (mount.open_rad - mount.closed_rad) * opening);
+    viewer.dataset[`gripper${arm.toUpperCase()}`] = opening.toFixed(2);
+  }
+}
 function renderGripperState() {
   const state = gripperStates[selectedGripper];
   if (!state) return;
   $("#gripper-state").textContent = state.connected ? "ONLINE" : "OFFLINE";
-  $("#gripper-feedback").textContent = `位置 ${state.position ?? 0} / 速度 ${state.speed ?? 0} / 电流 ${state.current ?? 0} / 力矩 ${state.torque_reached ? "到达" : "未到达"} / 报警 0x${Number(state.alarm ?? 0).toString(16)}`;
+  const opening = gripperOpening(selectedGripper);
+  const openingText = opening === null ? "" : `开合 ${Math.round(opening * 100)}% / `;
+  $("#gripper-feedback").textContent = `${openingText}位置 ${state.position ?? 0} / 速度 ${state.speed ?? 0} / 电流 ${state.current ?? 0} / 力矩 ${state.torque_reached ? "到达" : "未到达"} / 报警 0x${Number(state.alarm ?? 0).toString(16)}`;
 }
 function updateGripperList(list: any[]) {
   const select = $("#gripper-select") as HTMLSelectElement;
   select.innerHTML = list.map((item) => `<option value="${String(item.name)}">${String(item.name)}</option>`).join("");
+  for (const item of list) gripperConfigs[String(item.name)] = item;
+  updateGripperModels();
   if (!selectedGripper && list.length) selectedGripper = String(list[0].name);
   select.value = selectedGripper;
   renderGripperState();
@@ -1268,6 +1336,7 @@ function handleMessage(message: Message) {
   } else if (message.type === "gripper_state") {
     gripperStates[String(message.name)] = message;
     renderGripperState();
+    updateGripperModels();
     reconcileKeyboardControl();
   } else if (message.type === "gripper_result") {
     if (message.message) $("#gripper-feedback").textContent = String(message.message);

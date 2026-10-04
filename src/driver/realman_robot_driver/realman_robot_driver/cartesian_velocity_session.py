@@ -902,7 +902,7 @@ class CartesianVelocitySession:
         linear_accel = _positive_float(
             _field(goal, "max_linear_accel_mps2"), "max_linear_accel_mps2"
         )
-        if linear_accel > self.settings.max_linear_accel_mps2:
+        if linear_accel > self.settings.linear_accel_hard_limit_mps2:
             raise ValueError(
                 "max_linear_accel_mps2 exceeds configured linear acceleration"
             )

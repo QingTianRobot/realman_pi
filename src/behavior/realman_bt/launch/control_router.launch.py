@@ -104,6 +104,18 @@ def _load_pika_velocity_config(config_file: Path) -> dict[str, str | float | int
         ):
             raise ValueError(f"{config_file}: pika_velocity.{config_name} must be positive")
         result[parameter_name] = float(value)
+    linear_accel = velocity.get("max_linear_accel_mps2")
+    if linear_accel is not None:
+        if (
+            isinstance(linear_accel, bool)
+            or not isinstance(linear_accel, (int, float))
+            or not math.isfinite(float(linear_accel))
+            or float(linear_accel) <= 0.0
+        ):
+            raise ValueError(
+                f"{config_file}: pika_velocity.max_linear_accel_mps2 must be positive"
+            )
+        result["pika_velocity_max_linear_accel_mps2"] = float(linear_accel)
     return result
 
 
@@ -127,6 +139,7 @@ def _load_pika_mixed_config(config_file: Path) -> dict[str, float | int]:
         "max_linear_accel_mps2",
         "max_angular_speed_radps",
         "max_position_lead_m",
+        "max_orientation_lead_rad",
         "pose_poll_hz",
     ):
         value = mixed.get(config_name)

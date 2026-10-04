@@ -1070,7 +1070,7 @@ def test_connect_reconciles_physical_lockout_with_read_only_trajectory_state():
     source = NODE_PATH.read_text(encoding="utf-8")
 
     assert "was_connected = self.adapter.connected" in source
-    assert "connection_reset=not was_connected" in source
+    assert "connection_reset=event_recovery or not was_connected" in source
     assert "recover_event_channel=lambda: self._recover_event_channel()" in source
     assert "self.motion_coordinator.event_channel_recovery_required" in source
     assert "self.adapter.disconnect()" in source
@@ -1167,6 +1167,54 @@ def test_event_channel_recovery_serializes_disconnect_delay_and_reconnect():
         "ownership_acquire",
         "connect",
         "ownership_release",
+    ]
+
+
+@requires_ros_action_runtime
+def test_event_channel_recovery_connect_clears_quarantine_on_live_handle(monkeypatch):
+    # Recovery replaces the SDK handle in place, so the adapter still reports
+    # connected before the reconnect. The fresh callback channel must still be
+    # reconciled as a connection reset, or the quarantine is never cleared and
+    # every later motion goal is rejected.
+    reconcile_calls = []
+
+    class Adapter:
+        connected = True
+        last_error_message = ""
+
+        def reconnect(self):
+            return 0
+
+        def stop(self):
+            return 0
+
+        def register_event_callback(self, _callback):
+            return 0
+
+    def reconcile_after_connect(**kwargs):
+        reconcile_calls.append(kwargs)
+        return True
+
+    monkeypatch.setattr(
+        "realman_robot_driver.realman_driver_node.time.sleep", lambda _seconds: None
+    )
+    node = SimpleNamespace(
+        adapter=Adapter(),
+        motion_coordinator=SimpleNamespace(
+            handle_event=lambda _event: None,
+            reconcile_after_connect=reconcile_after_connect,
+        ),
+        _last_connect_attempt=0.0,
+        get_logger=lambda: SimpleNamespace(
+            info=lambda _message: None,
+            warn=lambda _message: None,
+            error=lambda _message: None,
+        ),
+    )
+
+    assert RealManDriverNode._connect_to_robot(node, event_recovery=True) == 0
+    assert reconcile_calls == [
+        {"connection_reset": True, "recovery_owns_arm": True}
     ]
 
 
@@ -1465,3 +1513,40 @@ def test_node_fails_closed_for_unknown_namespace_and_nontriple_thread_mode():
             )
     finally:
         _destroy_ros_nodes_and_shutdown(*nodes)
+
+
+def test_controller_info_service_returns_adapter_getters_as_json():
+    info = {"rm_get_arm_software_info": {"status": 0, "value": {"plan_version": "4.3.8"}}}
+    node = SimpleNamespace(
+        arm_id="r",
+        robot_ip="192.0.2.124",
+        adapter=SimpleNamespace(connected=True, controller_info=lambda: info),
+        get_logger=lambda: SimpleNamespace(error=lambda message: None),
+    )
+    response = SimpleNamespace(success=False, message="")
+
+    result = RealManDriverNode._controller_info(node, SimpleNamespace(), response)
+
+    assert result.success is True
+    payload = json.loads(result.message)
+    assert payload == {"arm": "r", "robot_ip": "192.0.2.124", "info": info}
+
+
+def test_controller_info_service_reports_adapter_errors_without_raising():
+    def boom():
+        raise RuntimeError("sdk exploded")
+
+    messages = []
+    node = SimpleNamespace(
+        arm_id="r",
+        robot_ip="192.0.2.124",
+        adapter=SimpleNamespace(connected=True, controller_info=boom),
+        get_logger=lambda: SimpleNamespace(error=messages.append),
+    )
+    response = SimpleNamespace(success=True, message="")
+
+    result = RealManDriverNode._controller_info(node, SimpleNamespace(), response)
+
+    assert result.success is False
+    assert json.loads(result.message)["error"] == "sdk exploded"
+    assert messages

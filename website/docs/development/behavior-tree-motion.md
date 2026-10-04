@@ -111,7 +111,7 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt tool_x
 调用方应选择已配置的工具坐标或工作坐标。
 
 节点在 Action 接受后通过独立 ROS timer 按配置周期发布 `TwistStamped`，因此命令刷新频率不依赖行为树
-tick 频率。publisher 使用 `KEEP_LAST=1`、`VOLATILE`，DDS lifespan 等于配置 watchdog；每条消息使用
+tick 频率。publisher 使用 `KEEP_LAST=1`、`VOLATILE`（不设置 DDS lifespan，driver 以单调 watchdog 判断新鲜度）；每条消息使用
 ROS clock 的新时间戳以及映射后的 `frame_id`。时长到达后节点进入停止等待状态：立即请求取消开放式
 `CartesianVelocity` session，并继续按控制周期刷新零速度，直到 Action 返回终态或超过配置的停止超时。
 这样取消处理即使超过一个 watchdog 周期，也不会把正常的定时停止误报为
@@ -162,7 +162,7 @@ l/r 的 pending goal、accepted handle、最新命令、输入时间和取消状
 `config/ros/realman_motion.yaml` 的 `10 ms` 周期刷新，而 driver 自身 `100 ms` watchdog 对命令流再次检查。
 前一层处理 Web/网络停更，后一层处理 router 到 driver 的刷新中断。`dry_run=true` 时 router 仍执行目录、
 WORK、frame、速度上限和 timeout 校验，但不发送 Action Goal，也不向 driver command topic 发布消息。
-键盘 Action goal 显式携带普通会话上限 `0.05 m/s`；Pika 单独申请 `1.0 m/s` 不会改变键盘值。
+键盘 Action goal 显式携带普通会话上限（`realman_motion.yaml` 的 `max_linear_speed_mps`，l/r 当前 `0.15 m/s`；按键实际速度再乘以 `linear_speed_fraction`，约 `0.02 m/s`）；Pika 单独申请 `1.0 m/s` 不会改变键盘值。
 键盘 Goal 使用 `follow=true` 的高跟随模式；router 把浏览器 `50 ms` ingress 缓存为最新命令，driver
 固定周期 worker 以 `10 ms` 刷新 SDK。Goal 构造会拒绝大于 `10 ms` 的 profile，避免未来误配为不满足
 高跟随时序的组合。旧的 `20 ms + follow=false` 在生产 A 组测试中出现启动跨轴瞬态，不再用于键盘控制。
@@ -233,7 +233,7 @@ Replay 的 Pika 会话上限为 `1.0 m/s` 线速度和 `2.0 rad/s` 角速度。�
 该 replay 使用内部 `ReplayNode.spin_once()` 处理 ROS 回调和时间调度；这是组合 API 的实现细节，
 操作者只使用独立项目的 `replay.sh` 命令，不直接运行 Python 节点。
 项目部署到独立的 `$HOME/pika_realman_replay`，不复用生产 Compose project，也不重启生产容器。
-模式与帧配置见 [Pika rosbag replay](./behavior-tree-control#pika-rosbag-replay)，
+模式与帧配置见 [Pika rosbag replay](./pika-teleop#pika-rosbag-replay)，
 接口映射见 [ingress 与坐标桥接](./realman-action-development#pika-rosbag-replay-的-ingress-与坐标桥接)。
 
 ## 构建

@@ -83,6 +83,25 @@ def test_profile_parser_selects_configured_pikabase_work_reference():
     assert profiles["r"].max_angular_accel_radps2 == 4.0
 
 
+def test_profile_parser_overrides_linear_acceleration_only_when_configured():
+    from pika_control_router import parse_arm_profiles
+
+    references = [
+        "l|work/pikabase|1|pikabase|l/work/pikabase",
+        "r|work/pikabase|1|pikabase|r/work/pikabase",
+    ]
+    velocity = ["l|10|100|0.15|0.25|0.1|0.5|10|2", "r|10|100|0.15|0.25|0.1|0.5|10|2"]
+
+    default = parse_arm_profiles(references, velocity, "work/pikabase", 1.0, 2.0, 4.0)
+    raised = parse_arm_profiles(
+        references, velocity, "work/pikabase", 1.0, 2.0, 4.0, 2.0
+    )
+
+    assert default["r"].max_linear_accel_mps2 == 0.1
+    assert raised["l"].max_linear_accel_mps2 == 2.0
+    assert raised["r"].max_linear_accel_mps2 == 2.0
+
+
 def test_pika_angular_velocity_above_limit_is_scaled_without_changing_direction():
     """Catches discarding a usable high-rate rotation instead of norm-clamping it."""
     from geometry_msgs.msg import TwistStamped
@@ -509,12 +528,15 @@ def _step(target, **overrides):
     settings = dict(
         dt=0.01,
         commanded_velocity=(0.0, 0.0, 0.0),
-        goal_orientation=None,
+        pika_orientation=None,
         max_speed=0.15,
         max_accel=0.10,
         max_angular_speed=0.25,
         measured_position=target.position,
         max_lead=0.05,
+        # The arm follows perfectly unless a test says otherwise.
+        measured_orientation=target.orientation,
+        max_orientation_lead=0.15,
     )
     settings.update(overrides)
     target.step(**settings)
@@ -557,12 +579,13 @@ def test_mixed_target_holds_when_no_measurement_is_available():
 
 def test_mixed_target_orientation_approaches_the_goal_at_the_angular_limit():
     target = _target()
+    _step(target, pika_orientation=(1.0, 0.0, 0.0, 0.0))  # pairs Pika with the arm
     goal = _axis_angle_quaternion((0.0, 1.0, 0.0), math.radians(30))
     for _ in range(100):  # 1 s at 0.25 rad/s = 14.3 degrees
-        _step(target, goal_orientation=goal)
+        _step(target, pika_orientation=goal, measured_orientation=target.orientation)
     assert _angle_between((1.0, 0.0, 0.0, 0.0), target.orientation) == pytest.approx(0.25, abs=1e-6)
     for _ in range(200):
-        _step(target, goal_orientation=goal)
+        _step(target, pika_orientation=goal, measured_orientation=target.orientation)
     assert _angle_between(target.orientation, goal) == pytest.approx(0.0, abs=1e-6)
 
 
@@ -570,8 +593,56 @@ def test_mixed_target_holds_orientation_without_a_fresh_goal():
     target = _target()
     before = target.orientation
     for _ in range(50):
-        _step(target, goal_orientation=None)
+        _step(target, pika_orientation=None)
     assert target.orientation == pytest.approx(before)
+
+
+def test_mixed_orientation_is_relative_so_an_offset_pika_does_not_turn_the_wrist():
+    # The Pika frame is 40 degrees off the arm. Holding the Pika still must
+    # hold the arm; only a later Pika rotation turns it, by the same amount.
+    from pika_control_router import quaternion_multiply
+
+    arm = _axis_angle_quaternion((1.0, 0.0, 0.0), math.radians(170))
+    offset = _axis_angle_quaternion((0.3, 0.8, 0.5), math.radians(40))
+    from pika_control_router import MixedTarget
+
+    target = MixedTarget((0.3, 0.0, 0.4), arm)
+    for _ in range(200):
+        _step(target, pika_orientation=offset, measured_orientation=target.orientation)
+    assert _angle_between(target.orientation, arm) == pytest.approx(0.0, abs=1e-9)
+
+    # Turn the Pika 10 degrees about the base z axis: the arm follows by
+    # exactly that rotation in the base frame.
+    turn = _axis_angle_quaternion((0.0, 0.0, 1.0), math.radians(10))
+    turned_pika = quaternion_multiply(turn, offset)
+    for _ in range(200):
+        _step(target, pika_orientation=turned_pika, measured_orientation=target.orientation)
+    expected = quaternion_multiply(turn, arm)
+    assert _angle_between(target.orientation, expected) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_mixed_orientation_is_leashed_to_the_measured_orientation():
+    # IK fails and the arm stops: the orientation target must stop within the
+    # lead instead of turning on, so turning the Pika back recovers at once.
+    target = _target()
+    stuck = target.orientation
+    _step(target, pika_orientation=(1.0, 0.0, 0.0, 0.0), measured_orientation=stuck)
+    away = _axis_angle_quaternion((0.0, 1.0, 0.0), math.radians(90))
+    for _ in range(1000):
+        _step(target, pika_orientation=away, measured_orientation=stuck)
+    assert _angle_between(stuck, target.orientation) == pytest.approx(0.15, abs=1e-6)
+    for _ in range(100):  # Pika turned back: the target returns to the arm.
+        _step(target, pika_orientation=(1.0, 0.0, 0.0, 0.0), measured_orientation=stuck)
+    assert _angle_between(stuck, target.orientation) == pytest.approx(0.0, abs=1e-6)
+
+
+def test_mixed_orientation_holds_without_a_measured_orientation():
+    target = _target()
+    _step(target, pika_orientation=(1.0, 0.0, 0.0, 0.0))
+    away = _axis_angle_quaternion((0.0, 1.0, 0.0), math.radians(30))
+    for _ in range(100):
+        _step(target, pika_orientation=away, measured_orientation=None)
+    assert target.orientation == pytest.approx((1.0, 0.0, 0.0, 0.0))
 
 
 def _mixed_router(*, goal_active=False, velocity_ago=0.0, pose_ago=0.0, anchor=True, sends=None):
@@ -591,6 +662,7 @@ def _mixed_router(*, goal_active=False, velocity_ago=0.0, pose_ago=0.0, anchor=T
     router.mixed_max_linear_accel_mps2 = 0.10
     router.mixed_max_angular_speed_radps = 0.25
     router.mixed_max_position_lead_m = 0.05
+    router.mixed_max_orientation_lead_rad = 0.15
     router.mixed_pose_poll_hz = 10.0
     calls = []
 
@@ -604,6 +676,7 @@ def _mixed_router(*, goal_active=False, velocity_ago=0.0, pose_ago=0.0, anchor=T
     if anchor:
         state.mixed = MixedTarget((0.3, 0.0, 0.4), (1.0, 0.0, 0.0, 0.0))
         state.measured_position = (0.3, 0.0, 0.4)
+        state.measured_orientation = (1.0, 0.0, 0.0, 0.0)
         state.measured_at = now
     return router, state, published, cancelled, sends, calls
 
@@ -621,6 +694,7 @@ def test_mixed_mode_anchors_at_the_current_pose_before_requesting_a_session():
     state.anchor_future.set_result(response)
     assert state.anchor_future is None
     assert state.mixed.position == pytest.approx((0.31, 0.02, 0.41))
+    assert state.measured_orientation == pytest.approx((1.0, 0.0, 0.0, 0.0))
     router._reconcile()
     assert len(sends) == 1
     # A pose session: BASE reference with the driver watchdog.
@@ -666,26 +740,41 @@ def test_the_first_mixed_target_is_the_anchor_itself():
     )
 
 
-def test_mixed_xyz_follows_velocity_while_orientation_follows_the_pika_quaternion():
+def test_mixed_xyz_follows_velocity_while_orientation_follows_the_pika_rotation():
     from geometry_msgs.msg import PoseStamped
+    from pika_control_router import quaternion_multiply
 
     router, state, published, cancelled, sends, calls = _mixed_router(goal_active=True)
+    # The Pika frame is 40 degrees off the arm; only its later rotation counts.
+    offset = _axis_angle_quaternion((1.0, 0.0, 0.0), math.radians(40))
     goal = _axis_angle_quaternion((0.0, 0.0, 1.0), math.radians(20))
     pose = PoseStamped()
     # Pika's absolute position is deliberately far away: mixed mode must use
     # only its orientation.
     pose.pose.position.x = 5.0
-    pose.pose.orientation.w, pose.pose.orientation.x, pose.pose.orientation.y, pose.pose.orientation.z = goal
+
+    def set_pika(orientation):
+        (pose.pose.orientation.w, pose.pose.orientation.x,
+         pose.pose.orientation.y, pose.pose.orientation.z) = orientation
+
+    set_pika(offset)
     state.latest_pose = pose
     state.latest_velocity.twist.linear.x = 0.05
     state.latest_velocity.twist.angular.z = 3.0  # must be ignored
-    state.last_mixed_step_at = time.monotonic() - 0.01
-    for _ in range(3):
+
+    def tick():
         state.velocity_input_at = state.pose_input_at = time.monotonic()
         state.last_mixed_step_at = time.monotonic() - 0.05
         state.measured_position = state.mixed.position
+        state.measured_orientation = state.mixed.orientation
         state.measured_at = time.monotonic()
         router._reconcile()
+
+    tick()  # pairs the offset Pika with the arm; the wrist does not turn
+    assert _angle_between((1.0, 0.0, 0.0, 0.0), state.mixed.orientation) == pytest.approx(0.0, abs=1e-9)
+    set_pika(quaternion_multiply(goal, offset))  # Pika turns 20 degrees about base z
+    for _ in range(2):
+        tick()
     message = published["pose"][-1]
     assert message.pose.position.x > 0.3
     assert message.pose.position.x < 0.31
@@ -694,9 +783,9 @@ def test_mixed_xyz_follows_velocity_while_orientation_follows_the_pika_quaternio
         message.pose.orientation.y, message.pose.orientation.z,
     )
     turned = _angle_between((1.0, 0.0, 0.0, 0.0), orientation)
-    # Three 50 ms steps at 0.25 rad/s: bounded, toward the goal.
-    assert turned == pytest.approx(3 * 0.05 * 0.25, abs=1e-6)
-    assert _angle_between(orientation, goal) < math.radians(20)
+    # Two 50 ms steps at 0.25 rad/s: bounded, toward the 20 degree base-z turn.
+    assert turned == pytest.approx(2 * 0.05 * 0.25, abs=1e-6)
+    assert _angle_between(orientation, goal) == pytest.approx(math.radians(20) - turned, abs=1e-6)
 
 
 def test_a_stale_mixed_velocity_decelerates_and_holds_instead_of_replaying():
@@ -786,6 +875,7 @@ def test_mixed_limits_may_not_exceed_the_pose_goal_ceilings():
     router.mixed_max_linear_accel_mps2 = 0.1
     router.mixed_max_angular_speed_radps = 0.25
     router.mixed_max_position_lead_m = 0.05
+    router.mixed_max_orientation_lead_rad = 0.15
     router.mixed_pose_poll_hz = 10.0
     router._validate_mixed_parameters()
     router.mixed_max_angular_speed_radps = 0.5

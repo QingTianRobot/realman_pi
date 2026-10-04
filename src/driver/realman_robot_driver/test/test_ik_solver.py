@@ -7,9 +7,14 @@ there and run wherever both are installed.
 
 import ast
 import builtins
+import importlib
 import math
+import sys
 from pathlib import Path
+from types import ModuleType
+from unittest import mock
 
+import numpy as np
 import pytest
 
 from realman_robot_driver.coordinate_manager import CoordinateManager
@@ -74,6 +79,68 @@ def test_ik_solver_requires_the_configured_tool_pose():
     assert {"tool_position", "tool_quaternion_wxyz"} <= required
 
 
+@pytest.fixture
+def stubbed_ik_module():
+    """Import ik_solver with CasADi / Pinocchio replaced by stubs.
+
+    This runs where neither is installed and proves the module imports,
+    constructs and solves without undefined names; it says nothing about the
+    numerics, which the casadi-backed tests below cover.
+    """
+    stubs = {
+        "casadi": mock.MagicMock(name="casadi"),
+        "pinocchio": mock.MagicMock(name="pinocchio"),
+        "pinocchio.casadi": mock.MagicMock(name="pinocchio.casadi"),
+    }
+    stubs["pinocchio"].casadi = stubs["pinocchio.casadi"]
+    # The solver reads the model dimension to size warm-start vectors; use the RM65's 6 joints.
+    stubs["pinocchio"].buildModelFromUrdf.return_value.nq = 6
+    # The symbolic TCP function returns (position, rotation).
+    stubs["casadi"].Function.return_value.return_value = (mock.MagicMock(), mock.MagicMock())
+    with mock.patch.dict(sys.modules, stubs):
+        sys.modules.pop("realman_robot_driver.ik_solver", None)
+        module = importlib.import_module("realman_robot_driver.ik_solver")
+        yield module
+    sys.modules.pop("realman_robot_driver.ik_solver", None)
+    # The import also bound the stubbed module on the package; drop it so a
+    # later import loads the real module.
+    package = sys.modules.get("realman_robot_driver")
+    if getattr(package, "ik_solver", None) is module:
+        del package.ik_solver
+
+
+def _stubbed_ik(module):
+    return module.RealManIK(
+        "/opt/urdf/RM65-B.urdf",
+        tool_position=(0.0, 0.0, 0.12),
+        tool_quaternion_wxyz=(1.0, 0.0, 0.0, 0.0),
+    )
+
+
+def test_stubbed_module_names_the_tool_frame_and_solver_as_strings(stubbed_ik_module):
+    assert isinstance(stubbed_ik_module, ModuleType)
+    ik = _stubbed_ik(stubbed_ik_module)
+
+    casadi = sys.modules["casadi"]
+    # The end joint defaults to the RM65 wrist joint and the optimizer to IPOPT, both as strings.
+    ik.model.getJointId.assert_called_with("joint_6")
+    assert casadi.Opti.return_value.solver.call_args.args[0] == "ipopt"
+    assert casadi.Opti.return_value.solver.call_args.args[1]["ipopt"]["max_iter"] == 50
+
+
+def test_stubbed_solve_returns_joint_degrees_or_none_without_raising(stubbed_ik_module):
+    ik = _stubbed_ik(stubbed_ik_module)
+    ik.opti.value.return_value = np.zeros(6)
+    # The residual check needs real FK; the stubs only exercise the call path.
+    ik._reaches = lambda joint_degrees, target: True
+
+    solved = ik.solve([0.3, 0.0, 0.3], [1.0, 0.0, 0.0, 0.0], seed_joint_degrees=[0.0] * 6)
+    assert solved == [0.0] * 6
+
+    ik.opti.solve_limited.side_effect = RuntimeError("infeasible")
+    assert ik.solve([0.3, 0.0, 0.3], [1.0, 0.0, 0.0, 0.0]) is None
+
+
 def _tcpgrip(arm="l"):
     profile = CoordinateManager.from_yaml(str(COORDINATES_PATH)).profiles[arm]
     return profile.tools[profile.tool_default]
@@ -88,9 +155,7 @@ def _angle_deg(first, second):
 def ik_module():
     pytest.importorskip("casadi")
     pytest.importorskip("pinocchio.casadi")
-    from realman_robot_driver import ik_solver
-
-    return ik_solver
+    return importlib.import_module("realman_robot_driver.ik_solver")
 
 
 @pytest.fixture

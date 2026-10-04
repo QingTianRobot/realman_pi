@@ -25,9 +25,10 @@ def test_pika_velocity_has_an_isolated_one_meter_per_second_limit():
     # stop the arm long before the session itself is released.
     assert velocity["stale_ms"] == 200
     assert velocity["input_timeout_ms"] == 3000
-    assert velocity["max_linear_speed_mps"] == 0.15
-    assert velocity["max_angular_speed_radps"] == 0.25
-    assert velocity["max_angular_accel_radps2"] == 0.5
+    assert velocity["max_linear_speed_mps"] == 1.0
+    assert velocity["max_angular_speed_radps"] == 2.0
+    assert velocity["max_angular_accel_radps2"] == 4.0
+    assert velocity["max_linear_accel_mps2"] == 2.0
 
 
 def test_control_tree_reads_pika_joint_defaults_from_blackboard():
@@ -49,6 +50,7 @@ def test_control_router_launch_loads_pika_config_and_injects_joint_defaults():
     assert '"pika_velocity_input_timeout_ms"' in source
     assert '"pika_velocity_max_linear_speed_mps"' in source
     assert '"pika_velocity_max_angular_accel_radps2"' in source
+    assert 'pika_velocity_max_linear_accel_mps2' in source
     assert '"coordinate_references": coordinate_references' in source
     assert '"cartesian_velocity_profiles": velocity_profiles' in source
 
@@ -91,6 +93,7 @@ def test_pika_mixed_config_is_declared_and_inside_the_pose_goal_ceilings():
     assert mixed["max_linear_speed_mps"] <= 0.15
     assert mixed["max_angular_speed_radps"] <= 0.25
     assert mixed["max_position_lead_m"] > 0.0
+    assert mixed["max_orientation_lead_rad"] > 0.0
     assert mixed["pose_poll_hz"] > 0.0
 
 
@@ -113,6 +116,7 @@ def test_pika_mixed_loader_passes_every_router_parameter(tmp_path):
         "pika_mixed_max_linear_accel_mps2",
         "pika_mixed_max_angular_speed_radps",
         "pika_mixed_max_position_lead_m",
+        "pika_mixed_max_orientation_lead_rad",
         "pika_mixed_pose_poll_hz",
     }
     assert "**pika_mixed_config" in LAUNCH.read_text(encoding="utf-8")

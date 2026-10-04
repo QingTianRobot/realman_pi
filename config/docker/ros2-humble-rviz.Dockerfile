@@ -5,6 +5,10 @@ ARG ROS_BASE_IMAGE=docker.m.daocloud.io/library/ros:humble-ros-base
 # Node is confined to this stage. The runtime image receives only the static
 # editor files, keeping the driver container free of npm and dev-server state.
 FROM node:22-bookworm AS bt_editor_build
+# Replaceable like the other mirrors; registry.npmjs.org times out from the
+# production robot network. Must not end with a slash.
+ARG NPM_REGISTRY=https://registry.npmmirror.com
+ENV npm_config_registry=${NPM_REGISTRY}
 WORKDIR /opt/bt_editor
 COPY third_party/behavior_tree_cpp/bt_editor/package.json third_party/behavior_tree_cpp/bt_editor/package-lock.json ./
 RUN npm ci

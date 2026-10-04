@@ -19,9 +19,10 @@ pika_default_pose:
   timeout_sec: 120
 
 # Pika owns a real-time l/r Cartesian velocity stream while pikavelocity is
-# active. The driver applies this per-session limit, which currently matches the
-# 0.15 m/s l/r default in realman_motion.yaml but is declared separately so
-# gentle teleop can be retuned without moving every client's limit.
+# active. The driver applies this per-session limit. It is raised to 1.0 m/s,
+# the l/r hard_max_linear_speed_mps in realman_motion.yaml, so a hand moving
+# faster than 0.15 m/s is no longer clamped; it is declared separately so Pika
+# teleop can be retuned without moving every client's limit.
 pika_velocity:
   # Use per-arm identity WORK frames so Pika BASE-expressed vectors remain unchanged.
   work_reference: work/pikabase
@@ -36,22 +37,31 @@ pika_velocity:
   # Only input older than this releases the velocity session. Re-opening one
   # re-runs rm_set_movev_canfd_init, so the session outlives short pauses.
   input_timeout_ms: 3000
-  max_linear_speed_mps: 0.15
-  # Gentle teleop keeps Pika angular commands at 0.25 rad/s after the Pika-side
-  # unit conversion so hand tremor does not translate into fast wrist motion.
-  max_angular_speed_radps: 0.25
-  # The matching ramp reaches the 0.25 rad/s limit in about 0.5 seconds from
+  max_linear_speed_mps: 1.0
+  # Pika angular commands are accepted up to 2.0 rad/s after the Pika-side unit
+  # conversion. A 0.25 rad/s cap clamped ordinary hand rotation (measured
+  # ~0.45 rad/s on production) and made the wrist feel sluggish. Ordinary
+  # Web/keyboard sessions keep their lower driver limit.
+  max_angular_speed_radps: 2.0
+  # Linear ramp for Pika velocity sessions. The 0.10 m/s^2 ordinary limit made the arm
+  # take 10 s to reach 1 m/s, so a hand motion barely moved it. Must not exceed the
+  # driver's hard_max_linear_accel_mps2 in realman_motion.yaml.
+  max_linear_accel_mps2: 2.0
+  # The matching ramp reaches the 2.0 rad/s limit in about 0.5 seconds from
   # rest, which stays smooth without feeling unresponsive.
-  max_angular_accel_radps2: 0.5
+  max_angular_accel_radps2: 4.0
 
 # Pika / Mixed: XYZ follows the Pika linear velocity from
-# /pika/<arm>/cartesian_velocity, while the orientation follows the Pika
-# absolute quaternion from /pika/<arm>/cartesian_pose. Both drive one absolute
-# pose session (the same IK + joint passthrough path as Pika position mode), so the tool
-# orientation tracks the hand without the drift of integrating angular
-# velocity. The Pika sender must publish both topics while this mode is active;
-# the angular part of the velocity stream and the position part of the pose
-# stream are ignored.
+# /pika/<arm>/cartesian_velocity, while the orientation follows how the Pika
+# has rotated since the session started (from /pika/<arm>/cartesian_pose). The
+# first Pika orientation is paired with the arm orientation at activation and
+# later Pika rotations are applied to the arm in the base frame, so the Pika
+# frame need not be aligned with the arm and activation does not turn the
+# wrist. Both drive one absolute pose session (the same IK + joint passthrough
+# path as Pika position mode), so the tool orientation tracks the hand without
+# the drift of integrating angular velocity. The Pika sender must publish both
+# topics while this mode is active; the angular part of the velocity stream
+# and the position part of the pose stream are ignored.
 pika_mixed:
   # Velocity older than this counts as zero, so the target decelerates and
   # holds; an orientation older than this is held. Must exceed the 50 ms Pika
@@ -63,14 +73,19 @@ pika_mixed:
   # router-wide max_linear_speed_mps the pose goal carries (0.15 m/s).
   max_linear_speed_mps: 0.15
   max_linear_accel_mps2: 0.10
-  # Rate at which the commanded orientation turns toward the Pika quaternion.
-  # An orientation offset at session start becomes a smooth rotation at this
-  # rate instead of a jump. Must not exceed the router's 0.25 rad/s ceiling.
+  # Rate at which the commanded orientation turns toward the Pika-derived goal,
+  # so a fast or jumpy hand rotation becomes a smooth one. Must not exceed the
+  # router's 0.25 rad/s ceiling.
   max_angular_speed_radps: 0.25
   # The XYZ target may lead the measured TCP by at most this distance. If the
   # arm stops following (IK failure, singularity), the target stops too instead
   # of running ahead and snapping the arm forward when motion resumes.
   max_position_lead_m: 0.05
+  # The commanded orientation may lead the measured TCP orientation by at most
+  # this angle, in radians. When the arm cannot follow (an unreachable
+  # orientation makes IK fail), the target stops at the arm instead of turning
+  # on, so rotating the Pika back recovers control immediately.
+  max_orientation_lead_rad: 0.15
   # How often the measured TCP pose is read for that leash, in Hz. Each read is
   # one get_current_pose call (joint read + forward kinematics) on the driver.
   pose_poll_hz: 10.0

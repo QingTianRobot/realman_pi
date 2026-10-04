@@ -65,6 +65,7 @@ class _ArmState:
     anchor_future: Any = None
     measure_future: Any = None
     measured_position: tuple[float, float, float] | None = None
+    measured_orientation: tuple[float, float, float, float] | None = None
     measured_at: float = 0.0
     next_measure_at: float = 0.0
     last_mixed_step_at: float = 0.0
@@ -151,6 +152,7 @@ def parse_arm_profiles(
     max_linear_speed_mps: float,
     max_angular_speed_radps: float,
     max_angular_accel_radps2: float,
+    max_linear_accel_mps2: float | None = None,
 ) -> dict[str, _ArmProfile]:
     references: dict[str, tuple[str, str]] = {}
     for entry in coordinate_references:
@@ -194,6 +196,12 @@ def parse_arm_profiles(
     angular_accel_limit = _positive_float(
         max_angular_accel_radps2, "max_angular_accel_radps2"
     )
+    # None keeps the per-arm value from cartesian_velocity_profiles (0.10 m/s^2).
+    linear_accel_limit = (
+        None
+        if max_linear_accel_mps2 is None
+        else _positive_float(max_linear_accel_mps2, "max_linear_accel_mps2")
+    )
     return {
         arm: _ArmProfile(
             references[arm][0],
@@ -202,7 +210,7 @@ def parse_arm_profiles(
             motion[arm][1],
             linear_limit,
             angular_limit,
-            motion[arm][2],
+            motion[arm][2] if linear_accel_limit is None else linear_accel_limit,
             angular_accel_limit,
         )
         for arm in ("l", "r")
@@ -254,6 +262,29 @@ def rotate_towards(
     return normalize_quaternion(tuple(a * x + b * y for x, y in zip(q0, q1)))
 
 
+def quaternion_multiply(first: Any, second: Any) -> tuple[float, float, float, float]:
+    """Hamilton product ``first * second`` of two wxyz quaternions."""
+    w1, x1, y1, z1 = (float(value) for value in first)
+    w2, x2, y2, z2 = (float(value) for value in second)
+    return (
+        w1 * w2 - x1 * x2 - y1 * y2 - z1 * z2,
+        w1 * x2 + x1 * w2 + y1 * z2 - z1 * y2,
+        w1 * y2 - x1 * z2 + y1 * w2 + z1 * x2,
+        w1 * z2 + x1 * y2 - y1 * x2 + z1 * w2,
+    )
+
+
+def quaternion_conjugate(quaternion: Any) -> tuple[float, float, float, float]:
+    w, x, y, z = (float(value) for value in quaternion)
+    return (w, -x, -y, -z)
+
+
+def quaternion_angle(first: Any, second: Any) -> float:
+    """Rotation angle in radians between two orientations."""
+    dot = abs(sum(a * b for a, b in zip(normalize_quaternion(first), normalize_quaternion(second))))
+    return 2.0 * math.acos(min(1.0, dot))
+
+
 def _norm3(vector: Any) -> float:
     return math.sqrt(sum(float(value) ** 2 for value in vector))
 
@@ -264,8 +295,14 @@ class MixedTarget:
     Position is the integral of the Pika linear velocity, speed-clamped and
     acceleration-limited, and leashed to the measured TCP so a target the arm
     cannot follow (IK failure, singularity) never runs away and then snaps.
-    Orientation is the Pika absolute quaternion, approached at a bounded
-    angular rate so an offset at session start becomes a smooth rotation.
+
+    Orientation follows the Pika rotation relative to the session start: the
+    first Pika orientation seen is paired with the arm orientation at the
+    anchor, and later Pika rotations are applied to the arm in the base frame,
+    the same frame the linear velocity is expressed in. The Pika frame then
+    need not be aligned with the arm, and activation does not turn the wrist.
+    The orientation is approached at a bounded angular rate and leashed to
+    the measured TCP orientation like the position.
     """
 
     def __init__(
@@ -281,18 +318,32 @@ class MixedTarget:
             orientation_wxyz
         )
         self.velocity: tuple[float, float, float] = (0.0, 0.0, 0.0)
+        # The arm orientation at the anchor and the Pika orientation it is
+        # paired with; the latter is captured from the first fresh Pika pose.
+        self.arm_reference: tuple[float, float, float, float] = self.orientation
+        self.pika_reference: tuple[float, float, float, float] | None = None
+
+    def goal_orientation(self, pika_orientation: Any) -> tuple[float, float, float, float]:
+        """Map a Pika orientation to the arm goal orientation (base frame)."""
+        pika = normalize_quaternion(pika_orientation)
+        if self.pika_reference is None:
+            self.pika_reference = pika
+        rotation = quaternion_multiply(pika, quaternion_conjugate(self.pika_reference))
+        return normalize_quaternion(quaternion_multiply(rotation, self.arm_reference))
 
     def step(
         self,
         *,
         dt: float,
         commanded_velocity: Any,
-        goal_orientation: Any | None,
+        pika_orientation: Any | None,
         max_speed: float,
         max_accel: float,
         max_angular_speed: float,
         measured_position: Any | None,
         max_lead: float,
+        measured_orientation: Any | None = None,
+        max_orientation_lead: float = 0.0,
     ) -> None:
         if dt <= 0.0:
             return
@@ -322,10 +373,17 @@ class MixedTarget:
                 )
             self.position = candidate
 
-        if goal_orientation is not None:
-            self.orientation = rotate_towards(
-                self.orientation, goal_orientation, max_angular_speed * dt
-            )
+        if pika_orientation is None:
+            return
+        goal = self.goal_orientation(pika_orientation)
+        if measured_orientation is None:
+            # Like the position: no recent measurement, no leash, so hold.
+            return
+        candidate = rotate_towards(self.orientation, goal, max_angular_speed * dt)
+        measured_q = normalize_quaternion(measured_orientation)
+        if quaternion_angle(candidate, measured_q) > max_orientation_lead > 0.0:
+            candidate = rotate_towards(measured_q, candidate, max_orientation_lead)
+        self.orientation = candidate
 
 
 class PikaControlRouter(Node):
@@ -356,7 +414,8 @@ class PikaControlRouter(Node):
                 "pika_velocity_input_timeout_ms"
             )
         # Mixed mode: XYZ integrated from Pika linear velocity, orientation
-        # from the Pika absolute quaternion, executed as one pose session.
+        # from the Pika rotation relative to the session start, executed as
+        # one pose session.
         self.mixed_stale_ms = int(self.declare_parameter("pika_mixed_stale_ms", 200).value)
         self.mixed_input_timeout_ms = int(
             self.declare_parameter("pika_mixed_input_timeout_ms", 3000).value
@@ -373,6 +432,9 @@ class PikaControlRouter(Node):
         self.mixed_max_position_lead_m = float(
             self.declare_parameter("pika_mixed_max_position_lead_m", 0.05).value
         )
+        self.mixed_max_orientation_lead_rad = float(
+            self.declare_parameter("pika_mixed_max_orientation_lead_rad", 0.15).value
+        )
         self.mixed_pose_poll_hz = float(
             self.declare_parameter("pika_mixed_pose_poll_hz", 10.0).value
         )
@@ -386,6 +448,9 @@ class PikaControlRouter(Node):
             self.declare_parameter(
                 "pika_velocity_max_angular_accel_radps2", 4.0
             ).value,
+            # 0.0 (unset) keeps the profile value.
+            self.declare_parameter("pika_velocity_max_linear_accel_mps2", 0.0).value
+            or None,
         )
         self.mode = ""
         self._arms: dict[str, _ArmState] = {}
@@ -431,6 +496,7 @@ class PikaControlRouter(Node):
             "mixed_max_linear_accel_mps2",
             "mixed_max_angular_speed_radps",
             "mixed_max_position_lead_m",
+            "mixed_max_orientation_lead_rad",
             "mixed_pose_poll_hz",
         ):
             value = getattr(self, name)
@@ -463,6 +529,7 @@ class PikaControlRouter(Node):
         state.anchor_future = None
         state.measure_future = None
         state.measured_position = None
+        state.measured_orientation = None
         state.measured_at = 0.0
         state.next_measure_at = 0.0
         state.last_mixed_step_at = 0.0
@@ -585,25 +652,25 @@ class PikaControlRouter(Node):
             if velocity_age < stale and state.latest_velocity is not None:
                 linear = state.latest_velocity.twist.linear
                 velocity = (linear.x, linear.y, linear.z)
-            goal_orientation = None
+            pika_orientation = None
             if pose_age < stale and state.latest_pose is not None:
                 orientation = state.latest_pose.pose.orientation
-                goal_orientation = (orientation.w, orientation.x, orientation.y, orientation.z)
-            measured = (
-                state.measured_position
-                if state.measured_position is not None
+                pika_orientation = (orientation.w, orientation.x, orientation.y, orientation.z)
+            fresh = (
+                state.measured_position is not None
                 and now - state.measured_at <= _MEASUREMENT_MAX_AGE_SEC
-                else None
             )
             state.mixed.step(
                 dt=min(max(dt, 0.0), 0.1),
                 commanded_velocity=velocity,
-                goal_orientation=goal_orientation,
+                pika_orientation=pika_orientation,
                 max_speed=self.mixed_max_linear_speed_mps,
                 max_accel=self.mixed_max_linear_accel_mps2,
                 max_angular_speed=self.mixed_max_angular_speed_radps,
-                measured_position=measured,
+                measured_position=state.measured_position if fresh else None,
                 max_lead=self.mixed_max_position_lead_m,
+                measured_orientation=state.measured_orientation if fresh else None,
+                max_orientation_lead=self.mixed_max_orientation_lead_rad,
             )
             self._publish_mixed_target(arm, state)
             return
@@ -677,6 +744,7 @@ class PikaControlRouter(Node):
         position, orientation = pose
         state.mixed = MixedTarget(position, orientation)
         state.measured_position = position
+        state.measured_orientation = orientation
         state.measured_at = time.monotonic()
 
     def _poll_measured_pose(self, arm: str, state: _ArmState, now: float) -> None:
@@ -701,7 +769,7 @@ class PikaControlRouter(Node):
         except Exception:
             pose = None
         if pose is not None:
-            state.measured_position = pose[0]
+            state.measured_position, state.measured_orientation = pose
             state.measured_at = time.monotonic()
 
     def _publish_mixed_target(self, arm: str, state: _ArmState) -> None:

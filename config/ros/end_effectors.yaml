@@ -1,0 +1,31 @@
+# End effectors mounted on the arm flanges, for the documentation site's 3D scene.
+# Lengths are metres and angles radians. The mount transform is the gripper's base_link
+# expressed in the parent link frame, so it must match how the gripper is bolted on.
+#
+# Scope: the documentation site's 3D scene (website/scripts/sync-three-robots.mjs) and the
+# :8765 Web control page (realman_web_control/model_manifest.py) read this file. The driver's
+# robot_state_publisher / RViz TF tree does not contain the gripper yet, and the physical
+# gripper keeps being driven through config/ros/gripper.yaml (gripper_manager).
+#
+# gripper_name links an arm to its gripper_manager name in gripper.yaml; the Web control page
+# uses it to animate the model from that gripper's live /<name>/position feedback.
+grippers:
+  # Changingtek AG2F90-C two-finger parallel gripper. Vendored URDF and meshes live in
+  # src/rm65_description/{urdf,meshes}/ctag2f90c*.
+  ctag2f90c:
+    urdf: ctag2f90c.urdf
+    mesh_dir: ctag2f90c
+    # Left_1_Joint is the only driving joint; every other moving joint mimics it.
+    driving_joint: Left_1_Joint
+    # Driving-joint angle (rad) at the closed and fully open ends of travel. Forward kinematics of
+    # the URDF gives a pad gap of ~2.5 mm at 0 rad and ~99 mm (pad-frame centres) at 1 rad.
+    closed_rad: 0.0
+    open_rad: 1.0
+
+# z = 0.014 m: the gripper's base_link mesh extends 14 mm behind its own origin, while link_6's
+# mesh ends exactly at its flange face (z = 0), so the origin is moved out by 14 mm to seat
+# the gripper's back face on the flange instead of overlapping the wrist.
+mounts:
+  l: {gripper: ctag2f90c, gripper_name: gripper_left, parent_link: link_6, xyz: [0.0, 0.0, 0.014], rpy: [0.0, 0.0, 0.0]}
+  m: {gripper: ctag2f90c, gripper_name: gripper_mid, parent_link: link_6, xyz: [0.0, 0.0, 0.014], rpy: [0.0, 0.0, 0.0]}
+  r: {gripper: ctag2f90c, gripper_name: gripper_right, parent_link: link_6, xyz: [0.0, 0.0, 0.014], rpy: [0.0, 0.0, 0.0]}

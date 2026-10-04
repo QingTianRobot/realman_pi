@@ -82,12 +82,61 @@ def _default_frames(coordinates: dict[str, Any], arm: str) -> dict[str, Any]:
     }
 
 
+def _vector3(value: Any, field: str) -> list[float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 3:
+        raise ValueError(f"{field} must be a 3-element list")
+    return [_finite(entry, f"{field}[{index}]") for index, entry in enumerate(value)]
+
+
+def _end_effectors(path: Path, description_root: Path) -> dict[str, Any]:
+    """Per-arm gripper mounts from end_effectors.yaml, validated against the URDF files."""
+
+    config = _load_yaml(path)
+    definitions = _child_mapping(config.get("grippers", {}), "end_effectors.grippers")
+    mounts = _child_mapping(config.get("mounts", {}), "end_effectors.mounts")
+    result: dict[str, Any] = {}
+    for arm in ARMS:
+        mount = mounts.get(arm)
+        if mount is None:
+            continue
+        mount = _child_mapping(mount, f"end_effectors.mounts.{arm}")
+        model = mount.get("gripper")
+        definition = _child_mapping(definitions.get(model), f"end_effectors.grippers.{model}")
+        urdf_name = definition.get("urdf")
+        if not isinstance(urdf_name, str) or not MODEL_PATTERN.fullmatch(urdf_name.removesuffix(".urdf")):
+            raise ValueError(f"end_effectors.grippers.{model}.urdf is invalid")
+        if not (description_root / "urdf" / urdf_name).is_file():
+            raise ValueError(f"configured gripper URDF does not exist: {urdf_name}")
+        gripper_name = mount.get("gripper_name")
+        if not isinstance(gripper_name, str) or not re.fullmatch(r"[a-z][a-z0-9_]*", gripper_name):
+            raise ValueError(f"end_effectors.mounts.{arm}.gripper_name is invalid")
+        parent_link = mount.get("parent_link")
+        if not isinstance(parent_link, str) or not re.fullmatch(r"[A-Za-z0-9_]+", parent_link):
+            raise ValueError(f"end_effectors.mounts.{arm}.parent_link is invalid")
+        driving_joint = definition.get("driving_joint")
+        if not isinstance(driving_joint, str) or not re.fullmatch(r"[A-Za-z0-9_]+", driving_joint):
+            raise ValueError(f"end_effectors.grippers.{model}.driving_joint is invalid")
+        result[arm] = {
+            "gripper": model,
+            "gripper_name": gripper_name,
+            "urdf_url": f"/models/urdf/{urdf_name}",
+            "parent_link": parent_link,
+            "xyz": _vector3(mount.get("xyz"), f"end_effectors.mounts.{arm}.xyz"),
+            "rpy": _vector3(mount.get("rpy"), f"end_effectors.mounts.{arm}.rpy"),
+            "driving_joint": driving_joint,
+            "closed_rad": _finite(definition.get("closed_rad"), f"end_effectors.grippers.{model}.closed_rad"),
+            "open_rad": _finite(definition.get("open_rad"), f"end_effectors.grippers.{model}.open_rad"),
+        }
+    return result
+
+
 def build_manifest(
     layout_path: str | Path,
     motion_path: str | Path,
     coordinates_path: str | Path,
     keyboard_path: str | Path,
     description_root: str | Path,
+    end_effectors_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Return browser-safe layout data without copying model files."""
 
@@ -155,6 +204,7 @@ def build_manifest(
             "motion": "config/ros/realman_motion.yaml",
             "coordinates": "config/ros/realman_coordinates.yaml",
             "keyboard": "config/ros/keyboard_control.yaml",
+            "end_effectors": "config/ros/end_effectors.yaml",
         },
         "root_frame": robots[0]["parent_frame"],
         "default_joint_position_rad": _finite(
@@ -162,6 +212,12 @@ def build_manifest(
         ),
         "robots": robots,
         "keyboard_control": keyboard.public_manifest(),
+        # Empty when no end_effectors.yaml is configured: the page then shows bare arms.
+        "end_effectors": (
+            _end_effectors(Path(end_effectors_path).resolve(), description_root)
+            if end_effectors_path is not None and Path(end_effectors_path).is_file()
+            else {}
+        ),
     }
 
 

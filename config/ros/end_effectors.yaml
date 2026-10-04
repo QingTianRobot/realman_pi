@@ -2,9 +2,13 @@
 # Lengths are metres and angles radians. The mount transform is the gripper's base_link
 # expressed in the parent link frame, so it must match how the gripper is bolted on.
 #
-# Scope: only website/scripts/sync-three-robots.mjs reads this file today. The driver's
+# Scope: the documentation site's 3D scene (website/scripts/sync-three-robots.mjs) and the
+# :8765 Web control page (realman_web_control/model_manifest.py) read this file. The driver's
 # robot_state_publisher / RViz TF tree does not contain the gripper yet, and the physical
 # gripper keeps being driven through config/ros/gripper.yaml (gripper_manager).
+#
+# gripper_name links an arm to its gripper_manager name in gripper.yaml; the Web control page
+# uses it to animate the model from that gripper's live /<name>/position feedback.
 grippers:
   # Changingtek AG2F90-C two-finger parallel gripper. Vendored URDF and meshes live in
   # src/rm65_description/{urdf,meshes}/ctag2f90c*.
@@ -22,6 +26,6 @@ grippers:
 # mesh ends exactly at its flange face (z = 0), so the origin is moved out by 14 mm to seat
 # the gripper's back face on the flange instead of overlapping the wrist.
 mounts:
-  l: {gripper: ctag2f90c, parent_link: link_6, xyz: [0.0, 0.0, 0.014], rpy: [0.0, 0.0, 0.0]}
-  m: {gripper: ctag2f90c, parent_link: link_6, xyz: [0.0, 0.0, 0.014], rpy: [0.0, 0.0, 0.0]}
-  r: {gripper: ctag2f90c, parent_link: link_6, xyz: [0.0, 0.0, 0.014], rpy: [0.0, 0.0, 0.0]}
+  l: {gripper: ctag2f90c, gripper_name: gripper_left, parent_link: link_6, xyz: [0.0, 0.0, 0.014], rpy: [0.0, 0.0, 0.0]}
+  m: {gripper: ctag2f90c, gripper_name: gripper_mid, parent_link: link_6, xyz: [0.0, 0.0, 0.014], rpy: [0.0, 0.0, 0.0]}
+  r: {gripper: ctag2f90c, gripper_name: gripper_right, parent_link: link_6, xyz: [0.0, 0.0, 0.014], rpy: [0.0, 0.0, 0.0]}

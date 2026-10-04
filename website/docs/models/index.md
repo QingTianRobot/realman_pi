@@ -48,6 +48,10 @@ link_6
 
 对应关节名是 `camera_rojoint` 和 `camera_joint`。因此相机相关坐标系仍属于同一棵以 `world` 为根的 TF 树。
 
+## 末端夹爪
+
+机械臂型号之外，描述包还带有 Changingtek AG2F90-C 夹爪模型（`urdf/ctag2f90c.urdf`），它不属于上述五个型号的 URDF，也不参与 `RM65_MODEL` 选择；挂载方式和模型细节见[Changingtek 夹爪控制](../development/gripper-control#ag2f90-c-夹爪模型)。
+
 ## 选择规则
 
 Docker 使用环境变量：

@@ -103,6 +103,7 @@ RealMan SDK ──▶ /l|m|r/realman_driver
 | `launch/three_robots.launch.py` | 从 `config/ros/three_robots.yaml` 创建 `/l`、`/m`、`/r` 三组节点与 TF |
 | `urdf/*.urdf` | 五个型号的描述与完整 TF 关系 |
 | `meshes/<model>/*.STL` | 每个 link 的视觉与碰撞网格 |
+| `urdf/ctag2f90c.urdf`、`meshes/ctag2f90c/` | Changingtek AG2F90-C 夹爪（厂商模型，本地有两处修改），挂载配置见 `config/ros/end_effectors.yaml` |
 
 URDF 使用标准 ROS 包 URI 引用网格，安装后由 ament 索引定位共享目录，工作空间可放在任意绝对路径：
 

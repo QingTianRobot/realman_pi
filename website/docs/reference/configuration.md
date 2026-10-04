@@ -23,6 +23,7 @@ description: 仓库根目录 config/ 下每个配置文件的职责、消费者�
 | `gripper.yaml` | 夹爪串口拓扑（稳定别名）、行程、速度/力、流式限速 | `gripper_manager`、Web | [夹爪控制](../development/gripper-control) |
 | `realman_web_control.yaml` | Web 服务监听地址/端口、允许来源、客户端数、模式发现与 override 超时 | `realman_web_control` | [Web 控制](../development/realman-web-control) |
 | `three_robots.yaml` | 三臂在 `world` 中的位姿与型号（**标定结果**） | 描述包、RViz、网站 3D 预览 | [三臂可视化](../development/three-arm-visualization) |
+| `end_effectors.yaml` | 末端夹爪定义（AG2F90-C）与每臂安装位姿；目前只被文档站三维场景读取，RViz/驱动 TF 尚未包含 | `website/scripts/sync-three-robots.mjs` | [夹爪控制](../development/gripper-control#ag2f90-c-夹爪模型) |
 | `cameras_ros2.yaml` | 三路 Orbbec + D435 的串号、分辨率、帧率、同步策略；可被 `cameras_ros2.local.yaml` 深合并覆盖 | `sensor_bringup`、`rm65_camera_ros2` | [相机指南](../guide/cameras) |
 | `camera_calibration.yaml` | ChArUco 板参数、话题、帧、阈值、服务名 | `realman_camera_calibration` | [手眼标定](../development/camera-calibration) |
 | `policy_bridge.yaml` | 策略服务地址、观测/动作 topic、滚动时域、看门狗 | `policy_bridge` | [策略桥接](../development/policy-bridge) |

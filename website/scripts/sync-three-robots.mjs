@@ -7,6 +7,7 @@ const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const websiteDirectory = resolve(scriptDirectory, "..");
 const repositoryDirectory = resolve(websiteDirectory, "..");
 const configPath = join(repositoryDirectory, "config", "ros", "three_robots.yaml");
+const endEffectorsPath = join(repositoryDirectory, "config", "ros", "end_effectors.yaml");
 const sourceDescription = join(repositoryDirectory, "src", "rm65_description");
 const generatedDirectory = join(websiteDirectory, "docs", ".vitepress", "cache", "public");
 const generatedModelsDirectory = join(generatedDirectory, "models");
@@ -66,6 +67,41 @@ for (const robot of robots) {
   const urdf = await readFile(join(sourceDescription, "urdf", `${robot.model}.urdf`), "utf8");
   modelMeshCounts.set(robot.model, (urdf.match(/<visual\b/g) ?? []).length);
 }
+// Optional end effectors (grippers) attached to each arm's flange in the web scene.
+const endEffectorSource = YAML.parse(await readFile(endEffectorsPath, "utf8"));
+const gripperDefinitions = endEffectorSource?.grippers ?? {};
+const gripperMounts = endEffectorSource?.mounts ?? {};
+const usedGrippers = new Set();
+const endEffectors = {};
+for (const id of robotIds) {
+  const mount = gripperMounts[id];
+  if (!mount) continue;
+  const definition = gripperDefinitions[mount.gripper];
+  if (!definition) fail(`mounts.${id}.gripper '${mount.gripper}' is not defined under grippers`);
+  const vector = (value, label) => {
+    if (!Array.isArray(value) || value.length !== 3) fail(`${label} must be a 3-element list`);
+    return value.map((entry, index) => finiteNumber(entry, `${label}[${index}]`));
+  };
+  usedGrippers.add(mount.gripper);
+  endEffectors[id] = {
+    gripper: mount.gripper,
+    parentLink: mount.parent_link,
+    xyz: vector(mount.xyz, `mounts.${id}.xyz`),
+    rpy: vector(mount.rpy, `mounts.${id}.rpy`),
+  };
+}
+const grippers = {};
+for (const name of usedGrippers) {
+  const definition = gripperDefinitions[name];
+  const urdf = await readFile(join(sourceDescription, "urdf", definition.urdf), "utf8");
+  grippers[name] = {
+    urdf: definition.urdf,
+    drivingJoint: definition.driving_joint,
+    closedRad: finiteNumber(definition.closed_rad, `grippers.${name}.closed_rad`),
+    openRad: finiteNumber(definition.open_rad, `grippers.${name}.open_rad`),
+    expectedMeshCount: (urdf.match(/<visual\b/g) ?? []).length,
+  };
+}
 const generatedLayout = {
   source: "config/ros/three_robots.yaml",
   rootFrame: robots[0].parentFrame,
@@ -73,6 +109,8 @@ const generatedLayout = {
   visualizationReferenceArm: "m",
   defaultJointPosition,
   robots: robots.map((robot) => ({ ...robot, expectedMeshCount: modelMeshCounts.get(robot.model) })),
+  grippers,
+  endEffectors,
 };
 
 await rm(generatedDirectory, { recursive: true, force: true });
@@ -84,6 +122,15 @@ for (const model of modelNames) {
   await cp(
     join(sourceDescription, "meshes", model),
     join(generatedModelsDirectory, "rm65_description", "meshes", model),
+    { recursive: true },
+  );
+}
+for (const name of usedGrippers) {
+  const { urdf, mesh_dir: meshDir } = gripperDefinitions[name];
+  await cp(join(sourceDescription, "urdf", urdf), join(generatedModelsDirectory, urdf));
+  await cp(
+    join(sourceDescription, "meshes", meshDir),
+    join(generatedModelsDirectory, "rm65_description", "meshes", meshDir),
     { recursive: true },
   );
 }

@@ -15,11 +15,28 @@ type RobotConfig = {
   };
 };
 
+type GripperConfig = {
+  urdf: string;
+  drivingJoint: string;
+  closedRad: number;
+  openRad: number;
+  expectedMeshCount: number;
+};
+
+type EndEffectorMount = {
+  gripper: string;
+  parentLink: string;
+  xyz: [number, number, number];
+  rpy: [number, number, number];
+};
+
 type LayoutConfig = {
   rootFrame: string;
   visualizationReferenceArm: "m";
   defaultJointPosition: number;
   robots: RobotConfig[];
+  grippers?: Record<string, GripperConfig>;
+  endEffectors?: Partial<Record<RobotConfig["id"], EndEffectorMount>>;
 };
 
 const canvas = ref<HTMLCanvasElement | null>(null);
@@ -46,6 +63,14 @@ const angles = reactive<Record<ArmId, number[]>>({
   r: Array(jointCount).fill(0),
 });
 const manual = reactive<Record<ArmId, boolean>>({ l: false, m: false, r: false });
+// Gripper opening per arm: 0 = closed, 1 = fully open (same convention as gripper_manager's percentage).
+const hasGripper = ref(false);
+const gripper = reactive<Record<ArmId, number>>({ l: 1, m: 1, r: 1 });
+const manualGripper = reactive<Record<ArmId, boolean>>({ l: false, m: false, r: false });
+const onGripperSlider = (event: Event) => {
+  gripper[selectedArm.value] = Number((event.target as HTMLInputElement).value) / 100;
+  manualGripper[selectedArm.value] = true;
+};
 const limits = reactive<Record<ArmId, { lower: number; upper: number }[]>>({
   l: Array.from({ length: jointCount }, () => ({ lower: -3.14, upper: 3.14 })),
   m: Array.from({ length: jointCount }, () => ({ lower: -3.14, upper: 3.14 })),
@@ -57,7 +82,10 @@ const onSlider = (index: number, event: Event) => {
   angles[selectedArm.value][index] = (degrees * Math.PI) / 180;
   manual[selectedArm.value] = true;
 };
-const resumeAuto = () => { manual[selectedArm.value] = false; };
+const resumeAuto = () => {
+  manual[selectedArm.value] = false;
+  manualGripper[selectedArm.value] = false;
+};
 
 let dispose: (() => void) | undefined;
 
@@ -205,9 +233,38 @@ onMounted(async () => {
       ));
     });
 
+    // Grippers hang off each arm's flange link. Their meshes load asynchronously like the arms'.
+    const loadedGrippers: {
+      id: ArmId;
+      robot: Awaited<ReturnType<typeof loader.loadAsync>>;
+      definition: GripperConfig;
+    }[] = [];
+    await Promise.all(
+      loadedRobots.map(async ({ robot, config: robotConfig }) => {
+        const mount = config.endEffectors?.[robotConfig.id];
+        const definition = mount && config.grippers?.[mount.gripper];
+        if (!mount || !definition) return;
+        const parent = robot.links[mount.parentLink];
+        if (!parent) throw new Error(`Arm ${robotConfig.id} has no link ${mount.parentLink}`);
+        const gripperRobot = await loader.loadAsync(`${base}models/${definition.urdf}`);
+        gripperRobot.position.set(...mount.xyz);
+        gripperRobot.rotation.set(mount.rpy[0], mount.rpy[1], mount.rpy[2], "ZYX");
+        parent.add(gripperRobot);
+        loadedGrippers.push({ id: robotConfig.id, robot: gripperRobot, definition });
+      }),
+    );
+    hasGripper.value = loadedGrippers.length > 0;
+    const setGripper = (id: ArmId, opening: number) => {
+      const entry = loadedGrippers.find((item) => item.id === id);
+      if (!entry) return;
+      const { closedRad, openRad, drivingJoint } = entry.definition;
+      entry.robot.setJointValue(drivingJoint, closedRad + (openRad - closedRad) * opening);
+    };
+    loadedGrippers.forEach(({ id }) => setGripper(id, gripper[id]));
+
     let modelTimer = 0;
     const prepareModels = (attempt = 0) => {
-      const meshes = loadedRobots.flatMap(({ robot }) => {
+      const meshes = [...loadedRobots, ...loadedGrippers].flatMap(({ robot }) => {
         const robotMeshes: InstanceType<typeof THREE.Mesh>[] = [];
         robot.traverse((object) => {
           if (object instanceof THREE.Mesh) robotMeshes.push(object);
@@ -215,7 +272,8 @@ onMounted(async () => {
         return robotMeshes;
       });
 
-      const expectedMeshCount = config.robots.reduce((total, robot) => total + robot.expectedMeshCount, 0);
+      const expectedMeshCount = config.robots.reduce((total, robot) => total + robot.expectedMeshCount, 0)
+        + loadedGrippers.reduce((total, { definition }) => total + definition.expectedMeshCount, 0);
       if (meshes.length < expectedMeshCount) {
         if (attempt >= 160) {
           state.value = "error";
@@ -240,6 +298,16 @@ onMounted(async () => {
             object.castShadow = true;
             object.receiveShadow = true;
           });
+        });
+      });
+
+      // Grippers use a neutral dark finish so they read as a separate tool from the colored arm links.
+      loadedGrippers.forEach(({ robot }) => {
+        robot.traverse((object) => {
+          if (!(object instanceof THREE.Mesh)) return;
+          object.material = new THREE.MeshStandardMaterial({ color: 0x2b3438, metalness: 0.35, roughness: 0.5 });
+          object.castShadow = true;
+          object.receiveShadow = true;
         });
       });
 
@@ -295,6 +363,15 @@ onMounted(async () => {
         const seconds = (performance.now() - startedAt) / 1000;
         const mirror = now - lastPanelSync > 100;
         if (mirror) lastPanelSync = now;
+        loadedGrippers.forEach(({ id }) => {
+          if (manualGripper[id]) setGripper(id, gripper[id]);
+          else if (!reducedMotion) {
+            // Slow open/close cycle, phase-shifted per arm.
+            const opening = 0.5 + 0.5 * Math.sin((2 * Math.PI * seconds) / 9 + armPhase[id] * 1.3);
+            setGripper(id, opening);
+            if (mirror) gripper[id] = opening;
+          }
+        });
         loadedRobots.forEach(({ robot, config: robotConfig }) => {
           const id = robotConfig.id;
           if (manual[id]) {
@@ -362,9 +439,9 @@ onBeforeUnmount(() => dispose?.());
             type="button"
             role="tab"
             :aria-selected="selectedArm === id"
-            :class="{ active: selectedArm === id, manual: manual[id] }"
+            :class="{ active: selectedArm === id, manual: manual[id] || manualGripper[id] }"
             @click="selectedArm = id"
-          >{{ id.toUpperCase() }}<small>{{ manual[id] ? "手动" : "自动" }}</small></button>
+          >{{ id.toUpperCase() }}<small>{{ manual[id] || manualGripper[id] ? "手动" : "自动" }}</small></button>
         </div>
         <label v-for="index in jointCount" :key="index" class="joint-row">
           <span class="joint-name">J{{ index }}</span>
@@ -379,7 +456,20 @@ onBeforeUnmount(() => dispose?.());
           />
           <span class="joint-value">{{ toDegrees(angles[selectedArm][index - 1]) }}°</span>
         </label>
-        <button class="joint-auto" type="button" :disabled="!manual[selectedArm]" @click="resumeAuto">恢复自动摆动</button>
+        <label v-if="hasGripper" class="joint-row gripper-row">
+          <span class="joint-name">夹爪</span>
+          <input
+            type="range"
+            min="0"
+            max="100"
+            step="1"
+            :aria-label="`${selectedArm} 臂夹爪开合`"
+            :value="Math.round(gripper[selectedArm] * 100)"
+            @input="onGripperSlider"
+          />
+          <span class="joint-value">{{ Math.round(gripper[selectedArm] * 100) }}%</span>
+        </label>
+        <button class="joint-auto" type="button" :disabled="!manual[selectedArm] && !manualGripper[selectedArm]" @click="resumeAuto">恢复自动摆动</button>
       </template>
     </div>
     <p v-if="state === 'loading'" class="viewer-state">正在加载三机械臂模型</p>

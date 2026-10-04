@@ -43,10 +43,11 @@ world -> l/world -> l/base_link -> l/link_1 -> ... -> l/link_6
 `website/scripts/sync-three-robots.mjs` 在 `npm run dev` 和 `npm run build` 前执行：
 
 ```text
-config/ros/three_robots.yaml
+config/ros/three_robots.yaml + config/ros/end_effectors.yaml
           │
           ├── 校验 l/m/r、命名空间、TF 前缀、型号和有限数值
           ├── 从 src/rm65_description 复制当前所需 URDF/STL
+          ├── 复制夹爪 URDF/STL（end_effectors.yaml 的 mounts）
           └── 生成 three-robots.json
                          │
                          ▼
@@ -54,7 +55,7 @@ config/ros/three_robots.yaml
 ```
 
 生成内容位于被 Git 忽略的 `website/docs/.vitepress/cache/public/`，不是第二份配置来源。生成的
-`three-robots.json` 明确写入 `visualizationReferenceArm: "m"`；查看器加载每台配置模型和默认关节位置后，统一减去中臂的平移，把中臂基座放在显示 `(0,0,0)`，再根据三台机械臂的组合边界设置距离。三台机械臂分别使用青绿、橙色和石墨色，便于区分命名空间。运行中的 Web 控制页面也采用同一显示约定，但其 ROS/TF 运动请求仍使用未平移的配置坐标。
+`three-robots.json` 明确写入 `visualizationReferenceArm: "m"`；查看器加载每台配置模型（首页场景使用放松弯曲并缓慢摆动的待机姿态，而不是零位）后，统一减去中臂的平移，把中臂基座放在显示 `(0,0,0)`，再根据三台机械臂的组合边界设置距离。三台机械臂分别使用青绿、橙色和石墨色，便于区分命名空间。运行中的 Web 控制页面也采用同一显示约定，但其 ROS/TF 运动请求仍使用未平移的配置坐标。
 
 GitHub Pages 工作流监听 YAML、URDF、mesh 和网站文件。推送这些路径的变化会重新构建页面，因此线上模型会反映最新提交。
 
@@ -77,6 +78,16 @@ npm run test:e2e
 ```
 
 端到端测试会检查三台模型完成加载、画布非空且持续渲染、页面无横向溢出，并把生成 JSON 中的型号、命名空间、TF 前缀、父坐标系、位姿和默认关节角与权威 YAML 逐项比较。
+
+## 末端夹爪与关节滑块
+
+首页三维场景在每臂 `link_6` 上各挂一个 AG2F90-C 夹爪。挂载关系来自 [`config/ros/end_effectors.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/end_effectors.yaml)：`grippers` 定义夹爪（URDF、驱动关节、闭合/全开弧度），`mounts` 按 `l/m/r` 指定挂在哪个 link 以及 `xyz`（m）、`rpy`（rad，ZYX）。`website/scripts/sync-three-robots.mjs` 在构建时校验该文件，把夹爪 URDF 与网格复制到站点资源，并把 `grippers`、`endEffectors` 写入生成的 `three-robots.json`；`RobotViewer.vue` 据此把夹爪加载为对应 link 的子节点。夹爪模型细节见[Changingtek 夹爪控制](./gripper-control#ag2f90-c-夹爪模型)。
+
+场景右下角的"关节控制"面板：
+
+- 选 `L / M / R`，六个滑块控制该臂关节（范围取自 URDF 限位），"夹爪"滑块控制开合（`0%` 闭合、`100%` 全开）。
+- 自动摆动时滑块实时跟随；拖动任一滑块，该臂（或夹爪）停止自由变化并保持用户设定的值，标签显示"手动"。"恢复自动摆动"让该臂的关节与夹爪重新自动运动。
+- 这只是网页预览，不会连接真实机器人。
 
 ## 已知边界
 

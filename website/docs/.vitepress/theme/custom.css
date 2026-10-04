@@ -792,11 +792,12 @@
 }
 .joint-row {
   display: grid;
-  grid-template-columns: 22px 1fr 40px;
+  grid-template-columns: 34px 1fr 40px;
   gap: 8px;
   align-items: center;
 }
 .joint-name {
+  white-space: nowrap;
   color: var(--vp-c-text-2);
   font-family: var(--vp-font-family-mono);
 }

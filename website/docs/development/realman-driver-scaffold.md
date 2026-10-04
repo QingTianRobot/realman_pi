@@ -122,6 +122,8 @@ ros2 service call /r/controller_info std_srvs/srv/Trigger "{}"
 
 `cartesian_pose` Action 与 `get_current_pose`、`forward_kinematics`、`solve_ik` 服务属于位姿控制面，契约见[睿尔曼 Action 开发与测试](./realman-action-development)。位姿 session 默认使用 CasADi + IPOPT 的自定义 IK（依赖 `config/python/ik-requirements.txt`，带上一解 warm-start 以避免 IK 分支跳变）；`pinocchio.casadi` 绑定缺失或 URDF 加载失败时，驱动记录一条 WARN 并回退到 SDK 自带 IK，位姿 session 仍可使用。PyPI 上的 `pinocchio` 是无关的包，`config/python/ik-requirements.txt` 因此只安装 `casadi`；当前生产镜像没有 `pinocchio.casadi`，所以实际运行在 SDK IK 回退路径上，`Custom CasADi IK unavailable` 的 WARN 是已知状态，而不是启动失败。
 
+历史说明：`ik_solver.py` 最初提交时漏掉了字符串字面量的引号（`end_joint: str = joint_6`、`solver(ipopt, …)` 等），即使依赖齐全，一导入也会 `NameError` 并静默回退，所以自定义 IK 实际从未生效过；现已修复，并由 `test_ik_solver.py`（用桩替换 CasADi / Pinocchio）保证模块能导入、构造和求解。修复只让代码路径可用：自定义 IK 在真机上的数值表现（warm-start 连续性、关节限位、与 SDK IK 的差异）尚未验证，需要提供带 `pinocchio.casadi` 的镜像后在现场按运行门槛验证。
+
 `stop` 当前映射到官方 `rm_set_arm_stop()`，表示最快关节速度受控停止且轨迹不可恢复。它不是断电急停，也不替代现场安全回路。
 
 ## 普通运动 Action

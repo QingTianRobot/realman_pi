@@ -105,7 +105,7 @@ def format_segment(metrics: SegmentMetrics, noise: Any = None) -> str:
         f"  accepted mean      : {metrics.accepted_mean:+.5f} {unit} (driver-side view of the command)",
         f"  limited mean       : {metrics.limited_mean:+.5f} {unit} (after acceleration limiting)",
         f"  measured mean      : {metrics.measured_mean:+.5f} {unit}",
-        f"  amplitude gain     : "
+        "  amplitude gain     : "
         + ("n/a" if metrics.amplitude_gain is None else f"{metrics.amplitude_gain:.3f}"),
     ]
     if metrics.is_dc:

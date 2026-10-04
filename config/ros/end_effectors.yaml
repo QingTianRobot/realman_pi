@@ -18,7 +18,10 @@ grippers:
     closed_rad: 0.0
     open_rad: 1.0
 
+# z = 0.014 m: the gripper's base_link mesh extends 14 mm behind its own origin, while link_6's
+# mesh ends exactly at its flange face (z = 0), so the origin is moved out by 14 mm to seat
+# the gripper's back face on the flange instead of overlapping the wrist.
 mounts:
-  l: {gripper: ctag2f90c, parent_link: link_6, xyz: [0.0, 0.0, 0.0], rpy: [0.0, 0.0, 0.0]}
-  m: {gripper: ctag2f90c, parent_link: link_6, xyz: [0.0, 0.0, 0.0], rpy: [0.0, 0.0, 0.0]}
-  r: {gripper: ctag2f90c, parent_link: link_6, xyz: [0.0, 0.0, 0.0], rpy: [0.0, 0.0, 0.0]}
+  l: {gripper: ctag2f90c, parent_link: link_6, xyz: [0.0, 0.0, 0.014], rpy: [0.0, 0.0, 0.0]}
+  m: {gripper: ctag2f90c, parent_link: link_6, xyz: [0.0, 0.0, 0.014], rpy: [0.0, 0.0, 0.0]}
+  r: {gripper: ctag2f90c, parent_link: link_6, xyz: [0.0, 0.0, 0.014], rpy: [0.0, 0.0, 0.0]}

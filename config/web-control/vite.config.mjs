@@ -49,11 +49,27 @@ async function devManifest() {
       work_frame_id: work.ros_frame_id,
     }];
   }));
+  const endEffectorConfig = YAML.parse(await readFile(resolve(repositoryDirectory, "config/ros/end_effectors.yaml"), "utf8"));
+  const endEffectors = Object.fromEntries(Object.entries(endEffectorConfig.mounts ?? {}).map(([id, mount]) => {
+    const gripper = endEffectorConfig.grippers[mount.gripper];
+    return [id, {
+      gripper: mount.gripper,
+      gripper_name: mount.gripper_name,
+      urdf_url: `/models/urdf/${gripper.urdf}`,
+      parent_link: mount.parent_link,
+      xyz: mount.xyz,
+      rpy: mount.rpy,
+      driving_joint: gripper.driving_joint,
+      closed_rad: gripper.closed_rad,
+      open_rad: gripper.open_rad,
+    }];
+  }));
   return {
     version: 1,
     root_frame: robots[0].parent_frame || layout.robots.l.parent_frame,
     default_joint_position_rad: layout.settings.default_joint_position || 0,
     robots,
+    end_effectors: endEffectors,
     keyboard_control: {
       heartbeat_period_ms: keyboard.heartbeat_period_ms,
       input_timeout_ms: keyboard.input_timeout_ms,

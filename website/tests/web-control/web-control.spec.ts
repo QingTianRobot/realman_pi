@@ -1110,3 +1110,32 @@ test("warns when MOVEL has no feedback without permitting a second motion", asyn
   await expect(page.locator("#execute-motion")).toBeDisabled();
   await expect(page.locator("#cancel-motion")).toBeEnabled();
 });
+
+test("mounts a gripper on every arm and follows live gripper position feedback", async ({ page }) => {
+  test.setTimeout(60_000);
+  await page.goto("/");
+  const viewer = page.locator("#viewer");
+  // 3 grippers x 9 meshes are loaded, attached to the flange links, before the scene is ready.
+  await expect(viewer).toHaveAttribute("data-gripper-meshes", "27", { timeout: 30_000 });
+
+  await emitWebSocketEvent(page, {
+    type: "gripper_list",
+    grippers: [
+      { name: "gripper_left", open_position: 400, close_position: 949 },
+      { name: "gripper_mid", open_position: 0, close_position: 9000 },
+      { name: "gripper_right", open_position: 4000, close_position: 12000 },
+    ],
+  });
+  // Each gripper maps its own device-unit endpoints (open/close differ per gripper) to 0..1.
+  await emitWebSocketEvent(page, { type: "gripper_state", name: "gripper_left", connected: true, position: 674.5, speed: 0, current: 0, torque_reached: false, alarm: 0 });
+  await emitWebSocketEvent(page, { type: "gripper_state", name: "gripper_mid", connected: true, position: 9000, speed: 0, current: 0, torque_reached: false, alarm: 0 });
+  await emitWebSocketEvent(page, { type: "gripper_state", name: "gripper_right", connected: true, position: 4000, speed: 0, current: 0, torque_reached: false, alarm: 0 });
+  await expect(viewer).toHaveAttribute("data-gripper-l", "0.50");
+  await expect(viewer).toHaveAttribute("data-gripper-m", "0.00");
+  await expect(viewer).toHaveAttribute("data-gripper-r", "1.00");
+  await expect(page.locator("#gripper-feedback")).toContainText("开合 50%");
+
+  // Live updates keep moving the model.
+  await emitWebSocketEvent(page, { type: "gripper_state", name: "gripper_left", connected: true, position: 949, speed: 0, current: 0, torque_reached: false, alarm: 0 });
+  await expect(viewer).toHaveAttribute("data-gripper-l", "0.00");
+});

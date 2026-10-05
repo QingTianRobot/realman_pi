@@ -160,7 +160,8 @@ IK 持续失败、机械臂停住。
 | `pose_poll_hz` | `10` | 牵引约束的实测位姿读取频率 |
 
 超出 router 上限的配置会在 router 启动时被拒绝。当前生产 driver 的自定义 CasADi IK 因依赖缺失未加载，
-位姿 session 使用 SDK IK；锚点读取（SDK 正解）与执行（SDK 逆解）因此参考同一末端点。
+位姿 session 使用 SDK IK；锚点读取（SDK 正解）与执行（SDK 逆解）因此参考同一末端点。启用自定义 IK 后，
+每个位姿 session 会先比对其 TCP 与 SDK 正解，不一致时该 session 回退到 SDK IK，同样不会因 TCP 偏移跳变。
 
 Pika 速度 Action 使用 `WORK` 和 `pikabase`。driver 收到该 Goal 时，如果当前已验证工作坐标不是
 `pikabase`，会在同一臂 ownership 内调用坐标管理器写入、切换并读回验证已配置的 `pikabase`，验证成功后才

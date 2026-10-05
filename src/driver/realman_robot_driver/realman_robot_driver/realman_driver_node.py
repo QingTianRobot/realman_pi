@@ -229,7 +229,19 @@ class RealManDriverNode(Node):
                 / 'urdf'
                 / f'{self.robot_model}.urdf'
             )
-            self._ik_solver = RealManIK(str(urdf_path))
+            # SDK FK/IK apply the controller's active tool, which startup reconciles
+            # to the configured default (tcpgrip), so the custom IK uses the same TCP.
+            # The pose session re-checks it against SDK FK before trusting it.
+            ik_tool = profile.tools[profile.tool_default]
+            self._ik_solver = RealManIK(
+                str(urdf_path),
+                tool_position=ik_tool.xyz_m,
+                tool_quaternion_wxyz=ik_tool.quaternion_wxyz,
+            )
+            self.get_logger().info(
+                f"Custom CasADi IK ready for Cartesian pose goals with tool "
+                f"{ik_tool.controller_name} {ik_tool.xyz_m}"
+            )
         except Exception as error:
             # The pose session falls back to the controller's own IK, so a missing
             # CasADi/Pinocchio install or URDF only degrades position teleop quality.

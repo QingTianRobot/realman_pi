@@ -16,7 +16,7 @@ Treat the serial bus, Modbus device, ROS manager, and Web bridge as separate hea
 - ROS facade: `gripper_manager_node.py`.
 - Browser bridge: `src/driver/realman_web_control/realman_web_control/{protocol.py,web_control_node.py}`.
 
-When comparing a supplied reference SDK, read its RTU implementation, driver, and active configuration completely. Do not treat the legacy `griger.py` compatibility driver as the reference unless the task explicitly names it.
+When comparing a supplied reference SDK, read its RTU implementation, driver, and active configuration completely. The old standalone `gripper_node` / `griger.py` driver and its launch file were removed; `gripper_manager` with `changingtek/rtu_psdk.py` is the only runtime path.
 
 ## Required Boundaries
 

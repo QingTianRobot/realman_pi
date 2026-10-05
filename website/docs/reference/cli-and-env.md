@@ -63,7 +63,7 @@ description: ./rm65 统一入口、行为树启动器、.env 与 Compose 环境�
 | `REALMAN_LOG_ROOT` | 日志根目录（容器内 `/opt/rm65_ws/logs`，映射到仓库 `logs/`） |
 
 ::: warning Web 控制没有认证
-`.env` 中的 `REALMAN_WEB_CONTROL_TOKEN` 目前**没有任何消费者**，Web control 不做 token 校验。`:8765` 能被访问的浏览器就能发送运动和停止命令，所以必须只放在受信任的机器人局域网内，不要暴露到公网或经 NAT 映射。
+Web control 不做任何身份校验：`:8765` 能被访问的浏览器就能发送运动和停止命令，所以必须只放在受信任的机器人局域网内，不要暴露到公网或经 NAT 映射。（`.env` 里曾有一个 `REALMAN_WEB_CONTROL_TOKEN`，但从来没有代码读取它，已删除，避免让人误以为有认证。）
 :::
 
 ## 端口与日志

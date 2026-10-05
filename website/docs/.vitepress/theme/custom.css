@@ -726,11 +726,11 @@
 /* Joint sliders over the homepage 3D scene. */
 .joint-panel {
   position: absolute;
-  right: max(24px, calc((100vw - 1180px) / 2));
+  right: 16px;
   bottom: 56px;
   z-index: 3;
   display: flex;
-  width: 248px;
+  width: 216px;
   max-width: calc(100% - 32px);
   flex-direction: column;
   gap: 6px;

@@ -1,5 +1,5 @@
 <script setup lang="ts">
-import { onBeforeUnmount, onMounted, reactive, ref } from "vue";
+import { nextTick, onBeforeUnmount, onMounted, reactive, ref, watch } from "vue";
 
 type RobotConfig = {
   id: "l" | "m" | "r";
@@ -88,11 +88,12 @@ const resumeAuto = () => {
 };
 
 let dispose: (() => void) | undefined;
+let relayout: (() => void) | undefined;
 
 onMounted(async () => {
   if (!canvas.value || !viewport.value) return;
-  // Phones start with the joint panel collapsed so it does not cover the scene.
-  panelOpen.value = window.innerWidth > 640;
+  // Open by default only where the scene can keep a decent size next to it; otherwise it starts collapsed.
+  panelOpen.value = window.innerWidth >= 1400;
 
   try {
     const base = import.meta.env.BASE_URL;
@@ -337,12 +338,25 @@ onMounted(async () => {
       renderer.setSize(width, height, false);
       camera.aspect = width / height;
       camera.zoom = width <= 640 ? 0.82 : 1;
-      // On wide screens the headline sits on the left; push the scene into the right half so the
-      // bent, swinging arms do not cover the text.
-      if (width > 900) camera.setViewOffset(width, height, -width * 0.2, 0, width, height);
-      else camera.clearViewOffset();
+      if (width > 900) {
+        // Wide screens: the headline is on the left and the joint panel on the right. Fit the scene
+        // into the free band between them (centered, scaled down if the band is narrower than the
+        // arms) so neither the text nor the panel covers the models.
+        const hostBox = host.getBoundingClientRect();
+        const copy = document.querySelector(".hero-copy")?.getBoundingClientRect();
+        const panel = document.querySelector(".joint-panel")?.getBoundingClientRect();
+        const bandLeft = (copy ? copy.right - hostBox.left : width * 0.45) + 12;
+        const bandRight = (panel ? panel.left - hostBox.left : width) - 32;
+        const free = Math.max(bandRight - bandLeft, 240);
+        // At zoom 1 the arms fill the viewer height and swing to ~1.05x that in width at the widest phase.
+        const extent = height * 1.05;
+        camera.zoom = Math.min(Math.max(free / extent, 0.5), 1);
+        const centerX = (bandLeft + Math.max(bandRight, bandLeft + free)) / 2;
+        camera.setViewOffset(width, height, width / 2 - centerX, 0, width, height);
+      } else camera.clearViewOffset();
       camera.updateProjectionMatrix();
     };
+    relayout = resize;
     const resizeObserver = new ResizeObserver(resize);
     resizeObserver.observe(host);
     resize();
@@ -407,6 +421,9 @@ onMounted(async () => {
     state.value = "error";
   }
 });
+
+// The scene is fitted around the joint panel, so refit whenever the panel opens, closes or appears.
+watch([panelOpen, state], () => nextTick(() => relayout?.()));
 
 onBeforeUnmount(() => dispose?.());
 </script>

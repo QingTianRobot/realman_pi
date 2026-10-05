@@ -313,3 +313,43 @@ test("grippers are mounted on every arm and the gripper slider takes over", asyn
   await page.waitForTimeout(1200);
   await expect(slider).toHaveValue("0");
 });
+
+test("the joint panel never covers the arms or the headline", async ({ page }) => {
+  await page.goto("./");
+  await expect(page.locator(".robot-viewport")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+  const viewport = page.viewportSize()!;
+  // The scene is only fitted around the panel on wide screens; phones stack it differently.
+  test.skip(viewport.width <= 900, "fitted layout is for wide screens");
+
+  const toggle = page.locator(".joint-panel-toggle");
+  if (!(await toggle.textContent())?.includes("收起")) await toggle.click();
+  await page.waitForTimeout(600);
+
+  // Sample opaque canvas pixels over a few seconds of the idle animation.
+  const result = await page.evaluate(async () => {
+    const canvas = document.querySelector<HTMLCanvasElement>(".robot-viewport canvas")!;
+    const gl = (canvas.getContext("webgl2") || canvas.getContext("webgl"))!;
+    const box = canvas.getBoundingClientRect();
+    const scale = box.width / canvas.width;
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+    let minX = Infinity;
+    let maxX = -Infinity;
+    for (let sample = 0; sample < 8; sample += 1) {
+      gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      for (let y = 0; y < canvas.height; y += 4) {
+        for (let x = 0; x < canvas.width; x += 4) {
+          if (pixels[(y * canvas.width + x) * 4 + 3] > 200) {
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x);
+          }
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+    const panel = document.querySelector(".joint-panel")!.getBoundingClientRect();
+    const copy = document.querySelector(".hero-copy")!.getBoundingClientRect();
+    return { left: minX * scale + box.left, right: maxX * scale + box.left, panelLeft: panel.left, copyRight: copy.right };
+  });
+  expect(result.right, "arms must end left of the panel").toBeLessThanOrEqual(result.panelLeft);
+  expect(result.left, "arms must start right of the headline column").toBeGreaterThanOrEqual(result.copyRight - 2);
+});

@@ -40,7 +40,8 @@ from realman_msgs.srv import (
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Float64, Int32, String
 from std_srvs.srv import SetBool, Trigger
-from gripper_ros2_msgs.srv import GripperPercentage
+from gripper_ros2_msgs.msg import GripperLimits
+from gripper_ros2_msgs.srv import GripperPercentage, MoveGripperRaw, SetGripperLimits
 from tf2_ros import Buffer, TransformListener
 
 from .action_bridge import ActionRecord, action_event, assign_fields, message_to_json
@@ -49,7 +50,7 @@ from .joint_records import JointRecordStore
 from .keyboard_control import KeyboardArmCommand, load_keyboard_control_config
 from .keyboard_control_bridge import KeyboardControlBridge
 from .model_manifest import build_manifest
-from .protocol import ProtocolError
+from .protocol import ProtocolError, reject_if_read_only
 from .tf_pose import transform_stamped_pose
 from .web_server import WebControlServer, load_server_config
 
@@ -206,6 +207,8 @@ class WebControlNode(Node):
                         "grasp_check": self.create_client(Trigger, f"/{name}/grasp_check", callback_group=self._callback_group),
                         "enable": self.create_client(SetBool, f"/{name}/enable", callback_group=self._callback_group),
                         "percentage": self.create_client(GripperPercentage, f"/{name}/percentage", callback_group=self._callback_group),
+                        "set_limits": self.create_client(SetGripperLimits, f"/{name}/set_limits", callback_group=self._callback_group),
+                        "move_raw": self.create_client(MoveGripperRaw, f"/{name}/move_raw", callback_group=self._callback_group),
                     }
                     self._gripper_states[name] = {"name": name, "connected": False, "position": 0.0, "speed": 0, "current": 0, "torque_reached": False, "alarm": 0}
                     self._web_subscriptions.extend([
@@ -215,6 +218,17 @@ class WebControlNode(Node):
                         self.create_subscription(Int32, f"/{name}/current", lambda msg, n=name: self._gripper_state(n, "current", int(msg.data)), 10, callback_group=self._callback_group),
                         self.create_subscription(Bool, f"/{name}/torque_reached", lambda msg, n=name: self._gripper_state(n, "torque_reached", bool(msg.data)), 10, callback_group=self._callback_group),
                         self.create_subscription(Int32, f"/{name}/alarm", lambda msg, n=name: self._gripper_state(n, "alarm", int(msg.data)), 10, callback_group=self._callback_group),
+                        self.create_subscription(
+                            GripperLimits,
+                            f"/{name}/limits",
+                            lambda msg, n=name: self._gripper_limits(n, msg),
+                            QoSProfile(
+                                depth=1,
+                                reliability=ReliabilityPolicy.RELIABLE,
+                                durability=DurabilityPolicy.TRANSIENT_LOCAL,
+                            ),
+                            callback_group=self._callback_group,
+                        ),
                     ])
         except Exception as error:
             self.get_logger().warning(f"Gripper control disabled: {error}")
@@ -758,8 +772,21 @@ class WebControlNode(Node):
         event = {"type": "gripper_state", **state}
         self._server.send_event(event)
 
+    def _gripper_limits(self, name: str, message: GripperLimits) -> None:
+        item = self._grippers.get(name)
+        if item is None:
+            return
+        item.update(
+            open_position=int(message.open_position),
+            close_position=int(message.close_position),
+            min_position=int(message.min_position),
+            max_position=int(message.max_position),
+        )
+        self._server.send_event({"type": "gripper_list", "grippers": list(self._grippers.values())})
+
     def _gripper_command(self, client_id: str, message: dict[str, Any]) -> None:
         name, command, request_id = message["name"], message["command"], message["request_id"]
+        reject_if_read_only(command, self._server.read_only, request_id)
         clients = self._gripper_clients.get(name)
         if clients is None:
             raise ProtocolError("gripper_unavailable", f"unknown gripper {name}", request_id)
@@ -771,6 +798,15 @@ class WebControlNode(Node):
             client = clients["percentage"]
             request = GripperPercentage.Request()
             request.percentage = float(message["percentage"])
+        elif command == "set_limits":
+            client = clients["set_limits"]
+            request = SetGripperLimits.Request()
+            request.open_position = int(message["open_position"])
+            request.close_position = int(message["close_position"])
+        elif command == "move_raw":
+            client = clients["move_raw"]
+            request = MoveGripperRaw.Request()
+            request.position = int(message["position"])
         else:
             client = clients[command]
             request = Trigger.Request()

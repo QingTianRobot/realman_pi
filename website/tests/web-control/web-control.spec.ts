@@ -1199,6 +1199,10 @@ test("gripper travel limits are edited, confirmed and applied from the web panel
     type: "gripper_result", name: "gripper_right", command: "set_limits",
     request_id: commands[0].request_id, state: "completed", success: true, message: "ok",
   });
+  // Different limits prove the inputs follow the broadcast again (the edit state is really cleared).
+  await emitWebSocketEvent(page, list(60, 9000));
+  await expect(page.locator("#gripper-open-position")).toHaveValue("60");
+  await expect(page.locator("#gripper-close-position")).toHaveValue("9000");
   await emitWebSocketEvent(page, list(52, 8500));
   await emitWebSocketEvent(page, state(4000));
   await expect(page.locator("#gripper-open-position")).toHaveValue("52");
@@ -1230,4 +1234,44 @@ test("gripper travel limits are disabled without write access", async ({ page })
   await expect(page.locator("#gripper-limits-apply")).toBeDisabled();
   await expect(page.locator("#gripper-open-position")).toBeDisabled();
   await expect(page.locator("#gripper-raw-position")).toBeDisabled();
+});
+
+test("gripper travel limits are disabled while the socket is closed and re-enabled on reconnect", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
+  await emitWebSocketEvent(page, {
+    type: "gripper_list",
+    grippers: [{ name: "gripper_right", open_position: 50, close_position: 8500, min_position: 0, max_position: 8500 }],
+  });
+  await page.locator("#gripper-limits > summary").click();
+  await expect(page.locator("#gripper-limits-apply")).toBeEnabled();
+  await expect(page.locator("#gripper-open-position")).toBeEnabled();
+  await expect(page.locator("#gripper-raw-position")).toBeEnabled();
+
+  // Losing the socket must disable the editor without waiting for another gripper message.
+  await page.evaluate(() => {
+    const socket = (window as any).__webSocket;
+    socket.readyState = 3;
+    socket.emit("close", {});
+  });
+  await expect(page.locator("#gripper-limits-apply")).toBeDisabled();
+  await expect(page.locator("#gripper-open-position")).toBeDisabled();
+  await expect(page.locator("#gripper-close-position")).toBeDisabled();
+  await expect(page.locator("#gripper-raw-position")).toBeDisabled();
+
+  // Even if the button is forced on, Apply must neither ask for confirmation nor send anything.
+  let dialogs = 0;
+  page.on("dialog", async (dialog) => {
+    dialogs += 1;
+    await dialog.dismiss();
+  });
+  await page.locator("#gripper-limits-apply").evaluate((element: HTMLButtonElement) => {
+    element.disabled = false;
+    element.click();
+  });
+  expect(dialogs).toBe(0);
+
+  // The app reconnects after 2 s; the editor comes back once the new socket is open.
+  await expect(page.locator("#gripper-limits-apply")).toBeEnabled({ timeout: 8_000 });
+  await expect(page.locator("#gripper-open-position")).toBeEnabled();
 });

@@ -1306,7 +1306,7 @@ function teachGripperLimit(field: "open" | "close") {
 }
 function applyGripperLimits() {
   const config = gripperConfigs[selectedGripper];
-  if (!config) return;
+  if (!config || !canWrite()) return;
   const { open, close } = gripperLimitsElements();
   const openPosition = Number(open.value);
   const closePosition = Number(close.value);
@@ -1337,6 +1337,7 @@ function handleMessage(message: Message) {
     mode.textContent = readOnly ? "READ ONLY" : "CONTROL READY";
     mode.classList.toggle("ready", !readOnly);
     if (message.layout) loadManifest(message.layout);
+    else updateButtons();
   } else if (message.type === "input_mode_list") {
     if (message.available) {
       inputModeCatalog = Array.isArray(message.modes) ? message.modes.reduce<InputModeOption[]>((modes, option) => {
@@ -1704,6 +1705,8 @@ function updateButtons() {
   applyRecordButton.disabled = !writable || activeRecordRequest || !recordSelect.value;
   deleteRecordButton.disabled = !writable || selectedMotionCommand !== 0 || activeRecordRequest || !recordSelect.value;
   updateInputModeSelectionDisabled();
+  // canWrite() changes on socket open/close and hello; all of those paths end in updateButtons().
+  renderGripperLimits();
 }
 
 function loadManifest(next: Manifest) {

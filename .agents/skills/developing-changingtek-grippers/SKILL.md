@@ -26,6 +26,7 @@ When comparing a supplied reference SDK, read its RTU implementation, driver, an
 - Keep authoritative configuration under root `config/`. Compose maps host aliases into `realman_bringup_remote`; Web control does not access serial devices directly.
 - Treat `connect()`/`connect_all()` as “serial file opened.” Treat `/<name>/connected=true` as “background Modbus feedback reads currently succeed.” Compare systems with the same safe read transaction, not their open-port messages.
 - Position is a configured device-unit integer. Web `percentage` is `0.0..1.0`, where `0` maps to `close_position` and `1` maps to `open_position`.
+- Only `open_position` and `close_position` are editable at runtime (`set_limits` service, web "行程设置" panel). They persist in `gripper_overrides.yaml` next to `gripper.yaml`, written atomically by `gripper_manager` only; `min_position`/`max_position` stay in `gripper.yaml`. Validation lives in `gripper_limits.py`; do not duplicate it in the Web layer.
 
 ## Interface Contract
 

@@ -192,6 +192,19 @@ bt_core::NodeStatus PikaVelocityInputNode::tick() {
 
 void PikaVelocityInputNode::onHalted() { entry_recorded_ = false; }
 
+bt_core::NodeStatus PikaMixedInputNode::tick() {
+  if (!entry_recorded_) {
+    recordPlaceholderEntry(
+        blackboard(), name(),
+        "Pika mixed stream (velocity XYZ, absolute orientation) is routed by "
+        "the Cartesian Pika bridge");
+    entry_recorded_ = true;
+  }
+  return bt_core::NodeStatus::RUNNING;
+}
+
+void PikaMixedInputNode::onHalted() { entry_recorded_ = false; }
+
 bt_core::NodeStatus IdleInputNode::tick() {
   return bt_core::NodeStatus::RUNNING;
 }

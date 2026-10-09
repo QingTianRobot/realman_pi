@@ -18,8 +18,11 @@
         <ReactiveSequence name="keyboard_branch">
           <InputModeGuard mode="keyboard" label="Web / 键盘速度控制" selectable="true"
                           selected_mode="{selected_mode}"/>
-          <ActivateInputMode mode="keyboard"/>
-          <KeyboardVelocityInput/>
+          <Sequence name="keyboard_entry">
+            <PrepareKeyboardWork dry_run="{dry_run}"/>
+            <ActivateInputMode mode="keyboard"/>
+            <KeyboardVelocityInput/>
+          </Sequence>
         </ReactiveSequence>
         <ReactiveSequence name="policy_branch">
           <InputModeGuard mode="policy" label="Policy" selectable="true"
@@ -35,7 +38,7 @@
                            l_joint_degrees="{pika_l_joint_degrees}"
                            m_joint_degrees="{pika_m_joint_degrees}"
                            r_joint_degrees="{pika_r_joint_degrees}"
-                           velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+                           velocity_percent="30" blend_radius_percent="0" timeout_sec="120"/>
             <ActivateInputMode mode="pikaposition"/>
             <PikaPositionInput/>
           </Sequence>
@@ -48,9 +51,22 @@
                            l_joint_degrees="{pika_l_joint_degrees}"
                            m_joint_degrees="{pika_m_joint_degrees}"
                            r_joint_degrees="{pika_r_joint_degrees}"
-                           velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+                           velocity_percent="30" blend_radius_percent="0" timeout_sec="120"/>
             <ActivateInputMode mode="pikavelocity"/>
             <PikaVelocityInput/>
+          </Sequence>
+        </ReactiveSequence>
+        <ReactiveSequence name="pikamixed_branch">
+          <InputModeGuard mode="pikamixed" label="Pika / Mixed 控制" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <Sequence name="pika_mixed_entry">
+            <ThreeArmMoveJ name="pika_default_pose" dry_run="{dry_run}"
+                           l_joint_degrees="{pika_l_joint_degrees}"
+                           m_joint_degrees="{pika_m_joint_degrees}"
+                           r_joint_degrees="{pika_r_joint_degrees}"
+                           velocity_percent="30" blend_radius_percent="0" timeout_sec="120"/>
+            <ActivateInputMode mode="pikamixed"/>
+            <PikaMixedInput/>
           </Sequence>
         </ReactiveSequence>
         <ReactiveSequence name="none_branch">

@@ -2,3 +2,8 @@ bin/
 log/
 __pycache__/
 *.pyc
+
+# Never commit TLS private keys or certificates.
+*.key
+*.crt
+*.pem

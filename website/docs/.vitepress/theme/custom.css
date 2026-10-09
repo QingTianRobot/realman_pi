@@ -632,3 +632,193 @@
     transition-duration: 0.01ms !important;
   }
 }
+
+/* Mermaid diagrams render at their natural size (Mermaid sets max-width itself) and shrink to the
+   column on narrow screens; tall ones scroll inside the frame. Click or press the button to zoom. */
+.vp-doc .mermaid {
+  position: relative;
+  margin: 16px 0;
+  padding: 16px;
+  max-height: 70vh;
+  overflow: auto;
+  text-align: center;
+  background: var(--vp-c-bg-soft);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  cursor: zoom-in;
+}
+.vp-doc .mermaid svg {
+  display: inline-block;
+  height: auto;
+  /* Never clip a label that still overflows its box; the frame scrolls instead. */
+  overflow: visible;
+}
+.vp-doc .mermaid .nodeLabel,
+.vp-doc .mermaid .edgeLabel,
+.vp-doc .mermaid .label {
+  overflow-wrap: anywhere;
+}
+.mermaid-zoom-hint {
+  position: sticky;
+  float: right;
+  top: 0;
+  margin: -4px -4px 0 8px;
+  padding: 2px 8px;
+  font-size: 12px;
+  line-height: 20px;
+  color: var(--vp-c-text-2);
+  background: var(--vp-c-bg);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 4px;
+  pointer-events: none;
+}
+
+.mermaid-lightbox {
+  position: fixed;
+  inset: 0;
+  z-index: 200;
+  display: flex;
+  flex-direction: column;
+  background: var(--vp-c-bg);
+}
+.mermaid-lightbox-bar {
+  display: flex;
+  gap: 8px;
+  align-items: center;
+  padding: 8px 12px;
+  border-bottom: 1px solid var(--vp-c-divider);
+  background: var(--vp-c-bg-soft);
+}
+.mermaid-lightbox-bar button {
+  min-width: 36px;
+  height: 32px;
+  padding: 0 10px;
+  color: var(--vp-c-text-1);
+  background: var(--vp-c-bg);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.mermaid-lightbox-bar button:hover {
+  border-color: var(--vp-c-brand-1);
+}
+.mermaid-lightbox-bar .spacer {
+  flex: 1;
+}
+.mermaid-lightbox-bar .scale {
+  min-width: 48px;
+  font-size: 13px;
+  color: var(--vp-c-text-2);
+  text-align: center;
+}
+.mermaid-lightbox-body {
+  flex: 1;
+  overflow: auto;
+  padding: 16px;
+}
+.mermaid-lightbox-body svg {
+  display: block;
+  margin: 0 auto;
+  max-width: none !important;
+  height: auto;
+}
+
+/* Joint sliders over the homepage 3D scene. */
+.joint-panel {
+  position: absolute;
+  right: 16px;
+  bottom: 56px;
+  z-index: 3;
+  display: flex;
+  width: 216px;
+  max-width: calc(100% - 32px);
+  flex-direction: column;
+  gap: 6px;
+  padding: 10px 12px;
+  color: var(--vp-c-text-1);
+  font-size: 12px;
+  background: color-mix(in srgb, var(--vp-c-bg) 86%, transparent);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 8px;
+  backdrop-filter: blur(6px);
+}
+.joint-panel.collapsed {
+  width: auto;
+}
+.joint-panel button {
+  color: var(--vp-c-text-1);
+  font: inherit;
+  background: var(--vp-c-bg);
+  border: 1px solid var(--vp-c-divider);
+  border-radius: 6px;
+  cursor: pointer;
+}
+.joint-panel button:hover:not(:disabled) {
+  border-color: var(--vp-c-brand-1);
+}
+.joint-panel button:disabled {
+  opacity: 0.45;
+  cursor: default;
+}
+.joint-panel-toggle {
+  padding: 4px 8px;
+  font-weight: 600;
+}
+.joint-arms {
+  display: grid;
+  grid-template-columns: repeat(3, 1fr);
+  gap: 6px;
+}
+.joint-arms button {
+  display: flex;
+  flex-direction: column;
+  align-items: center;
+  padding: 3px 0;
+  font-family: var(--vp-font-family-mono);
+  font-weight: 700;
+}
+.joint-arms button small {
+  color: var(--vp-c-text-2);
+  font-family: var(--vp-font-family-base);
+  font-size: 10px;
+  font-weight: 400;
+}
+.joint-arms button.active {
+  color: var(--vp-c-brand-1);
+  border-color: var(--vp-c-brand-1);
+}
+.joint-arms button.manual small {
+  color: var(--vp-c-brand-1);
+}
+.joint-row {
+  display: grid;
+  grid-template-columns: 34px 1fr 40px;
+  gap: 8px;
+  align-items: center;
+}
+.joint-name {
+  white-space: nowrap;
+  color: var(--vp-c-text-2);
+  font-family: var(--vp-font-family-mono);
+}
+.joint-value {
+  text-align: right;
+  font-family: var(--vp-font-family-mono);
+  font-variant-numeric: tabular-nums;
+}
+.joint-row input[type="range"] {
+  width: 100%;
+  min-width: 0;
+  accent-color: var(--vp-c-brand-1);
+}
+.joint-auto {
+  margin-top: 2px;
+  padding: 4px 8px;
+}
+@media (max-width: 640px) {
+  .joint-panel {
+    right: 16px;
+    bottom: 44px;
+    width: 220px;
+  }
+}

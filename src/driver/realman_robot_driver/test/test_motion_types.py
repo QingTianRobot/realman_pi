@@ -325,10 +325,58 @@ def test_motion_settings_separates_standard_and_hard_velocity_limits(tmp_path: P
     assert settings.angular_speed_hard_limit_radps == 0.25
 
 
+def test_motion_settings_separates_standard_and_hard_angular_acceleration_limits(
+    tmp_path: Path,
+):
+    path = write_settings(tmp_path, hard_max_angular_accel_radps2=4.0)
+
+    settings = MotionSettings.from_yaml(path, "l")
+
+    assert settings.max_angular_accel_radps2 == 0.5
+    assert settings.angular_accel_hard_limit_radps2 == 4.0
+
+
+def test_motion_settings_separates_standard_and_hard_linear_acceleration_limits(
+    tmp_path: Path,
+):
+    path = write_settings(tmp_path, hard_max_linear_accel_mps2=2.0)
+
+    settings = MotionSettings.from_yaml(path, "l")
+
+    assert settings.max_linear_accel_mps2 == 0.1
+    assert settings.linear_accel_hard_limit_mps2 == 2.0
+
+
+def test_motion_settings_linear_acceleration_hard_limit_defaults_to_standard(
+    tmp_path: Path,
+):
+    settings = MotionSettings.from_yaml(write_settings(tmp_path), "l")
+
+    assert settings.linear_accel_hard_limit_mps2 == settings.max_linear_accel_mps2
+
+
+def test_motion_settings_rejects_hard_linear_acceleration_below_standard_limit(
+    tmp_path: Path,
+):
+    path = write_settings(tmp_path, hard_max_linear_accel_mps2=0.05)
+
+    with pytest.raises(ValueError, match="at least max_linear_accel_mps2"):
+        MotionSettings.from_yaml(path, "l")
+
+
 def test_motion_settings_rejects_hard_limit_below_standard_limit(tmp_path: Path):
     path = write_settings(tmp_path, hard_max_linear_speed_mps=0.049)
 
     with pytest.raises(ValueError, match="at least max_linear_speed_mps"):
+        MotionSettings.from_yaml(path, "l")
+
+
+def test_motion_settings_rejects_hard_angular_acceleration_below_standard_limit(
+    tmp_path: Path,
+):
+    path = write_settings(tmp_path, hard_max_angular_accel_radps2=0.49)
+
+    with pytest.raises(ValueError, match="at least max_angular_accel_radps2"):
         MotionSettings.from_yaml(path, "l")
 
 
@@ -406,8 +454,10 @@ def test_motion_type_hints_resolve_private_mapping_helper():
         "velocity_watchdog_ms",
         "max_linear_accel_mps2",
         "max_angular_accel_radps2",
+        "hard_max_angular_accel_radps2",
         "joint_goal_tolerance_deg",
         "stop_timeout_sec",
+        "pose_max_joint_speed_dps",
     ],
 )
 def test_motion_settings_reject_non_positive_or_non_finite_values(tmp_path: Path, field: str):
@@ -424,3 +474,13 @@ def test_motion_settings_reject_unknown_keys_and_unknown_arm(tmp_path: Path):
 
     with pytest.raises(ValueError, match="unknown arm"):
         MotionSettings.from_yaml(write_settings(tmp_path), "x")
+
+
+def test_pose_joint_speed_is_optional_and_loaded_when_set(tmp_path: Path):
+    from realman_robot_driver.motion_types import DEFAULT_POSE_MAX_JOINT_SPEED_DPS
+
+    assert MotionSettings.from_yaml(write_settings(tmp_path), "l").pose_max_joint_speed_dps == (
+        DEFAULT_POSE_MAX_JOINT_SPEED_DPS
+    )
+    path = write_settings(tmp_path, pose_max_joint_speed_dps=45.0)
+    assert MotionSettings.from_yaml(path, "l").pose_max_joint_speed_dps == 45.0

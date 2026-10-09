@@ -13,7 +13,6 @@ from ament_index_python.packages import get_package_share_directory
 import rclpy
 from rclpy.action import ActionServer
 from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
-from rclpy.duration import Duration
 from rclpy.executors import ExternalShutdownException, MultiThreadedExecutor
 from rclpy.node import Node
 from rclpy.qos import (
@@ -216,11 +215,42 @@ class RealManDriverNode(Node):
             ownership=self.arm_ownership,
             settings=self.motion_settings,
             active_frame=self._active_velocity_frames,
+            prepare_reference=self._prepare_velocity_reference,
             coordinate_manager=self.coordinate_manager,
             logger=self.get_logger(),
             action_type=CartesianVelocity,
             ros_time_now_ns=lambda: self.get_clock().now().nanoseconds,
         )
+        try:
+            from .ik_solver import RealManIK
+
+            urdf_path = (
+                Path(get_package_share_directory('rm65_description'))
+                / 'urdf'
+                / f'{self.robot_model}.urdf'
+            )
+            # SDK FK/IK apply the controller's active tool, which startup reconciles
+            # to the configured default (tcpgrip), so the custom IK uses the same TCP.
+            # The pose session re-checks it against SDK FK before trusting it.
+            ik_tool = profile.tools[profile.tool_default]
+            self._ik_solver = RealManIK(
+                str(urdf_path),
+                tool_position=ik_tool.xyz_m,
+                tool_quaternion_wxyz=ik_tool.quaternion_wxyz,
+            )
+            self.get_logger().info(
+                f"Custom CasADi IK ready for Cartesian pose goals with tool "
+                f"{ik_tool.controller_name} {ik_tool.xyz_m}"
+            )
+        except Exception as error:
+            # The pose session falls back to the controller's own IK, so a missing
+            # CasADi/Pinocchio install or URDF only degrades position teleop quality.
+            # Say so loudly: the fallback is otherwise invisible from the outside.
+            self._ik_solver = None
+            self.get_logger().warning(
+                "Custom CasADi IK unavailable, falling back to the RealMan SDK IK "
+                f"for Cartesian pose goals: {type(error).__name__}: {error}"
+            )
         self.pose_session = CartesianPoseSession(
             arm_id=self.arm_id,
             adapter=self.adapter,
@@ -230,6 +260,7 @@ class RealManDriverNode(Node):
             coordinate_manager=self.coordinate_manager,
             logger=self.get_logger(),
             ros_time_now_ns=lambda: self.get_clock().now().nanoseconds,
+            ik_solver=self._ik_solver,
         )
         self._coordinate_state_publisher = self.create_publisher(
             String,
@@ -291,9 +322,9 @@ class RealManDriverNode(Node):
                 history=QoSHistoryPolicy.KEEP_LAST,
                 depth=1,
                 durability=QoSDurabilityPolicy.VOLATILE,
-                lifespan=Duration(
-                    nanoseconds=self.motion_settings.velocity_watchdog_ms * 1_000_000
-                ),
+                # No lifespan here: QoS lifespan keys off wall-clock time, which drifts
+                # between hosts and silently drops valid commands. Staleness is enforced
+                # by the session monotonic watchdog and relative stamp check instead.
             ),
             callback_group=self.velocity_command_callback_group,
         )
@@ -305,9 +336,9 @@ class RealManDriverNode(Node):
                 history=QoSHistoryPolicy.KEEP_LAST,
                 depth=1,
                 durability=QoSDurabilityPolicy.VOLATILE,
-                lifespan=Duration(
-                    nanoseconds=self.motion_settings.velocity_watchdog_ms * 1_000_000
-                ),
+                # No lifespan here: QoS lifespan keys off wall-clock time, which drifts
+                # between hosts and silently drops valid commands. Staleness is enforced
+                # by the session monotonic watchdog and relative stamp check instead.
             ),
             callback_group=self.velocity_command_callback_group,
         )
@@ -333,6 +364,7 @@ class RealManDriverNode(Node):
                 self._recover_motion,
             ),
             self.create_service(Trigger, "status", self._status),
+            self.create_service(Trigger, "controller_info", self._controller_info),
             self.create_service(
                 VerifyCoordinates,
                 "coordinates/verify",
@@ -502,6 +534,24 @@ class RealManDriverNode(Node):
         )
         if self.adapter.last_error_message:
             response.message += f" detail={self.adapter.last_error_message}"
+        return response
+
+    def _controller_info(
+        self, _request: Trigger.Request, response: Trigger.Response
+    ) -> Trigger.Response:
+        """Return read-only controller version/parameter getters as JSON."""
+        try:
+            info = self.adapter.controller_info()
+            response.success = self.adapter.connected and bool(info)
+            response.message = json.dumps(
+                {"arm": self.arm_id, "robot_ip": self.robot_ip, "info": info},
+                ensure_ascii=False,
+                sort_keys=True,
+            )
+        except Exception as error:
+            self.get_logger().error(f"RealMan controller info query failed: {error}")
+            response.success = False
+            response.message = json.dumps({"arm": self.arm_id, "error": str(error)})
         return response
 
     def _verify_coordinates(
@@ -780,7 +830,11 @@ class RealManDriverNode(Node):
         return response
 
     def _run_coordinate_operation(
-        self, operation: CoordinateOperation, name: str = ""
+        self,
+        operation: CoordinateOperation,
+        name: str = "",
+        *,
+        ownership_already_acquired: bool = False,
     ) -> CoordinateOperationResult:
         result = run_coordinate_operation(
             self.coordinate_manager,
@@ -790,6 +844,7 @@ class RealManDriverNode(Node):
             operation,
             name,
             publish_result=self._update_active_references,
+            ownership_already_acquired=ownership_already_acquired,
         )
         if not result.success or not result.matched:
             self.get_logger().warn(
@@ -814,6 +869,30 @@ class RealManDriverNode(Node):
             frame = self._frame_for_controller(ReferenceType.WORK, result.current_work)
             if frame is not None:
                 self._active_velocity_frames[ReferenceType.WORK] = frame
+
+    def _prepare_velocity_reference(
+        self, reference_type: ReferenceType, reference_name: str
+    ) -> None:
+        """Select and verify a configured work frame before velocity startup."""
+        if reference_type is not ReferenceType.WORK:
+            return
+        active_work = self._active_velocity_frames.get(ReferenceType.WORK)
+        if (
+            active_work is not None
+            and active_work[0] == reference_name
+            and self.coordinate_manager.motion_allowed(self.arm_id)
+        ):
+            return
+        result = self._run_coordinate_operation(
+            CoordinateOperation.SELECT_WORK,
+            reference_name,
+            ownership_already_acquired=True,
+        )
+        if not result.success or not result.matched:
+            raise ValueError(
+                f"unable to select and verify work frame {reference_name!r}: "
+                f"{result.message}"
+            )
 
     def _publish_coordinate_state(
         self, result: CoordinateOperationResult | None = None
@@ -920,7 +999,7 @@ class RealManDriverNode(Node):
                 raise ValueError("PoseStamped header.stamp must be set")
             self.pose_session.accept_command(command)
         except (RuntimeError, ValueError) as error:
-            self.get_logger().debug(f"Cartesian pose command rejected: {error}")
+            self.get_logger().warning(f"Cartesian pose command rejected: {error}")
 
     @staticmethod
     def _fill_verify_response(
@@ -948,8 +1027,23 @@ class RealManDriverNode(Node):
         self._last_connect_attempt = time.monotonic()
         try:
             was_connected = self.adapter.connected
-            code = self.adapter.connect()
+            if event_recovery:
+                code = self.adapter.reconnect()
+            else:
+                code = self.adapter.connect()
             if code == 0:
+                if event_recovery:
+                    # A clean stop can leave the controller reporting an active
+                    # trajectory even though nothing is moving. Clear it before the
+                    # reconcile read, otherwise the channel stays quarantined.
+                    stop_status = int(self.adapter.stop())
+                    if stop_status != 0:
+                        self.get_logger().warn(
+                            "RealMan trajectory stop before recovery returned API2 "
+                            f"status {stop_status}"
+                        )
+                    else:
+                        time.sleep(0.3)
                 callback_status = self.adapter.register_event_callback(
                     self.motion_coordinator.handle_event
                 )
@@ -960,8 +1054,12 @@ class RealManDriverNode(Node):
                     )
                     self.adapter.disconnect()
                     return callback_status
+                # Recovery recreates the SDK handle while the adapter still
+                # reports connected, but the callback channel is just as fresh
+                # as after a cold connect. Without the reset flag the
+                # quarantine is never cleared and every motion goal is rejected.
                 if not self.motion_coordinator.reconcile_after_connect(
-                    connection_reset=not was_connected,
+                    connection_reset=event_recovery or not was_connected,
                     recovery_owns_arm=event_recovery,
                 ):
                     self.get_logger().warn(
@@ -1032,14 +1130,6 @@ class RealManDriverNode(Node):
                 "Resetting RealMan SDK connection after a clean stop left the "
                 "trajectory event channel without a generation marker"
             )
-            if self.adapter.connected:
-                disconnect_status = self.adapter.disconnect()
-                if disconnect_status != 0:
-                    self.get_logger().error(
-                        "RealMan event channel reset disconnect failed with API2 "
-                        f"status {disconnect_status}"
-                    )
-                    return False
             # The controller can keep the old TCP session briefly after the
             # SDK handle is destroyed. Give it a bounded quiet interval before
             # creating a replacement handle.

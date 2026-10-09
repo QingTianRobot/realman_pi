@@ -22,7 +22,9 @@
   },
   "devDependencies": {
     "@playwright/test": "1.62.1",
+    "mermaid": "^11.17.2",
     "vitepress": "1.6.4",
+    "vitepress-plugin-mermaid": "^2.0.17",
     "yaml": "^2.8.1"
   }
 }

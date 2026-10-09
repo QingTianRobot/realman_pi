@@ -13,6 +13,7 @@
 #include "realman_bt/cartesian_velocity_for_duration_node.hpp"
 #include "realman_bt/input_mode_nodes.hpp"
 #include "realman_bt/move_j_node.hpp"
+#include "realman_bt/prepare_keyboard_work_node.hpp"
 #include "realman_bt/three_arm_move_j_node.hpp"
 
 namespace realman_bt {
@@ -105,12 +106,14 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   factory_.registerNodeType<SelectInputModeNode>("SelectInputMode");
   factory_.registerNodeType<InputModeGuardNode>("InputModeGuard");
   factory_.registerNodeType<ActivateInputModeNode>("ActivateInputMode");
+  factory_.registerNodeType<PrepareKeyboardWorkNode>("PrepareKeyboardWork");
   factory_.registerNodeType<WebInputStubNode>("WebInputStub");
   factory_.registerNodeType<PolicyInputStubNode>("PolicyInputStub");
   factory_.registerNodeType<KeyboardVelocityInputNode>("KeyboardVelocityInput");
   factory_.registerNodeType<PikaInputStubNode>("PikaInputStub");
   factory_.registerNodeType<PikaPositionInputNode>("PikaPositionInput");
   factory_.registerNodeType<PikaVelocityInputNode>("PikaVelocityInput");
+  factory_.registerNodeType<PikaMixedInputNode>("PikaMixedInput");
   factory_.registerNodeType<IdleInputNode>("IdleInput");
   factory_.registerNodeType<MoveJNode>("MoveJ");
   factory_.registerNodeType<ThreeArmMoveJNode>("ThreeArmMoveJ");

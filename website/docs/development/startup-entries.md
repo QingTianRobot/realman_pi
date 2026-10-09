@@ -57,9 +57,12 @@ rm65_project_help
 这个 RViz-only 服务。出现冲突时先停止 `realman_driver_rviz`，再重新执行需要的入口。
 :::
 
-行为树驱动测试使用两个终端：先执行 `./rm65 up` 启动生产 ROS/相机/Web 项目，再执行
-`./rm65 bt r`。行为树执行器、只读 `bt_server` 和静态运行监视器都在
-`realman_bringup_remote` 容器内；启动器依赖 `/<arm_id>/execute_motion` Action Server，
+行为树命令只要求 Docker 中有且仅有一个正在运行的
+`realman_bringup_remote` bringup 容器，不要求先执行 `./rm65 up`，也不要求该容器属于当前仓库的
+Compose project。容器可以由 `./rm65 up`、`docker compose up -d realman_bringup_remote` 或
+`rm65_docker_bringup_remote` 启动；启动器通过 Docker 的
+`com.docker.compose.service=realman_bringup_remote` 标签解析容器，并直接对该容器执行行为树。
+行为树执行器、只读 `bt_server` 和静态运行监视器都在该容器内；启动器依赖 `/<arm_id>/execute_motion` Action Server，
 默认 `REALMAN_BT_DRY_RUN=true`。网页地址为
 `http://<host>:8080/`。监视器只读 `GET /api/runtime` 快照，不提供编辑、Tick 或 Run，
 网页服务先于 Action readiness 启动，所以驱动发现尚未完成时也会显示等待页；执行器仍会等待
@@ -80,7 +83,7 @@ accepted handle，直到收到拒绝或成功提交 cancel；提交异常会重�
 
 `./rm65 bt control` 不是 one-shot MoveJ：它读取 `config/behavior-trees/control.xml` 和
 `config/ros/behavior_tree.yaml`，强制 `stop_on_terminal=false`、`exit_on_terminal=false`，并一直运行到
-Ctrl-C。`./rm65 up` 不会替它启动 executor；Ctrl-C 也只停止 router/:8080，不停止 driver 或 :8765 Web
+Ctrl-C。`./rm65 up` 不会替它启动 executor；只要 bringup 容器已运行即可单独启动 control。Ctrl-C 也只停止 router/:8080，不停止 driver 或 :8765 Web
 服务。路由的动态 XML 目录和 Web cancellation 约定见[行为树控制权与 Mock 测试](./behavior-tree-control)。
 
 行为树入口支持省略 `.xml` 后缀：`./rm65 bt move`、`./rm65 bt three`、`./rm65 bt control` 和
@@ -316,12 +319,12 @@ RealSense D435 已通过 `realsense_d435.launch.py` 接入 ROS2 节点路径（�
 
 | 函数 | 当前用途 | 启动/影响的组件 | 适用场景 | 权威配置与文档 |
 | --- | --- | --- | --- | --- |
-| `rm65_docker_remote_rviz [domain]` | 前台启动 RViz-only 远程查看器；省略 `domain` 时读取 `.env` 的 `ROS_DOMAIN_ID`。 | `remote_rviz.launch.py` 和 `rviz2`；不启动本地 driver、robot_state_publisher 或假关节状态源。 | 首次排查远程 DDS、X11 授权或 RViz 配置时，保留终端日志。 | `.env`、[快速开始：远程 RViz 函数详解](../guide/getting-started#远程-rviz-函数详解) |
+| `rm65_docker_remote_rviz [domain]` | 前台启动 RViz-only 远程查看器；省略 `domain` 时读取 `.env` 的 `ROS_DOMAIN_ID`。 | `remote_rviz.launch.py` 和 `rviz2`；不启动本地 driver、robot_state_publisher 或假关节状态源。 | 首次排查远程 DDS、X11 授权或 RViz 配置时，保留终端日志。 | `.env`、[快速开始：远程 RViz 函数详解](../guide/remote-rviz#远程-rviz-函数详解) |
 | `rm65_docker_remote_rviz_start [domain]` | 后台启动 RViz-only 远程查看器并打印状态；省略 `domain` 时读取 `.env`。 | `docker compose up -d realman_remote_rviz`。 | 日常在桌面机持续观察工控机 `realman_bringup_remote` 发布的三臂状态。 | `.env`、`realman_remote_rviz` Compose 服务 |
 | `rm65_docker_remote_rviz_stop` | 停止后台远程 RViz。 | `docker compose stop realman_remote_rviz`。 | 关闭桌面机 RViz-only 服务，不影响工控机驱动和机械臂。 | Docker Compose |
 | `rm65_docker_remote_rviz_status` | 查看后台远程 RViz 状态。 | `docker compose ps realman_remote_rviz`。 | 确认 RViz 容器是否仍在运行。 | Docker Compose |
 | `rm65_docker_remote_rviz_logs [-f]` | 查看或跟踪远程 RViz 日志。 | `docker compose logs --tail=100 ... realman_remote_rviz`。 | 排查 DDS 发现、TF、joint state 或显示授权问题。 | Docker Compose、[故障排查](../troubleshooting) |
-| `rm65_docker_camera_rviz [domain]` | 前台显示生产机三路 Orbbec 加全局 RealSense D435 共四路彩色图像；省略 `domain` 时读取 `.env` 的 `ROS_DOMAIN_ID`；宿主机未构建 `realsense2_camera` 时 `rm65_camera_ros2` 直接失败，不会到达 RViz 阶段。 | `realman_camera_rviz` 和只含彩色 Image display 的 `config/rviz/cameras.rviz`；不启动驱动、本地相机或深度显示。 | 笔记本查看生产机的 `/camera_left`、`/camera_middle`、`/camera_right` 与 `/camera_global/d435` 实拍画面。 | `.env`、[快速开始：查看四路实拍画面](../guide/getting-started#查看四路实拍画面) |
+| `rm65_docker_camera_rviz [domain]` | 前台显示生产机三路 Orbbec 加全局 RealSense D435 共四路彩色图像；省略 `domain` 时读取 `.env` 的 `ROS_DOMAIN_ID`；宿主机未构建 `realsense2_camera` 时 `rm65_camera_ros2` 直接失败，不会到达 RViz 阶段。 | `realman_camera_rviz` 和只含彩色 Image display 的 `config/rviz/cameras.rviz`；不启动驱动、本地相机或深度显示。 | 笔记本查看生产机的 `/camera_left`、`/camera_middle`、`/camera_right` 与 `/camera_global/d435` 实拍画面。 | `.env`、[快速开始：查看四路实拍画面](../guide/cameras#查看四路实拍画面) |
 | `rm65_docker_camera_rviz_start [domain]` | 后台启动三路相机 RViz；省略 `domain` 时读取 `.env`。 | `docker compose up -d realman_camera_rviz`。 | 日常持续查看相机画面。 | `.env`、`realman_camera_rviz` Compose 服务 |
 | `rm65_docker_camera_rviz_stop` | 停止后台相机 RViz。 | `docker compose stop realman_camera_rviz`。 | 关闭笔记本上的相机查看器，不影响生产机相机。 | Docker Compose |
 | `rm65_docker_camera_rviz_status` | 查看后台相机 RViz 状态。 | `docker compose ps realman_camera_rviz`。 | 确认相机 RViz 容器是否运行。 | Docker Compose |

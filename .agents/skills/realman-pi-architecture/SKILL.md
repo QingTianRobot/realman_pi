@@ -115,5 +115,5 @@ executor、launcher 和监视器退出，XML 与快照归档到 `logs/behavior-t
 1. 改启动行为时同步更新 `rm65`、Compose、`functions.zsh` 兼容提示和 Web 手册。
 2. 改 ROS 节点/launch/日志时遵守 `ros2-logging-conventions`，保留彩色 rcutils 和官方节点日志。
 3. 改配置时只在根 `config/` 增加或修改权威文件，并补充解释性注释。
-4. 改用户可见行为后更新 `website/docs/development/` 或对应 guide，并运行 `npm run build`。
+4. 改用户可见行为后更新 `website/docs/development/` 或对应 guide（总览见 `website/docs/architecture/overview.md`，速查表见 `website/docs/reference/`，Pika 见 `development/pika-teleop.md`），并运行 `npm run build`。
 5. 完成前至少验证 `bash -n rm65`、`zsh -n functions.zsh`、`docker compose config` 和相关测试。

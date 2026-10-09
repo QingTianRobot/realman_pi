@@ -1,4 +1,12 @@
-"""Cancellable, watchdog-protected Cartesian pose streaming session."""
+"""Cancellable, watchdog-protected Cartesian pose streaming session.
+
+Each tick solves IK for the latest target and streams the joint result with
+``rm_movej_canfd`` passthrough. Passthrough executes immediately and does no
+planning, so the session itself bounds how far every joint may move per tick
+(``pose_max_joint_speed_dps`` in realman_motion.yaml). The previous
+``rm_movej(..., connect=1)`` stream never moved the arm: connect=1 plans a
+trajectory together with the next one and does not execute it.
+"""
 
 from __future__ import annotations
 
@@ -10,7 +18,8 @@ import time
 from typing import Any, Callable, Mapping, Sequence
 
 from .motion_types import MotionSettings, ReferenceType
-from .quaternion_math import normalize
+from .quaternion_math import conjugate, multiply, normalize
+from .pose_math import euler_to_quaternion, quaternion_to_euler
 
 
 class PoseTerminalState(IntEnum):
@@ -48,9 +57,36 @@ class _Goal:
     follow: bool
     trajectory_mode: int
     radio: int
+    velocity_percent: int
+    blend_radius_percent: int
 
 
 _ZERO_POSE = ((0.0, 0.0, 0.0), (1.0, 0.0, 0.0, 0.0))
+# The custom IK must place the TCP where SDK FK (get_current_pose) does; a larger
+# gap means a different tool or flange, and targets anchored on SDK FK would jump.
+_TCP_MATCH_POSITION_M = 0.002
+_TCP_MATCH_ANGLE_RAD = math.radians(1.0)
+
+
+def step_towards(
+    current: Sequence[float], target: Sequence[float], max_step_deg: float
+) -> list[float]:
+    """Move each joint toward ``target`` by at most ``max_step_deg``."""
+    limit = max(0.0, float(max_step_deg))
+    return [
+        float(c) + max(-limit, min(limit, float(t) - float(c)))
+        for c, t in zip(current, target)
+    ]
+
+
+def _valid_joints(values: Any) -> list[float] | None:
+    try:
+        joints = [float(value) for value in values]
+    except (TypeError, ValueError):
+        return None
+    if len(joints) != 6 or not all(math.isfinite(value) for value in joints):
+        return None
+    return joints
 
 
 class CartesianPoseSession:
@@ -68,6 +104,7 @@ class CartesianPoseSession:
         monotonic: Callable[[], float] = time.monotonic,
         ros_time_now_ns: Callable[[], int] | None = None,
         logger: Any | None = None,
+        ik_solver: Any | None = None,
     ) -> None:
         if arm_id not in {"l", "m", "r"}:
             raise ValueError("arm_id must be one of l, m, or r")
@@ -80,6 +117,7 @@ class CartesianPoseSession:
         self._monotonic = monotonic
         self._ros_time_now_ns = ros_time_now_ns
         self._logger = logger
+        self._ik_solver = ik_solver
         self._condition = threading.Condition(threading.RLock())
         self._stop_event = threading.Event()
         self._done_event = threading.Event()
@@ -92,9 +130,16 @@ class CartesianPoseSession:
         self._target_position, self._target_quaternion = _ZERO_POSE
         self._limited_position, self._limited_quaternion = _ZERO_POSE
         self._command_received_at = 0.0
+        self._command_received = False
         self._session_epoch_ns: int | None = None
         self._last_command_stamp_ns: int | None = None
         self._last_tick_at = 0.0
+        self._last_ik_failure_log = 0.0
+        # None until the custom IK's TCP is compared with SDK FK in this session.
+        self._custom_ik_verified: bool | None = None
+        # Joint target most recently accepted by the controller; the next step
+        # starts here and the next IK solve is seeded from it.
+        self._commanded_joints: list[float] | None = None
         self._last_api2_status = 0
         self._phase = PoseFeedbackPhase.VALIDATING
         self._move_in_progress = False
@@ -122,6 +167,11 @@ class CartesianPoseSession:
                 if self._coordinate_manager is not None and not self._coordinate_manager.motion_allowed(self.arm_id):
                     raise ValueError("active coordinates are not verified")
                 self._goal = self._validate_goal(goal)
+                # Passthrough steps are relative to the last command, so the
+                # first one must start from where the arm actually is.
+                current = self._read_current_joints()
+                if current is None:
+                    raise ValueError("current joint state is unavailable")
             except Exception as error:
                 self.ownership.release(self.arm_id)
                 self._owns_ownership = False
@@ -134,9 +184,13 @@ class CartesianPoseSession:
             self._target_position, self._target_quaternion = _ZERO_POSE
             self._limited_position, self._limited_quaternion = _ZERO_POSE
             self._command_received_at = now
+            self._command_received = False
             self._last_tick_at = now
-            self._session_epoch_ns = self._read_ros_time_ns()
+            self._commanded_joints = current
+            self._session_epoch_ns = None
             self._last_command_stamp_ns = None
+            # The active tool can change between sessions, so verify per session.
+            self._custom_ik_verified = None
             self._stop_event.clear()
             self._done_event.clear()
             self._thread = threading.Thread(
@@ -158,25 +212,23 @@ class CartesianPoseSession:
                 raise ValueError(
                     f"PoseStamped header.frame_id must equal active frame_id {self._goal.ros_frame_id!r}"
                 )
-            age_sec = 0.0
             if self._ros_time_now_ns is not None:
                 if stamp_ns <= 0:
                     raise ValueError("PoseStamped header.stamp must be set")
-                now_ns = self._read_ros_time_ns()
-                if self._session_epoch_ns is not None and stamp_ns < self._session_epoch_ns:
+                if self._session_epoch_ns is None:
+                    self._session_epoch_ns = stamp_ns
+                elif stamp_ns < self._session_epoch_ns:
                     raise ValueError("PoseStamped stamp belongs to a previous session")
-                age_ns = now_ns - stamp_ns
-                if age_ns < 0:
-                    raise ValueError("PoseStamped stamp is in the future")
-                if age_ns > self._goal.watchdog_ms * 1_000_000:
-                    raise ValueError("PoseStamped command is stale")
                 if self._last_command_stamp_ns is not None and stamp_ns <= self._last_command_stamp_ns:
                     raise ValueError("PoseStamped stamp must be newer than the last accepted command")
-                age_sec = age_ns / 1_000_000_000.0
                 self._last_command_stamp_ns = stamp_ns
             self._target_position = position
             self._target_quaternion = normalize(quaternion)
-            self._command_received_at = self._monotonic() - age_sec
+            if not self._command_received:
+                self._limited_position = position
+                self._limited_quaternion = normalize(quaternion)
+            self._command_received_at = self._monotonic()
+            self._command_received = True
             self._condition.notify_all()
             return True
 
@@ -192,30 +244,38 @@ class CartesianPoseSession:
             if not expired:
                 if self._move_in_progress:
                     return None
-                dt = max(0.0, now - self._last_tick_at)
-                self._last_tick_at = now
-                position = _limit_position(
-                    self._limited_position,
-                    self._target_position,
-                    self._goal.max_linear_speed_mps * dt,
-                )
-                quaternion = _limit_quaternion(
-                    self._limited_quaternion,
-                    self._target_quaternion,
-                    self._goal.max_angular_speed_radps * dt,
-                )
+                if not self._command_received or self._commanded_joints is None:
+                    return None
                 self._move_in_progress = True
                 goal = self._goal
+                position = self._target_position
+                quaternion = self._target_quaternion
+                seed = list(self._commanded_joints)
+                # A stalled tick must not turn into one large unplanned step.
+                dt = min(max(now - self._last_tick_at, 0.0), 2.0 * goal.control_period_ms / 1000.0)
+                self._last_tick_at = now
         if expired:
             return self._stop_and_join(PoseTerminalState.WATCHDOG_STOP, "pose command watchdog expired")
+        command = seed
         try:
-            status = int(self.adapter.movep([*position, *quaternion], goal.follow, goal.trajectory_mode, goal.radio))
+            solution = self._solve_ik(position, quaternion, seed)
+            if solution is not None:
+                command = step_towards(
+                    seed, solution, self.settings.pose_max_joint_speed_dps * dt
+                )
+            # IK failure (singularity / unreachable) re-sends the previous
+            # target, which holds the arm and keeps the passthrough stream alive.
+            status = int(
+                self.adapter.movej_canfd(command, goal.follow, goal.trajectory_mode, goal.radio)
+            )
         except Exception:
             status = -1
         with self._condition:
             self._move_in_progress = False
             if not self._running or self._goal is not goal:
                 return self._result
+            if status == 0:
+                self._commanded_joints = command
             self._limited_position = position
             self._limited_quaternion = quaternion
             self._last_api2_status = status
@@ -223,6 +283,101 @@ class CartesianPoseSession:
         if status != 0:
             return self._stop_and_join(PoseTerminalState.ABORTED, "Cartesian pose command failed", api2_status=status)
         return None
+
+    def _read_current_joints(self) -> list[float] | None:
+        try:
+            state = self.adapter.get_state()
+        except Exception:
+            return None
+        if getattr(state, "error_code", -1) != 0:
+            return None
+        return _valid_joints(getattr(state, "joint_degrees", None))
+
+    def _solve_ik(
+        self,
+        position: tuple[float, float, float],
+        quaternion: tuple[float, float, float, float],
+        seed_joint_degrees: list[float],
+    ) -> list[float] | None:
+        """Solve IK toward the target, seeded from the last commanded joints.
+
+        Seeding from the command instead of reading the arm every tick keeps the
+        solution on the current branch and spares one controller round trip per
+        tick. Returns ``None`` on failure; the caller then holds the arm.
+        """
+        if self._ik_solver is not None and self._custom_ik_matches_sdk(seed_joint_degrees):
+            try:
+                joints = self._ik_solver.solve(
+                    position, quaternion, seed_joint_degrees=seed_joint_degrees
+                )
+            except Exception:
+                joints = None
+            solution = _valid_joints(joints) if joints is not None else None
+            if solution is None:
+                self._log_ik_failure(-1)
+            return solution
+        pose_euler = [*position, *quaternion_to_euler(quaternion)]
+        try:
+            status, joints = self.adapter.inverse_kinematics(list(seed_joint_degrees), pose_euler)
+        except Exception:
+            self._log_ik_failure(-1)
+            return None
+        solution = _valid_joints(joints) if status == 0 and joints else None
+        if solution is None:
+            self._log_ik_failure(status)
+        return solution
+
+    def _custom_ik_matches_sdk(self, joint_degrees: Sequence[float]) -> bool:
+        """Compare the custom IK's TCP with SDK FK once per session.
+
+        Both are evaluated at the same joints (the seed, which starts the session
+        at the measured joints), so any gap is a TCP definition mismatch.
+
+        The session target is expressed in the SDK FK frame (Pika Mixed anchors
+        it on get_current_pose), so a custom IK with a different tool offset
+        would move the arm by that offset. On a mismatch or a failed check the
+        session uses the SDK IK instead.
+        """
+        if self._custom_ik_verified is not None:
+            return self._custom_ik_verified
+        reason = ""
+        try:
+            status, sdk_pose = self.adapter.forward_kinematics(list(joint_degrees))
+            if status != 0 or len(sdk_pose) != 6:
+                reason = f"SDK forward kinematics failed (api2_status={status})"
+            else:
+                ik_position, ik_quaternion = self._ik_solver.forward_kinematics(list(joint_degrees))
+                sdk_quaternion = euler_to_quaternion(*sdk_pose[3:])
+                distance = math.dist(ik_position, sdk_pose[:3])
+                delta = multiply(conjugate(sdk_quaternion), normalize(ik_quaternion))
+                angle = 2.0 * math.acos(min(1.0, abs(delta[0])))
+                if distance > _TCP_MATCH_POSITION_M or angle > _TCP_MATCH_ANGLE_RAD:
+                    reason = (
+                        f"custom IK TCP differs from SDK FK by {distance * 1000.0:.1f} mm "
+                        f"and {math.degrees(angle):.2f} deg"
+                    )
+        except Exception as error:
+            reason = f"TCP check failed: {type(error).__name__}: {error}"
+        self._custom_ik_verified = not reason
+        if self._logger is not None:
+            if reason:
+                self._logger.error(
+                    f"{reason} for {self.arm_id}; using the RealMan SDK IK for this pose session"
+                )
+            else:
+                self._logger.info(f"Custom IK TCP matches SDK FK for {self.arm_id}")
+        return self._custom_ik_verified
+
+    def _log_ik_failure(self, status: int) -> None:
+        now = self._monotonic()
+        if now - self._last_ik_failure_log < 1.0:
+            return
+        self._last_ik_failure_log = now
+        if self._logger is not None:
+            self._logger.warning(
+                f"Inverse kinematics failed for {self.arm_id} "
+                f"(api2_status={status}); holding the previous joint target"
+            )
 
     def cancel(self) -> PoseResult:
         return self._stop_and_join(PoseTerminalState.CANCELED, "pose session canceled")
@@ -312,8 +467,8 @@ class CartesianPoseSession:
         if reference_name != controller:
             raise ValueError(f"reference_name must equal active verified frame {controller!r}")
         period = _positive_int(_field(goal, "control_period_ms"), "control_period_ms")
-        if period != self.settings.velocity_control_period_ms:
-            raise ValueError("control_period_ms must equal the configured control period")
+        if period > self.settings.velocity_watchdog_ms:
+            raise ValueError("control_period_ms must not exceed the configured watchdog")
         watchdog = _positive_int(_field(goal, "watchdog_ms"), "watchdog_ms")
         if watchdog > self.settings.velocity_watchdog_ms:
             raise ValueError("watchdog_ms exceeds the configured watchdog")
@@ -321,11 +476,13 @@ class CartesianPoseSession:
         angular_speed = _bounded_positive(_field(goal, "max_angular_speed_radps"), self.settings.max_angular_speed_radps, "max_angular_speed_radps")
         linear_accel = _bounded_positive(_field(goal, "max_linear_accel_mps2"), self.settings.max_linear_accel_mps2, "max_linear_accel_mps2")
         angular_accel = _bounded_positive(_field(goal, "max_angular_accel_radps2"), self.settings.max_angular_accel_radps2, "max_angular_accel_radps2")
+        velocity_percent = _percent(_field(goal, "velocity_percent"), 50, "velocity_percent")
+        blend_radius_percent = _percent(_field(goal, "blend_radius_percent"), 100, "blend_radius_percent")
         trajectory_mode = int(_field(goal, "trajectory_mode"))
         radio = int(_field(goal, "radio"))
         if trajectory_mode not in {0, 1, 2} or not 0 <= radio <= {0: 0, 1: 100, 2: 1000}[trajectory_mode]:
             raise ValueError("trajectory_mode/radio is invalid")
-        return _Goal(reference_type, reference_name, ros_frame, period, watchdog, linear_speed, angular_speed, linear_accel, angular_accel, bool(_field(goal, "follow")), trajectory_mode, radio)
+        return _Goal(reference_type, reference_name, ros_frame, period, watchdog, linear_speed, angular_speed, linear_accel, angular_accel, bool(_field(goal, "follow")), trajectory_mode, radio, velocity_percent, blend_radius_percent)
 
     def _run_loop(self) -> None:
         goal = self._goal
@@ -451,6 +608,14 @@ def _bounded_positive(value: Any, maximum: float, name: str) -> float:
     if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(float(value)) or float(value) <= 0 or float(value) > maximum:
         raise ValueError(f"{name} exceeds configured limit")
     return float(value)
+
+
+def _percent(value: Any, default: int, name: str) -> int:
+    if value is None or value == 0:
+        return default
+    if isinstance(value, bool) or not isinstance(value, int) or not 1 <= value <= 100:
+        raise ValueError(f"{name} must be an integer in 1..100")
+    return value
 
 
 def _limit_position(current: Sequence[float], target: Sequence[float], maximum_delta: float) -> tuple[float, float, float]:

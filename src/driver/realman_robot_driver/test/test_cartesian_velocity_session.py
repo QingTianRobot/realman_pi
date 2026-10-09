@@ -131,6 +131,7 @@ def settings(
     max_angular_speed_radps=2.0,
     hard_max_linear_speed_mps=None,
     hard_max_angular_speed_radps=None,
+    hard_max_angular_accel_radps2=None,
     velocity_watchdog_ms=100,
 ) -> MotionSettings:
     return MotionSettings(
@@ -145,6 +146,7 @@ def settings(
         stop_timeout_sec=1.0,
         hard_max_linear_speed_mps=hard_max_linear_speed_mps,
         hard_max_angular_speed_radps=hard_max_angular_speed_radps,
+        hard_max_angular_accel_radps2=hard_max_angular_accel_radps2,
     )
 
 
@@ -194,6 +196,7 @@ def make_session(
     session_settings=None,
     ros_clock=None,
     active_frame=None,
+    prepare_reference=None,
 ):
     kwargs = {}
     if ros_clock is not None:
@@ -205,6 +208,7 @@ def make_session(
         settings=session_settings or settings(),
         active_frame=active_frame
         or (lambda reference_type: ("tcpgrip", "l/tool/tcpgrip")),
+        prepare_reference=prepare_reference,
         motion_allowed=lambda arm: True,
         monotonic=clock or Clock(),
         **kwargs,
@@ -358,18 +362,21 @@ def test_shutdown_repeats_real_status_while_stop_failure_lockout_is_active():
     assert session.result.api2_status == 23
 
 
-def test_stamp_is_required_and_stale_commands_cannot_refresh_watchdog():
+def test_stamp_is_required_and_wall_clock_age_is_ignored():
     ros_clock = RosClock(1_000_000_000)
     session = make_session(ros_clock=ros_clock)
     assert session.start(valid_goal()) is True
 
     with pytest.raises(ValueError, match="stamp"):
         session.accept_command(twist("l/tool/tcpgrip"))
+    # A stamp far in the past (wall-clock age > watchdog) is no longer rejected:
+    # cross-host clocks are not synchronized, so staleness is enforced by the
+    # monotonic watchdog instead.
     ros_clock.value_ns = 1_200_000_000
-    with pytest.raises(ValueError, match="stale"):
-        session.accept_command(
-            twist("l/tool/tcpgrip", linear=(0.1, 0.0, 0.0), stamp_ns=1_000_000_000)
-        )
+    assert session.accept_command(
+        twist("l/tool/tcpgrip", linear=(0.1, 0.0, 0.0), stamp_ns=1_000_000_000)
+    )
+    assert session._command[:3] == (0.1, 0.0, 0.0)
     session.shutdown()
 
 
@@ -377,13 +384,20 @@ def test_previous_session_stamp_is_rejected_after_new_session_epoch():
     ros_clock = RosClock(1_000_000_000)
     session = make_session(ros_clock=ros_clock)
     assert session.start(valid_goal()) is True
+    # First accepted command seeds the session epoch (lazy-init).
+    assert session.accept_command(
+        twist("l/tool/tcpgrip", linear=(0.1, 0.0, 0.0), stamp_ns=1_000_000_000)
+    )
     session.shutdown()
 
     ros_clock.value_ns = 2_000_000_000
     assert session.start(valid_goal()) is True
+    assert session.accept_command(
+        twist("l/tool/tcpgrip", linear=(0.1, 0.0, 0.0), stamp_ns=1_500_000_000)
+    )
     with pytest.raises(ValueError, match="session"):
         session.accept_command(
-            twist("l/tool/tcpgrip", linear=(0.1, 0.0, 0.0), stamp_ns=1_900_000_000)
+            twist("l/tool/tcpgrip", linear=(0.1, 0.0, 0.0), stamp_ns=1_400_000_000)
         )
     session.shutdown()
 
@@ -392,6 +406,9 @@ def test_older_stamp_cannot_overwrite_newer_command_in_same_session():
     ros_clock = RosClock(1_000_000_000)
     session = make_session(ros_clock=ros_clock)
     assert session.start(valid_goal()) is True
+    assert session.accept_command(
+        twist("l/tool/tcpgrip", linear=(0.1, 0.0, 0.0), stamp_ns=1_000_000_000)
+    )
     ros_clock.value_ns = 1_020_000_000
     assert session.accept_command(
         twist("l/tool/tcpgrip", linear=(0.2, 0.0, 0.0), stamp_ns=1_020_000_000)
@@ -991,6 +1008,24 @@ def test_session_goal_can_request_pika_speed_up_to_the_driver_hard_limit():
     session.shutdown()
 
 
+def test_session_goal_can_request_pika_angular_acceleration_up_to_hard_limit():
+    session = make_session(
+        session_settings=settings(
+            max_angular_speed_radps=0.25,
+            hard_max_angular_speed_radps=2.0,
+            hard_max_angular_accel_radps2=4.0,
+        )
+    )
+
+    assert session.start(
+        valid_goal(
+            max_angular_speed_radps=2.0,
+            max_angular_accel_radps2=4.0,
+        )
+    ) is True
+    session.shutdown()
+
+
 def test_zero_goal_speed_uses_the_standard_session_limit():
     session = make_session(
         session_settings=settings(
@@ -1069,6 +1104,29 @@ def test_direct_start_validates_frame_only_after_claiming_ownership_and_releases
 
     assert observed_busy == [True]
     assert ownership.is_busy("l") is False
+
+
+def test_start_prepares_requested_work_reference_before_validating_active_frame():
+    active = {ReferenceType.WORK: ("cell", "l/work/cell")}
+    prepared = []
+
+    def prepare_reference(reference_type, reference_name):
+        prepared.append((reference_type, reference_name))
+        active[ReferenceType.WORK] = ("pikabase", "l/work/pikabase")
+
+    session = make_session(
+        active_frame=active,
+        prepare_reference=prepare_reference,
+    )
+
+    assert session.start(
+        valid_goal(
+            reference_type=int(ReferenceType.WORK),
+            reference_name="pikabase",
+        )
+    ) is True
+    assert prepared == [(ReferenceType.WORK, "pikabase")]
+    session.shutdown()
 
 
 def test_concurrent_goal_callbacks_reserve_exactly_one_request():

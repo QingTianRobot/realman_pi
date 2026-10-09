@@ -32,16 +32,25 @@ def test_router_requires_active_keyboard_and_verified_default_work():
     assert "goal.max_angular_speed_radps = profile.max_angular_speed_radps" in source
 
 
-def test_keyboard_velocity_goal_uses_low_follow_for_web_timing():
+def test_keyboard_velocity_goal_uses_high_follow_at_ten_milliseconds():
     from keyboard_control_router import KeyboardControlRouter, _ArmProfile
 
-    profile = _ArmProfile("cell", "r/work/cell", 20, 100, 0.05, 0.25, 0.1, 0.5)
+    profile = _ArmProfile("cell", "r/work/cell", 10, 100, 0.05, 0.25, 0.1, 0.5)
 
     goal = KeyboardControlRouter._goal(profile)
 
-    assert goal.follow is False
-    assert goal.control_period_ms == 20
+    assert goal.follow is True
+    assert goal.control_period_ms == 10
     assert goal.watchdog_ms == 100
+
+
+def test_keyboard_velocity_goal_rejects_period_above_high_follow_limit():
+    from keyboard_control_router import KeyboardControlRouter, _ArmProfile
+
+    profile = _ArmProfile("cell", "r/work/cell", 11, 100, 0.05, 0.25, 0.1, 0.5)
+
+    with pytest.raises(ValueError, match="high-follow requires control_period_ms <= 10"):
+        KeyboardControlRouter._goal(profile)
 
 
 def test_router_stops_on_timeout_mode_loss_and_shutdown():
@@ -64,15 +73,15 @@ def test_profile_parser_resolves_only_l_r_default_work_and_motion_limits():
             "r|default_work|1|cell|r/work/cell",
         ],
         [
-            "l|20|100|0.05|0.25|0.1|0.5|10|2",
+            "l|10|100|0.05|0.25|0.1|0.5|10|2",
             "m|20|100|0.05|0.25|0.1|0.5|10|2",
-            "r|20|100|0.05|0.25|0.1|0.5|10|2",
+            "r|10|100|0.05|0.25|0.1|0.5|10|2",
         ],
     )
     assert set(profiles) == {"l", "r"}
     assert profiles["l"].reference_name == "cell"
     assert profiles["l"].frame_id == "l/work/cell"
-    assert profiles["r"].control_period_ms == 20
+    assert profiles["r"].control_period_ms == 10
 
 
 def test_profile_parser_rejects_base_or_missing_default_work():
@@ -98,7 +107,7 @@ def test_late_router_receives_latest_transient_coordinate_state():
     rclpy.init(args=[
         "--ros-args",
         "-p", "coordinate_references:=['l|default_work|1|cell|l/work/cell','r|default_work|1|cell|r/work/cell']",
-        "-p", "cartesian_velocity_profiles:=['l|20|100|0.05|0.25|0.1|0.5|10|2','r|20|100|0.05|0.25|0.1|0.5|10|2']",
+        "-p", "cartesian_velocity_profiles:=['l|10|100|0.05|0.25|0.1|0.5|10|2','r|10|100|0.05|0.25|0.1|0.5|10|2']",
     ])
     peer = Node("coordinate_state_replay_peer")
     publisher = peer.create_publisher(
@@ -158,6 +167,7 @@ def test_late_accepted_goal_is_cancelled_after_mode_loss():
     router = KeyboardControlRouter.__new__(KeyboardControlRouter)
     router.mode = ""
     router.input_timeout_ms = 150
+    router.input_lost_ms = 1000
     router.get_logger = lambda: SimpleNamespace(error=lambda _message: None, warning=lambda _message: None, info=lambda _message: None)
     profile = _ArmProfile("cell", "l/work/cell", 20, 100, 0.05, 0.25, 0.1, 0.5)
     pending = Future()
@@ -173,6 +183,56 @@ def test_late_accepted_goal_is_cancelled_after_mode_loss():
     assert state.goal_handle is None
 
 
+def test_keyboard_goal_acceptance_immediately_publishes_cached_work_command():
+    """The first driver command must be sent only after WORK selection succeeds."""
+    from geometry_msgs.msg import TwistStamped
+    from builtin_interfaces.msg import Time
+    from keyboard_control_router import KeyboardControlRouter, _ArmProfile, _ArmState
+
+    published = []
+    result_future = Future()
+    handle = SimpleNamespace(
+        accepted=True,
+        get_result_async=lambda: result_future,
+    )
+    pending = Future()
+    pending.set_result(handle)
+    profile = _ArmProfile("cell", "l/work/cell", 20, 100, 0.05, 0.25, 0.1, 0.5)
+    command = TwistStamped()
+    command.header.frame_id = profile.frame_id
+    command.twist.linear.y = 0.03
+    state = _ArmState(
+        SimpleNamespace(),
+        SimpleNamespace(publish=published.append),
+        profile,
+        pending_goal=pending,
+        latest_command=command,
+        last_input_at=time.monotonic(),
+        work_available=True,
+    )
+    router = KeyboardControlRouter.__new__(KeyboardControlRouter)
+    router.dry_run = False
+    router.mode = "keyboard"
+    router.input_timeout_ms = 150
+    router.input_lost_ms = 1000
+    router._arms = {"l": state}
+    router.get_logger = lambda: SimpleNamespace(
+        info=lambda _message: None,
+        warning=lambda _message: None,
+        error=lambda _message: None,
+    )
+    router.get_clock = lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(to_msg=lambda: Time(sec=12, nanosec=34))
+    )
+
+    router._goal_response("l", pending)
+
+    assert len(published) == 1
+    assert published[0].header.frame_id == "l/work/cell"
+    assert published[0].header.stamp.sec == 12
+    assert published[0].twist.linear.y == 0.03
+
+
 @pytest.fixture
 def router_node(request):
     from keyboard_control_router import KeyboardControlRouter
@@ -180,7 +240,7 @@ def router_node(request):
     from rclpy.node import Node
 
     rclpy.init(args=["--ros-args", "-p", "coordinate_references:=['l|default_work|1|cell|l/work/cell','r|default_work|1|cell|r/work/cell']",
-                     "-p", "cartesian_velocity_profiles:=['l|20|100|0.05|0.25|0.1|0.5|10|2','r|20|100|0.05|0.25|0.1|0.5|10|2']"])
+                     "-p", "cartesian_velocity_profiles:=['l|10|100|0.05|0.25|0.1|0.5|10|2','r|10|100|0.05|0.25|0.1|0.5|10|2']"])
     request.addfinalizer(rclpy.shutdown)
     router = KeyboardControlRouter()
     request.addfinalizer(lambda: Node.destroy_node(router))
@@ -335,3 +395,236 @@ def test_gripper_topics_route_real_dds_messages_and_suppress_dry_run(router_node
         executor.remove_node(router)
         executor.shutdown()
         peer.destroy_node()
+
+
+# ------------------------------------------------------- session lifecycle
+
+
+def _session_router(*, goal_active=True, linear_x=0.0, input_ago=0.0, sends=None):
+    """A router with one l arm, faking only the ROS transports.
+
+    ``sends`` collects goals if the router asks for a session; when it is None
+    the action client has no send_goal_async, so an unexpected second session
+    request fails the test.
+    """
+    from builtin_interfaces.msg import Time
+    from geometry_msgs.msg import TwistStamped
+    from keyboard_control_router import KeyboardControlRouter, _ArmProfile, _ArmState
+
+    published = []
+    cancelled = []
+
+    def cancel_goal_async():
+        cancelled.append(True)
+        return Future()
+
+    if sends is None:
+        client = SimpleNamespace()
+    else:
+        def send_goal_async(goal):
+            sends.append(goal)
+            return Future()
+        client = SimpleNamespace(server_is_ready=lambda: True, send_goal_async=send_goal_async)
+
+    profile = _ArmProfile("cell", "l/work/cell", 10, 100, 0.05, 0.25, 0.1, 0.5)
+    command = TwistStamped()
+    command.header.frame_id = profile.frame_id
+    command.twist.linear.x = linear_x
+    state = _ArmState(
+        client,
+        SimpleNamespace(publish=published.append),
+        profile,
+        goal_handle=SimpleNamespace(cancel_goal_async=cancel_goal_async) if goal_active else None,
+        latest_command=command,
+        last_input_at=time.monotonic() - input_ago,
+        work_available=True,
+    )
+    router = KeyboardControlRouter.__new__(KeyboardControlRouter)
+    router.dry_run = False
+    router.mode = "keyboard"
+    router.input_timeout_ms = 150
+    router.input_lost_ms = 1000
+    router._arms = {"l": state}
+    router.get_logger = lambda: SimpleNamespace(
+        info=lambda _m: None, warning=lambda _m: None, error=lambda _m: None
+    )
+    router.get_clock = lambda: SimpleNamespace(
+        now=lambda: SimpleNamespace(to_msg=lambda: Time(sec=1, nanosec=0))
+    )
+    return router, state, published, cancelled
+
+
+def _twist(frame_id, linear_x=0.0, linear_y=0.0):
+    from geometry_msgs.msg import TwistStamped
+
+    message = TwistStamped()
+    message.header.frame_id = frame_id
+    message.twist.linear.x = linear_x
+    message.twist.linear.y = linear_y
+    return message
+
+
+def _is_zero(message):
+    twist = message.twist
+    return all(
+        value == 0.0
+        for value in (
+            twist.linear.x, twist.linear.y, twist.linear.z,
+            twist.angular.x, twist.angular.y, twist.angular.z,
+        )
+    )
+
+
+def test_the_session_opens_before_any_key_is_pressed():
+    # An empty heartbeat in keyboard mode is enough: the first press must not
+    # wait for goal acceptance, WORK selection and movev initialisation.
+    sends = []
+    router, state, published, cancelled = _session_router(
+        goal_active=False, linear_x=0.0, sends=sends
+    )
+    router._reconcile_arm("l", time.monotonic())
+    assert len(sends) == 1
+    assert sends[0].follow is True
+
+
+def test_releasing_the_keys_keeps_the_session_and_streams_zero():
+    router, state, published, cancelled = _session_router(linear_x=0.02)
+    router._velocity_input("l", _twist("l/work/cell"))
+    router._reconcile_arm("l", time.monotonic())
+    assert cancelled == []
+    assert published and _is_zero(published[-1])
+
+
+def test_a_long_pause_does_not_end_the_session():
+    # There is no idle timeout: however long the keys stay up, a browser that
+    # keeps sending empty heartbeats holds the session open.
+    router, state, published, cancelled = _session_router(linear_x=0.0)
+    state.sessions_started = 1
+    for _ in range(50):
+        router._velocity_input("l", _twist("l/work/cell"))
+        router._reconcile_arm("l", time.monotonic())
+    assert cancelled == []
+    assert state.goal_handle is not None
+    assert all(_is_zero(message) for message in published)
+
+
+def test_changing_direction_only_changes_the_command():
+    router, state, published, cancelled = _session_router(linear_x=0.02)
+    router._velocity_input("l", _twist("l/work/cell", 0.0, -0.02))
+    router._reconcile_arm("l", time.monotonic())
+    router._velocity_input("l", _twist("l/work/cell", -0.02, 0.0))
+    router._reconcile_arm("l", time.monotonic())
+    assert cancelled == []
+    assert published[-2].twist.linear.y == pytest.approx(-0.02)
+    assert published[-1].twist.linear.x == pytest.approx(-0.02)
+
+
+def test_a_late_heartbeat_stops_the_arm_but_keeps_the_session():
+    # 150 ms < age < 1 s: a network stall, not a lost browser.
+    router, state, published, cancelled = _session_router(linear_x=0.02, input_ago=0.4)
+    router._reconcile_arm("l", time.monotonic())
+    assert cancelled == []
+    assert published and _is_zero(published[-1])
+
+
+def test_a_lost_browser_releases_the_session():
+    router, state, published, cancelled = _session_router(linear_x=0.02, input_ago=1.5)
+    router._reconcile_arm("l", time.monotonic())
+    assert cancelled == [True]
+    assert published and _is_zero(published[-1])
+
+
+def test_invalid_input_still_stops_the_arm_immediately():
+    router, state, published, cancelled = _session_router(linear_x=0.02)
+    router._velocity_input("l", _twist("l/work/wrong"))
+    assert cancelled == [True]
+
+
+def test_a_rejected_session_is_retried_after_a_pause_not_every_tick():
+    sends = []
+    router, state, published, cancelled = _session_router(goal_active=False, sends=sends)
+    pending = Future()
+    pending.set_result(SimpleNamespace(accepted=False))
+    state.pending_goal = pending
+    router._goal_response("l", pending)
+    router._reconcile_arm("l", time.monotonic())
+    assert sends == []
+    state.retry_after = 0.0
+    router._reconcile_arm("l", time.monotonic())
+    assert len(sends) == 1
+
+
+def test_a_driver_ended_session_is_reopened_after_a_pause():
+    from realman_msgs.action import CartesianVelocity
+
+    sends = []
+    router, state, published, cancelled = _session_router(sends=sends)
+    finished = Future()
+    finished.set_result(SimpleNamespace(result=SimpleNamespace(
+        success=False,
+        message="velocity command watchdog expired",
+        terminal_state=CartesianVelocity.Result.WATCHDOG_STOP,
+    )))
+    router._goal_finished("l", finished)
+    assert state.goal_handle is None
+    router._reconcile_arm("l", time.monotonic())
+    assert sends == []
+    assert state.retry_after > time.monotonic()
+
+
+def test_restarts_within_one_activation_are_counted_and_reset_on_reactivation():
+    from realman_msgs.msg import InputModeState
+
+    router, state, published, cancelled = _session_router(goal_active=False)
+    warnings = []
+    router.get_logger = lambda: SimpleNamespace(
+        info=lambda _m: None, warning=warnings.append, error=lambda _m: None
+    )
+    for _ in range(2):
+        pending = Future()
+        pending.set_result(SimpleNamespace(
+            accepted=True, get_result_async=lambda: Future()
+        ))
+        state.pending_goal = pending
+        router._goal_response("l", pending)
+    assert state.sessions_started == 2
+    assert any("restart #1" in message for message in warnings)
+    router._mode_epoch = 1
+    router._mode_request_id = 1
+    router._mode_state(InputModeState(active_mode="keyboard", phase=InputModeState.ACTIVE,
+                                     epoch=2, request_id=2))
+    assert state.sessions_started == 0
+
+
+def test_input_lost_must_exceed_the_input_timeout():
+    from keyboard_control_router import KeyboardControlRouter
+    import rclpy
+
+    rclpy.init(args=[
+        "--ros-args",
+        "-p", "coordinate_references:=['l|default_work|1|cell|l/work/cell','r|default_work|1|cell|r/work/cell']",
+        "-p", "cartesian_velocity_profiles:=['l|10|100|0.05|0.25|0.1|0.5|10|2','r|10|100|0.05|0.25|0.1|0.5|10|2']",
+        "-p", "input_timeout_ms:=150",
+        "-p", "input_lost_ms:=100",
+    ])
+    try:
+        with pytest.raises(ValueError, match="input_lost_ms must exceed"):
+            KeyboardControlRouter()
+    finally:
+        rclpy.shutdown()
+
+
+def test_a_period_above_high_follow_is_refused_at_startup_not_on_first_press():
+    from keyboard_control_router import KeyboardControlRouter
+    import rclpy
+
+    rclpy.init(args=[
+        "--ros-args",
+        "-p", "coordinate_references:=['l|default_work|1|cell|l/work/cell','r|default_work|1|cell|r/work/cell']",
+        "-p", "cartesian_velocity_profiles:=['l|20|100|0.05|0.25|0.1|0.5|10|2','r|20|100|0.05|0.25|0.1|0.5|10|2']",
+    ])
+    try:
+        with pytest.raises(ValueError, match="high-follow requires"):
+            KeyboardControlRouter()
+    finally:
+        rclpy.shutdown()

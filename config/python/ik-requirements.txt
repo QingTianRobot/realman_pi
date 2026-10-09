@@ -1,0 +1,9 @@
+# Custom inverse kinematics for PikaAnyArm-style position teleop.
+# CasADi builds the symbolic optimization and bundles the IPOPT solver.
+#
+# Pinocchio is intentionally NOT listed. The PyPI package named "pinocchio" is
+# an unrelated nose plugin, and the real library ("pin") ships without the
+# `pinocchio.casadi` bindings that ik_solver.py imports. Until a build with
+# those bindings is provided (e.g. conda-forge or a source build), the driver
+# logs a warning and falls back to the RealMan SDK IK.
+casadi

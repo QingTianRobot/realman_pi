@@ -1,0 +1,528 @@
+<?xml version="1.0" encoding="utf-8"?>
+<!-- This URDF was automatically created by SolidWorks to URDF Exporter! Originally created by Stephen Brawner (brawner@gmail.com) 
+     Commit Version: 1.6.0-4-g7f85cfe  Build Version: 1.6.7995.38578
+     For more information, please see http://wiki.ros.org/sw_urdf_exporter -->
+<!-- Changingtek AG2F90-C gripper (ctag2f90c), vendored from the manufacturer's
+     crt_ctag2f90c_gripper_visualization ROS package (BSD, ROS-Industrial; see
+     meshes/ctag2f90c/LICENSE). Local changes: mesh URIs point at this package, and the
+     limits of the mimic joints are widened from 0..0 to the range their mimic
+     multiplier produces so URDF loaders that clamp mimic values do not freeze them.
+     Left_1_Joint (0..1 rad) is the only driving joint; all other moving joints mimic it. -->
+<robot
+  name="crt_ctag2f90c">
+  <link
+    name="base_link">
+    <inertial>
+      <origin
+        xyz="-3.03438666080911E-05 0.000164444408216863 0.0415501043891079"
+        rpy="0 0 0" />
+      <mass
+        value="0.310178508912656" />
+      <inertia
+        ixx="0.00040397991189065"
+        ixy="-7.67071063755645E-08"
+        ixz="-4.8034277809683E-08"
+        iyy="0.000296362927485086"
+        iyz="2.37380471524215E-07"
+        izz="0.000212128802807125" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/base_link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/base_link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <link
+    name="Left_1_Link">
+    <inertial>
+      <origin
+        xyz="-9.28680668570248E-19 0.030539291459314 -0.00258607700367608"
+        rpy="0 0 0" />
+      <mass
+        value="0.0143082868091883" />
+      <inertia
+        ixx="3.13950698375337E-06"
+        ixy="-1.52080132643556E-23"
+        ixz="6.91547980628378E-24"
+        iyy="1.68765500467537E-07"
+        iyz="2.43038947287639E-07"
+        izz="3.01776984338656E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Left_1_Link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Left_1_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Left_1_Joint"
+    type="revolute">
+    <origin
+      xyz="0 -0.030141 0.090147"
+      rpy="1.5708 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="Left_1_Link" />
+    <axis
+      xyz="1 0 0" />
+    <limit
+      lower="0"
+      upper="1"
+      effort="2"
+      velocity="1000" />
+  </joint>
+  <link
+    name="Left_Support_Link">
+    <inertial>
+      <origin
+        xyz="1.07295456192646E-10 0.0151471213709181 -0.00881425056266623"
+        rpy="0 0 0" />
+      <mass
+        value="0.0119105654270604" />
+      <inertia
+        ixx="2.29855296669515E-06"
+        ixy="3.52760274833619E-14"
+        ixz="-4.83144274478498E-15"
+        iyy="5.66006626841495E-07"
+        iyz="6.96553660909406E-07"
+        izz="2.02879732303575E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Left_Support_Link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Left_Support_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Left_Support_Joint"
+    type="revolute">
+    <origin
+      xyz="0 0.054804 -0.0046413"
+      rpy="0 0 0" />
+    <parent
+      link="Left_1_Link" />
+    <child
+      link="Left_Support_Link" />
+    <axis
+      xyz="-1 0 0" />
+    <limit
+      lower="0"
+      upper="1"
+      effort="0"
+      velocity="0" />
+    <mimic
+      joint="Left_1_Joint"
+      multiplier="1"
+      offset="0" />
+  </joint>
+  <link
+    name="Left_Pad_Link">
+    <inertial>
+      <origin
+        xyz="-6.16776893223986E-16 0.00343564941025751 0.00291131442785867"
+        rpy="0 0 0" />
+      <mass
+        value="0.028983148227117" />
+      <inertia
+        ixx="8.29474554098334E-06"
+        ixy="-1.89994985124349E-21"
+        ixz="-8.69955081865361E-20"
+        iyy="1.40034188740669E-06"
+        iyz="-3.29382180279853E-08"
+        izz="9.56613605828327E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Left_Pad_Link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Left_Pad_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Left_Pad_Joint"
+    type="fixed">
+    <origin
+      xyz="0 0.0515 -0.02425"
+      rpy="0 0 0" />
+    <parent
+      link="Left_Support_Link" />
+    <child
+      link="Left_Pad_Link" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+  <link
+    name="Left_2_Link">
+    <inertial>
+      <origin
+        xyz="-9.64455187140789E-18 0.0335366982007761 -0.00283988029070185"
+        rpy="0 0 0" />
+      <mass
+        value="0.0171972364497243" />
+      <inertia
+        ixx="3.15392174079445E-06"
+        ixy="-7.65628822295208E-24"
+        ixz="6.80209220247533E-22"
+        iyy="2.70902150111044E-07"
+        iyz="2.43381350518246E-07"
+        izz="3.123872461982E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Left_2_Link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Left_2_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Left_2_Joint"
+    type="revolute">
+    <origin
+      xyz="0 -0.016 0.107"
+      rpy="1.5708 0 0" />
+    <parent
+      link="base_link" />
+    <child
+      link="Left_2_Link" />
+    <axis
+      xyz="-1 0 0" />
+    <limit
+      lower="-1"
+      upper="0"
+      effort="0"
+      velocity="0" />
+    <mimic
+      joint="Left_1_Joint"
+      multiplier="-1"
+      offset="0" />
+  </joint>
+    <link
+    name="Right_1_Link">
+    <inertial>
+      <origin
+        xyz="-2.12745571485216E-18 0.0305392914593139 -0.00258607700367608"
+        rpy="0 0 0" />
+      <mass
+        value="0.0143082868091883" />
+      <inertia
+        ixx="3.13950698375336E-06"
+        ixy="4.14549273924351E-23"
+        ixz="2.42807909542875E-24"
+        iyy="1.68765500467537E-07"
+        iyz="2.43038947287639E-07"
+        izz="3.01776984338656E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Right_1_Link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Right_1_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Right_1_Joint"
+    type="revolute">
+    <origin
+      xyz="0 0.030141 0.090147"
+      rpy="1.5708 0 3.1416" />
+    <parent
+      link="base_link" />
+    <child
+      link="Right_1_Link" />
+    <axis
+      xyz="1 0 0" />
+    <limit
+      lower="0"
+      upper="1"
+      effort="2"
+      velocity="1000" />
+    <mimic
+      joint="Left_1_Joint"
+      multiplier="1"
+      offset="0" />
+  </joint>
+  <link
+    name="Right_2_Link">
+    <inertial>
+      <origin
+        xyz="1.23073470736957E-17 0.033536698200776 -0.00283988029070186"
+        rpy="0 0 0" />
+      <mass
+        value="0.0171972364497243" />
+      <inertia
+        ixx="3.15392174079445E-06"
+        ixy="3.99539849237237E-23"
+        ixz="-6.94115744711518E-22"
+        iyy="2.70902150111044E-07"
+        iyz="2.43381350518245E-07"
+        izz="3.123872461982E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Right_2_Link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Right_2_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Right_2_Joint"
+    type="revolute">
+    <origin
+      xyz="0 0.016 0.107"
+      rpy="1.5708 0 3.1416" />
+    <parent
+      link="base_link" />
+    <child
+      link="Right_2_Link" />
+    <axis
+      xyz="1 0 0" />
+    <limit
+      lower="0"
+      upper="1"
+      effort="0"
+      velocity="0" />
+    <mimic
+      joint="Right_1_Joint"
+      multiplier="1"
+      offset="0" />
+  </joint>
+
+  <link
+    name="Right_Support_Link">
+    <inertial>
+      <origin
+        xyz="1.07297655713615E-10 0.0151471213709181 -0.00881425056266621"
+        rpy="0 0 0" />
+      <mass
+        value="0.0119105654270604" />
+      <inertia
+        ixx="2.29855296669515E-06"
+        ixy="3.52761223264558E-14"
+        ixz="-4.83149321191609E-15"
+        iyy="5.66006626841495E-07"
+        iyz="6.96553660909407E-07"
+        izz="2.02879732303575E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Right_Support_Link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Right_Support_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Right_Support_Joint"
+    type="revolute">
+    <origin
+      xyz="0 0.054804 -0.0046413"
+      rpy="0 0 0" />
+    <parent
+      link="Right_1_Link" />
+    <child
+      link="Right_Support_Link" />
+    <axis
+      xyz="-1 0 0" />
+    <limit
+      lower="0"
+      upper="1"
+      effort="0"
+      velocity="0" />
+    <mimic
+      joint="Right_1_Joint"
+      multiplier="1"
+      offset="0" />
+  </joint>
+  <link
+    name="Right_Pad_Link">
+    <inertial>
+      <origin
+        xyz="-1.50137447913012E-19 0.00343564941025742 0.00291131442785872"
+        rpy="0 0 0" />
+      <mass
+        value="0.028983148227117" />
+      <inertia
+        ixx="8.29474554098334E-06"
+        ixy="-8.85123816078709E-22"
+        ixz="6.94922146887372E-24"
+        iyy="1.40034188740669E-06"
+        iyz="-3.29382180281129E-08"
+        izz="9.56613605828327E-06" />
+    </inertial>
+    <visual>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Right_Pad_Link.STL" />
+      </geometry>
+      <material
+        name="">
+        <color
+          rgba="0.898039215686275 0.917647058823529 0.929411764705882 1" />
+      </material>
+    </visual>
+    <collision>
+      <origin
+        xyz="0 0 0"
+        rpy="0 0 0" />
+      <geometry>
+        <mesh
+          filename="package://rm65_description/meshes/ctag2f90c/Right_Pad_Link.STL" />
+      </geometry>
+    </collision>
+  </link>
+  <joint
+    name="Right_Pad_Joint"
+    type="fixed">
+    <origin
+      xyz="0 0.0515 -0.02425"
+      rpy="0 0 0" />
+    <parent
+      link="Right_Support_Link" />
+    <child
+      link="Right_Pad_Link" />
+    <axis
+      xyz="0 0 0" />
+  </joint>
+</robot>

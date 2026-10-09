@@ -26,7 +26,7 @@
 
 ## 配置
 
-权威配置是 [`config/ros/gripper.yaml`](../../../../config/ros/gripper.yaml)，容器映射在 [`config/docker/compose.yaml`](../../../../config/docker/compose.yaml)。不要在源码包或生产主机维护第二份夹爪 YAML。
+权威配置是 [`config/ros/gripper.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/gripper.yaml)，容器映射在 [`config/docker/compose.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/docker/compose.yaml)。不要在源码包或生产主机维护第二份夹爪 YAML。
 
 | ROS 名称 | 宿主机和容器内稳定路径 | `slave_id` | 打开/闭合位置 |
 | --- | --- | --- | --- |
@@ -73,9 +73,22 @@ Web `percentage` 的范围是 `0.0..1.0`：`0` 映射到 `close_position`，`1` 
 将百分比转换为配置中的设备位置并把最新目标交给总线线程，不等待夹爪到位反馈；同一总线上的新目标会覆盖尚未处理的旧目标。
 它不改变同步 `/<name>/percentage` service 的等待和结果语义。
 
+总线线程对连续目标优先：收到新目标会立即唤醒总线线程，且目标持续到达（间隔小于 `command_quiet_s`=0.2 s）时，
+反馈轮询降为每 `streaming_poll_interval`=0.5 s 一次（两者均可在 `gripper.yaml` 的 bus 下配置），避免 Modbus 半双工上的反馈读取（每次 3 个事务）挤占目标写入，
+造成夹爪运动顿挫。
+
+连续目标还受 `min_command_interval_s`（默认 0.25 s）和 `command_deadband`（默认 0.01，占开合行程的比例）限制：
+每次触发都会让夹爪重新规划运动，实测（右夹爪，24 mm 行程）单次服务阶跃 0.81 s 到位；连续 topic 以 20 Hz 触发几乎不动（+9 单位），8 Hz 约 3.4 s，4 Hz 约 1.3 s，因此同一夹爪的触发间隔不小于该值，
+间隔内到达的新目标只保留最新一个，到期后发送，保证最终位置一定下发；与上次目标差异小于死区的目标被丢弃，
+但恰好等于全开或全闭位置的目标不会被丢弃。目标停止后恢复按 `poll_hz` 轮询，因此 `position` 等反馈话题在连续控制期间更新较慢。
+
 行为树的 Pika router 订阅 `/pika/l/gripper_percentage`、`/pika/r/gripper_percentage`，在
-`pikaposition` 或 `pikavelocity` 为 `ACTIVE` 时分别转发到 `gripper_left`、`gripper_right` 的 command topic。
+`pikaposition`、`pikavelocity` 或 `pikamixed` 为 `ACTIVE` 时分别转发到 `gripper_left`、`gripper_right` 的 command topic。
 Pika 不控制 `gripper_mid`；切出 Pika 模式后不会自动发送开、合或停止命令。
+
+夹爪端限频为 4 Hz（`min_command_interval_s: 0.25`）。生产端 PikaRemote 的 `pika_realman_mapper`
+同样按 `gripper_publish_rate_hz`（默认 4.0）发布 `/pika/{l,r}/gripper_percentage`，其余位姿和速度话题仍按
+`command_rate_hz` 发布；两端保持一致，避免夹爪端丢弃中间目标。router 不再需要额外限速。
 
 ## 键盘双夹爪全开／全闭
 
@@ -111,6 +124,28 @@ WORK 不可用不影响健康夹爪；一侧离线／报警也不影响另一侧
 无硬件回归覆盖配置／协议、单次边沿、控制权、健康门控、epoch/时效、dry-run 和桌面／移动端键盘交互：
 在 Humble 环境运行 Web keyboard/input-mode、BT keyboard router 和 gripper_ros2 的 pytest；网页执行
 `cd website && npm run test:web-control`。真实夹爪验收须另行确认工作区安全和运动授权。
+
+## AG2F90-C 夹爪模型
+
+AG2F90-C（厂商包名 `ctag2f90c`）是 Changingtek 的两指平行夹爪。厂商 ROS 可视化包已收进描述包，和机械臂模型放在一起：
+
+| 内容 | 位置 |
+| --- | --- |
+| URDF | `src/rm65_description/urdf/ctag2f90c.urdf` |
+| 9 个 STL 网格 | `src/rm65_description/meshes/ctag2f90c/` |
+| 厂商许可（BSD，ROS-Industrial） | `src/rm65_description/meshes/ctag2f90c/LICENSE` |
+| 安装位置（挂在哪一节、位姿）与开合端点 | [`config/ros/end_effectors.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/end_effectors.yaml) |
+
+**模型结构**：`base_link` 是安装面，指尖朝 `+z`，指垫在 `base_link` 前方约 `0.18–0.20 m` 处。**只有 `Left_1_Joint`（`0..1 rad`）是驱动关节**，其余可动关节（`Left_Support`、`Left_2`、`Right_1`、`Right_2`、`Right_Support`）都用 `mimic` 跟随它；两个指垫是固定关节。对 URDF 做正运动学，`0 rad` 时指垫间距约 `2.5 mm`（闭合），`1 rad` 时约 `99 mm`（全开，指垫坐标系中心间距）。
+
+**对厂商文件的两处本地修改**（URDF 头部注释里也有说明）：
+
+1. 网格 URI 改为 `package://rm65_description/meshes/ctag2f90c/…`；
+2. 厂商导出的 mimic 关节限位是 `0..0`，会让按限位截断 mimic 值的加载器（网页 `urdf-loader`、MoveIt）把手指冻住，已改为 mimic 倍率实际产生的范围（`Left_2_Joint` 为 `-1..0`，其余为 `0..1`）。`robot_state_publisher` 不受影响。
+
+**与真实夹爪的对应**：厂商示例脚本把驱动关节线性映射为设备位置 `p = (1 − q) × 9000`（`q` 为 `Left_1_Joint` 弧度，单位 `0.01 mm`），即全开 `q=1` ↔ 位置 `0`，闭合 `q=0` ↔ 位置 `9000`。其寄存器（使能 `0x0100`、位置 `0x0102/0x0103`、速度 `0x0104`、力 `0x0105`、加减速 `0x0106/0x0107`、触发 `0x0108`）与本项目 `rtu_psdk.py` 一致，波特率 `115200`、从站 `1`。本项目的 `percentage` 约定（`0` 闭合、`1` 张开）与模型的 `q`（`0` 闭合、`1` 全开）方向相同。三台机械臂末端的夹爪均为 AG2F90-C，因此网页场景给 `l/m/r` 各挂一个。注意 `gripper.yaml` 中三个夹爪的行程并不一致：`gripper_mid` 是 `0..9000`（与上面的 `9000` 映射吻合），`gripper_right` 是 `4000..12000`，`gripper_left` 是 `400..949`。若三者确为同一型号，这些差异要么是单位不同，要么是配置有误，请现场核对后再改 `gripper.yaml`，本页和网页场景不依赖这些数值。
+
+**当前集成范围**：模型用于两处——文档站首页的三维场景（每臂 `link_6` 末端各挂一个，带开合滑块，见[三臂配置驱动可视化](./three-arm-visualization#末端夹爪与关节滑块)），以及 `:8765` Web 控制页的 URDF 视图（随真实夹爪的位置反馈实时开合，见[WebSocket 浏览器控制](./realman-web-control#夹爪模型与实时开合反馈)）。驱动侧的 `robot_state_publisher` / RViz 的 TF 树**还没有**包含夹爪，真实夹爪仍通过 `gripper_manager` 驱动；要在 RViz 里显示并跟随真实开合，需要另外把 `/<name>/position` 转成夹爪关节状态，这是后续工作。安装位姿 `xyz` / `rpy` 的默认值是"夹爪 `base_link` 原点沿 `link_6` 的 `+z` 方向偏移 `0.014 m`（夹爪底座网格在自身原点后方延伸 `14 mm`，这样底面刚好贴在法兰面上而不与腕部重叠）、无转角"，如果现场有转接板或绕轴向转了角度，请按实物修改 `end_effectors.yaml`。
 
 ## WebSocket 生命周期
 

@@ -6,25 +6,41 @@ robots:
     # Action deadline in seconds; bounds a stalled operation without an infinite wait.
     default_timeout_sec: 10.0
     # Cartesian translation speed in m/s; low by default for shared-cell commissioning.
-    max_linear_speed_mps: 0.05
+    max_linear_speed_mps: 0.15
     # Cartesian rotation speed in rad/s; keep below abrupt wrist motion limits.
     max_angular_speed_radps: 0.25
-    # Absolute per-session driver ceiling; only the Pika router requests 1.0 m/s.
+    # Absolute per-session driver ceiling; Pika may request up to 2 rad/s.
     hard_max_linear_speed_mps: 1.0
-    # No elevated angular profile is enabled; all clients remain capped at 0.25 rad/s.
-    hard_max_angular_speed_radps: 0.25
-    # Velocity command interval in ms; controller commands must be refreshed regularly.
-    velocity_control_period_ms: 20
+    # Ordinary clients remain at 0.25 rad/s; Pika's explicit 2 rad/s profile uses this ceiling.
+    hard_max_angular_speed_radps: 2.0
+    # 10 ms is the fastest period RealMan high-follow accepts, and the keyboard
+    # router requires it: a production A/B found 20 ms low-follow produced
+    # non-commanded-axis transients at session start. The driver accepts only
+    # this one period per arm, so Pika velocity (follow=false) refreshes at
+    # 10 ms too; the driver worker and input routers all derive it from here.
+    velocity_control_period_ms: 10
     # Stop velocity control after this many ms without a refresh for fail-safe behavior.
     velocity_watchdog_ms: 100
     # Cartesian translation acceleration in m/s^2; limits payload impulse.
     max_linear_accel_mps2: 0.10
     # Cartesian rotation acceleration in rad/s^2; limits wrist impulse.
     max_angular_accel_radps2: 0.50
+    # Pika sessions may explicitly request a faster angular ramp; ordinary
+    # keyboard, Web, and BT sessions remain capped by the standard value above.
+    hard_max_angular_accel_radps2: 4.0
+    # Pika velocity sessions may request a faster linear ramp; ordinary keyboard, Web,
+    # and BT sessions stay capped by max_linear_accel_mps2 above. Without this the
+    # 0.10 m/s^2 ramp made a 1 s hand motion move the arm only ~5 cm.
+    hard_max_linear_accel_mps2: 2.0
     # Per-joint terminal tolerance in degrees; success requires every joint to converge.
     joint_goal_tolerance_deg: 0.25
     # Maximum seconds to wait for one commanded stop to be reported complete.
     stop_timeout_sec: 2.0
+    # Cartesian pose sessions (Pika position and mixed modes) stream IK joint
+    # targets by CANFD passthrough, which executes each target unplanned. The
+    # driver moves every joint toward the IK solution by at most this many
+    # degrees per second, so a distant or jumping target is approached smoothly.
+    pose_max_joint_speed_dps: 30.0
   m:
     # Action deadline in seconds; bounds a stalled operation without an infinite wait.
     default_timeout_sec: 10.0
@@ -35,7 +51,8 @@ robots:
     # Middle-arm streaming keeps the standard limit; Pika never controls this arm.
     hard_max_linear_speed_mps: 0.05
     hard_max_angular_speed_radps: 0.25
-    # Velocity command interval in ms; controller commands must be refreshed regularly.
+    # Each driver validates Action goals against its own arm's period, so the
+    # middle arm, which has no keyboard or Pika stream, keeps the 20 ms period.
     velocity_control_period_ms: 20
     # Stop velocity control after this many ms without a refresh for fail-safe behavior.
     velocity_watchdog_ms: 100
@@ -43,30 +60,53 @@ robots:
     max_linear_accel_mps2: 0.10
     # Cartesian rotation acceleration in rad/s^2; limits wrist impulse.
     max_angular_accel_radps2: 0.50
+    # The middle arm has no Pika stream, so its hard ceiling stays conservative.
+    hard_max_angular_accel_radps2: 0.50
     # Per-joint terminal tolerance in degrees; success requires every joint to converge.
     joint_goal_tolerance_deg: 0.25
     # Maximum seconds to wait for one commanded stop to be reported complete.
     stop_timeout_sec: 2.0
+    # Cartesian pose sessions (Pika position and mixed modes) stream IK joint
+    # targets by CANFD passthrough, which executes each target unplanned. The
+    # driver moves every joint toward the IK solution by at most this many
+    # degrees per second, so a distant or jumping target is approached smoothly.
+    pose_max_joint_speed_dps: 30.0
   r:
     # Action deadline in seconds; bounds a stalled operation without an infinite wait.
     default_timeout_sec: 10.0
     # Cartesian translation speed in m/s; low by default for shared-cell commissioning.
-    max_linear_speed_mps: 0.05
+    max_linear_speed_mps: 0.15
     # Cartesian rotation speed in rad/s; keep below abrupt wrist motion limits.
     max_angular_speed_radps: 0.25
-    # Absolute per-session driver ceiling; only the Pika router requests 1.0 m/s.
+    # Absolute per-session driver ceiling; Pika may request up to 2 rad/s.
     hard_max_linear_speed_mps: 1.0
-    # No elevated angular profile is enabled; all clients remain capped at 0.25 rad/s.
-    hard_max_angular_speed_radps: 0.25
-    # Velocity command interval in ms; controller commands must be refreshed regularly.
-    velocity_control_period_ms: 20
+    # Ordinary clients remain at 0.25 rad/s; Pika's explicit 2 rad/s profile uses this ceiling.
+    hard_max_angular_speed_radps: 2.0
+    # 10 ms is the fastest period RealMan high-follow accepts, and the keyboard
+    # router requires it: a production A/B found 20 ms low-follow produced
+    # non-commanded-axis transients at session start. The driver accepts only
+    # this one period per arm, so Pika velocity (follow=false) refreshes at
+    # 10 ms too; the driver worker and input routers all derive it from here.
+    velocity_control_period_ms: 10
     # Stop velocity control after this many ms without a refresh for fail-safe behavior.
     velocity_watchdog_ms: 100
     # Cartesian translation acceleration in m/s^2; limits payload impulse.
     max_linear_accel_mps2: 0.10
     # Cartesian rotation acceleration in rad/s^2; limits wrist impulse.
     max_angular_accel_radps2: 0.50
+    # Pika sessions may explicitly request a faster angular ramp; ordinary
+    # keyboard, Web, and BT sessions remain capped by the standard value above.
+    hard_max_angular_accel_radps2: 4.0
+    # Pika velocity sessions may request a faster linear ramp; ordinary keyboard, Web,
+    # and BT sessions stay capped by max_linear_accel_mps2 above. Without this the
+    # 0.10 m/s^2 ramp made a 1 s hand motion move the arm only ~5 cm.
+    hard_max_linear_accel_mps2: 2.0
     # Per-joint terminal tolerance in degrees; success requires every joint to converge.
     joint_goal_tolerance_deg: 0.25
     # Maximum seconds to wait for one commanded stop to be reported complete.
     stop_timeout_sec: 2.0
+    # Cartesian pose sessions (Pika position and mixed modes) stream IK joint
+    # targets by CANFD passthrough, which executes each target unplanned. The
+    # driver moves every joint toward the IK solution by at most this many
+    # degrees per second, so a distant or jumping target is approached smoothly.
+    pose_max_joint_speed_dps: 30.0

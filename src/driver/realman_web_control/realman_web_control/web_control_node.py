@@ -107,6 +107,10 @@ class WebControlNode(Node):
         self.declare_parameter("description_root", description_root)
         self.declare_parameter("static_root", f"{package_share}/static")
         self.declare_parameter(
+            "end_effectors_config_file",
+            str(config_root / "ros" / "end_effectors.yaml"),
+        )
+        self.declare_parameter(
             "gripper_config_file",
             str(config_root / "ros" / "gripper.yaml"),
         )
@@ -138,6 +142,7 @@ class WebControlNode(Node):
             coordinates_file,
             keyboard_file,
             description_root,
+            self._parameter("end_effectors_config_file"),
         )
         self._robots = {robot["id"]: robot for robot in self._manifest["robots"]}
         self._keyboard_config = load_keyboard_control_config(

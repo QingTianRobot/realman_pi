@@ -14,6 +14,7 @@ x-realman-common: &realman-common
       UBUNTU_PORTS_APT_MIRROR: ${UBUNTU_PORTS_APT_MIRROR:-https://mirrors.aliyun.com/ubuntu-ports}
       ROS2_APT_MIRROR: ${ROS2_APT_MIRROR:-https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu}
       PYPI_INDEX_URL: ${PYPI_INDEX_URL:-https://pypi.tuna.tsinghua.edu.cn/simple}
+      NPM_REGISTRY: ${NPM_REGISTRY:-https://registry.npmmirror.com}
   network_mode: host
   ipc: host
   environment:
@@ -27,8 +28,9 @@ x-realman-common: &realman-common
     FASTDDS_BUILTIN_TRANSPORTS: ${FASTDDS_BUILTIN_TRANSPORTS:-UDPv4}
     REALMAN_CONFIG_ROOT: /opt/rm65_ws/config
     REALMAN_LOG_ROOT: /opt/rm65_ws/logs
-    # `./rm65 bt` opts in through docker compose exec. Keep normal production
-    # bringup free of behavior-tree processes and any real-motion side effect.
+    # `./rm65 bt` opts in by exec'ing into an already-running bringup container.
+    # Keep normal production bringup free of behavior-tree processes and any
+    # real-motion side effect.
     BT_AUTOSTART: ${BT_AUTOSTART:-false}
     REALMAN_BT_ARM_ID: ${REALMAN_BT_ARM_ID:-r}
     REALMAN_BT_DRY_RUN: ${REALMAN_BT_DRY_RUN:-true}

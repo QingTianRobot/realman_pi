@@ -7,7 +7,8 @@ description: 使用 vendored BehaviorTree.CPP-X 执行单臂或三臂同步分�
 
 realman_bt 提供一个独立的 ROS 2 C++ 执行器，用于从 XML 加载行为树并执行关节移动。它参考
 third_party/behavior_tree_cpp 的 NodeFactory -> XmlParser -> Tree::tickOnce() 链路，注册
-Sequence、MoveJ、ThreeArmMoveJ 和 CartesianVelocityForDuration，不替换生产 ./rm65 up 编排，也不会
+Sequence、MoveJ、ThreeArmMoveJ、CartesianVelocityForDuration 和输入路由所需的
+PrepareKeyboardWork 等节点，不替换生产 ./rm65 up 编排，也不会
 自动启动机械臂驱动。
 
 同一执行器还支持持久输入路由树，但不与本页的 one-shot MoveJ 生命周期混淆：`./rm65 up` 后另行执行
@@ -110,7 +111,7 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt tool_x
 调用方应选择已配置的工具坐标或工作坐标。
 
 节点在 Action 接受后通过独立 ROS timer 按配置周期发布 `TwistStamped`，因此命令刷新频率不依赖行为树
-tick 频率。publisher 使用 `KEEP_LAST=1`、`VOLATILE`，DDS lifespan 等于配置 watchdog；每条消息使用
+tick 频率。publisher 使用 `KEEP_LAST=1`、`VOLATILE`（不设置 DDS lifespan，driver 以单调 watchdog 判断新鲜度）；每条消息使用
 ROS clock 的新时间戳以及映射后的 `frame_id`。时长到达后节点进入停止等待状态：立即请求取消开放式
 `CartesianVelocity` session，并继续按控制周期刷新零速度，直到 Action 返回终态或超过配置的停止超时。
 这样取消处理即使超过一个 watchdog 周期，也不会把正常的定时停止误报为
@@ -128,7 +129,14 @@ response 或 accepted goal 移交给 executor 的 cancellation drain。`pending_
 
 ## 键盘连续速度 session
 
-`control.xml` 的 `keyboard` 分支不直接发送机器人命令；`KeyboardVelocityInput` 只是长驻控制权叶节点，
+`control.xml` 的 `keyboard` 分支先运行 `PrepareKeyboardWork`。该异步叶节点从统一坐标注册表解析 l/r 的
+`default_work`，并通过 `/l|r/coordinates/select_work` 要求 driver 选择和读回验证对应 WORK；只有两路
+响应都成功且 `active_name` 精确匹配配置后，后续 `ActivateInputMode` 才能发布 `ACTIVE/keyboard`。
+服务不可用时节点保持 `RUNNING`，由全局模式切换超时负责进入 `FAILED`；服务拒绝或读回不匹配会立即
+记录失败并触发安全回退 `none`。`dry_run=true` 只验证 l/r 默认引用存在且类型为 WORK，不创建 service
+client，也不修改控制器坐标。
+
+该分支自身不直接发送机器人速度命令；`KeyboardVelocityInput` 只是长驻控制权叶节点，
 同一 `control_router.launch.py` 中的 `keyboard_control_router` 分别拥有 l/r 两个连续速度 session：
 
 ```text
@@ -140,7 +148,9 @@ response 或 accepted goal 移交给 executor 的 cancellation drain。`pending_
 ```
 
 l/r 的 pending goal、accepted handle、最新命令、输入时间和取消状态完全独立，m 不参与键盘控制。
-某一侧按键为空、WORK 不可用或超时，只发布并取消该侧的 session；另一侧可以继续按自己的按键和状态运行。
+某一侧按键为空时只向该侧刷新零速度，session 保持；session 在进入键盘模式时即建立，只在离开模式、WORK
+不可用、非法输入或浏览器心跳丢失超过 `input_lost_ms` 时取消（见 [行为树控制权](./behavior-tree-control)）。
+另一侧可以继续按自己的按键和状态运行。
 
 每个 Goal 固定使用 `CartesianVelocity.Goal.WORK`，名称和 frame ID 必须匹配该臂已验证的
 `default_work`。BASE 不允许，WORK 不可用时也不会自动改用 TOOL。模式离开 keyboard、坐标失配、按键释放、
@@ -149,12 +159,16 @@ l/r 的 pending goal、accepted handle、最新命令、输入时间和取消状
 
 失效保护分两层：浏览器按 `config/ros/keyboard_control.yaml` 每 `50 ms` 发送完整按键集合，keyboard router
 在 `150 ms` 没有新输入时释放该臂；已接受 session 的 driver command 按
-`config/ros/realman_motion.yaml` 的 `20 ms` 周期刷新，而 driver 自身 `100 ms` watchdog 对命令流再次检查。
+`config/ros/realman_motion.yaml` 的 `10 ms` 周期刷新，而 driver 自身 `100 ms` watchdog 对命令流再次检查。
 前一层处理 Web/网络停更，后一层处理 router 到 driver 的刷新中断。`dry_run=true` 时 router 仍执行目录、
 WORK、frame、速度上限和 timeout 校验，但不发送 Action Goal，也不向 driver command topic 发布消息。
-键盘 Action goal 显式携带普通会话上限 `0.05 m/s`；Pika 单独申请 `1.0 m/s` 不会改变键盘值。
-键盘 Goal 使用 `follow=false` 的低跟随模式；RealMan SDK 的高跟随模式要求稳定的 `<=10 ms` 透传，不能
-仅因需要更快响应就把键盘会话改成高跟随。
+键盘 Action goal 显式携带普通会话上限（`realman_motion.yaml` 的 `max_linear_speed_mps`，l/r 当前 `0.15 m/s`；按键实际速度再乘以 `linear_speed_fraction`，约 `0.02 m/s`）；Pika 单独申请 `1.0 m/s` 不会改变键盘值。
+键盘 Goal 使用 `follow=true` 的高跟随模式；router 把浏览器 `50 ms` ingress 缓存为最新命令，driver
+固定周期 worker 以 `10 ms` 刷新 SDK。Goal 构造会拒绝大于 `10 ms` 的 profile，避免未来误配为不满足
+高跟随时序的组合。旧的 `20 ms + follow=false` 在生产 A 组测试中出现启动跨轴瞬态，不再用于键盘控制。
+Action 接受（也即 driver 已完成目标 WORK 选择与读回验证）后，keyboard router 会立即把缓存的最新按键速度
+重新打当前 ROS 时间戳并发布；因此 session 的首条 driver command 不会在坐标切换完成前发送，也不需要等待
+下一个浏览器输入周期。
 进入 `ACTIVE/keyboard` 时，:8765 Web 页还会把 l/r 已验证 WORK 的红/绿/蓝 XYZ 轴绘制在 URDF 场景中；
 模式离开或坐标失配即隐藏。
 
@@ -190,12 +204,19 @@ Web control 的“命令与实际末端速度”区域会同时显示左右臂�
 坐标是 `l/base_link`、`r/base_link`，桥接后只进入 `/pika/l/cartesian_velocity` 和
 `/pika/r/cartesian_velocity`；夹爪记录只进入 `/pika/l/gripper_percentage` 和
 `/pika/r/gripper_percentage`，类型为 `std_msgs/msg/Float32`，归一化值 `0` 表示闭合、`1` 表示打开。
-RealMan 速度模式没有 BASE 初始化选项，所以 replay 在执行前选择 identity WORK aliases
-`l/work/pikabase`、`r/work/pikabase`，并将速度消息 frame 改为相应的 `l/work/pikabase`、
-`r/work/pikabase`。Pika router 的 `pika_velocity.work_reference` 固定引用这组单位 WORK；键盘与默认
-WORK 会话继续使用 `l/work/cell`、`r/work/cell`，其它客户端保留各自的配置引用。
+RealMan 速度模式没有 BASE 初始化选项，所以 replay 将速度消息 frame 改为 identity WORK aliases
+`l/work/pikabase`、`r/work/pikabase`。Pika router 的 `pika_velocity.work_reference` 固定引用这组单位 WORK；
+driver 在收到 Pika 速度 Goal 时会自动选择并读回验证对应的 `pikabase`，键盘与默认 WORK 会话继续使用
+`l/work/cell`、`r/work/cell`，其它客户端保留各自的配置引用。
 
-Replay 的 Pika 会话上限为 `1.0 m/s` 线速度和 `0.25 rad/s` 角速度。桥接器按 bag 顺序发布新时间戳，
+Pika router 不直接按 ingress 到达时刻透传。它保存最新有效速度，并按每臂 `10 ms` control period 向 driver
+刷新带新时间戳的命令。权威配置 `config/ros/pika_config.yaml` 中，`pika_velocity.stale_ms=200` 以内重发最新
+速度以吸收 DDS 抖动，超过后改发零速度但保留 session；`pika_velocity.input_timeout_ms=3000` 以上才取消 session。
+driver 的 `100 ms` watchdog 保持不变，继续防护 router 进程停止或 command topic 中断。
+
+Replay 的 Pika 会话上限为 `1.0 m/s` 线速度和 `2.0 rad/s` 角速度。角速度超限时按三轴向量模长
+等比例缩放并保留方向；生产 Pika Goal 使用 `4.0 rad/s²` 的专用角加速度斜坡，普通速度会话仍为
+`0.5 rad/s²`。桥接器按 bag 顺序发布新时间戳，
 执行尝试选择 WORK 之后，结束或任何运行时安全条件失败时先向左右速度 ingress 发送零向量，等待超过
 `100 ms` watchdog，再将已选择或可能已选择的 WORK 恢复为 `cell`（`l/work/cell`、`r/work/cell`）。
 只读预检不会改坐标或发送 cleanup 零速；夹爪的 `0` 是闭合指令，不能用作停止。
@@ -212,7 +233,7 @@ Replay 的 Pika 会话上限为 `1.0 m/s` 线速度和 `0.25 rad/s` 角速度。
 该 replay 使用内部 `ReplayNode.spin_once()` 处理 ROS 回调和时间调度；这是组合 API 的实现细节，
 操作者只使用独立项目的 `replay.sh` 命令，不直接运行 Python 节点。
 项目部署到独立的 `$HOME/pika_realman_replay`，不复用生产 Compose project，也不重启生产容器。
-模式与帧配置见 [Pika rosbag replay](./behavior-tree-control#pika-rosbag-replay)，
+模式与帧配置见 [Pika rosbag replay](./pika-teleop#pika-rosbag-replay)，
 接口映射见 [ingress 与坐标桥接](./realman-action-development#pika-rosbag-replay-的-ingress-与坐标桥接)。
 
 ## 构建
@@ -239,15 +260,18 @@ Replay 的 Pika 会话上限为 `1.0 m/s` 线速度和 `0.25 rad/s` 角速度。
 
     docker compose build realman_bringup_remote
 
-然后按顺序执行：
-
-终端 1：
+然后在一个终端启动 `realman_bringup_remote` 容器，例如统一入口：
 
     ./rm65 up
 
-终端 2：
+也可以直接使用 `docker compose up -d realman_bringup_remote`，或使用前台的
+`rm65_docker_bringup_remote`。另一个终端执行：
 
     ./rm65 bt r
+
+行为树入口按 Docker 的 `com.docker.compose.service=realman_bringup_remote` 标签查找正在运行的容器，
+不依赖 `./rm65 up` 的相机/Web 生命周期，也不依赖当前 Compose project 名称。没有容器或同时有多个
+匹配容器时，入口会拒绝启动；这避免把真实控制请求发到不明确的 bringup 实例。
 
 三臂分阶段树使用：
 
@@ -428,10 +452,13 @@ MoveJ goal。可用以下命令确认 Action 图和执行状态：
 ## 重复执行与 UNKNOWN 排查
 
 “同一棵树执行两次”本身不能确定失败原因。先保留本次归档的 `events`、终态计数及 driver 日志，区分
-入口拒绝（如退出码 `73`）和 Action 返回的失败。在项目根目录、实际 driver 容器中执行只读检查：
+入口拒绝（如退出码 `73`）和 Action 返回的失败。在项目根目录，先用与行为树入口相同的标签确认只存在一个实际 driver 容器，再执行只读检查：
 
 ```bash
-docker compose exec -T realman_bringup_remote bash -lc '
+docker ps \
+  --filter label=com.docker.compose.service=realman_bringup_remote \
+  --filter status=running --format '{{.ID}}'
+docker exec <bringup-container-id> bash -lc '
   source /opt/ros/humble/setup.bash
   source /opt/rm65_ws/install/setup.bash
   printenv ROS_DOMAIN_ID
@@ -462,15 +489,18 @@ driver 却随后记录 `SUCCEEDED`。这时不能把 UNKNOWN 改成成功，也�
 ```bash
 unset ROS_DOMAIN_ID
 ./rm65 up
-docker compose exec -T realman_bringup_remote printenv ROS_DOMAIN_ID
+docker ps --filter label=com.docker.compose.service=realman_bringup_remote \
+  --filter status=running --format '{{.ID}}'
+docker exec <bringup-container-id> printenv ROS_DOMAIN_ID
 docker compose exec -T realman_web_control printenv ROS_DOMAIN_ID
 ```
 
 `unset` 用于清除可能覆盖 `.env` 的旧 shell 导出值；使用 Zsh helper 的终端还需重新
 `source functions.zsh`。仅 `docker compose restart` 不会更新已有容器的环境。核对 `.env` 中该项、
 Compose 展开值及实际容器/宿主机相机进程环境，并让远程查看器同步；若 CLI 发现结果疑似缓存，刷新目标
-domain 的 ROS 2 daemon 后重查。容器名由 Compose 生成，需要 ID 时用
-`docker compose ps -q realman_bringup_remote` 获取。
+domain 的 ROS 2 daemon 后重查。行为树入口使用 Docker service label 获取 bringup 容器 ID；如果需要手动执行
+`docker exec`，复用上面的 `docker ps --filter label=com.docker.compose.service=realman_bringup_remote` 查询，
+并确认结果只有一行。
 
 最后重查每路恰好一个 Action Server、连接反馈和 `REALMAN_BT_DRY_RUN=true ./rm65 bt three`。
 dry-run 成功证明参数与执行退出链路通过，不证明真实运动成功。
@@ -490,7 +520,7 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ、定时笛卡尔速度，以及 `control.xml` 的
 `SelectInputMode`、`InputModeGuard`、`ActivateInputMode`、`KeyboardVelocityInput` 和其它输入叶。切入
 `keyboard` 时，ReactiveFallback 激活键盘叶并由独立 router 管理 l/r WORK 速度 session；切入
-`pikaposition` 或 `pikavelocity` 时，输入树会先执行一次有状态 Sequence 中的三臂 ThreeArmMoveJ 默认姿态准备动作，
+`pikaposition`、`pikavelocity` 或 `pikamixed` 时，输入树会先执行一次有状态 Sequence 中的三臂 ThreeArmMoveJ 默认姿态准备动作，
 成功后才激活 Pika；该姿态来自 `config/ros/pika_config.yaml` 的 `joint_degrees`，由
 `control_router.launch.py` 启动时注入，不是每次切换时动态读取。Pika 分支保持运行时，
 准备动作不会被 ReactiveSequence 的后续 tick 重复执行；离开后重新进入才会再次准备。新增节点仍须在执行器中显式
@@ -526,6 +556,7 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 ```bash
 ./rm65 bt-test all
 bash scripts/test_bt_launcher.sh
+bash tests/test_bt_bringup_detection.sh
 bash scripts/test_bt_container_entrypoint.sh
 python3 -m unittest discover -s tests -p test_bt_runtime_result.py
 ```

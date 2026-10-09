@@ -115,10 +115,18 @@ test("authoritative layout retains the calibrated production arrangement", async
 test("documentation routes render", async ({ page }) => {
   for (const route of [
     "guide/getting-started",
+    "guide/cameras",
+    "guide/remote-rviz",
     "models/",
+    "architecture/overview",
     "architecture/tf-tree",
     "architecture/package",
+    "reference/ros-interfaces",
+    "reference/configuration",
+    "reference/cli-and-env",
     "development/",
+    "development/testing",
+    "development/pika-teleop",
     "development/documentation-workflow",
     "development/startup-entries",
     "development/camera-calibration",
@@ -134,6 +142,7 @@ test("documentation routes render", async ({ page }) => {
     "development/behavior-tree-motion",
     "development/gripper-control",
     "development/policy-bridge",
+    "development/velocity-follow-test",
     "troubleshooting",
   ]) {
     await page.goto(route);
@@ -179,6 +188,169 @@ test("repository tree preserves its multiline structure", async ({ page }) => {
 
   const lines = (await repositoryTree.textContent())?.trim().split("\n") ?? [];
   expect(lines.length).toBeGreaterThan(20);
-  expect(lines).toContain("├── config/");
+  // Lines carry trailing descriptions, so match the tree branch prefix.
+  expect(lines.some((line) => line.startsWith("├── config/"))).toBe(true);
   expect(lines).toContain("└── README.md");
+});
+
+test("mermaid diagrams render inside the column and open a zoom viewer", async ({ page }) => {
+  await page.goto("architecture/overview");
+  const diagram = page.locator(".vp-doc .mermaid svg").first();
+  await expect(diagram).toBeVisible({ timeout: 15_000 });
+
+  const layout = await page.evaluate(() => ({
+    documentWidth: document.documentElement.scrollWidth,
+    viewportWidth: window.innerWidth,
+    frames: [...document.querySelectorAll<HTMLElement>(".vp-doc .mermaid")].map((frame) => {
+      const rect = frame.getBoundingClientRect();
+      return { right: rect.right, height: rect.height };
+    }),
+  }));
+  expect(layout.documentWidth).toBeLessThanOrEqual(layout.viewportWidth + 1);
+  for (const frame of layout.frames) {
+    expect(frame.right).toBeLessThanOrEqual(layout.viewportWidth + 1);
+    // Tall diagrams scroll inside their frame instead of stretching the page.
+    expect(frame.height).toBeLessThanOrEqual(page.viewportSize()!.height * 0.7 + 60);
+  }
+
+  await page.locator(".vp-doc .mermaid").first().click();
+  const viewer = page.locator(".mermaid-lightbox");
+  await expect(viewer).toBeVisible();
+  await expect(viewer.locator("svg")).toBeVisible();
+  await page.keyboard.press("Escape");
+  await expect(viewer).toHaveCount(0);
+});
+
+test("joint sliders take over an arm from the idle animation", async ({ page }) => {
+  await page.goto("./");
+  await expect(page.locator(".robot-viewport")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+  const toggle = page.locator(".joint-panel-toggle");
+  if ((await toggle.textContent())?.includes("关节控制") && !(await toggle.textContent())?.includes("收起")) await toggle.click();
+
+  const first = page.locator(".joint-row input").first();
+  await expect(first).toBeVisible();
+  await first.fill("45");
+  await expect(page.locator(".joint-arms button.active small")).toHaveText("手动");
+
+  // The manual arm holds the user's value while the animation keeps running for the others.
+  await page.waitForTimeout(1200);
+  await expect(first).toHaveValue("45");
+  await expect(page.locator(".joint-auto")).toBeEnabled();
+  await page.locator(".joint-auto").click();
+  await expect(page.locator(".joint-arms button.active small")).toHaveText("自动");
+});
+
+test("mermaid labels stay inside their boxes and the SVG", async ({ page }) => {
+  for (const route of [
+    "architecture/overview",
+    "development/behavior-tree-control",
+    "development/pika-teleop",
+    "development/realman-driver-scaffold",
+  ]) {
+    await page.goto(route);
+    await expect(page.locator(".vp-doc .mermaid svg").first()).toBeVisible({ timeout: 15_000 });
+    await page.waitForTimeout(800);
+
+    const problems = await page.evaluate(() => {
+      const found: string[] = [];
+      document.querySelectorAll<SVGSVGElement>(".vp-doc .mermaid svg").forEach((svg, index) => {
+        const svgBox = svg.getBoundingClientRect();
+        svg.querySelectorAll<SVGElement>("foreignObject, text").forEach((element) => {
+          const label = element.textContent?.trim() ?? "";
+          if (!label) return;
+          const range = document.createRange();
+          range.selectNodeContents(
+            element.tagName === "foreignObject"
+              ? element.querySelector("span.nodeLabel, span.edgeLabel, p, span") ?? element
+              : element,
+          );
+          const text = range.getBoundingClientRect();
+          if (!text.width) return;
+          // 2px tolerance for sub-pixel layout.
+          if (text.left < svgBox.left - 2 || text.right > svgBox.right + 2 || text.top < svgBox.top - 2 || text.bottom > svgBox.bottom + 2) {
+            found.push(`diagram ${index}: "${label.slice(0, 30)}" leaves the SVG`);
+          }
+          const node = element.closest("g.node");
+          // Nodes contain several shapes (some empty); the node outline is the largest one.
+          const shapes = node ? [...node.querySelectorAll("rect, polygon, path, circle, ellipse")] : [];
+          const outline = shapes
+            .map((shape) => shape.getBoundingClientRect())
+            .sort((a, b) => b.width * b.height - a.width * a.height)[0];
+          if (node && outline) {
+            const box = outline;
+            if (text.width > box.width + 2 || text.height > box.height + 2) {
+              found.push(`diagram ${index}: "${label.slice(0, 30)}" is larger than its node`);
+            }
+          }
+        });
+      });
+      return found;
+    });
+    expect(problems, `${route}: ${problems.join("; ")}`).toEqual([]);
+  }
+});
+
+test("grippers are mounted on every arm and the gripper slider takes over", async ({ page, request }) => {
+  const layout = await (await request.get("three-robots.json")).json();
+  const source = YAML.parse(await readFile(resolve("../config/ros/end_effectors.yaml"), "utf8"));
+  for (const id of ["l", "m", "r"]) {
+    expect(layout.endEffectors[id].gripper).toBe(source.mounts[id].gripper);
+    expect(layout.endEffectors[id].parentLink).toBe(source.mounts[id].parent_link);
+  }
+  expect(layout.grippers.ctag2f90c.drivingJoint).toBe(source.grippers.ctag2f90c.driving_joint);
+
+  await page.goto("./");
+  await expect(page.locator(".robot-viewport")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+  // 3 arms plus 3 grippers (9 meshes each) must all be loaded before the scene reports ready.
+  const meshes = Number(await page.locator(".robot-viewport").getAttribute("data-mesh-count"));
+  expect(meshes).toBeGreaterThanOrEqual(21 + 27);
+
+  const toggle = page.locator(".joint-panel-toggle");
+  if (!(await toggle.textContent())?.includes("收起")) await toggle.click();
+  const slider = page.locator(".gripper-row input");
+  await expect(slider).toBeVisible();
+  await slider.fill("0");
+  await expect(page.locator(".joint-arms button.active small")).toHaveText("手动");
+  await page.waitForTimeout(1200);
+  await expect(slider).toHaveValue("0");
+});
+
+test("the joint panel never covers the arms or the headline", async ({ page }) => {
+  await page.goto("./");
+  await expect(page.locator(".robot-viewport")).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+  const viewport = page.viewportSize()!;
+  // The scene is only fitted around the panel on wide screens; phones stack it differently.
+  test.skip(viewport.width <= 900, "fitted layout is for wide screens");
+
+  const toggle = page.locator(".joint-panel-toggle");
+  if (!(await toggle.textContent())?.includes("收起")) await toggle.click();
+  await page.waitForTimeout(600);
+
+  // Sample opaque canvas pixels over a few seconds of the idle animation.
+  const result = await page.evaluate(async () => {
+    const canvas = document.querySelector<HTMLCanvasElement>(".robot-viewport canvas")!;
+    const gl = (canvas.getContext("webgl2") || canvas.getContext("webgl"))!;
+    const box = canvas.getBoundingClientRect();
+    const scale = box.width / canvas.width;
+    const pixels = new Uint8Array(canvas.width * canvas.height * 4);
+    let minX = Infinity;
+    let maxX = -Infinity;
+    for (let sample = 0; sample < 8; sample += 1) {
+      gl.readPixels(0, 0, canvas.width, canvas.height, gl.RGBA, gl.UNSIGNED_BYTE, pixels);
+      for (let y = 0; y < canvas.height; y += 4) {
+        for (let x = 0; x < canvas.width; x += 4) {
+          if (pixels[(y * canvas.width + x) * 4 + 3] > 200) {
+            minX = Math.min(minX, x);
+            maxX = Math.max(maxX, x);
+          }
+        }
+      }
+      await new Promise((resolve) => setTimeout(resolve, 700));
+    }
+    const panel = document.querySelector(".joint-panel")!.getBoundingClientRect();
+    const copy = document.querySelector(".hero-copy")!.getBoundingClientRect();
+    return { left: minX * scale + box.left, right: maxX * scale + box.left, panelLeft: panel.left, copyRight: copy.right };
+  });
+  expect(result.right, "arms must end left of the panel").toBeLessThanOrEqual(result.panelLeft);
+  expect(result.left, "arms must start right of the headline column").toBeGreaterThanOrEqual(result.copyRight - 2);
 });

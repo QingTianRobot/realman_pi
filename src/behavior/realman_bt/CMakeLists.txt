@@ -48,6 +48,17 @@ target_link_libraries(move_j_nodes runtime_snapshot bt::core)
 ament_target_dependencies(move_j_nodes
   geometry_msgs rclcpp rclcpp_action realman_msgs)
 
+add_library(prepare_keyboard_work_node
+  src/prepare_keyboard_work_node.cpp)
+target_include_directories(prepare_keyboard_work_node PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(prepare_keyboard_work_node PUBLIC cxx_std_17)
+target_link_libraries(prepare_keyboard_work_node
+  input_mode move_j_nodes runtime_snapshot bt::core)
+ament_target_dependencies(prepare_keyboard_work_node
+  rclcpp realman_msgs)
+
 install(TARGETS input_mode runtime_snapshot input_mode_nodes
   EXPORT export_${PROJECT_NAME})
 install(DIRECTORY include/ DESTINATION include)
@@ -63,6 +74,7 @@ target_link_libraries(realman_bt_executor bt::core)
 target_link_libraries(realman_bt_executor runtime_snapshot)
 target_link_libraries(realman_bt_executor move_j_nodes)
 target_link_libraries(realman_bt_executor input_mode_nodes)
+target_link_libraries(realman_bt_executor prepare_keyboard_work_node)
 ament_target_dependencies(realman_bt_executor
   rclcpp rclcpp_action rcl_interfaces realman_msgs std_msgs std_srvs)
 install(TARGETS realman_bt_executor DESTINATION lib/${PROJECT_NAME})
@@ -72,7 +84,7 @@ install(PROGRAMS scripts/pika_control_router.py
 install(PROGRAMS scripts/keyboard_control_router.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME keyboard_control_router)
-install(TARGETS move_j_nodes
+install(TARGETS move_j_nodes prepare_keyboard_work_node
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
@@ -100,7 +112,8 @@ if(BUILD_TESTING)
   target_compile_features(test_input_mode_executor PRIVATE cxx_std_17)
   target_compile_definitions(test_input_mode_executor PRIVATE
     BT_TEST_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees")
-  target_link_libraries(test_input_mode_executor move_j_nodes input_mode_nodes)
+  target_link_libraries(test_input_mode_executor
+    move_j_nodes input_mode_nodes prepare_keyboard_work_node)
   ament_target_dependencies(test_input_mode_executor
     rclcpp rclcpp_action rcl_interfaces realman_msgs std_msgs std_srvs)
   add_test(NAME test_input_mode_executor COMMAND test_input_mode_executor)
@@ -138,6 +151,15 @@ if(BUILD_TESTING)
     rclcpp rclcpp_action realman_msgs geometry_msgs)
   add_test(NAME test_cartesian_velocity_for_duration_node
     COMMAND test_cartesian_velocity_for_duration_node)
+
+  add_executable(test_prepare_keyboard_work_node
+    test/test_prepare_keyboard_work_node.cpp)
+  target_link_libraries(test_prepare_keyboard_work_node
+    prepare_keyboard_work_node)
+  ament_target_dependencies(test_prepare_keyboard_work_node
+    rclcpp realman_msgs)
+  add_test(NAME test_prepare_keyboard_work_node
+    COMMAND test_prepare_keyboard_work_node)
 
   add_executable(test_terminal_exit_policy test/test_terminal_exit_policy.cpp)
   target_include_directories(test_terminal_exit_policy PRIVATE

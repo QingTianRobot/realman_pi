@@ -68,7 +68,7 @@ watchdog 和 lockout，不会直接调用 SDK。
 
 输入路由器是可选的独立进程：`./rm65 up` 启动长期 driver 与本服务，但**不会**启动它。要启用
 全局路由，在 driver 容器已运行后执行 `./rm65 bt control`；它加载
-[`config/behavior-trees/control.xml`](../../../config/behavior-trees/control.xml)，并在 Ctrl-C
+[`config/behavior-trees/control.xml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/behavior-trees/control.xml)，并在 Ctrl-C
 前保持 executor 和 :8080 只读监视器运行。Ctrl-C 不会停止 driver 或本服务，`./rm65 down` 才停止
 统一运行时。路由和本服务必须使用同一个 `ROS_DOMAIN_ID`。
 
@@ -88,7 +88,7 @@ transient-local 订阅 `/realman_bt_executor/input_mode_state`。同一 YAML 的
 
 目录完全由 XML 的字面 `InputModeGuard` 项发现，浏览器不会维护模式名单。当前 picker 显示一个
 “GLOBAL INPUT / 输入模式”卡片，带一个动态 select：`none`、`keyboard`、`policy`、`pikaposition`、
-`pikavelocity` 都可选；`web` 虽会由
+`pikavelocity`、`pikamixed` 都可选；`web` 虽会由
 状态显示为 active，却保持隐藏且不可选。没有正在运行的路由器或 discovery 不健康时，卡片隐藏；
 既有直接 Action 控制继续兼容，仅在两项 router service 都确认为不可用时启用。服务只短暂失联或
 catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返回 `input_mode_unavailable`，而不是绕过仲裁。
@@ -177,13 +177,15 @@ Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`s
 未知键、重复键和 m 输入均被拒绝。同一 owner 重选 keyboard 不重置 sequence 或夹爪按键边沿。
 外部模式切换、epoch 改变、目录移除 keyboard 也会释放旧 lease，不能靠缓存控制权继续发送。
 每 `50 ms` 心跳都会发送左右臂各自的完整集合，包括空集合；
-后端 `150 ms` 未收到该臂新输入就清零并取消该臂 session。
+后端 `150 ms` 未收到该臂新输入就把该臂速度清零但保留 session，`1000 ms`（`input_lost_ms`）未收到才取消
+该臂 session。
 
-键位、`50 ms` 心跳、`150 ms` Web 输入超时和 `0.4` 速度比例来自
-[`config/ros/keyboard_control.yaml`](../../../config/ros/keyboard_control.yaml)。比例乘以
-[`config/ros/realman_motion.yaml`](../../../config/ros/realman_motion.yaml) 的逐臂上限；当前 l/r 都派生为
-`0.02 m/s` 线速度和 `0.10 rad/s` 角速度。WORK 名称和 frame ID 仍来自
-[`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml)，键盘配置不会复制
+键位、`50 ms` 心跳、`150 ms` Web 输入超时、`1000 ms` 输入丢失时限和速度比例来自
+[`config/ros/keyboard_control.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/keyboard_control.yaml)。比例乘以
+[`config/ros/realman_motion.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/realman_motion.yaml) 的逐臂上限；l/r 线速度上限为
+Pika 提高到 `0.15 m/s`，线速度比例相应设为 `0.13333333`，当前 l/r 都派生为 `0.02 m/s` 线速度和
+`0.10 rad/s`（角速度比例 `0.4` × `0.25 rad/s`）角速度。WORK 名称和 frame ID 仍来自
+[`config/ros/realman_coordinates.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/realman_coordinates.yaml)，键盘配置不会复制
 运动上限或坐标定义。`grippers.l|r.open|close` 定义夹爪物理键；全部机械臂和夹爪键码必须全局唯一。
 实际全开／全闭位置仍只由 `config/ros/gripper.yaml` 管理。
 
@@ -198,7 +200,8 @@ keyboard）、`GRIPPER ONLY`（WORK 均不可用但有健康夹爪）和 `WORK U
 匹配状态和失败详情。这覆盖首个样本早于 DDS endpoint discovery 的启动时序；Web 或行为树晚于驱动启动
 时无需人工再次调用 `coordinates/verify`，即可解除页面的 `WORK UNAVAILABLE` 安全门。
 
-`keyup` 会立即发送该侧更新后的完整集合；松开某一臂的全部速度键只停止该臂。对应臂 WORK 失配时也只
+`keyup` 会立即发送该侧更新后的完整集合；松开某一臂的全部速度键只让该臂减速到零，其速度 session
+在整个键盘激活期间保持（见 [行为树控制权](./behavior-tree-control)），再次按键直接复用同一 session。对应臂 WORK 失配时也只
 清空该臂速度键并发送，另一臂、健康夹爪键和活动心跳继续。夹爪离线／报警只清空该侧夹爪键。
 窗口 `blur`、页面隐藏、目录不再包含 keyboard 或离开
 `ACTIVE/keyboard` 时，浏览器清空两臂并停止心跳；WebSocket 已关闭时不能再发送消息，因此服务端通过
@@ -395,12 +398,12 @@ Web 控制相关 Compose 服务把 `./config` 以可写方式挂到容器内，�
 
 ### 末端六轴速度
 
-先建立速度 Action，再以 20 ms 左右的周期发送 `vx, vy, vz, wx, wy, wz`。页面会默认选中
+先建立速度 Action，再以配置的 `10 ms` 周期发送 `vx, vy, vz, wx, wy, wz`。页面会默认选中
 当前 `coordinate_state` 提供的参考系：
 
 ```json
 {"type":"start_cartesian_velocity","request_id":"vel-001","arm":"l","goal":{
-  "reference_type":1,"reference_name":"cell","control_period_ms":20,"watchdog_ms":100,
+  "reference_type":1,"reference_name":"cell","control_period_ms":10,"watchdog_ms":100,
   "max_linear_accel_mps2":0.10,"max_angular_accel_radps2":0.50,
   "follow":false,"trajectory_mode":0,"radio":0}}
 ```
@@ -465,6 +468,29 @@ ros2 topic echo --once /l/cartesian_velocity/state
 客户端断开时，后端按以下顺序清理：速度通道发布零速度、请求速度 Action cancel、请求普通
 Action cancel。浏览器刷新不会留下仍由网页拥有的速度命令。
 
+## 夹爪模型与实时开合反馈
+
+`:8765` 页面的实体姿态（LIVE）URDF 视图在每臂 `link_6` 上挂载 AG2F90-C 夹爪模型，并按真实夹爪的位置反馈实时开合；目标影子（SHADOW）不带夹爪。
+
+**数据来源**（全部在根目录 `config/`，页面不写死任何数值）：
+
+| 内容 | 来源 |
+| --- | --- |
+| 每臂挂哪个夹爪、挂在哪个 link、`xyz` / `rpy`、驱动关节与闭合/全开弧度、`gripper_name` | [`config/ros/end_effectors.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/end_effectors.yaml) → `model_manifest.py` 的 `end_effectors` 字段 |
+| 每个夹爪的 `open_position` / `close_position`（设备单位） | `config/ros/gripper.yaml` → `gripper_list` 事件 |
+| 实时位置 | `/<name>/position`（`Float64`，设备单位）→ `gripper_state` 事件，`gripper_manager` 约 `20 Hz` 发布 |
+
+**映射**：`l`、`m`、`r` 分别对应 `gripper_left`、`gripper_mid`、`gripper_right`（`end_effectors.yaml` 的 `gripper_name`）。页面用该夹爪**自己的**端点把设备位置换算成开合度 `(position − close) / (open − close)`，限制在 `0..1`（`0` 闭合、`1` 全开，与 `percentage` 约定一致），再换算成驱动关节角 `closed_rad + (open_rad − closed_rad) × 开合度`；其余可动关节由 URDF 的 `mimic` 跟随。三个夹爪的行程单位不同也不影响显示。
+
+**行为约定**：
+
+- 夹爪网格随 URDF 一起通过 `/models/…` 提供（`resolve_model_asset` 仍拒绝目录穿越），挂载完成、9 个网格全部加载后场景才算就绪（`data-gripper-meshes="27"`）。
+- 在收到第一条反馈之前模型保持全开；夹爪离线或 `gripper.yaml` 缺该夹爪时保持最后一个姿态，不会猜测数值，右侧夹爪面板的 `ONLINE/OFFLINE` 仍是权威状态。
+- 选中夹爪的反馈行显示 `开合 NN%`；`data-gripper-l|m|r` 暴露各臂当前开合度，供测试使用。
+- 没有 `end_effectors.yaml` 时 `end_effectors` 为空，页面显示不带夹爪的机械臂。
+
+模型只反映反馈，**不会**发送任何夹爪命令；开合操作仍使用页面的夹爪按钮、键盘或 Pika 路径。
+
 ## URDF 与影子模型
 
 后端启动时读取：
@@ -473,10 +499,11 @@ Action cancel。浏览器刷新不会留下仍由网页拥有的速度命令。
 - `config/ros/realman_motion.yaml`：速度、加速度、watchdog 默认值；
 - `config/ros/realman_coordinates.yaml`：BASE/WORK/TOOL 当前配置名称；
 - `rm65_description/urdf/<model>.urdf`：六个关节的 lower/upper limit 和 mesh。
+- `config/ros/end_effectors.yaml`：每臂夹爪挂载（见下节），文件缺失时不显示夹爪。
 - `config/ros/camera_calibration.yaml`：独立标定页面展示的 ChArUco 配置；标定
   service 仍由 `realman_camera_calibration` 节点实际执行。
 
-服务端只允许 `/models/urdf/<model>.urdf` 和 `/models/meshes/...` 解析到
+服务端只允许 `/models/urdf/<model>.urdf`（含夹爪 URDF）和 `/models/meshes/...` 解析到
 `rm65_description` package 内，`..` 路径会被拒绝。前端为三台机械臂分别加载两份 URDF
 实例：每台 arm 都有一个实体模型和一个影子模型。实体模型使用各自的
 `joint_states.position`，影子模型只跟随当前选中 arm 的滑轨目标；不 clone 实例，避免

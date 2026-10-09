@@ -7,19 +7,20 @@ description: RealMan 控制模式切换、工业任务树和隔离 mock 验证�
 
 行为树运行时位于 `realman_bt`，底层仍使用 RealMan Action 和
 `motion_coordinator`。持久输入路由器的权威定义是
-[`config/behavior-trees/control.xml`](../../../config/behavior-trees/control.xml)：
-当前目录顺序为 `web`、`keyboard`、`policy`、`pikaposition`、`pikavelocity`、`none`。其中
-`keyboard`、`policy`、`pikaposition`、`pikavelocity` 和 `none` 可由浏览器选择器请求；`web`
+[`config/behavior-trees/control.xml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/behavior-trees/control.xml)：
+当前目录顺序为 `web`、`keyboard`、`policy`、`pikaposition`、`pikavelocity`、`pikamixed`、`none`。其中
+`keyboard`、`policy`、`pikaposition`、`pikavelocity`、`pikamixed` 和 `none` 可由浏览器选择器请求；`web`
 是粘性且最高优先级的覆盖，不出现在浏览器选择器中。
 ROS selection service 接受任何已注册模式（包括 `web`），只要求调用者提供非空 `requester_id`；
 该字段用于请求关联，并非 service 层的身份验证或授权。
-`keyboard` 分支固定为 `InputModeGuard` → `ActivateInputMode` → `KeyboardVelocityInput`。该叶节点和
+`keyboard` 分支固定为 `InputModeGuard` → 有状态 `keyboard_entry` →
+`PrepareKeyboardWork` → `ActivateInputMode` → `KeyboardVelocityInput`。该叶节点和
 Policy/Pika 输入叶一样保持 `RUNNING` 并记录控制权；实际键盘速度 session 由同一 launch 中的
 `keyboard_control_router` 管理，Pika topic 转发由 `pika_control_router` 管理。两个 router 都只为 l/r
 建立 session，绝不为 m 建立 goal、订阅或 command publisher。
 
-选择器显示 `Pika / 位置控制`（模式 ID `pikaposition`）和 `Pika / 速度控制`（模式 ID
-`pikavelocity`）两个独立选项。Pika 生产 topic 为 `/pika/l|r/cartesian_pose`（`PoseStamped`）
+选择器显示 `Pika / 位置控制`（模式 ID `pikaposition`）、`Pika / 速度控制`（模式 ID
+`pikavelocity`）和 `Pika / Mixed 控制`（模式 ID `pikamixed`）三个独立选项。Pika 生产 topic 为 `/pika/l|r/cartesian_pose`（`PoseStamped`）
 和 `/pika/l|r/cartesian_velocity`（`TwistStamped`）；位置数据使用各臂 BASE frame（`l/base_link`、
 `r/base_link`），速度数据使用已验证的 identity WORK frame（`l/work/pikabase`、`r/work/pikabase`）。
 键盘仍要求已验证的默认 `l/work/cell`、`r/work/cell`。夹爪开合度由 `/pika/l|r/gripper_percentage`
@@ -29,7 +30,13 @@ l/r，绝不订阅或发送 m 的夹爪信号。
 `InputModeGuard` 的 `mode`、`label`、`selectable` 字面量在 XML 构造时注册目录，
 因此新增模式只改 XML 和相应叶注册，不能在 Web 或 Python 写静态枚举。路由根节点必须保留
 `ReactiveSequence` 和 `ReactiveFallback`，使 guard 每个 10 Hz tick 都重算并 halt 离开的
-RUNNING 分支。普通分支是 `InputModeGuard` → `ActivateInputMode` → 输入叶；Pika 分支在激活前
+RUNNING 分支。普通分支是 `InputModeGuard` → `ActivateInputMode` → 输入叶；keyboard 分支在激活前
+调用 `/l/coordinates/select_work` 和 `/r/coordinates/select_work`，请求名称来自坐标注册表中的
+`l|default_work`、`r|default_work`，而不是在行为树中硬编码 `cell`。两个响应都必须返回
+`success=true` 且 `active_name` 与各自的配置名称一致，随后才发布 `ACTIVE/keyboard`。
+任一 service 拒绝、异常或读回名称不一致都会让切换进入 `FAILED`，现有协调器下一拍安排安全模式
+`none`；因此浏览器不会在错误 WORK 下取得 keyboard lease。`dry_run=true` 时仍验证左右臂默认引用
+存在且类型为 WORK，但不创建 service client，也不改变控制器坐标。Pika 分支在激活前
 额外运行一次有状态 `Sequence` 中的 `ThreeArmMoveJ` 准备动作，准备成功后才发布 Pika `ACTIVE`。
 准备动作成功后，后续 tick 会从该 `Sequence` 的 Pika 输入叶继续，不会重新进入准备动作；只有离开
 Pika 分支后再次进入，才会重新执行准备动作。
@@ -42,7 +49,7 @@ Pika 分支后再次进入，才会重新执行准备动作。
 
 键盘只允许每臂当前已验证的默认 WORK 坐标：坐标状态必须同时确认 `motion_allowed=true`、
 `work_matched=true`、当前/预期 WORK 名称及 frame ID 都与
-[`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml) 一致。Goal 固定使用
+[`config/ros/realman_coordinates.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/realman_coordinates.yaml) 一致。Goal 固定使用
 `CartesianVelocity.Goal.WORK`；BASE 被拒绝，也不会在 WORK 不可用时自动回退到 TOOL。
 `/<arm>/coordinates/state` 使用 reliable、transient-local、depth 1 QoS，驱动保留最近一次校验结果，
 并按 `config/ros/realman_driver.yaml` 的 `coordinate_state_publish_rate`（生产默认 `1.0 Hz`）低频重发。
@@ -59,6 +66,23 @@ Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。键盘�
 请求它的 WebSocket 在收到匹配的 `ACTIVE/keyboard` 后取得独占 lease；其它浏览器的按键消息会被拒绝。
 
 ## 输入路由 ROS 契约
+选择与切换的状态流转（`phase` 取值 `ACTIVE` / `SWITCHING` / `FAILED`）：
+
+```mermaid
+stateDiagram-v2
+  [*] --> ACTIVE_none
+  ACTIVE_none: ACTIVE（none）
+  ACTIVE_X: ACTIVE（目标模式）
+  SWITCHING: SWITCHING（先选中性分支 none）
+  FAILED: FAILED
+  ACTIVE_none --> SWITCHING: select_input_mode(X)
+  ACTIVE_X --> SWITCHING: 选择另一模式
+  SWITCHING --> ACTIVE_X: 下一 tick 激活并运行目标分支
+  SWITCHING --> FAILED: 准备动作 / WORK 校验失败 / 超时
+  FAILED --> ACTIVE_none: 协调器安排安全模式 none
+  ACTIVE_X --> ACTIVE_none: Web override 或离开
+```
+
 
 路由器运行时由 `realman_bt_executor` 提供两个 service 和一个可靠、transient-local topic：
 
@@ -68,26 +92,51 @@ Web 运动也只有收到同一请求的 `ACTIVE/web` 后才会转发。键盘�
 | `/realman_bt_executor/select_input_mode` | `realman_msgs/srv/SelectInputMode`：请求 `mode_id`、`requester_id`；响应 `accepted`、`request_id`、`message` | 请求一个已注册模式。 |
 | `/realman_bt_executor/input_mode_state` | `realman_msgs/msg/InputModeState`：`requested_mode`、`selected_mode`、`active_mode`、`phase`、`request_id`、`epoch`、`detail` | 发布 `ACTIVE`、`SWITCHING` 或 `FAILED` 的路由状态。 |
 
-配置在 [`config/ros/behavior_tree.yaml`](../../../config/ros/behavior_tree.yaml)：
+配置在 [`config/ros/behavior_tree.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/behavior_tree.yaml)：
 `tick_rate_hz: 10.0`（Hz）、`switch_timeout_ms: 5000`（ms），以及必须是已注册且可选模式的
 `safe_fallback_mode: none`。`none` 既是安全回退也是中性 tick，不能删除或改成 Web。
 
 键盘按键、速度比例和 Web 输入时序的权威配置是
-[`config/ros/keyboard_control.yaml`](../../../config/ros/keyboard_control.yaml)。浏览器每 `50 ms` 发送一次
+[`config/ros/keyboard_control.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/keyboard_control.yaml)。浏览器每 `50 ms` 发送一次
 左右臂各自的完整按键集合；Web bridge 对每臂要求严格递增的 sequence，并拒绝未知物理键码、重复键码、
-非 lease owner 和任何 m 输入。Web 输入超过 `150 ms` 未刷新时，keyboard router 对该臂发布零速度并
-取消 session。driver 仍按 `config/ros/realman_motion.yaml` 的 `20 ms` 周期和 `100 ms` watchdog
-执行第二层失效保护。
+非 lease owner 和任何 m 输入。keyboard router 缓存最新有效输入，并按 `config/ros/realman_motion.yaml`
+的 `10 ms` 周期刷新 driver；driver 仍用 `100 ms` watchdog 执行第二层失效保护。
 
-键盘速度 Goal 固定使用 `follow=false`（RealMan SDK 的低跟随模式）。SDK 高跟随要求透传周期不超过
-`10 ms`，而浏览器/DDS 键盘链路不是实时通道；不要仅把配置周期改成 `10 ms` 就重新启用高跟随，除非
-同时验证实际 `rm_movev_canfd` 发送间隔始终满足该约束。
+键盘速度 Goal 固定使用 `follow=true`（RealMan SDK 高跟随模式），并在创建 Goal 时拒绝任何大于
+`10 ms` 的配置周期。浏览器仍每 `50 ms` 上报完整按键集合，router 将输入采样与 SDK 刷新解耦，
+由 driver 固定周期 worker 按 `10 ms` 执行最新命令。生产 A/B 测试中，旧的 `20 ms + follow=false`
+组合在启动阶段出现明显的非指令轴瞬态，因此不能恢复为键盘默认配置。
 
-离开 `keyboard`、WORK 失配、按键全部释放、Web 输入超时、owner WebSocket 关闭或 router 关闭时，
-相关臂先收敛到零速度，再取消其 Action session。浏览器 owner 断开还会释放 lease 并请求安全模式
-`none`。如果停止条件发生在 Action goal response 返回之前，router 设置 `cancel_after_accept`；迟到接受的
-goal 会立即取消，不能成为 active session。`dry_run=true` 时仍校验模式、WORK、配置和输入，但不发送
-driver Goal，也不发布 driver command。
+#### 一次键盘激活只有一个速度 session
+
+每条臂的速度 session 生命周期跟随**模式**，而不是跟随按键：
+
+| 事件 | 行为 |
+| --- | --- |
+| 进入 `ACTIVE/keyboard`、WORK 已验证、浏览器心跳到达 | **立即**建立 session（选 WORK、`rm_set_movev_canfd_init`），持续刷新零速度；第一次按键不再等待 Goal 接受和初始化 |
+| 按键、松键、换方向 | 只改变命令，session 不变；换向和停止由 driver 的加速度限幅平滑过渡 |
+| 心跳晚于 `input_timeout_ms`（`150 ms`） | 刷新零速度让机械臂停下，**保留** session；短暂网络卡顿不触发重新初始化 |
+| 心跳晚于 `input_lost_ms`（`1000 ms`，浏览器关闭、失焦或页面隐藏） | 发布零速度并取消 session；页面恢复后立即重新建立 |
+| 离开 `keyboard`、WORK 失配、非法输入、router 关闭 | 发布零速度并取消 session |
+| driver 拒绝或自行结束 session | 等待 `0.5 s` 再重试，不按 `10 ms` 周期反复请求 |
+
+两个时限均来自 `config/ros/keyboard_control.yaml`，`input_lost_ms` 必须大于 `input_timeout_ms`。
+
+之所以不在松键时取消：每次取消都会下发一帧**未经加速度限幅**的零速度并调用 `rm_set_arm_slow_stop`，
+下一次按键再重新 `rm_set_movev_canfd_init`。松键后机械臂实测还会滑行约 1.8 s，重新初始化往往落在仍在运动的
+机械臂上，而 session 启动正是上面 A/B 测试里出现非指令轴瞬态的时刻；随时换向的键盘操作因此会反复出现
+跑偏和跟踪滞后。
+
+router 记录每次激活以来打开的 session 数：第一个以 info 记录，之后每次重开都以 warning 记录为
+`restart #N`。正常操作一次激活只应出现一个；出现 restart 说明有东西在打断 session，应先排查它。
+
+代价是键盘模式激活且页面在前台期间，左右臂一直被速度 session 占用，其它运动请求（如 Web 关节运动）会被
+driver 以 ownership 忙拒绝；离开键盘模式或页面失焦超过 `input_lost_ms` 即释放。
+
+如果停止条件发生在 Action goal response 返回之前，router 设置 `cancel_after_accept`；迟到接受的 goal 会立即
+取消，不能成为 active session。浏览器 owner 断开还会释放 lease 并请求安全模式 `none`。`dry_run=true` 时
+仍校验模式、WORK、配置和输入，但不发送 driver Goal，也不发布 driver command。`control_period_ms` 大于
+`10 ms` 的配置会在 router 启动时被拒绝，而不是在第一次按键时让 router 崩溃。
 
 切入 `ACTIVE/keyboard` 后，Web 控制台会在 URDF 查看区同时绘制左右臂可用的 WORK 坐标轴：
 X/Y/Z 分别为红/绿/蓝，轴的位姿来自驱动回传的 `work.xyz_m` 与 `work.quaternion_wxyz`，再叠加
@@ -103,76 +152,21 @@ Web bridge 检查 lease/sequence 并识别新按下边沿，发布 `/keyboard/l|
 松键／模式离开不会取消已提交夹爪目标，更不能向夹爪发送零值来模拟停止。详见
 [键盘夹爪契约](./gripper-control#键盘双夹爪全开-全闭)。原 ReactiveFallback 和 `KeyboardVelocityInput` 无需新分支。
 
-同一 launch 还启动 `pika_control_router`。它接收 executor 的 active mode，并只为 l/r 管理 Pika
-Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/command` 和
-`/gripper_right/percentage/command`。只有 `pikaposition` 或 `pikavelocity` 处于 `ACTIVE` 时才转发；
-其它模式会丢弃输入，不自动开合。夹爪 command topic 是非阻塞的连续控制路径，`dry_run=true`
-（默认）时不发送机器人 Action 或夹爪 command。需要真实 Pika 运动时必须显式设置
-`REALMAN_BT_DRY_RUN=false`，并完成低速、急停和工作区检查。
-
-`pikavelocity` 是实时速度流，而不是单点位置目标。其逐会话线速度向量模长上限来自
-[`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 的
-`pika_velocity.max_linear_speed_mps`，当前为 `1.0 m/s`；角速度上限仍为 `0.25 rad/s`。
-驱动配置中的普通会话上限继续是 `0.05 m/s`，所以键盘、Web 手动速度和普通行为树速度节点不会随
-Pika 一起升速。驱动仅将 l/r 的绝对逐会话硬上限设为 `1.0 m/s`，m 仍为 `0.05 m/s`。
-
-### Pika rosbag replay
-
-独立的 Pika rosbag replay 项目把 bag 中的 `l/base_link`、`r/base_link` 速度记录送入同名
-`/pika/l|r/cartesian_velocity` ingress。RealMan 的速度初始化没有 BASE 选项，因此 replay 在发送前
-选择 identity WORK aliases `l/work/pikabase`、`r/work/pikabase`，并将 `header.frame_id` 改为相应的
-`l/work/pikabase` 或 `r/work/pikabase`。Pika router 由 `pika_velocity.work_reference: work/pikabase`
-配置这个引用；其零平移和单位四元数来自
-[`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml)，保持 BASE 速度向量
-数值不变。键盘和默认会话仍使用 `cell`。
-Replay 只发布 `/pika/l|r/cartesian_velocity` 与 `/pika/l|r/gripper_percentage`，夹爪值是
-`Float32` 的归一化百分比（`0` 闭合、`1` 张开），Pika 限制为 `1.0 m/s` 和 `0.25 rad/s`。
-进入执行并尝试选择坐标后，每次结束或失败会向两路速度 ingress 发送终端零向量，等待超过 `100 ms`
-watchdog 后把已选或可能已选的坐标恢复为 `cell`；只读预检不会选择坐标或执行这段 cleanup。
-恢复失败必须先人工确认 `/<arm>/coordinates/state`，再调用 `/<arm>/coordinates/select_work` 选择 `cell`。
-夹爪不发送“零值停止”，因为 `0` 是闭合目标。
-
-Replay 不替 control tree 选择模式。操作员先启动 `REALMAN_BT_DRY_RUN=false ./rm65 bt control`，
-在 Web 页面手动选择
-`Pika / 速度控制` 并等待 `ACTIVE`，再运行独立项目的 `./replay.sh run <bag>` 只读预检，最后才由
-操作员显式添加 `--execute`。关闭 dry-run 后，手动进入 Pika 本身就会执行三臂准备运动，必须在选择
-之前确认工作区和急停。自动验证和 `inspect` 不运行真实 `--execute`；测试中的执行分支只连接 fake。
-独立项目的 `ReplayNode.spin_once()` 只在内部调度，操作员入口始终是 `replay.sh`。
-
-Replay 部署到 `$HOME/pika_realman_replay`，使用独立 Compose 与生产 ROS domain `65`，不启动或
-重启生产 driver/control tree。生命周期见 [Pika replay 边界](./behavior-tree-motion#pika-rosbag-replay-边界)，
-driver 侧契约见 [ingress 与坐标桥接](./realman-action-development#pika-rosbag-replay-的-ingress-与坐标桥接)。
-
-Pika 发送端应以约 `50 Hz` 分别发布左右臂，消息字段如下；`header.stamp` 必须使用发送节点当前 ROS
-clock、非零且严格递增，不能重复使用旧消息：
-
-```yaml
-# /pika/l/cartesian_velocity
-header:
-  stamp: <node.get_clock().now().to_msg()>
-  frame_id: l/work/pikabase
-twist:
-  linear:  {x: 0.10, y: 0.00, z: 0.00}   # m/s
-  angular: {x: 0.00, y: 0.00, z: 0.00}   # rad/s
-```
-
-右臂只把 `frame_id` 改为 `r/work/pikabase` 并发布到 `/pika/r/cartesian_velocity`。线速度限制按
-`sqrt(vx^2 + vy^2 + vz^2)` 计算；例如 `(1, 1, 0)` 的模长约为 `1.414 m/s`，会被拒绝。
-输入停止超过 `100 ms` 后 driver watchdog 会零速并终止 session；正常停止也应先连续发送零向量，
-然后切换到 `none` 或其它输入模式。
-
-切入任一 Pika 模式时，行为树先用 `ThreeArmMoveJ` 将 l/m/r 移动到
-[`config/ros/pika_config.yaml`](../../../config/ros/pika_config.yaml) 中
-`pika_default_pose.left|middle|right.joint_degrees` 指定的关节角（单位：度），再激活 Pika。
-`control_router.launch.py` 启动时读取这三组关节角并注入行为树黑板；同一配置中的 `tcp_pose` 不参与
-这次初始 MoveJ。修改默认姿态只需更新该 YAML 并重启控制树，不要再修改 `control.xml`。准备动作失败
-或切换期间被取消时，不会进入 Pika `ACTIVE`。
+同一 launch 还启动 `pika_control_router`，只为 l/r 管理 Pika 的位置、速度和 Mixed 三种 session，并转发 Pika 夹爪
+百分比。门控、保持规则、限值、Mixed 模式的牵引约束、准备动作、发送端消息规范和 rosbag replay 都在
+[Pika 遥操作](./pika-teleop)。这里只保留与输入路由相关的约束：`dry_run=true`（默认）时 router 不发送机器人
+Action 或夹爪 command，需要真实 Pika 运动必须显式设置 `REALMAN_BT_DRY_RUN=false`，并完成低速、急停和
+工作区检查；切入任一 Pika 模式前，行为树先运行一次 `ThreeArmMoveJ` 准备动作到
+`config/ros/pika_config.yaml` 的 `pika_default_pose`，准备失败或被取消时不会进入 Pika `ACTIVE`。
 
 ## 生命周期和无硬件验证
 
-`./rm65 up` 只拥有长期 driver 和 :8765 Web 服务；它不启动行为树。先启动该运行时，再显式执行
-`./rm65 bt control`，该命令使用 `control_router.launch.py` 和 `exit_on_terminal=false`，连同 :8080
-只读监视器持续到 Ctrl-C。Ctrl-C 不停止 driver；`./rm65 down` 才停止统一运行时。
+`./rm65 up` 只拥有长期 driver 和 :8765 Web 服务；它不启动行为树。只要 Docker 中已经有一个运行中的
+`realman_bringup_remote` 容器，就可以显式执行 `./rm65 bt control`；该命令使用
+`control_router.launch.py` 和 `exit_on_terminal=false`，连同 :8080 只读监视器持续到 Ctrl-C。
+启动器按 Docker 的 `com.docker.compose.service=realman_bringup_remote` 标签查找唯一运行中的 driver
+容器，再通过容器 ID 执行 `bt-start`，因此不依赖 `./rm65 up` 或当前 Compose project；没有或多于一个匹配
+bringup 时会拒绝启动，避免把控制树接入错误的驱动图。Ctrl-C 不停止 driver；`./rm65 down` 才停止统一运行时。
 
 ## 独立测试
 
@@ -229,4 +223,4 @@ Service 常驻模式。
 `/api/tree/load`。文件名会进行 URL 编码；打开失败会显示错误 toast。该 URL 参数只在启动时消费一次，
 因此后续编辑不会因 React 状态更新而重复打开或覆盖画布。
 
-相关配置：[`config/ros/behavior_tree.yaml`](../../../config/ros/behavior_tree.yaml)。
+相关配置：[`config/ros/behavior_tree.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/behavior_tree.yaml)。

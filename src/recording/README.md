@@ -163,7 +163,7 @@ Web 只做实时只读展示，不放录制控制按钮。页面组件建议保�
 1. 顶部连接和采集健康摘要。
 2. 相机组件：按配置动态生成 4 个卡片；低清 JPEG 通过独立 URL 获取。
 3. 机械臂组件：动态生成 3 个 arm 卡片，显示连接、6 个关节和坐标摘要。
-4. 3D 组件：复用 `src/driver/realman_web_control/web/src/main.ts` 的 Three.js + `urdf-loader` 思路，加载三臂 URDF 和 `three_robots.yaml` 的位姿，将 `/l|m|r/joint_states` 映射到模型。
+4. 3D 组件：复用 `src/driver/realman_web_control/web/src/main.ts` 的 Three.js + `urdf-loader` 思路，加载三臂 URDF 和 `three_robots.yaml` 的位姿，将 `/l|m|r/joint_states` 映射到模型。末端位置是该实时关节角的浏览器 FK；`/l|m|r/cartesian_velocity/state` 的控制量和驱动实测量直接显示，只有 `measured_valid=true` 且 frame 为对应 `<arm>/base_link` 时才绘制实测线速度箭头，绝不以网页帧差分估计速度。
 5. 录制状态组件：显示 PREPARE/RECORDING/FINALIZING/READY/FAILED、elapsed、remaining、drop count。
 
 不要直接复用完整 Web Control bundle，因为它包含运动控制、Action、MOVEJ/MOVEL 等不属于录制页面的功能。应抽取只读 3D viewer 或建立独立前端构建入口。

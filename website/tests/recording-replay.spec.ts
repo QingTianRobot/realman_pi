@@ -1,5 +1,45 @@
 import { expect, test } from "@playwright/test";
 
+test("live workspace presents FK position and direct driver velocity in 2D and 3D", async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.routeWebSocket("/ws", (socket) => {
+    const velocity = (commandedLinear: number[], commandedAngular: number[], measuredLinear: number[], measuredAngular: number[]) => ({
+      measured_frame_id: "l/base_link",
+      measured_valid: true,
+      measured_age_ms: 12,
+      commanded_linear_velocity_mps: commandedLinear,
+      commanded_angular_velocity_radps: commandedAngular,
+      measured_linear_velocity_mps: measuredLinear,
+      measured_angular_velocity_radps: measuredAngular,
+    });
+    const snapshot = (joint1: number) => JSON.stringify({
+      type: "recording_snapshot",
+      recording: { state: 0, detail: "实时观测", elapsed_sec: 0, remaining_sec: 0, dropped_samples: 0 },
+      arms: {
+        l: { connected: true, positions_rad: [joint1, 0, 0, 0, 0, 0], cartesian_velocity: velocity([0.3, 0, 0], [0, 0, 0.7], [0.2, 0, 0], [0, 0, 0.5]) },
+        m: { connected: true, positions_rad: [0, 0, 0, 0, 0, 0], cartesian_velocity: { ...velocity([0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]), measured_frame_id: "m/base_link" } },
+        r: { connected: true, positions_rad: [0, 0, 0, 0, 0, 0], cartesian_velocity: { ...velocity([0, 0, 0], [0, 0, 0], [0, 0, 0], [0, 0, 0]), measured_frame_id: "r/base_link" } },
+      },
+      grippers: {},
+      preview_cameras: {},
+    });
+    socket.send(JSON.stringify({ type: "hello", read_only_robot: true }));
+    setTimeout(() => socket.send(snapshot(0)), 400);
+  });
+
+  await page.goto("/");
+
+  await expect(page.locator("#motion-l")).toContainText("位置", { timeout: 15_000 });
+  await expect(page.locator("#motion-l")).toContainText(/驱动线速度\s+0\.200/, { timeout: 15_000 });
+  await expect(page.locator("#motion-l")).toContainText(/驱动角速度\s+0\.500/, { timeout: 15_000 });
+  await expect(page.locator("#motion-l")).toContainText(/控制线速度\s+0\.300/, { timeout: 15_000 });
+  await expect(page.locator("#motion-l")).toContainText(/控制角速度\s+0\.700/, { timeout: 15_000 });
+  await expect(page.locator("#motion-l svg")).toHaveCount(2, { timeout: 15_000 });
+  await expect(page.locator("#motion-l")).toContainText("驱动测量 · 12 ms", { timeout: 15_000 });
+  await expect(page.locator("#motion-viewer")).toHaveAttribute("data-velocity-vectors", "actual+commanded");
+  await expect(page.locator("#motion-viewer")).toHaveAttribute("data-end-effector-markers", "active");
+});
+
 test("replay workspace synchronizes camera tiles and exposes added canonical features", async ({ page }) => {
   await page.route("**/api/lerobot", (route) =>
     route.fulfill({

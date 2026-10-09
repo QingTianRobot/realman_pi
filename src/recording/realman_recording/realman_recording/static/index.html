@@ -40,16 +40,17 @@
     .layout.replay-layout>.grid-stack-item>.grid-stack-item-content{position:relative!important;inset:auto!important;width:100%!important;height:auto!important;overflow:hidden}
     .layout.replay-layout>.grid-stack-item:nth-child(1){grid-column:1;grid-row:1;height:390px!important}
     .layout.replay-layout>.grid-stack-item:nth-child(1)>.grid-stack-item-content{height:100%!important}
-    .layout.replay-layout>.grid-stack-item:nth-child(2){display:none!important}
-    .layout.replay-layout>.grid-stack-item:nth-child(3){grid-column:2;grid-row:1}
-    .layout.replay-layout>.grid-stack-item:nth-child(4){grid-column:2;grid-row:2}
+    .layout.replay-layout>.grid-stack-item:nth-child(2),.layout.replay-layout>.motion-3d-panel{display:none!important}
+    .layout.replay-layout>.grid-stack-item:nth-child(3){display:none!important}
+    .layout.replay-layout>.grid-stack-item:nth-child(4){grid-column:2;grid-row:1}
+    .layout.replay-layout>.grid-stack-item:nth-child(6){grid-column:2;grid-row:2}
     .layout.replay-layout #viewer{height:100%;min-height:0}
     .layout.replay-layout #previews{display:none}
     @media(max-width:1100px){.replay-studio{grid-template-columns:190px minmax(0,1fr)}.layout.replay-layout{grid-template-columns:minmax(0,1.4fr) minmax(250px,1fr)}}
-    @media(max-width:700px){.replay-studio{grid-template-columns:1fr}.replay-camera-grid{grid-template-columns:1fr 1fr}.layout.replay-layout{grid-template-columns:1fr}.layout.replay-layout>.grid-stack-item:nth-child(1){grid-column:1;grid-row:auto;height:320px!important}.layout.replay-layout>.grid-stack-item:nth-child(3),.layout.replay-layout>.grid-stack-item:nth-child(4){grid-column:1;grid-row:auto}.studio-toolbar{flex-wrap:wrap}}
+    @media(max-width:700px){.replay-studio{grid-template-columns:1fr}.replay-camera-grid{grid-template-columns:1fr 1fr}.layout.replay-layout{grid-template-columns:1fr}.layout.replay-layout>.grid-stack-item:nth-child(1){grid-column:1;grid-row:auto;height:320px!important}.layout.replay-layout>.grid-stack-item:nth-child(4),.layout.replay-layout>.grid-stack-item:nth-child(6){grid-column:1;grid-row:auto}.studio-toolbar{flex-wrap:wrap}}
   </style>
-  <script type="module" crossorigin src="/assets/recording-nZsfIn7a.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/recording-CpHj0JBJ.css">
+  <script type="module" crossorigin src="/assets/recording-EwrKaP85.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/recording-DZOGzEBa.css">
 </head>
 <body>
   <main class="shell">
@@ -97,9 +98,11 @@
     </section>
 
     <div class="layout grid-stack">
-      <div class="grid-stack-item" gs-w="12" gs-h="8" gs-min-h="5"><section class="panel grid-stack-item-content" style="display:flex;flex-direction:column"><div class="panel-head"><h3>三臂 3D 姿态</h3><span id="pose-count" class="count">URDF 实时关节</span></div><div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div></div><div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span>ROS 2 SYSTEM_TIME</span></div></section></div>
+      <div class="grid-stack-item" gs-w="12" gs-h="8" gs-min-h="5"><section class="panel grid-stack-item-content" style="display:flex;flex-direction:column"><div class="panel-head"><h3>三臂 3D 姿态</h3><span class="count">URDF · joint_states</span></div><div id="viewer" class="viewer" data-motion-visualization="waiting"><canvas id="canvas" aria-label="RealMan URDF 三维机械臂姿态"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div></div><div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span>仅机械臂姿态</span></div></section></div>
+      <div class="grid-stack-item motion-3d-panel" gs-w="12" gs-h="5" gs-min-h="4"><section class="panel grid-stack-item-content" style="display:flex;flex-direction:column"><div class="panel-head"><h3>末端运动 3D</h3><span id="motion-3d-status" class="count">等待末端数据</span></div><div id="motion-viewer" class="viewer" data-velocity-vectors="waiting" data-end-effector-markers="waiting"><canvas id="motion-canvas" aria-label="三臂末端位置、控制速度与实际速度三维空间展示"></canvas></div><div class="viewer-footer"><span>彩色点：末端位置 · 轨迹：历史位置</span><span><b style="color:#67d391">绿：实际</b> · <b style="color:#55a6ff">蓝：控制</b></span></div></section></div>
       <div class="grid-stack-item" gs-w="12" gs-h="4" gs-min-h="3"><section class="panel grid-stack-item-content"><div class="panel-head"><h3>相机预览</h3><span id="camera-count" class="count">等待视频流</span></div><div id="previews" class="camera-grid"><div class="empty" style="grid-column:1/-1">预览未启动 · 启用 preview_enabled 后显示低清画面</div></div></section></div>
       <div class="grid-stack-item" gs-w="12" gs-h="3" gs-min-h="2"><section class="panel grid-stack-item-content"><div class="panel-head"><h3>机械臂状态</h3><span id="arm-count" class="count">0 / 3 online</span></div><div id="arms" class="arm-grid"><div class="empty" style="grid-column:1/-1">等待 ROS 2 状态话题</div></div></section></div>
+      <div class="grid-stack-item live-motion-panel" gs-w="12" gs-h="3" gs-min-h="2"><section class="panel grid-stack-item-content"><div class="panel-head"><h3>末端运动 · 2D</h3><span class="count">位置：URDF FK · 速度：驱动状态</span></div><div id="motion-cards" class="motion-grid"><div class="empty" style="grid-column:1/-1">等待 joint_states 与 CartesianVelocityState</div></div></section></div>
       <div class="grid-stack-item" gs-w="12" gs-h="2" gs-min-h="2"><section class="panel grid-stack-item-content"><div class="panel-head"><h3>夹爪状态</h3><span id="gripper-count" class="count">实时输入</span></div><div id="grippers" class="gripper-grid"><div class="empty" style="grid-column:1/-1">等待夹爪话题</div></div></section></div>
     </div>
     <footer class="footer"><span>数据采集独立于预览与浏览器连接</span><span>ROS 2 SYSTEM_TIME</span></footer>

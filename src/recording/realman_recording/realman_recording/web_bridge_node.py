@@ -23,6 +23,7 @@ from rclpy.node import Node
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Bool, Float64, Int32, String
 
+from realman_msgs.msg import CartesianVelocityState
 from realman_recording_msgs.msg import RecordingStatus
 from .camera_workers import LatestFramePreview, PreviewFrame, downscale_jpeg, image_to_jpeg, load_camera_sources
 from .layout_manifest import build_recording_manifest
@@ -58,6 +59,7 @@ class RecordingWebBridgeNode(Node):
         self.declare_parameter("camera_ids", [""])
         self.declare_parameter("camera_image_topics", [""])
         self.declare_parameter("arm_namespaces", ["l", "m", "r"])
+        self.declare_parameter("arm_velocity_topics", [""])
         self.declare_parameter("gripper_position_topics", [""])
         self.declare_parameter("gripper_torque_topics", [""])
         self.declare_parameter("gripper_alarm_topics", [""])
@@ -70,9 +72,16 @@ class RecordingWebBridgeNode(Node):
         # This viewer timestamp is observability metadata only; it never enters MCAP.
         self._wall_clock = Clock(clock_type=ClockType.SYSTEM_TIME)
         self._arms = tuple(str(item) for item in self.get_parameter("arm_namespaces").value)
+        velocity_topics = tuple(
+            str(item) for item in self.get_parameter("arm_velocity_topics").value if str(item)
+        )
+        if velocity_topics and len(velocity_topics) != len(self._arms):
+            raise ValueError("arm_velocity_topics must be empty or match arm_namespaces length")
+        self._velocity_topics_by_arm = dict(zip(self._arms, velocity_topics))
         self._joint_positions: dict[str, list[float]] = {}
         self._connections: dict[str, bool] = {}
         self._coordinates: dict[str, dict[str, Any]] = {}
+        self._cartesian_velocity: dict[str, dict[str, Any]] = {}
         self._gripper: dict[str, dict[str, float | bool | int]] = {}
         self._recording_status: dict[str, Any] = {
             "state": "IDLE",
@@ -120,6 +129,13 @@ class RecordingWebBridgeNode(Node):
                 String, f"/{arm}/coordinates/state", lambda message, selected=arm: self._coordinates_message(selected, message),
                 10, callback_group=self._callback_group,
             )
+            velocity_topic = self._velocity_topics_by_arm.get(arm)
+            if velocity_topic:
+                self.create_subscription(
+                    CartesianVelocityState, velocity_topic,
+                    lambda message, selected=arm: self._cartesian_velocity_message(selected, message),
+                    10, callback_group=self._callback_group,
+                )
         self._register_gripper_subscriptions()
         self.create_subscription(
             RecordingStatus, "recording/status", self._recording_status_message,
@@ -235,6 +251,23 @@ class RecordingWebBridgeNode(Node):
         """Cache only the documented numeric coordinate subset for read-only display."""
         self._coordinates[arm] = safe_coordinate_subset(message.data)
 
+    def _cartesian_velocity_message(self, arm: str, message: CartesianVelocityState) -> None:
+        """Cache driver command and measured Cartesian velocity without estimating either.
+
+        The browser uses ``measured_*`` only for the actual-speed arrow.  Both command
+        and measured vectors are kept in the driver's declared ``measured_frame_id`` so
+        the dashboard can compare control intent with the physical result honestly.
+        """
+        self._cartesian_velocity[arm] = {
+            "commanded_linear_velocity_mps": [float(value) for value in message.commanded_linear_velocity_mps],
+            "commanded_angular_velocity_radps": [float(value) for value in message.commanded_angular_velocity_radps],
+            "measured_frame_id": str(message.measured_frame_id),
+            "measured_linear_velocity_mps": [float(value) for value in message.measured_linear_velocity_mps],
+            "measured_angular_velocity_radps": [float(value) for value in message.measured_angular_velocity_radps],
+            "measured_valid": bool(message.measured_valid),
+            "measured_age_ms": int(message.measured_age_ms),
+        }
+
     def _gripper_value(self, topic: str, field: str, value: Any) -> None:
         self._gripper.setdefault(topic, {})[field] = value
 
@@ -272,6 +305,7 @@ class RecordingWebBridgeNode(Node):
                         "positions_rad": self._joint_positions.get(arm, []),
                         "connected": self._connections.get(arm, False),
                         "coordinate_state": self._coordinates.get(arm, {}),
+                        "cartesian_velocity": self._cartesian_velocity.get(arm, {}),
                     }
                     for arm in self._arms
                 },

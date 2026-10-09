@@ -13,9 +13,9 @@
     # Controller-side Cartesian command streams. They are observations only; the recorder
     # never publishes to them. Configure each external teleoperation source explicitly.
     arm_action_topics: [/l/cartesian_velocity/command, /m/cartesian_velocity/command, /r/cartesian_velocity/command]
-    # Driver-published measured end-effector velocity (CartesianVelocityState), in
-    # left/middle/right order. These replace offline FK+pose-difference velocity
-    # estimation when present; leave empty to fall back to the derived estimate.
+    # Driver-published CartesianVelocityState in left/middle/right order. It preserves
+    # controller intent and actual measured speed for offline export; no FK-difference
+    # estimate is substituted when this stream is available.
     arm_velocity_topics: [/l/cartesian_velocity/state, /m/cartesian_velocity/state, /r/cartesian_velocity/state]
     # Optional actual gripper command streams, in left/middle/right order.  Leave
     # empty until the upstream gripper interface exposes a command topic: the
@@ -105,6 +105,10 @@
     camera_ids: [orbbec-left, orbbec-middle, orbbec-right, d435]
     camera_image_topics: [/camera_left/color/image_raw, /camera_middle/color/image_raw, /camera_right/color/image_raw, /camera_global/d435/color/image_raw]
     arm_namespaces: [l, m, r]
+    # Read-only driver telemetry paired with arm_namespaces. The dashboard plots
+    # commanded_* against measured_* and shows the latter in 3D; vectors are in each
+    # arm's measured_frame_id (normally <arm>/base_link), with m/s and rad/s units.
+    arm_velocity_topics: [/l/cartesian_velocity/state, /m/cartesian_velocity/state, /r/cartesian_velocity/state]
     gripper_position_topics: [/gripper_left/position, /gripper_mid/position, /gripper_right/position]
     gripper_torque_topics: [/gripper_left/torque_reached, /gripper_mid/torque_reached, /gripper_right/torque_reached]
     gripper_alarm_topics: [/gripper_left/alarm, /gripper_mid/alarm, /gripper_right/alarm]

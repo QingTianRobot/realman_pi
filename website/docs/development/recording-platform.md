@@ -36,7 +36,7 @@ ROS Image ──► bounded JPEG archive ──► videos/
 
 录制可选配置 `calibration_snapshot_path` 指向已解算的相机标定结果。配置后，START 会将该文件复制入 session metadata 并写入 SHA-256/version；未配置时 metadata 明确标为 `UNAVAILABLE`，不会把占位内参/外参当成真实几何数据。
 
-网页三维部分只提取 `realman_web_control` 的 Three.js/URDF 实时关节模型；不得带入运动控制按钮、动作协议或 SDK 调用。实时页只读订阅 ROS 快照；回放页采用 LeRobot Studio 风格的工作台布局：左侧 episode 侧栏、中央同步相机拼图与播放时间轴、右侧 Canonical 字段图表/raw inspector，下方显示与帧同步的 3D、关节和夹爪组件。采用深色中性底色与蓝色交互强调；实时监控页布局不变。回放通过 `/api/lerobot`、`/api/lerobot/<session>/summary`、`/api/lerobot/<session>/frames` 和相机 JPEG endpoint 读取已导出的 LeRobot v3 episode。回放绝对时间根据 receipt 的 `first_walltime_ns`、帧索引和固定 `fps` 网格重建，不以 LeRobot 浮点 `timestamp` 反推；单个源时间戳可用该帧策略时间加 `quality.sync_error_ns` 中对应 source 的偏差恢复。摘要将 receipt 的 `quality_sync_source_ids` 暴露给字段检视器，为同步误差向量显示相机/topic 名；帧 API 提供 `source_timestamps_ns` 十进制字符串映射，保留 Unix epoch 纳秒的整数精度。source ID 与向量宽度不一致时拒绝返回猜测结果。Rerun 离线回放不属于当前验收范围。
+网页保留两个互不混合的 3D 组件：`三臂 3D 姿态` 只提取 `realman_web_control` 的 Three.js/URDF 实时关节模型，不带运动控制按钮、动作协议、SDK 调用或末端运动标记；独立的 `末端运动 3D` 显示三臂 FK 末端位置点和轨迹。实时页只读订阅 ROS 快照：末端位置由 `/<arm>/joint_states` 在浏览器 URDF 中做 FK，`/<arm>/cartesian_velocity/state` 的 `commanded_*` 和 `measured_*` 直接透传为 2D 控制/实际速度曲线。末端运动 3D 从同一 FK 末端点绘制两支线速度箭头：蓝色是 `commanded_linear_velocity_mps` 控制输入，绿色是 `measured_linear_velocity_mps` 实测结果；方向表示向量方向、长度按模长缩放。实测箭头仅在 `measured_valid=true` 且 `measured_frame_id=<arm>/base_link` 时绘制。绝不以浏览器帧差分估算速度。回放页采用 LeRobot Studio 风格的工作台布局：左侧 episode 侧栏、中央同步相机拼图与播放时间轴、右侧 Canonical 字段图表/raw inspector，下方显示与帧同步的 3D、关节和夹爪组件。采用深色中性底色与蓝色交互强调；实时监控页布局不变。回放通过 `/api/lerobot`、`/api/lerobot/<session>/summary`、`/api/lerobot/<session>/frames` 和相机 JPEG endpoint 读取已导出的 LeRobot v3 episode。回放绝对时间根据 receipt 的 `first_walltime_ns`、帧索引和固定 `fps` 网格重建，不以 LeRobot 浮点 `timestamp` 反推；单个源时间戳可用该帧策略时间加 `quality.sync_error_ns` 中对应 source 的偏差恢复。摘要将 receipt 的 `quality_sync_source_ids` 暴露给字段检视器，为同步误差向量显示相机/topic 名；帧 API 提供 `source_timestamps_ns` 十进制字符串映射，保留 Unix epoch 纳秒的整数精度。source ID 与向量宽度不一致时拒绝返回猜测结果。Rerun 离线回放不属于当前验收范围。
 向量字段检视器提供独立分量选择，时间序列和当前帧 selected value 同步更新；joint、EE pose/velocity、Cartesian command 优先用 receipt 中的关节名和 frame 为分量命名，其他向量显示索引。
 帧 API 根据数据集 schema 动态返回所有非图像标量/向量字段，包含可选 `action.command.gripper`，因此后续追加数值或布尔 Canonical feature 时不需再为每个字段修改 API；图像仍通过独立的按需 JPEG endpoint 读取。
 
@@ -52,6 +52,7 @@ LeRobot v3 的每个向量 feature 都在 `features.<key>.names` 中声明分量
 - `/<arm>/joint_states` (`sensor_msgs/msg/JointState`)
 - `/<arm>/connected` (`std_msgs/msg/Bool`)
 - `/<arm>/coordinates/state` (`std_msgs/msg/String`)
+- `/<arm>/cartesian_velocity/state` (`realman_msgs/msg/CartesianVelocityState`；由 `arm_velocity_topics` 与 `arm_namespaces` 一一对应，读取 `commanded_*`、`measured_*`、`measured_valid`、`measured_age_ms` 和 `measured_frame_id`)
 - `arm_action_topics` 中配置的 `geometry_msgs/msg/TwistStamped` 控制目标（只读采集）
 - `/tf` (`tf2_msgs/msg/TFMessage`)
 - `gripper_*_topics` 中配置的夹爪位置、力矩到位与告警话题。

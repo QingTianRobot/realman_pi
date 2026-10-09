@@ -4,7 +4,8 @@ Phase 1 uses ``joint_states`` as the placeholder for ``state[0:6]`` (the design
 spec's Cartesian state awaits a driver topic -- risk R2). ``state[6]`` is the
 gripper opening 0..1, converted from the ``gripper_manager`` device-unit
 ``Float64`` position using the ``open_position``/``close_position`` from
-``gripper.yaml`` (0=close, 1=open, matching the manager's own mapping).
+``gripper.yaml``, kept current by the latched ``/<name>/limits`` topic
+(0=close, 1=open, matching the manager's own mapping).
 
 The composer never does control maths: it only reads latest samples and packs
 them. If a required joint sample has not arrived, ``compose`` returns ``None``
@@ -72,6 +73,8 @@ class StateComposer:
         self._warned_missing_gripper: set[str] = set()
         self._subscriptions = []
         if node is not None:
+            from gripper_ros2_msgs.msg import GripperLimits
+            from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
             from sensor_msgs.msg import JointState
             from std_msgs.msg import Float64
 
@@ -87,12 +90,37 @@ class StateComposer:
                         Float64, topic, lambda m, s=side: self._on_gripper(s, m), 10
                     )
                 )
+            # gripper_manager latches the effective endpoints (gripper.yaml overlaid by the
+            # web-editable overrides); follow them so state[6] matches what it commands.
+            limits_qos = QoSProfile(
+                depth=1,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            )
+            for topic in state_cfg.gripper_position_topics.values():
+                name = gripper_name_from_topic(topic)
+                if name:
+                    self._subscriptions.append(
+                        node.create_subscription(
+                            GripperLimits, f"/{name}/limits",
+                            lambda m, n=name: self._on_limits(n, m), limits_qos,
+                        )
+                    )
 
     def _on_joint(self, side: str, msg) -> None:
         self.update_joint(side, list(msg.position))
 
     def _on_gripper(self, side: str, msg) -> None:
         self.update_gripper_position(side, float(msg.data))
+
+    def _on_limits(self, name: str, msg) -> None:
+        self.update_limits(name, msg.open_position, msg.close_position)
+
+    def update_limits(self, name: str, open_position: int, close_position: int) -> None:
+        """Adopt the live endpoints published on ``/<name>/limits``."""
+        if open_position == close_position:
+            return
+        self._limits[name] = (int(open_position), int(close_position))
 
     def update_joint(self, side: str, positions) -> None:
         self._joint[side] = [float(p) for p in positions][:6]

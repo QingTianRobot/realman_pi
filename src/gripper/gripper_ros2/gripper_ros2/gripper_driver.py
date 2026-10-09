@@ -116,6 +116,10 @@ class GripperDevice:
 
 
 class GripperBus:
+    # A target sent through the continuous (request_move) path within this many
+    # seconds marks the device as under live control.
+    STREAMING_WINDOW_S = 2.0
+
     def __init__(self, port: str, baudrate: int = 115200, timeout: float = 0.3,
                  poll_hz: float = 25.0, auto_reconnect: bool = True,
                  reconnect_interval: float = 5.0, command_quiet_s: float = 0.2,
@@ -194,6 +198,25 @@ class GripperBus:
         with self._cmd_lock:
             self._pending[int(slave_id)] = int(position)
         self._wake.set()
+
+    def is_streaming(self, slave_id: int, now: float | None = None) -> bool:
+        """True while continuous control keeps targeting this device."""
+        now = time.time() if now is None else now
+        slave_id = int(slave_id)
+        with self._cmd_lock:
+            if slave_id in self._pending:
+                return True
+            last = self._last_sent.get(slave_id)
+        return last is not None and now - last[0] < self.STREAMING_WINDOW_S
+
+    def apply_endpoints(self, slave_id: int, open_position: int, close_position: int):
+        """Switch a device to new open/close endpoints and forget stale targets."""
+        device = self.get(slave_id)
+        with self._cmd_lock:
+            device.open_position = int(open_position)
+            device.close_position = int(close_position)
+            self._pending.pop(int(slave_id), None)
+            self._last_sent.pop(int(slave_id), None)
 
     def set_active(self, slave_id):
         self.active_slave_id = None if slave_id is None else int(slave_id)

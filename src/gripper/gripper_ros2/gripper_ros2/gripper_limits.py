@@ -140,3 +140,44 @@ def apply_overrides(config: dict, overrides: dict) -> None:
             entry = overrides.get(gripper["name"])
             if entry:
                 gripper.update({field: entry[field] for field in LIMIT_FIELDS})
+
+
+class LimitsStore:
+    """Validate, persist and apply endpoint changes for the live devices."""
+
+    def __init__(self, manager, path, overrides=None):
+        self.manager = manager
+        self.path = Path(path)
+        self.overrides = dict(overrides or {})
+
+    def current(self, name: str) -> dict[str, int]:
+        device = self.manager.get(name)
+        return {
+            "open_position": device.open_position,
+            "close_position": device.close_position,
+            "min_position": device.min_position,
+            "max_position": device.max_position,
+        }
+
+    def set_limits(self, name: str, open_position, close_position,
+                   now: float | None = None) -> tuple[bool, str]:
+        """Return ``(success, message)``; file and device change only on success."""
+        device = self.manager.get(name)
+        problem = validate_limits(
+            open_position, close_position, device.min_position, device.max_position,
+        )
+        if problem:
+            return False, problem
+        if device.bus.is_streaming(device.slave_id, now):
+            return False, "Gripper busy: continuous control is active"
+        updated = {
+            **self.overrides,
+            name: {"open_position": open_position, "close_position": close_position},
+        }
+        try:
+            save_overrides(self.path, updated)
+        except OSError as error:
+            return False, f"Cannot save {self.path}: {error}"
+        self.overrides = updated
+        device.bus.apply_endpoints(device.slave_id, open_position, close_position)
+        return True, f"open_position={open_position}, close_position={close_position}"

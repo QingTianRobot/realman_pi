@@ -75,7 +75,7 @@ def load_overrides(path, ranges) -> tuple[dict[str, dict[str, int]], list[str]]:
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
     except FileNotFoundError:
         return {}, []
-    except (OSError, UnicodeError, yaml.YAMLError) as error:
+    except Exception as error:  # noqa: BLE001 - yaml raises ValueError, RecursionError, ...
         return {}, [f"{path}: cannot read overrides: {error}"]
     if not document:
         return {}, []

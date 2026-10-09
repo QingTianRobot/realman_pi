@@ -25,6 +25,7 @@ class GripperDeploymentTest(unittest.TestCase):
     def test_runtime_overrides_file_is_not_tracked(self):
         ignored = (ROOT / "config/ros/.gitignore").read_text(encoding="utf-8").splitlines()
         self.assertIn("gripper_overrides.yaml", ignored)
+        self.assertIn(".gripper_overrides.yaml.*.tmp", ignored)
 
     def test_limit_interfaces_are_declared_in_the_msgs_package(self):
         msgs = ROOT / "src/gripper/gripper_ros2_msgs"

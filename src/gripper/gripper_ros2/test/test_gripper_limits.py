@@ -136,6 +136,25 @@ class OverridesFileTest(unittest.TestCase):
         self.assertEqual(accepted, {})
         self.assertEqual(len(errors), 1)
 
+    def test_yaml_value_error_is_reported_not_raised(self):
+        # PyYAML 6 raises ValueError (not YAMLError) for an impossible date.
+        self.path.write_text("a: 2001-13-45\n", encoding="utf-8")
+        accepted, errors = load_overrides(self.path, RANGES)
+        self.assertEqual(accepted, {})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("cannot read overrides", errors[0])
+
+    def test_yaml_recursion_error_is_reported_not_raised(self):
+        self.path.write_text("grippers: {}\n", encoding="utf-8")
+        with mock.patch(
+            "gripper_ros2.gripper_limits.yaml.safe_load",
+            side_effect=RecursionError("deep"),
+        ):
+            accepted, errors = load_overrides(self.path, RANGES)
+        self.assertEqual(accepted, {})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("deep", errors[0])
+
     def test_unreadable_path_is_reported_not_raised(self):
         self.path.write_text("grippers: {}\n", encoding="utf-8")
         with mock.patch(

@@ -196,3 +196,9 @@ dialog input { width: 100%; margin: 8px 0 18px; }
   .viewer-footer { font-size: 9px; }
   .record-save-row, .record-apply-row { grid-template-columns: 1fr; }
 }
+.gripper-limits { margin-top: 9px; }
+.gripper-limits summary { cursor: pointer; color: #8fa6a9; font-size: 11px; }
+.gripper-limits[open] summary { margin-bottom: 9px; }
+.gripper-limits-body { display: grid; gap: 9px; }
+.gripper-raw { display: grid; gap: 5px; color: #8fa6a9; font-size: 10px; }
+.gripper-raw input { width: 100%; }

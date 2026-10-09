@@ -1139,3 +1139,95 @@ test("mounts a gripper on every arm and follows live gripper position feedback",
   await emitWebSocketEvent(page, { type: "gripper_state", name: "gripper_left", connected: true, position: 949, speed: 0, current: 0, torque_reached: false, alarm: 0 });
   await expect(viewer).toHaveAttribute("data-gripper-l", "0.00");
 });
+
+test("gripper travel limits are edited, confirmed and applied from the web panel", async ({ page }) => {
+  await page.goto("/");
+  const sentCommands = () => page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map((value) => JSON.parse(value))
+      .filter((item) => item.type === "gripper_command"));
+  const list = (open: number, close: number) => ({
+    type: "gripper_list",
+    grippers: [{ name: "gripper_right", open_position: open, close_position: close, min_position: 0, max_position: 12000 }],
+  });
+  const state = (position: number, speed = 0) => ({
+    type: "gripper_state", name: "gripper_right", connected: true, position, speed, current: 0, torque_reached: false, alarm: 0,
+  });
+
+  await emitWebSocketEvent(page, list(4000, 12000));
+  await emitWebSocketEvent(page, state(4000));
+  await page.locator("#gripper-limits > summary").click();
+  await expect(page.locator("#gripper-open-position")).toHaveValue("4000");
+  await expect(page.locator("#gripper-close-position")).toHaveValue("12000");
+  await expect(page.locator("#gripper-limits-range")).toContainText("0..12000");
+
+  // "Set to current position" only copies the live reading into the input.
+  await emitWebSocketEvent(page, state(52));
+  await page.locator("#gripper-teach-open").click();
+  await expect(page.locator("#gripper-open-position")).toHaveValue("52");
+  expect(await sentCommands()).toHaveLength(0);
+
+  // It is disabled while the gripper is moving.
+  await emitWebSocketEvent(page, state(60, 5));
+  await expect(page.locator("#gripper-teach-open")).toBeDisabled();
+  await emitWebSocketEvent(page, state(52, 0));
+  await expect(page.locator("#gripper-teach-open")).toBeEnabled();
+
+  // Unapplied edits survive a gripper_list broadcast.
+  await page.locator("#gripper-close-position").fill("8500");
+  await emitWebSocketEvent(page, list(77, 11000));
+  await expect(page.locator("#gripper-open-position")).toHaveValue("52");
+  await expect(page.locator("#gripper-close-position")).toHaveValue("8500");
+
+  // Apply asks for confirmation that shows old -> new values, then sends one command.
+  let dialogMessage = "";
+  page.once("dialog", async (dialog) => {
+    dialogMessage = dialog.message();
+    await dialog.accept();
+  });
+  await page.locator("#gripper-limits-apply").click();
+  expect(dialogMessage).toContain("开位 77 → 52");
+  expect(dialogMessage).toContain("闭位 11000 → 8500");
+  const commands = await sentCommands();
+  expect(commands).toHaveLength(1);
+  expect(commands[0]).toMatchObject({
+    command: "set_limits", name: "gripper_right", open_position: 52, close_position: 8500,
+  });
+
+  // The completed result clears the edit state; the broadcast limits drive the readout.
+  await emitWebSocketEvent(page, {
+    type: "gripper_result", name: "gripper_right", command: "set_limits",
+    request_id: commands[0].request_id, state: "completed", success: true, message: "ok",
+  });
+  await emitWebSocketEvent(page, list(52, 8500));
+  await emitWebSocketEvent(page, state(4000));
+  await expect(page.locator("#gripper-open-position")).toHaveValue("52");
+  await expect(page.locator("#gripper-close-position")).toHaveValue("8500");
+  await expect(page.locator("#gripper-feedback")).toContainText("开合 53%");
+
+  // The raw-position slider sends one move_raw on release.
+  await page.locator("#gripper-raw-position").evaluate((element: HTMLInputElement) => {
+    element.value = "1234";
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+    element.dispatchEvent(new Event("change", { bubbles: true }));
+  });
+  await expect(page.locator("#gripper-raw-value")).toHaveText("1234");
+  const jog = (await sentCommands()).filter((item) => item.command === "move_raw");
+  expect(jog).toHaveLength(1);
+  expect(jog[0]).toMatchObject({ name: "gripper_right", position: 1234 });
+});
+
+test("gripper travel limits are disabled without write access", async ({ page }) => {
+  await page.goto("/");
+  // The fake socket sends its own read_only:false hello 20 ms after load; wait for that burst first.
+  await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
+  await emitWebSocketEvent(page, { type: "hello", read_only: true });
+  await emitWebSocketEvent(page, {
+    type: "gripper_list",
+    grippers: [{ name: "gripper_right", open_position: 50, close_position: 8500, min_position: 0, max_position: 8500 }],
+  });
+  await page.locator("#gripper-limits > summary").click();
+  await expect(page.locator("#gripper-limits-apply")).toBeDisabled();
+  await expect(page.locator("#gripper-open-position")).toBeDisabled();
+  await expect(page.locator("#gripper-raw-position")).toBeDisabled();
+});

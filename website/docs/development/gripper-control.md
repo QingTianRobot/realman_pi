@@ -30,8 +30,8 @@
 
 | ROS 名称 | 宿主机和容器内稳定路径 | `slave_id` | 打开/闭合位置 |
 | --- | --- | --- | --- |
-| `gripper_right` | `/dev/realman/gripper_right` | `1` | `4000` / `12000` |
-| `gripper_left` | `/dev/realman/gripper_left` | `1` | `400` / `949` |
+| `gripper_right` | `/dev/realman/gripper_right` | `1` | `50` / `8500` |
+| `gripper_left` | `/dev/realman/gripper_left` | `1` | `20` / `900` |
 | `gripper_mid` | `/dev/realman/gripper_mid` | `1` | `0` / `9000` |
 
 `/dev/ttyUSB0`、`/dev/ttyUSB1`、`/dev/ttyUSB2` 会因重连或启动顺序变化，只能作为稳定别名当前指向的实现细节。开发机可用 `REALMAN_GRIPPER_RIGHT_DEVICE`、`REALMAN_GRIPPER_LEFT_DEVICE`、`REALMAN_GRIPPER_MID_DEVICE` 覆盖 Compose 的宿主路径；容器内路径仍保持 `/dev/realman/gripper_*`。
@@ -143,7 +143,7 @@ AG2F90-C（厂商包名 `ctag2f90c`）是 Changingtek 的两指平行夹爪。�
 1. 网格 URI 改为 `package://rm65_description/meshes/ctag2f90c/…`；
 2. 厂商导出的 mimic 关节限位是 `0..0`，会让按限位截断 mimic 值的加载器（网页 `urdf-loader`、MoveIt）把手指冻住，已改为 mimic 倍率实际产生的范围（`Left_2_Joint` 为 `-1..0`，其余为 `0..1`）。`robot_state_publisher` 不受影响。
 
-**与真实夹爪的对应**：厂商示例脚本把驱动关节线性映射为设备位置 `p = (1 − q) × 9000`（`q` 为 `Left_1_Joint` 弧度，单位 `0.01 mm`），即全开 `q=1` ↔ 位置 `0`，闭合 `q=0` ↔ 位置 `9000`。其寄存器（使能 `0x0100`、位置 `0x0102/0x0103`、速度 `0x0104`、力 `0x0105`、加减速 `0x0106/0x0107`、触发 `0x0108`）与本项目 `rtu_psdk.py` 一致，波特率 `115200`、从站 `1`。本项目的 `percentage` 约定（`0` 闭合、`1` 张开）与模型的 `q`（`0` 闭合、`1` 全开）方向相同。三台机械臂末端的夹爪均为 AG2F90-C，因此网页场景给 `l/m/r` 各挂一个。注意 `gripper.yaml` 中三个夹爪的行程并不一致：`gripper_mid` 是 `0..9000`（与上面的 `9000` 映射吻合），`gripper_right` 是 `4000..12000`，`gripper_left` 是 `400..949`。若三者确为同一型号，这些差异要么是单位不同，要么是配置有误，请现场核对后再改 `gripper.yaml`，本页和网页场景不依赖这些数值。
+**与真实夹爪的对应**：厂商示例脚本把驱动关节线性映射为设备位置 `p = (1 − q) × 9000`（`q` 为 `Left_1_Joint` 弧度，单位 `0.01 mm`），即全开 `q=1` ↔ 位置 `0`，闭合 `q=0` ↔ 位置 `9000`。其寄存器（使能 `0x0100`、位置 `0x0102/0x0103`、速度 `0x0104`、力 `0x0105`、加减速 `0x0106/0x0107`、触发 `0x0108`）与本项目 `rtu_psdk.py` 一致，波特率 `115200`、从站 `1`。本项目的 `percentage` 约定（`0` 闭合、`1` 张开）与模型的 `q`（`0` 闭合、`1` 全开）方向相同。三台机械臂末端的夹爪均为 AG2F90-C，因此网页场景给 `l/m/r` 各挂一个。注意 `gripper.yaml` 中三个夹爪的行程并不一致：`gripper_mid` 是 `0..9000`（与上面的 `9000` 映射吻合），`gripper_right` 是 `50..8500`，`gripper_left` 是 `20..900`。后两个数值来自 2026-09-28 对机械限位的实测标定（右：全开 ≈ 8、全闭 ≈ 8668，堵转到力矩；左：全开 ≈ 1、全闭 ≈ 919），两端各留约 2% 余量避免顶到硬限位。此前开位误设为右 `4000`、左 `400`，会让 `percentage=1`（以及键盘和 Pika 的全开）只张开约 55%，闭位 `12000`／`949` 又超出机械极限，使百分比下端出现一段落在全闭的死区；2026-10-09 已改正。左夹爪量级只有右夹爪的约十分之一，单位可能不同（待确认）。若三者确为同一型号，这些差异要么是单位不同，要么是配置有误，改 `gripper.yaml` 前请现场核对机械限位，本页和网页场景不依赖这些数值。
 
 **当前集成范围**：模型用于两处——文档站首页的三维场景（每臂 `link_6` 末端各挂一个，带开合滑块，见[三臂配置驱动可视化](./three-arm-visualization#末端夹爪与关节滑块)），以及 `:8765` Web 控制页的 URDF 视图（随真实夹爪的位置反馈实时开合，见[WebSocket 浏览器控制](./realman-web-control#夹爪模型与实时开合反馈)）。驱动侧的 `robot_state_publisher` / RViz 的 TF 树**还没有**包含夹爪，真实夹爪仍通过 `gripper_manager` 驱动；要在 RViz 里显示并跟随真实开合，需要另外把 `/<name>/position` 转成夹爪关节状态，这是后续工作。安装位姿 `xyz` / `rpy` 的默认值是"夹爪 `base_link` 原点沿 `link_6` 的 `+z` 方向偏移 `0.014 m`（夹爪底座网格在自身原点后方延伸 `14 mm`，这样底面刚好贴在法兰面上而不与腕部重叠）、无转角"，如果现场有转接板或绕轴向转了角度，请按实物修改 `end_effectors.yaml`。
 

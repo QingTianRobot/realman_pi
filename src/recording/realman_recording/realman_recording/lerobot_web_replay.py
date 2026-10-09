@@ -200,7 +200,7 @@ class LeRobotReplayCatalog:
                         "timestamp_ns": reference.first_walltime_ns
                         + frame_index * round(1_000_000_000 / reference.fps),
                         "state": state,
-                        "action": self._numbers(row.get("action.command.cartesian_velocity", [])),
+                        "action": self._numbers(row.get("action.command_action", [])),
                         "features": features,
                         "source_timestamps_ns": self._source_timestamps_ns(
                             row, reference, frame_index

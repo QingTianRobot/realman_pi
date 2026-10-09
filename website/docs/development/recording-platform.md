@@ -40,7 +40,7 @@ ROS Image ──► bounded JPEG archive ──► videos/
 向量字段检视器提供独立分量选择，时间序列和当前帧 selected value 同步更新；joint、EE pose/velocity、Cartesian command 优先用 receipt 中的关节名和 frame 为分量命名，其他向量显示索引。
 帧 API 根据数据集 schema 动态返回所有非图像标量/向量字段，包含可选 `action.command.gripper`，因此后续追加数值或布尔 Canonical feature 时不需再为每个字段修改 API；图像仍通过独立的按需 JPEG endpoint 读取。
 
-LeRobot v3 的每个向量 feature 都在 `features.<key>.names` 中声明分量名，作为 Studio 风格检视器的维度标签唯一优先来源：关节按配置的机械臂顺序展开为 `<arm>.<joint>`，末端位姿按 `x/y/z/qx/qy/qz/qw` 展开，末端速度与笛卡尔速度按 `vx/vy/vz/wx/wy/wz` 展开，夹爪使用 topic namespace 名称，同步误差使用 `quality_sync_source_ids` 顺序。回放前端先读 feature metadata；旧数据没有 `names` 时才从 receipt canonical metadata 推导兼容标签。布尔质量字段在原始值检视器中仍显示 `true/false`，图表按 `1/0` 绘制。
+LeRobot v3 的每个向量 feature 都在 `features.<key>.names` 中声明分量名，作为 Studio 风格检视器的维度标签唯一优先来源：关节按配置的机械臂顺序展开为 `<arm>.<joint>`，末端位置按 `x/y/z`、末端姿态按 `qx/qy/qz/qw`、末端线速度按 `vx/vy/vz`、末端角速度按 `wx/wy/wz` 展开，控制动作与执行动作按 `vx/vy/vz/wx/wy/wz` 展开，夹爪使用 topic namespace 名称，同步误差使用 `quality_sync_source_ids` 顺序。回放前端先读 feature metadata；旧数据没有 `names` 时才从 receipt canonical metadata 推导兼容标签。布尔质量字段在原始值检视器中仍显示 `true/false`，图表按 `1/0` 绘制。
 
 此行为参考 [LeRobot Studio 的图表数据模型](https://github.com/ioai-tech/lerobot-studio/blob/main/src/react/components/panels/ChartPanel/chartPanelModel.ts)：保留其 feature metadata 驱动维度命名、任意 observation/action 数值字段进入检视器的做法，但沿用本项目现有 Web 工作台和 `/api/lerobot` 只读 API，不引入 Studio 的 React 应用或额外服务。
 回放相机 JPEG 按请求生成并缩放至 640×360、quality 65；这只影响 Web 预览传输，不修改 LeRobot 原视频。
@@ -131,31 +131,18 @@ docker compose up realman_recording
 5. `lerobot_web_replay.py`：提供只读 LeRobot episode catalog 和按需图像解码；默认最多缓存 4 个空闲 dataset 句柄，按 LRU 淘汰；同一 episode 的 SDK 读取经独立锁串行化，正在使用的句柄固定到读取结束。高并发时活跃句柄可令缓存暂时超过 4 个，读操作结束后重新收敛。Web handler 将 SDK 读取和 JPEG 解码移到工作线程，避免慢回放请求阻塞实时快照；`replay.py`（已并入 `realman_recording` 包）仍是后续 Rerun 回放实验骨架，当前不作为验收路径。
 6. 已在工控机临时 recording 容器完成 colcon、recorder/Web bridge 启动、`/healthz`、空数据集 `/api/lerobot`、失败 PREPARE 边界和 Domain 65 下 3 秒 state-only MCAP 录制（819 条消息、无 drop/write error）；另有隔离 ROS graph 的合成 Service→MCAP→DISCARD 集成测试、SIGKILL 活跃 recorder 后由新 recorder ROS 节点恢复 manifest 的进程级测试，以及用 LeRobot SDK fixture 完成 HTTP list/summary/frame/JPEG 回读。WebSocket 慢客户端自动回归使用独立 asyncio loop 和阻塞 client，验证 producer 非阻塞、快照合并及超时清理。待真机验收包括四路相机成功录制和真实 episode ADOPT/导出/回放；待故障注入包括真实磁盘耗尽（当前仅有 writer `OSError` 注入）。
 
-`recording-test` 增量镜像的权威构建定义为仓库根目录 `config/docker/recording-test.Dockerfile`，
-它基于已有 `rm65-humble-rviz:local`，安装 MCAP storage plugin、CPU PyTorch、LeRobot、Pillow 与 PyArrow，
-并只构建 recording ROS 包。构建命令：
+录制包由基础镜像 `rm65-humble-rviz:local` 直接构建：`config/docker/ros2-humble-rviz.Dockerfile` 已把
+`realman_recording` / `realman_recording_msgs` 加入 colcon 构建清单，并安装 ffmpeg、MCAP storage
+plugin、CPU PyTorch、LeRobot、Pillow 与 PyArrow。没有独立的 `rm65-recording` overlay 镜像；
+`./rm65 up` 会把录制 recorder 与回放网页随三臂驱动、Web control 一起启动：
 
 ```bash
-docker build --network=host -f config/docker/recording-test.Dockerfile -t rm65-recording:verified .
-```
-
-大型 PyTorch/LeRobot wheel 的单连接读取超时默认为 300 秒；受限网络可用
-`--build-arg PIP_NETWORK_TIMEOUT=<秒>` 调整。构建完成后，容器中 `ros2 bag list storage`
-必须包含 `mcap`，并且 recording 测试通过后才更新 `rm65-recording:test` tag。
-
-当工控机上的 `rm65-recording:test` 已有上述依赖、只需要同步本地 recording 源码时，可用
-`config/docker/recording-test-refresh.Dockerfile` 做快速源码刷新：它以当前测试镜像为 base，复制 recording
-源码与 ROS 配置后重建两个 recording 包，不重新安装系统/ML 依赖。该 refresh 镜像不独立可复现，不能替代完整构建；
-新 tag 必须通过完整 recording 测试后才能更新为 `rm65-recording:test`。
-
-```bash
-docker build --network=host \
-  -f config/docker/recording-test-refresh.Dockerfile \
-  -t rm65-recording:verified .
+./rm65 build    # 重建 rm65-humble-rviz:local（含录制包与全部依赖）
+./rm65 up       # 启动三臂驱动、Web control、录制 recorder + 回放网页（127.0.0.1:8770）
 ```
 
 启动前用 `ros2 bag list storage | grep -x mcap` 检查插件；回放/导出环境还需确认 Python 能导入
-`lerobot`、`PIL` 和 `pyarrow`。如果宿主 Docker 网络能够正常解析镜像域名，可省略 `--network=host`。
+`lerobot`、`PIL` 和 `pyarrow`。
 
 在安装了 `website/` npm 依赖和 Playwright Chromium 的开发机上，可运行回放浏览器回归（桌面与窄屏各一例）：
 

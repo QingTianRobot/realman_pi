@@ -126,11 +126,19 @@ class Pi05Adapter:
         valid = method() if callable(method) else valid
         if isinstance(valid, (list, tuple)):
             valid = valid[0] if valid else False
+        ee_position = values("observation.ee_position")
+        ee_rotation = values("observation.ee_rotation")
+        if len(ee_position) % 3 or len(ee_rotation) != (len(ee_position) // 3) * 4:
+            raise ValueError("split EE position/rotation layout is inconsistent")
+        ee_pose: list[float] = []
+        for arm in range(len(ee_position) // 3):
+            ee_pose.extend(ee_position[arm * 3:(arm + 1) * 3])
+            ee_pose.extend(ee_rotation[arm * 4:(arm + 1) * 4])
         return CanonicalFrame(
             joint_position=(), joint_velocity=(),
-            ee_pose_base=values("observation.ee_pose_base"), ee_velocity_base=(),
+            ee_pose_base=tuple(ee_pose), ee_velocity_base=(),
             gripper_position=values("observation.gripper_position"),
-            command_cartesian_velocity=values("action.command.cartesian_velocity"),
+            command_cartesian_velocity=values("action.command_action"),
             command_gripper=(
                 values("action.command.gripper") if "action.command.gripper" in features else None
             ), valid=bool(valid), sync_error_ns=(),

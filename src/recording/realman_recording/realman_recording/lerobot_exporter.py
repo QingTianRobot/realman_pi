@@ -44,6 +44,32 @@ class ExportRequest:
     progress_callback: Callable[[int, int], None] | None = None
 
 
+def _split_ee_pose(pose: Sequence[float], arm_count: int) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    """Split flat ``[x, y, z, qx, qy, qz, qw] * arm_count`` into position and rotation."""
+    if len(pose) != arm_count * 7:
+        raise ValueError("EE pose must be 7 values per arm")
+    position: list[float] = []
+    rotation: list[float] = []
+    for arm in range(arm_count):
+        values = pose[arm * 7:(arm + 1) * 7]
+        position.extend(values[:3])
+        rotation.extend(values[3:])
+    return tuple(position), tuple(rotation)
+
+
+def _split_ee_velocity(velocity: Sequence[float], arm_count: int) -> tuple[tuple[float, ...], tuple[float, ...]]:
+    """Split flat ``[vx, vy, vz, wx, wy, wz] * arm_count`` into linear and angular."""
+    if len(velocity) != arm_count * 6:
+        raise ValueError("EE velocity must be 6 values per arm")
+    linear: list[float] = []
+    angular: list[float] = []
+    for arm in range(arm_count):
+        values = velocity[arm * 6:(arm + 1) * 6]
+        linear.extend(values[:3])
+        angular.extend(values[3:])
+    return tuple(linear), tuple(angular)
+
+
 class LeRobotExporter:
     """Convert a finalized session into a single-episode LeRobot dataset."""
 
@@ -100,13 +126,18 @@ class LeRobotExporter:
             try:
                 task = str(manifest.get("metadata", {}).get("task") or "recording")
                 for index, frame in enumerate(canonical):
+                    ee_position, ee_rotation = _split_ee_pose(frame.ee_pose_base, schema.arm_count)
+                    ee_linear, ee_angular = _split_ee_velocity(frame.ee_velocity_base, schema.arm_count)
                     payload = {
                         "observation.joint_position": np.asarray(frame.joint_position, dtype=np.float32),
                         "observation.joint_velocity": np.asarray(frame.joint_velocity, dtype=np.float32),
-                        "observation.ee_pose_base": np.asarray(frame.ee_pose_base, dtype=np.float32),
-                        "observation.ee_velocity_base": np.asarray(frame.ee_velocity_base, dtype=np.float32),
+                        "observation.ee_position": np.asarray(ee_position, dtype=np.float32),
+                        "observation.ee_rotation": np.asarray(ee_rotation, dtype=np.float32),
+                        "observation.ee_linear_velocity": np.asarray(ee_linear, dtype=np.float32),
+                        "observation.ee_angular_velocity": np.asarray(ee_angular, dtype=np.float32),
                         "observation.gripper_position": np.asarray(frame.gripper_position, dtype=np.float32),
-                        "action.command.cartesian_velocity": np.asarray(frame.command_cartesian_velocity, dtype=np.float32),
+                        "action.command_action": np.asarray(frame.command_cartesian_velocity, dtype=np.float32),
+                        "action.executed_action": np.asarray(frame.ee_velocity_base, dtype=np.float32),
                         "quality.valid": np.asarray([frame.valid], dtype=np.bool_),
                         "quality.sync_error_ns": np.asarray(frame.sync_error_ns, dtype=np.int64),
                         "task": task,

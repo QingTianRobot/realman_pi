@@ -2,8 +2,20 @@
 from pathlib import Path
 
 from realman_recording.lerobot_align import TimedSample
-from realman_recording.lerobot_exporter import LeRobotExporter
+from realman_recording.lerobot_exporter import LeRobotExporter, _split_ee_pose, _split_ee_velocity
 from realman_recording.lerobot_schema import schema_from_parameters
+
+
+def test_split_ee_pose_and_velocity_preserve_arm_order():
+    pose = (1.0, 2.0, 3.0, 0.0, 0.0, 0.0, 1.0) * 3  # 3 arms × [x,y,z,qx,qy,qz,qw]
+    position, rotation = _split_ee_pose(pose, 3)
+    assert position == (1.0, 2.0, 3.0, 1.0, 2.0, 3.0, 1.0, 2.0, 3.0)
+    assert rotation == (0.0, 0.0, 0.0, 1.0) * 3
+
+    velocity = tuple(float(index) for index in range(18))  # 3 arms × [vx,vy,vz,wx,wy,wz]
+    linear, angular = _split_ee_velocity(velocity, 3)
+    assert linear == (0.0, 1.0, 2.0, 6.0, 7.0, 8.0, 12.0, 13.0, 14.0)
+    assert angular == (3.0, 4.0, 5.0, 9.0, 10.0, 11.0, 15.0, 16.0, 17.0)
 
 
 def test_v3_anchor_grid_is_fixed_fps_not_four_camera_union(tmp_path: Path):

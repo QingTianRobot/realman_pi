@@ -347,32 +347,17 @@ cd website
 npm run build
 ```
 
-`recording-test` 的独立 Humble overlay 定义在
-`config/docker/recording-test.Dockerfile`。从仓库根目录构建新测试镜像（保留旧 tag，方便回滚）：
+录制运行时由基础镜像 `rm65-humble-rviz:local` 直接提供：`config/docker/ros2-humble-rviz.Dockerfile` 已把
+`realman_recording` / `realman_recording_msgs` 加入构建清单，并安装 MCAP storage plugin、CPU PyTorch、
+LeRobot、Pillow 与 PyArrow。没有独立的 `rm65-recording` overlay 镜像，重建基础镜像即可：
 
 ```bash
-docker build --network=host \
-  -f config/docker/recording-test.Dockerfile \
-  -t rm65-recording:verified .
+./rm65 build    # 重建 rm65-humble-rviz:local（含录制包与全部依赖）
+./rm65 up       # 启动三臂驱动、Web control、录制 recorder + 回放网页（127.0.0.1:8770）
 ```
 
-`--network=host` 用于 Docker bridge DNS 无法解析 apt/PyPI mirror 的主机环境；网络正常时也可省略。
-大依赖下载默认允许 300 秒的单连接读取超时；网络环境需要时可用
-`--build-arg PIP_NETWORK_TIMEOUT=<秒>` 覆盖，不需要手工修改 Dockerfile。
 构建后确认 `source /opt/ros/humble/setup.bash && ros2 bag list storage | grep -x mcap` 能列出 `mcap`，
-且 Python 可导入 `lerobot`、`PIL`、`pyarrow`，再用该镜像执行 recording-test。
-
-工控机上依赖已安装且验证过后，仅更新工作区源码时可使用
-`config/docker/recording-test-refresh.Dockerfile`，避免重新下载大型 PyTorch/LeRobot wheels：
-
-```bash
-docker build --network=host \
-  -f config/docker/recording-test-refresh.Dockerfile \
-  -t rm65-recording:verified .
-```
-
-这个快速刷新 Dockerfile 默认以 `rm65-recording:test` 为基础，只复制 recording 源码/配置并重建 ROS 包；
-它不是独立构建，不能替代上面的完整 Dockerfile。完成后仍须运行整个 recording 测试集，验证通过后再把新镜像标记为 `rm65-recording:test`。
+且 Python 可导入 `lerobot`、`PIL`、`pyarrow`，再运行 recording 测试。
 
 真实运行时再执行：
 

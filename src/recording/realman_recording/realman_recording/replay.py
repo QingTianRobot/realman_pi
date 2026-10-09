@@ -120,8 +120,10 @@ class ReplayPlayer:
         """Log one LeRobot frame without assuming a model-specific state/action vector."""
         scalar_features = (
             "observation.joint_position", "observation.joint_velocity",
-            "observation.ee_pose_base", "observation.ee_velocity_base",
-            "observation.gripper_position", "action.command.cartesian_velocity",
+            "observation.ee_position", "observation.ee_rotation",
+            "observation.ee_linear_velocity", "observation.ee_angular_velocity",
+            "observation.gripper_position",
+            "action.command_action", "action.executed_action",
             "action.command.gripper", "quality.sync_error_ns",
         )
         for feature in scalar_features:

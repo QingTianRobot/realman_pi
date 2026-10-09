@@ -728,16 +728,22 @@ function componentLabels(feature: string, count: number): string[] {
     return arms.flatMap((arm) => jointNames.map((joint) => `${arm}.${joint}`));
   }
 
-  const poseAxes = ["x", "y", "z", "qx", "qy", "qz", "qw"];
+  const positionAxes = ["x", "y", "z"];
+  const rotationAxes = ["qx", "qy", "qz", "qw"];
+  const linearAxes = ["vx", "vy", "vz"];
+  const angularAxes = ["wx", "wy", "wz"];
   const velocityAxes = ["vx", "vy", "vz", "wx", "wy", "wz"];
   const command = canonical.cartesian_command as { frames?: unknown } | undefined;
   const commandFrames = Array.isArray(command?.frames)
     ? command.frames.filter((name): name is string => typeof name === "string")
     : [];
-  const axes = feature === "observation.ee_pose_base" ? poseAxes
-    : feature === "observation.ee_velocity_base" || feature === "action.command.cartesian_velocity" ? velocityAxes
+  const axes = feature === "observation.ee_position" ? positionAxes
+    : feature === "observation.ee_rotation" ? rotationAxes
+    : feature === "observation.ee_linear_velocity" ? linearAxes
+    : feature === "observation.ee_angular_velocity" ? angularAxes
+    : feature === "action.command_action" || feature === "action.executed_action" ? velocityAxes
       : [];
-  const frameNames = feature === "action.command.cartesian_velocity" ? commandFrames : baseFrames;
+  const frameNames = feature === "action.command_action" ? commandFrames : baseFrames;
   if (axes.length && frameNames.length * axes.length === count) {
     return frameNames.flatMap((frameName) => axes.map((axis) => `${frameName.split("/")[0]}.${axis}`));
   }

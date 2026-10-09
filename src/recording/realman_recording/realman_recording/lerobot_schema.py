@@ -95,6 +95,22 @@ class LeRobotV3Schema:
         return 6 * self.arm_count
 
     @property
+    def ee_position_dim(self) -> int:
+        return 3 * self.arm_count
+
+    @property
+    def ee_rotation_dim(self) -> int:
+        return 4 * self.arm_count
+
+    @property
+    def ee_linear_velocity_dim(self) -> int:
+        return 3 * self.arm_count
+
+    @property
+    def ee_angular_velocity_dim(self) -> int:
+        return 3 * self.arm_count
+
+    @property
     def gripper_dim(self) -> int:
         return len(self.gripper_position_topics)
 
@@ -140,9 +156,17 @@ class LeRobotV3Schema:
         if missing:
             raise ValueError(f"missing camera image shapes: {sorted(missing)}")
         joint_components = [f"{arm}.{joint}" for arm in self.arm_ids for joint in self.joint_names]
-        ee_pose_components = [
-            f"{arm}.{axis}" for arm in self.arm_ids
-            for axis in ("x", "y", "z", "qx", "qy", "qz", "qw")
+        ee_position_components = [
+            f"{arm}.{axis}" for arm in self.arm_ids for axis in ("x", "y", "z")
+        ]
+        ee_rotation_components = [
+            f"{arm}.{axis}" for arm in self.arm_ids for axis in ("qx", "qy", "qz", "qw")
+        ]
+        ee_linear_components = [
+            f"{arm}.{axis}" for arm in self.arm_ids for axis in ("vx", "vy", "vz")
+        ]
+        ee_angular_components = [
+            f"{arm}.{axis}" for arm in self.arm_ids for axis in ("wx", "wy", "wz")
         ]
         ee_velocity_components = [
             f"{arm}.{axis}" for arm in self.arm_ids
@@ -160,17 +184,26 @@ class LeRobotV3Schema:
             "observation.joint_velocity": {
                 "dtype": "float32", "shape": (self.joint_dim,), "names": joint_components,
             },
-            "observation.ee_pose_base": {
-                "dtype": "float32", "shape": (self.ee_pose_dim,), "names": ee_pose_components,
+            "observation.ee_position": {
+                "dtype": "float32", "shape": (self.ee_position_dim,), "names": ee_position_components,
             },
-            "observation.ee_velocity_base": {
-                "dtype": "float32", "shape": (self.ee_velocity_dim,), "names": ee_velocity_components,
+            "observation.ee_rotation": {
+                "dtype": "float32", "shape": (self.ee_rotation_dim,), "names": ee_rotation_components,
+            },
+            "observation.ee_linear_velocity": {
+                "dtype": "float32", "shape": (self.ee_linear_velocity_dim,), "names": ee_linear_components,
+            },
+            "observation.ee_angular_velocity": {
+                "dtype": "float32", "shape": (self.ee_angular_velocity_dim,), "names": ee_angular_components,
             },
             "observation.gripper_position": {
                 "dtype": "float32", "shape": (self.gripper_dim,), "names": gripper_components,
             },
-            "action.command.cartesian_velocity": {
+            "action.command_action": {
                 "dtype": "float32", "shape": (self.command_dim,), "names": command_components,
+            },
+            "action.executed_action": {
+                "dtype": "float32", "shape": (self.ee_velocity_dim,), "names": ee_velocity_components,
             },
             "quality.valid": {"dtype": "bool", "shape": (1,), "names": ["valid"]},
             "quality.sync_error_ns": {

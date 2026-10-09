@@ -25,25 +25,36 @@ def test_schema_features_are_v3_writer_features():
     features = _schema().features({camera: (240, 320, 3) for camera in _schema().camera_ids})
     assert features["observation.joint_position"]["shape"] == (18,)
     assert features["observation.joint_velocity"]["shape"] == (18,)
-    assert features["observation.ee_pose_base"]["shape"] == (21,)
-    assert features["observation.ee_velocity_base"]["shape"] == (18,)
+    assert features["observation.ee_position"]["shape"] == (9,)
+    assert features["observation.ee_rotation"]["shape"] == (12,)
+    assert features["observation.ee_linear_velocity"]["shape"] == (9,)
+    assert features["observation.ee_angular_velocity"]["shape"] == (9,)
     assert features["observation.gripper_position"]["shape"] == (3,)
-    assert features["action.command.cartesian_velocity"]["shape"] == (18,)
+    assert features["action.command_action"]["shape"] == (18,)
+    assert features["action.executed_action"]["shape"] == (18,)
     assert features["action.command.gripper"]["shape"] == (3,)
     assert features["quality.valid"]["shape"] == (1,)
     assert features["quality.sync_error_ns"]["shape"] == (16,)
     assert features["observation.joint_position"]["names"] == [
         f"{arm}.joint_{joint}" for arm in ("l", "m", "r") for joint in range(1, 7)
     ]
-    assert features["observation.ee_pose_base"]["names"] == [
-        f"{arm}.{axis}" for arm in ("l", "m", "r")
-        for axis in ("x", "y", "z", "qx", "qy", "qz", "qw")
+    assert features["observation.ee_position"]["names"] == [
+        f"{arm}.{axis}" for arm in ("l", "m", "r") for axis in ("x", "y", "z")
     ]
-    assert features["observation.ee_velocity_base"]["names"] == [
+    assert features["observation.ee_rotation"]["names"] == [
+        f"{arm}.{axis}" for arm in ("l", "m", "r") for axis in ("qx", "qy", "qz", "qw")
+    ]
+    assert features["observation.ee_linear_velocity"]["names"] == [
+        f"{arm}.{axis}" for arm in ("l", "m", "r") for axis in ("vx", "vy", "vz")
+    ]
+    assert features["observation.ee_angular_velocity"]["names"] == [
+        f"{arm}.{axis}" for arm in ("l", "m", "r") for axis in ("wx", "wy", "wz")
+    ]
+    assert features["action.command_action"]["names"] == [
         f"{arm}.{axis}" for arm in ("l", "m", "r")
         for axis in ("vx", "vy", "vz", "wx", "wy", "wz")
     ]
-    assert features["action.command.cartesian_velocity"]["names"] == [
+    assert features["action.executed_action"]["names"] == [
         f"{arm}.{axis}" for arm in ("l", "m", "r")
         for axis in ("vx", "vy", "vz", "wx", "wy", "wz")
     ]

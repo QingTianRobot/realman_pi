@@ -44,9 +44,10 @@ def test_pi05_adapter_rot6d_and_dimension_contract_are_explicit():
 def test_pi05_adapter_accepts_lerobot_feature_mapping():
     frame = _frame()
     sample = Pi05Adapter(_config()).adapt({
-        "observation.ee_pose_base": frame.ee_pose_base,
+        "observation.ee_position": (1.0, 2.0, 3.0) * 3,
+        "observation.ee_rotation": (0.0, 0.0, 0.0, 1.0) * 3,
         "observation.gripper_position": frame.gripper_position,
-        "action.command.cartesian_velocity": frame.command_cartesian_velocity,
+        "action.command_action": frame.command_cartesian_velocity,
         "quality.valid": (True,),
     })
     assert sample["action"] == frame.command_cartesian_velocity

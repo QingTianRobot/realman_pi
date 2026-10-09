@@ -2139,6 +2139,216 @@ Expected: 夹爪停在 `300` 附近；网页"开合"读数为 100%；再把开�
 
 ---
 
+### Task 11: `policy_bridge` 跟随 `/<name>/limits`（最终评审补充，在 Task 10 上线前完成）
+
+最终评审发现：`policy_bridge` 的 `StateComposer` 只在启动时从 `gripper.yaml` 读一次开位、闭位，网页修改后观测里的 `state[6]`（夹爪开合 0..1）会与 `gripper_manager` 实际使用的行程不一致。用户已决定让它订阅 `/<name>/limits`。
+
+**Files:**
+- Modify: `src/policy_bridge/policy_bridge/observation/state_composer.py`
+- Modify: `src/policy_bridge/package.xml`
+- Modify: `src/policy_bridge/test/test_state_composer.py`
+- Modify: `config/ros/policy_bridge.yaml`（仅注释）
+- Modify: `website/docs/development/policy-bridge.md`
+
+**Interfaces:**
+- Consumes: `gripper_ros2_msgs.msg.GripperLimits`（字段 `open_position`、`close_position`、`min_position`、`max_position`，`int32`）；话题 `/<name>/limits`，可靠、`transient_local`、深度 1。
+- Produces: `StateComposer.update_limits(name: str, open_position: int, close_position: int) -> None`（`open_position == close_position` 时忽略）；`StateComposer._on_limits(name: str, msg) -> None`。
+
+- [ ] **Step 1: 写失败的测试**
+
+在 `src/policy_bridge/test/test_state_composer.py` 末尾追加：
+
+```python
+def test_update_limits_changes_the_percentage_mapping(tmp_path):
+    composer = StateComposer(None, _state_cfg(_write_gripper_yaml(tmp_path)))
+    composer.update_joint("left", [0, 0, 0, 0, 0, 0])
+    composer.update_gripper_position("left", 674.5)  # gripper.yaml: 400..949 -> 0.5
+    assert abs(float(composer.compose("left")[6]) - 0.5) < 1e-6
+    composer.update_limits("gripper_left", 20, 900)  # endpoints edited from the web UI
+    composer.update_gripper_position("left", 460.0)  # (460 - 900) / (20 - 900) = 0.5
+    assert abs(float(composer.compose("left")[6]) - 0.5) < 1e-6
+    composer.update_gripper_position("left", 20.0)   # new open position -> 1.0
+    assert abs(float(composer.compose("left")[6]) - 1.0) < 1e-6
+
+
+def test_update_limits_works_without_a_gripper_yaml(tmp_path):
+    composer = StateComposer(None, _state_cfg(str(tmp_path / "missing.yaml")))
+    composer.update_joint("right", [0, 0, 0, 0, 0, 0])
+    composer.update_limits("gripper_right", 50, 8500)
+    composer.update_gripper_position("right", 50.0)
+    assert abs(float(composer.compose("right")[6]) - 1.0) < 1e-6
+
+
+def test_update_limits_ignores_a_degenerate_span(tmp_path):
+    composer = StateComposer(None, _state_cfg(_write_gripper_yaml(tmp_path)))
+    composer.update_limits("gripper_left", 500, 500)
+    composer.update_joint("left", [0, 0, 0, 0, 0, 0])
+    composer.update_gripper_position("left", 949.0)  # still the yaml 400..949 mapping
+    assert float(composer.compose("left")[6]) == 0.0
+
+
+def test_on_limits_forwards_the_message_fields(tmp_path):
+    from types import SimpleNamespace
+
+    composer = StateComposer(None, _state_cfg(_write_gripper_yaml(tmp_path)))
+    composer._on_limits(
+        "gripper_left",
+        SimpleNamespace(open_position=20, close_position=900, min_position=0, max_position=900),
+    )
+    assert composer._limits["gripper_left"] == (20, 900)
+
+
+def test_composer_subscribes_to_latched_limits_topics(tmp_path):
+    pytest.importorskip("rclpy")
+    pytest.importorskip("gripper_ros2_msgs")
+    from gripper_ros2_msgs.msg import GripperLimits
+    from rclpy.qos import QoSDurabilityPolicy, QoSReliabilityPolicy
+
+    class RecordingNode:
+        def __init__(self):
+            self.subscriptions = []
+
+        def create_subscription(self, msg_type, topic, callback, qos):
+            self.subscriptions.append((msg_type, topic, callback, qos))
+            return object()
+
+    node = RecordingNode()
+    composer = StateComposer(node, _state_cfg(_write_gripper_yaml(tmp_path)))
+    limits = {topic: (msg_type, callback, qos) for msg_type, topic, callback, qos in node.subscriptions
+              if topic.endswith("/limits")}
+    assert set(limits) == {"/gripper_left/limits", "/gripper_right/limits"}
+    msg_type, callback, qos = limits["/gripper_left/limits"]
+    assert msg_type is GripperLimits
+    assert qos.durability == QoSDurabilityPolicy.TRANSIENT_LOCAL
+    assert qos.reliability == QoSReliabilityPolicy.RELIABLE
+    assert qos.depth == 1
+    callback(GripperLimits(open_position=20, close_position=900, min_position=0, max_position=900))
+    assert composer._limits["gripper_left"] == (20, 900)
+```
+
+并把文件顶部的 `import numpy as np` 之后加一行 `import pytest`（与现有导入保持字母顺序即可）。
+
+- [ ] **Step 2: 运行，确认失败**
+
+Run: `cd src/policy_bridge && ~/.venvs/realman-web/bin/python -m pytest test/test_state_composer.py -q`
+Expected: 前四个新用例 FAIL（`AttributeError: ... 'update_limits'`），第五个本地 SKIPPED。若本地缺少 `numpy`，先 `~/.venvs/realman-web/bin/pip install numpy`。
+
+- [ ] **Step 3: 实现**
+
+在 `state_composer.py` 中，把
+
+```python
+            from sensor_msgs.msg import JointState
+            from std_msgs.msg import Float64
+```
+
+替换为
+
+```python
+            from gripper_ros2_msgs.msg import GripperLimits
+            from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
+            from sensor_msgs.msg import JointState
+            from std_msgs.msg import Float64
+```
+
+把
+
+```python
+            for side, topic in state_cfg.gripper_position_topics.items():
+                self._subscriptions.append(
+                    node.create_subscription(
+                        Float64, topic, lambda m, s=side: self._on_gripper(s, m), 10
+                    )
+                )
+```
+
+替换为
+
+```python
+            for side, topic in state_cfg.gripper_position_topics.items():
+                self._subscriptions.append(
+                    node.create_subscription(
+                        Float64, topic, lambda m, s=side: self._on_gripper(s, m), 10
+                    )
+                )
+            # gripper_manager latches the effective endpoints (gripper.yaml overlaid by the
+            # web-editable overrides); follow them so state[6] matches what it commands.
+            limits_qos = QoSProfile(
+                depth=1,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            )
+            for topic in state_cfg.gripper_position_topics.values():
+                name = gripper_name_from_topic(topic)
+                if name:
+                    self._subscriptions.append(
+                        node.create_subscription(
+                            GripperLimits, f"/{name}/limits",
+                            lambda m, n=name: self._on_limits(n, m), limits_qos,
+                        )
+                    )
+```
+
+在 `    def update_joint(self, side: str, positions) -> None:` 之前插入：
+
+```python
+    def _on_limits(self, name: str, msg) -> None:
+        self.update_limits(name, msg.open_position, msg.close_position)
+
+    def update_limits(self, name: str, open_position: int, close_position: int) -> None:
+        """Adopt the live endpoints published on ``/<name>/limits``."""
+        if open_position == close_position:
+            return
+        self._limits[name] = (int(open_position), int(close_position))
+
+```
+
+把模块文档字符串中的 "using the ``open_position``/``close_position`` from ``gripper.yaml``" 改为 "using the ``open_position``/``close_position`` from ``gripper.yaml``, kept current by the latched ``/<name>/limits`` topic"（保持其余文字不变）。
+
+在 `package.xml` 的 `<exec_depend>geometry_msgs</exec_depend>` 之后加一行：
+
+```xml
+  <!-- GripperLimits (latched effective open/close endpoints). -->
+  <exec_depend>gripper_ros2_msgs</exec_depend>
+```
+
+把 `config/ros/policy_bridge.yaml` 中
+
+```
+    # state[6] 夹爪开合 0~1。来源为 gripper_manager 发布的 Float64 设备单位，
+    # 用 gripper_config 的 open/close_position 换算（0=close, 1=open）。
+```
+
+替换为
+
+```
+    # state[6] 夹爪开合 0~1。来源为 gripper_manager 发布的 Float64 设备单位，
+    # 用 open/close_position 换算（0=close, 1=open）：启动时取 gripper_config，
+    # 之后跟随 gripper_manager 发布的 /<name>/limits（网页"行程设置"修改后立即生效）。
+```
+
+在 `website/docs/development/policy-bridge.md` 的订阅表中，于夹爪位置一行之后插入：
+
+```
+| 夹爪行程 | `/gripper_left/limits`、`/gripper_right/limits` | `gripper_ros2_msgs/GripperLimits`（可靠、`transient_local`、深度 1）；`state[6]` 的开位、闭位随它更新 |
+```
+
+- [ ] **Step 4: 运行本地测试，确认通过**
+
+Run: `cd src/policy_bridge && ~/.venvs/realman-web/bin/python -m pytest test/test_state_composer.py -q`
+Expected: 前四个新用例与原有用例 PASS，订阅用例 SKIPPED。再运行 `python3 -m py_compile src/policy_bridge/policy_bridge/observation/state_composer.py`，无输出。
+
+- [ ] **Step 5: 提交**
+
+```bash
+git add src/policy_bridge/policy_bridge/observation/state_composer.py src/policy_bridge/package.xml src/policy_bridge/test/test_state_composer.py config/ros/policy_bridge.yaml website/docs/development/policy-bridge.md
+git commit -m "feat(policy-bridge): follow the latched /<name>/limits endpoints"
+```
+
+（容器内验证由控制者完成：编译 `gripper_ros2_msgs` 与 `policy_bridge`，运行 `src/policy_bridge/test`，订阅用例此时真正执行。）
+
+---
+
 ## Self-Review（已对照设计文档逐条检查）
 
 **Spec 覆盖：**

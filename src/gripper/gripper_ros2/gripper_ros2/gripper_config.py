@@ -9,8 +9,11 @@ import yaml
 
 
 NAME_PATTERN = re.compile(r"^[A-Za-z][A-Za-z0-9_]*$")
-SERVICE_SUFFIXES = ("open", "close", "reset", "enable", "grasp_check", "percentage", "calibrate")
-TOPIC_SUFFIXES = ("position", "speed", "current", "torque_reached", "alarm", "connected")
+SERVICE_SUFFIXES = (
+    "open", "close", "reset", "enable", "grasp_check", "percentage", "calibrate",
+    "set_limits", "move_raw",
+)
+TOPIC_SUFFIXES = ("position", "speed", "current", "torque_reached", "alarm", "connected", "limits")
 COMMAND_SUFFIXES = ("percentage/command",)
 
 

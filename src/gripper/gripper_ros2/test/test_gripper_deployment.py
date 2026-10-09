@@ -22,6 +22,17 @@ class GripperDeploymentTest(unittest.TestCase):
         self.assertIn("self.manager.request_move(name, target)", command_callback)
         self.assertNotIn("wait_until_pos_or_torque", command_callback)
 
+    def test_runtime_overrides_file_is_not_tracked(self):
+        ignored = (ROOT / "config/ros/.gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertIn("gripper_overrides.yaml", ignored)
+
+    def test_limit_interfaces_are_declared_in_the_msgs_package(self):
+        msgs = ROOT / "src/gripper/gripper_ros2_msgs"
+        cmake = (msgs / "CMakeLists.txt").read_text(encoding="utf-8")
+        for path in ("msg/GripperLimits.msg", "srv/SetGripperLimits.srv", "srv/MoveGripperRaw.srv"):
+            self.assertTrue((msgs / path).is_file(), path)
+            self.assertIn(f'"{path}"', cmake)
+
     def test_root_config_uses_three_stable_gripper_aliases(self):
         config = load_gripper_config(ROOT / "config/ros/gripper.yaml")
         ports = {bus["port"] for bus in config["buses"]}

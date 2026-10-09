@@ -1,0 +1,7 @@
+int32 open_position    # 要设置的开位
+int32 close_position   # 要设置的闭位
+---
+bool success           # 是否已保存并生效
+string message         # 结果描述或拒绝原因
+int32 open_position    # 调用后生效的开位（失败时为当前值）
+int32 close_position   # 调用后生效的闭位（失败时为当前值）

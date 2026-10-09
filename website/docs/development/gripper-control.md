@@ -34,6 +34,8 @@
 | `gripper_left` | `/dev/realman/gripper_left` | `1` | `20` / `900` |
 | `gripper_mid` | `/dev/realman/gripper_mid` | `1` | `0` / `9000` |
 
+上表的打开/闭合位置是 `gripper.yaml` 中的默认值；实际生效的开位和闭位可以在网页"行程设置"面板里于运行时覆盖（见[在网页上设置开位和闭位](#在网页上设置开位和闭位)），`gripper_manager` 把生效值发布在 `/<name>/limits` 上。
+
 `/dev/ttyUSB0`、`/dev/ttyUSB1`、`/dev/ttyUSB2` 会因重连或启动顺序变化，只能作为稳定别名当前指向的实现细节。开发机可用 `REALMAN_GRIPPER_RIGHT_DEVICE`、`REALMAN_GRIPPER_LEFT_DEVICE`、`REALMAN_GRIPPER_MID_DEVICE` 覆盖 Compose 的宿主路径；容器内路径仍保持 `/dev/realman/gripper_*`。
 
 | 字段 | 单位/范围 | 作用 |
@@ -119,14 +121,14 @@ grippers:
     close_position: 8500
 ```
 
-它是这台机器的运行时状态，被 `config/ros/.gitignore` 忽略，不进 git；容器以 root 写入，主机上手工修改需要 `sudo`。`gripper_manager` 启动时在 `gripper.yaml` 之上叠加该文件；文件损坏、夹爪名不存在或数值不满足上述规则时，对应条目被忽略并打 ERROR 日志，节点照常用 `gripper.yaml` 启动。要恢复默认，删除该文件并重启 `gripper_manager`。`min_position` / `max_position` 只能在 `gripper.yaml` 中修改，网页无法越过。
+它是这台机器的运行时状态，被 `config/ros/.gitignore` 忽略，不进 git；容器以 root 写入，主机上手工修改需要 `sudo`。`gripper_manager` 启动时在 `gripper.yaml` 之上叠加该文件。无法读取或解析的文件整体被忽略；夹爪名不存在，或数值不满足上述规则 1–3（忙检查只在运行时 `set_limits` 时适用）的条目单独被忽略。两种情况都会打 ERROR 日志，节点照常用 `gripper.yaml` 启动。要恢复默认，删除该文件并重启 `gripper_manager`。`min_position` / `max_position` 只能在 `gripper.yaml` 中修改，网页无法越过。
 
 ## 键盘双夹爪全开／全闭
 
 启动 `control.xml` 后，8765 网页会根据动态目录显示键盘卡片。选择 `keyboard` 并获得独占 WebSocket lease 后，
 左侧 `1/2` 分别全开／全闭，右侧 `9/0` 分别全开／全闭；两侧可独立或同时操作，也可与机械臂速度键并用。
 按键配置是 `config/ros/keyboard_control.yaml` 的 `grippers.l|r.open|close`（物理 `Digit*` 码）；
-位置端点沿用本页的 `gripper.yaml`，不复制行程值，不新增中间夹爪键盘入口。
+位置端点来自 `gripper.yaml` 加上运行时覆盖（见[在网页上设置开位和闭位](#在网页上设置开位和闭位)），不在键盘配置里复制行程值，不新增中间夹爪键盘入口。
 
 ```text
 :8765 keyboard_state（每侧完整按键集合、递增 sequence）

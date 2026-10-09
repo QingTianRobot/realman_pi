@@ -30,9 +30,9 @@ When comparing a supplied reference SDK, read its RTU implementation, driver, an
 
 ## Interface Contract
 
-Each configured name exposes Trigger services `open`, `close`, `reset`, `grasp_check`, and `calibrate`; `enable` uses `std_srvs/SetBool`; `percentage` uses `gripper_ros2_msgs/GripperPercentage`. State topics are `position`, `speed`, `current`, `torque_reached`, `alarm`, and `connected`.
+Each configured name exposes Trigger services `open`, `close`, `reset`, `grasp_check`, and `calibrate`; `enable` uses `std_srvs/SetBool`; `percentage` uses `gripper_ros2_msgs/GripperPercentage`; `set_limits` uses `gripper_ros2_msgs/SetGripperLimits` and `move_raw` uses `gripper_ros2_msgs/MoveGripperRaw`. State topics are `position`, `speed`, `current`, `torque_reached`, `alarm`, and `connected`, plus `limits` (`gripper_ros2_msgs/GripperLimits`; latched: reliable, `transient_local`) carrying the effective endpoints and `min`/`max`.
 
-Web control reads the same YAML, sends ROS service requests, and publishes `gripper_list`, `gripper_state`, and `gripper_result` WebSocket events. Validate browser input in `protocol.py`. The current server reports `read_only=false` and enables direct control; any future read-only policy must reject write commands at the Web server boundary rather than relying on the UI.
+Web control reads the same YAML, but the effective open/close endpoints come from `gripper.yaml` overlaid by `gripper_overrides.yaml` and arrive live through `/<name>/limits`. It sends ROS service requests, and publishes `gripper_list`, `gripper_state`, and `gripper_result` WebSocket events. Validate browser input in `protocol.py`. The current server reports `read_only=false` and enables direct control; any future read-only policy must reject write commands at the Web server boundary rather than relying on the UI.
 
 ## Diagnostic Order
 

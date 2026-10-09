@@ -92,7 +92,7 @@ RUN cmake -S /opt/rm65_ws/src/behavior_tree_cpp -B /opt/rm65_ws/behavior_tree/bu
 RUN python3 -m pip install --no-cache-dir \
         --index-url "https://download.pytorch.org/whl/cpu" \
         --retries 5 \
-        --timeout 60 \
+        --timeout 300 \
         torch==2.6.0+cpu torchvision==0.21.0+cpu
 
 # Install the pinned vendor API used by the real driver. Mock tests still avoid
@@ -105,7 +105,7 @@ RUN python3 -m pip install --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
         --extra-index-url "https://pypi.org/simple" \
         --retries 5 \
-        --timeout 60 \
+        --timeout 300 \
         --requirement /opt/rm65_ws/config/python/realman-sdk-requirements.txt \
         --requirement /opt/rm65_ws/config/python/recording-requirements.txt
 
@@ -116,7 +116,7 @@ RUN python3 -m pip install --no-cache-dir --index-url "${PYPI_INDEX_URL}" --extr
 RUN python3 -m pip install --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
         --retries 5 \
-        --timeout 60 \
+        --timeout 300 \
         --requirement /opt/rm65_ws/config/python/gripper-requirements.txt
 
 # Transport deps (msgpack + websockets) for the vendored OpenPI policy client
@@ -124,7 +124,7 @@ RUN python3 -m pip install --no-cache-dir \
 RUN python3 -m pip install --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
         --retries 5 \
-        --timeout 60 \
+        --timeout 300 \
         --requirement /opt/rm65_ws/config/python/policy-bridge-requirements.txt
 
 RUN . /opt/ros/humble/setup.sh \

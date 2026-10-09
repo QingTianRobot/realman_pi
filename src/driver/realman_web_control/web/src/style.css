@@ -163,6 +163,7 @@ input[type="range"] { display: block; width: 100%; accent-color: #4dbbb0; }
 .progress-track { height: 4px; background: #26383c; margin: 4px 0 12px; }
 .progress-bar { width: 0; height: 100%; background: #4cc2b5; transition: width .15s ease; }
 .feedback { min-height: 32px; color: #c3d4d1; font-size: 11px; line-height: 1.5; }
+#gripper-limits-status { min-height: 0; }
 .result { min-height: 46px; max-height: 150px; overflow: auto; margin: 10px 0 0; padding: 10px; border: 1px solid #24383c; color: #9bb5b2; font-size: 10px; white-space: pre-wrap; }
 dialog { width: min(400px, calc(100vw - 30px)); border: 1px solid #48676b; border-radius: 4px; background: #132125; color: #e7efec; padding: 22px; }
 dialog::backdrop { background: rgba(2, 8, 10, .72); }

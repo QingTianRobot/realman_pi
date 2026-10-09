@@ -216,7 +216,7 @@ app.innerHTML = `
         <button id="execute-motion" class="button primary full" type="button" disabled>发送 MOVEJ</button>
       </section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">CARTESIAN</span><h2>末端速度</h2></div><span id="velocity-state" class="mini-state">IDLE</span></div><div class="form-grid"><label>参考系<select id="velocity-frame"></select></label><label>周期 (ms)<input id="velocity-period" type="number" min="1" step="1" /></label><label>看门狗 (ms)<input id="velocity-watchdog" type="number" min="1" step="1" /></label><label>线加速度<input id="linear-accel" type="number" min="0.001" step="0.01" /></label><label>角加速度<input id="angular-accel" type="number" min="0.001" step="0.01" /></label></div><div id="velocity-inputs" class="velocity-inputs"></div><div class="inline-actions"><button id="start-velocity" class="button secondary" type="button" disabled>启动速度 Action</button><button id="cancel-velocity" class="button ghost" type="button" disabled>取消</button></div></section>
-      <section id="gripper-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">GRIPPER</span><h2>夹爪控制</h2></div><span id="gripper-state" class="mini-state">WAIT</span></div><div class="form-grid"><label>设备<select id="gripper-select"></select></label><label>开合度 (0=闭合)<input id="gripper-percentage" type="range" min="0" max="1" step="0.01" value="1" /></label></div><div class="inline-actions"><button id="gripper-open" class="button secondary" type="button">打开</button><button id="gripper-close" class="button secondary" type="button">闭合</button><button id="gripper-enable" class="button ghost" type="button">使能</button><button id="gripper-reset" class="button danger" type="button">复位</button></div><div id="gripper-feedback" class="feedback">等待夹爪状态</div><details id="gripper-limits" class="gripper-limits"><summary>行程设置</summary><div class="gripper-limits-body"><div class="form-grid"><label>开位<input id="gripper-open-position" type="number" step="1" /></label><label>闭位<input id="gripper-close-position" type="number" step="1" /></label></div><div class="inline-actions"><button id="gripper-teach-open" class="button ghost" type="button">开位=当前位置</button><button id="gripper-teach-close" class="button ghost" type="button">闭位=当前位置</button></div><label class="gripper-raw">原始位置 <output id="gripper-raw-value">0</output><input id="gripper-raw-position" type="range" min="0" max="1" step="1" value="0" /></label><button id="gripper-limits-apply" class="button primary full" type="button">应用行程</button><div id="gripper-limits-range" class="feedback"></div></div></details></section>
+      <section id="gripper-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">GRIPPER</span><h2>夹爪控制</h2></div><span id="gripper-state" class="mini-state">WAIT</span></div><div class="form-grid"><label>设备<select id="gripper-select"></select></label><label>开合度 (0=闭合)<input id="gripper-percentage" type="range" min="0" max="1" step="0.01" value="1" /></label></div><div class="inline-actions"><button id="gripper-open" class="button secondary" type="button">打开</button><button id="gripper-close" class="button secondary" type="button">闭合</button><button id="gripper-enable" class="button ghost" type="button">使能</button><button id="gripper-reset" class="button danger" type="button">复位</button></div><div id="gripper-feedback" class="feedback">等待夹爪状态</div><details id="gripper-limits" class="gripper-limits"><summary>行程设置</summary><div class="gripper-limits-body"><div class="form-grid"><label>开位<input id="gripper-open-position" type="number" step="1" /></label><label>闭位<input id="gripper-close-position" type="number" step="1" /></label></div><div class="inline-actions"><button id="gripper-teach-open" class="button ghost" type="button">开位=当前位置</button><button id="gripper-teach-close" class="button ghost" type="button">闭位=当前位置</button></div><label class="gripper-raw">原始位置 <output id="gripper-raw-value">0</output><input id="gripper-raw-position" type="range" min="0" max="1" step="1" value="0" /></label><button id="gripper-limits-apply" class="button primary full" type="button">应用行程</button><div id="gripper-limits-range" class="feedback"></div><div id="gripper-limits-status" class="feedback" role="status" aria-live="polite"></div></div></details></section>
       <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">ACTION MONITOR</span><h2>运行反馈</h2></div><span id="action-state" class="mini-state">IDLE</span></div><div class="progress-track"><div id="progress" class="progress-bar"></div></div><div id="feedback" class="feedback">尚未发送 Action</div><pre id="result" class="result" aria-live="polite">等待结果…</pre></section>
     </aside>
   </main>
@@ -1260,6 +1260,11 @@ function renderGripperState() {
   const openingText = opening === null ? "" : `开合 ${Math.round(opening * 100)}% / `;
   $("#gripper-feedback").textContent = `${openingText}位置 ${state.position ?? 0} / 速度 ${state.speed ?? 0} / 电流 ${state.current ?? 0} / 力矩 ${state.torque_reached ? "到达" : "未到达"} / 报警 0x${Number(state.alarm ?? 0).toString(16)}`;
 }
+// Messages about the travel-limit editor (validation, set_limits/move_raw results) go to a line that
+// only the editor writes to, so the 20 Hz telemetry in #gripper-feedback cannot overwrite them.
+function setGripperLimitsStatus(text: string) {
+  $("#gripper-limits-status").textContent = text;
+}
 function gripperLimitsElements() {
   return {
     open: $("#gripper-open-position") as HTMLInputElement,
@@ -1303,6 +1308,7 @@ function teachGripperLimit(field: "open" | "close") {
   if (!Number.isFinite(position)) return;
   gripperLimitsElements()[field].value = String(Math.round(position));
   gripperLimitsDirty = true;
+  setGripperLimitsStatus("");
 }
 function applyGripperLimits() {
   const config = gripperConfigs[selectedGripper];
@@ -1311,7 +1317,7 @@ function applyGripperLimits() {
   const openPosition = Number(open.value);
   const closePosition = Number(close.value);
   if (open.value === "" || close.value === "" || !Number.isInteger(openPosition) || !Number.isInteger(closePosition)) {
-    $("#gripper-feedback").textContent = "开位和闭位必须是整数";
+    setGripperLimitsStatus("开位和闭位必须是整数");
     return;
   }
   const confirmed = window.confirm(
@@ -1404,7 +1410,14 @@ function handleMessage(message: Message) {
     updateGripperModels();
     reconcileKeyboardControl();
   } else if (message.type === "gripper_result") {
-    if (message.message) $("#gripper-feedback").textContent = String(message.message);
+    if (message.command === "set_limits" || message.command === "move_raw") {
+      if (message.message) {
+        const prefix = message.success === false ? "失败：" : message.command === "set_limits" && message.success === true ? "已应用：" : "";
+        setGripperLimitsStatus(`${prefix}${String(message.message)}`);
+      }
+    } else if (message.message) {
+      $("#gripper-feedback").textContent = String(message.message);
+    }
     if (message.command === "set_limits" && message.state === "completed" && message.success === true) {
       gripperLimitsDirty = false;
       renderGripperLimits();
@@ -1972,6 +1985,7 @@ fetch("/api/layout").then((response) => response.json()).then(loadManifest).catc
 ($("#gripper-select") as HTMLSelectElement).addEventListener("change", (event) => {
   selectedGripper = (event.target as HTMLSelectElement).value;
   gripperLimitsDirty = false;
+  setGripperLimitsStatus("");
   renderGripperState();
   renderGripperLimits();
 });
@@ -1980,8 +1994,12 @@ $("#gripper-close").addEventListener("click", () => sendGripper("close"));
 $("#gripper-enable").addEventListener("click", () => sendGripper("enable"));
 $("#gripper-reset").addEventListener("click", () => sendGripper("reset"));
 $("#gripper-percentage").addEventListener("change", (event) => sendGripper("percentage", { percentage: Number((event.target as HTMLInputElement).value) }));
-($("#gripper-open-position") as HTMLInputElement).addEventListener("input", () => { gripperLimitsDirty = true; });
-($("#gripper-close-position") as HTMLInputElement).addEventListener("input", () => { gripperLimitsDirty = true; });
+for (const id of ["#gripper-open-position", "#gripper-close-position"]) {
+  ($(id) as HTMLInputElement).addEventListener("input", () => {
+    gripperLimitsDirty = true;
+    setGripperLimitsStatus("");
+  });
+}
 $("#gripper-teach-open").addEventListener("click", () => teachGripperLimit("open"));
 $("#gripper-teach-close").addEventListener("click", () => teachGripperLimit("close"));
 $("#gripper-limits-apply").addEventListener("click", applyGripperLimits);

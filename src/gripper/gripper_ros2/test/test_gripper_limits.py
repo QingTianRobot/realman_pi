@@ -130,6 +130,31 @@ class OverridesFileTest(unittest.TestCase):
                 self.assertEqual(accepted, {})
                 self.assertEqual(len(errors), 1)
 
+    def test_non_utf8_file_is_ignored(self):
+        self.path.write_bytes(b"\xff\xfe\x00garbage\x80\x81")
+        accepted, errors = load_overrides(self.path, RANGES)
+        self.assertEqual(accepted, {})
+        self.assertEqual(len(errors), 1)
+
+    def test_unreadable_path_is_reported_not_raised(self):
+        self.path.write_text("grippers: {}\n", encoding="utf-8")
+        with mock.patch(
+            "gripper_ros2.gripper_limits.Path.read_text",
+            side_effect=PermissionError("denied"),
+        ):
+            accepted, errors = load_overrides(self.path, RANGES)
+        self.assertEqual(accepted, {})
+        self.assertEqual(len(errors), 1)
+        self.assertIn("denied", errors[0])
+
+    def test_untraversable_parent_does_not_raise_from_exists(self):
+        self.path.write_text("grippers: {}\n", encoding="utf-8")
+        with mock.patch(
+            "gripper_ros2.gripper_limits.Path.exists",
+            side_effect=PermissionError("not traversable"),
+        ):
+            self.assertEqual(load_overrides(self.path, RANGES), ({}, []))
+
     def test_failed_replace_keeps_original_and_leaves_no_temp_files(self):
         save_overrides(self.path, RIGHT)
         original = self.path.read_text(encoding="utf-8")

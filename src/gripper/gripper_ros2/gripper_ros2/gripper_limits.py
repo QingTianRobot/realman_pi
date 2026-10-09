@@ -71,11 +71,11 @@ def load_overrides(path, ranges) -> tuple[dict[str, dict[str, int]], list[str]]:
     ``gripper.yaml``.
     """
     path = Path(path)
-    if not path.exists():
-        return {}, []
     try:
         document = yaml.safe_load(path.read_text(encoding="utf-8"))
-    except (OSError, yaml.YAMLError) as error:
+    except FileNotFoundError:
+        return {}, []
+    except (OSError, UnicodeError, yaml.YAMLError) as error:
         return {}, [f"{path}: cannot read overrides: {error}"]
     if not document:
         return {}, []

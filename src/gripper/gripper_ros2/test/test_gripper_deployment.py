@@ -33,6 +33,18 @@ class GripperDeploymentTest(unittest.TestCase):
             self.assertTrue((msgs / path).is_file(), path)
             self.assertIn(f'"{path}"', cmake)
 
+    def test_manager_exposes_limit_services_and_latched_limits_topic(self):
+        source = MANAGER_NODE.read_text(encoding="utf-8")
+        self.assertIn('f"{prefix}/set_limits"', source)
+        self.assertIn('f"{prefix}/move_raw"', source)
+        self.assertIn('f"{prefix}/limits"', source)
+        self.assertIn("QoSDurabilityPolicy.TRANSIENT_LOCAL", source)
+        start = source.index("    def _move_raw(")
+        end = source.index("    def _publish_feedback(", start)
+        body = source[start:end]
+        # An out-of-range jog must be rejected before the gripper is auto-enabled.
+        self.assertLess(body.index("check_raw_position("), body.index("self._ready("))
+
     def test_root_config_uses_three_stable_gripper_aliases(self):
         config = load_gripper_config(ROOT / "config/ros/gripper.yaml")
         ports = {bus["port"] for bus in config["buses"]}

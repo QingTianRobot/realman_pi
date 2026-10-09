@@ -1,6 +1,7 @@
 from pathlib import Path
 import tempfile
 import unittest
+from unittest import mock
 
 from gripper_ros2 import gripper_driver as gd
 from gripper_ros2.gripper_limits import LimitsStore, load_overrides
@@ -58,6 +59,32 @@ class LimitsStoreTest(unittest.TestCase):
         self.assertIn("busy", message)
         self.assertEqual(self.endpoints("gripper_right"), (4000, 8500))
         self.assertFalse(self.path.exists())
+
+    def test_recent_request_blocks_until_the_window_has_passed(self):
+        bus = self.manager.get_bus("/bus")
+        bus.request_move(1, 5000, now=100.0)
+        with mock.patch.object(gd, "Changingtek_rtu_psdk", mock.MagicMock()):
+            bus._process_pending(100.0)
+        self.assertEqual(bus._pending, {})
+        ok, message = self.store.set_limits("gripper_right", 50, 8400, now=101.0)
+        self.assertFalse(ok)
+        self.assertIn("busy", message)
+        ok, message = self.store.set_limits("gripper_right", 50, 8400, now=103.0)
+        self.assertTrue(ok, message)
+
+    def test_successful_change_is_remembered_in_overrides(self):
+        self.assertTrue(self.store.set_limits("gripper_right", 50, 8400, now=100.0)[0])
+        self.assertEqual(
+            self.store.overrides,
+            {"gripper_right": {"open_position": 50, "close_position": 8400}},
+        )
+
+    def test_validation_failure_takes_precedence_over_busy(self):
+        self.manager.get_bus("/bus").request_move(1, 5000, now=100.0)
+        ok, message = self.store.set_limits("gripper_right", 8500, 50, now=100.5)
+        self.assertFalse(ok)
+        self.assertIn("smaller", message)
+        self.assertNotIn("busy", message)
 
     def test_save_failure_keeps_live_values(self):
         store = LimitsStore(self.manager, Path(self.tmp.name) / "missing" / "o.yaml")

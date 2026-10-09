@@ -151,6 +151,8 @@ class GripperBus:
         self.min_command_interval_s = float(min_command_interval_s)
         self.command_deadband = float(command_deadband)
         self._last_sent = {}
+        # When request_move last targeted each device (hardware sends may be deduped).
+        self._last_request = {}
         self._wake = threading.Event()
         self._last_command = self._last_poll = 0.0
 
@@ -194,9 +196,10 @@ class GripperBus:
             sdk.instrument.address = int(slave_id)
             return fn(sdk)
 
-    def request_move(self, slave_id: int, position: int):
+    def request_move(self, slave_id: int, position: int, now: float | None = None):
         with self._cmd_lock:
             self._pending[int(slave_id)] = int(position)
+            self._last_request[int(slave_id)] = time.time() if now is None else now
         self._wake.set()
 
     def is_streaming(self, slave_id: int, now: float | None = None) -> bool:
@@ -206,8 +209,8 @@ class GripperBus:
         with self._cmd_lock:
             if slave_id in self._pending:
                 return True
-            last = self._last_sent.get(slave_id)
-        return last is not None and now - last[0] < self.STREAMING_WINDOW_S
+            last = self._last_request.get(slave_id)
+        return last is not None and now - last < self.STREAMING_WINDOW_S
 
     def apply_endpoints(self, slave_id: int, open_position: int, close_position: int):
         """Switch a device to new open/close endpoints and forget stale targets."""
@@ -217,6 +220,7 @@ class GripperBus:
             device.close_position = int(close_position)
             self._pending.pop(int(slave_id), None)
             self._last_sent.pop(int(slave_id), None)
+            self._last_request.pop(int(slave_id), None)
 
     def set_active(self, slave_id):
         self.active_slave_id = None if slave_id is None else int(slave_id)

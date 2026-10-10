@@ -66,6 +66,11 @@ RUN find -L /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
         ros-humble-tf2-ros \
     && rm -rf /var/lib/apt/lists/*
 
+# Prefer IPv4 for DNS resolution.  Robot LANs frequently have no public IPv6
+# route, yet some resolvers return AAAA-first for pypi.org/files.pythonhosted.org;
+# the default getaddrinfo sort then hangs pip on an unreachable IPv6 address.
+RUN echo "precedence ::ffff:0:0/96  100" >> /etc/gai.conf
+
 WORKDIR /opt/rm65_ws
 
 # CMake installs the repository-root configuration into the package share

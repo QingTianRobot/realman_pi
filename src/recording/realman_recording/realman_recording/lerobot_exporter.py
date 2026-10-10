@@ -110,6 +110,21 @@ def _subtasks_table(subtasks: Sequence[dict[str, Any]]) -> tuple[list[str], list
     )
 
 
+def _assert_single_annotated_episode(root: Path) -> None:
+    """Reject exporting a second annotated episode into a shared dataset.
+
+    ``meta/subtasks.parquet`` is a single per-dataset label table, so a second
+    annotated episode would silently remap the first episode's per-frame indices
+    onto the second episode's labels.  A prior non-empty table means the dataset is
+    already annotated; multi-episode subtask annotation is not yet supported.
+    """
+    table_path = root / "meta" / "subtasks.parquet"
+    if table_path.is_file() and table_path.stat().st_size > 0:
+        raise ValueError(
+            "dataset already has subtask labels; multi-episode subtask annotation is not yet supported"
+        )
+
+
 class LeRobotExporter:
     """Convert a finalized session into a single-episode LeRobot dataset."""
 
@@ -197,6 +212,10 @@ class LeRobotExporter:
                     self._report(request, index + 1, len(aligned))
                 episode_index = self._dataset_episode_count(dataset)
                 if subtasks:
+                    # A second annotated episode would overwrite the shared
+                    # per-dataset label table and silently remap the first
+                    # episode's indices; reject that before any frame is written.
+                    _assert_single_annotated_episode(dataset_root)
                     # Write the label table before the frames are committed so a
                     # parquet failure cannot leave an episode whose frames carry
                     # subtask_index values but no label table.

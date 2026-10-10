@@ -9,7 +9,12 @@ import json
 
 import pytest
 
-from realman_recording.lerobot_exporter import _frame_subtask_index, _subtasks_table, _validate_subtask_coverage
+from realman_recording.lerobot_exporter import (
+    _assert_single_annotated_episode,
+    _frame_subtask_index,
+    _subtasks_table,
+    _validate_subtask_coverage,
+)
 from realman_recording.lerobot_schema import schema_from_parameters
 from realman_recording.session_store import SessionStore
 
@@ -206,6 +211,25 @@ def test_write_subtasks_parquet_uses_string_and_int64_columns(tmp_path, monkeypa
     assert captured["subtask"] == (["place"], "string")
     assert captured["subtask_index"] == ([3], "int64")
     assert captured["path"] == root / "meta" / "subtasks.parquet"
+
+
+def test_single_annotated_episode_guard_rejects_existing_label_table(tmp_path):
+    root = tmp_path / "dataset"
+    (root / "meta").mkdir(parents=True)
+    (root / "meta" / "subtasks.parquet").write_bytes(b"not-empty")
+    with pytest.raises(ValueError):
+        _assert_single_annotated_episode(root)
+
+
+def test_single_annotated_episode_guard_allows_fresh_dataset(tmp_path):
+    _assert_single_annotated_episode(tmp_path / "dataset")
+
+
+def test_single_annotated_episode_guard_ignores_empty_table(tmp_path):
+    root = tmp_path / "dataset"
+    (root / "meta").mkdir(parents=True)
+    (root / "meta" / "subtasks.parquet").write_bytes(b"")
+    _assert_single_annotated_episode(root)
 
 
 # --- Task 4: GET/POST /api/lerobot/{session_id}/subtasks --------------------------

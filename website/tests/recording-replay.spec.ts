@@ -73,6 +73,8 @@ test("replay workspace synchronizes camera tiles and exposes added canonical fea
           "observation.user_added_scalar": { dtype: "float32", shape: [] },
           "quality.sync_error_ns": { dtype: "int64", shape: [2], names: ["image:front", "/l/joint_states"] },
           "quality.valid": { dtype: "bool", shape: [1], names: ["valid"] },
+          "observation.images.front": { dtype: "video", shape: [] },
+          "observation.images.wrist": { dtype: "video", shape: [] },
         },
         quality: { invalid_frames: 0 },
         canonical: {
@@ -123,29 +125,30 @@ test("replay workspace synchronizes camera tiles and exposes added canonical fea
       }),
     }),
   );
-  await page.route("**/api/lerobot/episode-1/frames/*/cameras/*", (route) =>
-    route.fulfill({
-      contentType: "image/png",
-      body: Buffer.from("iVBORw0KGgoAAAANSUhEUgAAAAEAAAABCAIAAACQd1PeAAAADUlEQVR4nGP4z8AAAAMBAQDJ/pLvAAAAAElFTkSuQmCC", "base64"),
-    }),
+  await page.route("**/api/lerobot/episode-1/video/*", (route) =>
+    route.fulfill({ status: 200, contentType: "video/mp4", body: "" }),
   );
 
   await page.goto("/");
   await expect(page.locator("html")).toHaveCSS("--blue", "#55a6ff");
   await page.getByRole("button", { name: "回放" }).click();
-  await page.locator('.episode-item[data-session="episode-1"]').click();
+  await expect(page.locator("#replay-search")).toBeVisible();
+  await expect(page.locator('#replay-filter option[value="pick the object"]')).toHaveCount(1);
+  await expect(page.locator('.episode-item[data-session="episode-1"] .episode-action')).toHaveText("隐藏");
+  await page.locator('.episode-item[data-session="episode-1"] .episode-main').click();
 
   await expect(page.locator("#replay-cameras .camera-card")).toHaveCount(2);
-  await expect.poll(() => page.locator('#replay-cameras img[alt="front"]').evaluate((image: HTMLImageElement) => image.naturalWidth)).toBe(1);
-  await expect(page.locator('#replay-feature-select option[value="action.command.gripper"]')).toHaveCount(1);
+  await expect(page.locator('#replay-cameras .camera-card[data-camera="front"] video')).toHaveAttribute("src", /\/api\/lerobot\/episode-1\/video\/front$/);
+  await expect(page.locator('#replay-feature-select option[value="action.command.gripper"]')).toHaveCount(0);
   await expect(page.locator('#replay-feature-select option[value="observation.user_added_scalar"]')).toHaveCount(1);
+  await expect(page.locator('#replay-action-select option[value="action.command.gripper"]')).toHaveCount(1);
   const dimensionSelect = page.locator("#replay-feature-component");
   await expect(dimensionSelect.locator("option")).toHaveCount(18);
   await dimensionSelect.selectOption("r.joint_6");
   const rawFrame = page.locator("#replay-feature-raw");
-  await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").selected_component).toBe("r.joint_6");
-  await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").selected_value).toBe(17);
-  const chartPoints = (await page.locator("#replay-feature-chart polyline").getAttribute("points")) ?? "";
+  await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").component).toBe("r.joint_6");
+  await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").state_component).toBe(17);
+  const chartPoints = (await page.locator("#replay-feature-chart .chart-state").getAttribute("points")) ?? "";
   const firstY = Number(chartPoints.split(" ")[0]?.split(",")[1]);
   const secondY = Number(chartPoints.split(" ")[1]?.split(",")[1]);
   expect(firstY).toBeLessThan(secondY);
@@ -158,8 +161,8 @@ test("replay workspace synchronizes camera tiles and exposes added canonical fea
     .toEqual({ "image:front": "1000000001", "/l/joint_states": "999999999" });
   await page.locator("#replay-feature-select").selectOption("quality.valid");
   await expect(page.locator("#replay-feature-component option")).toHaveText(["valid"]);
-  await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").value).toEqual([true]);
-  await expect(page.locator("#replay-feature-chart polyline")).toBeVisible();
+  await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").state_value).toEqual([true]);
+  await expect(page.locator("#replay-feature-chart .chart-state")).toBeVisible();
   await expect(page.locator(".layout.replay-layout #viewer")).toBeVisible();
   await expect(page.locator(".layout.replay-layout #previews")).toBeHidden();
   const pageWidth = await page.evaluate(() => ({

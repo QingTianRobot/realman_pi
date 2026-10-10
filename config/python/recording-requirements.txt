@@ -1,6 +1,6 @@
-# Optional live visualizer dependency. The recording core handles ImportError and
-# remains fully functional when this SDK is absent; production images install it here.
-rerun-sdk
+# Optional live visualizer dependency is intentionally NOT installed: rerun-sdk
+# (~168 MB, pypi.org-only) is the slowest recording-image download and Rerun output
+# is deferred (rerun_enabled: false). The recording core already guards its import.
 # LeRobot v3 writer used by the asynchronous, adopted-session exporter.  Dataset
 # v3 is supported by lerobot 0.4.x; 0.4.4 is the newest release available for
 # the Python 3.10 / ROS 2 Humble image and is shared with π₀.₅ training.

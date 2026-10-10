@@ -5,6 +5,7 @@ import { GridStack } from "gridstack";
 import "gridstack/dist/gridstack.min.css";
 import "./styles.css";
 import { initSidebar } from "./replay/sidebar";
+import { renderAnalysis } from "./replay/analysis";
 import { initVideo, type VideoContext } from "./replay/video";
 import { initCharts, renderHealth } from "./replay/charts";
 import { initAnnotation } from "./replay/annotation";
@@ -775,10 +776,25 @@ const sidebar = initSidebar({
       if (replay && !sidebar.getSession(replay.session)) exitReplay();
     });
   },
+  onRefreshed: (episodes) => renderAnalysis(episodes),
 });
-for (const selector of ["#replay-feature-select", "#replay-action-select", "#replay-feature-component"]) {
+// The feature dropdown re-renders the chart on change; playback/frame steps also
+// drive the same render path. The chart keeps its own selection state.
+for (const selector of ["#replay-feature-select"]) {
   document.querySelector(selector)?.addEventListener("change", () => {
     if (replay) charts.render(replay.frames[replay.index], replay.frames, replay.index);
+  });
+}
+
+// Sidebar tabs: Episodes | Analysis, following LeRobot Studio.
+for (const button of document.querySelectorAll<HTMLButtonElement>(".sidebar-tab")) {
+  button.addEventListener("click", () => {
+    const tab = button.getAttribute("data-sidebar-tab");
+    document.querySelectorAll(".sidebar-tab").forEach((other) => other.classList.toggle("active", other === button));
+    const episodes = document.querySelector<HTMLElement>("#sidebar-episodes");
+    const analysis = document.querySelector<HTMLElement>("#sidebar-analysis");
+    if (episodes) episodes.style.display = tab === "episodes" ? "" : "none";
+    if (analysis) analysis.style.display = tab === "analysis" ? "" : "none";
   });
 }
 

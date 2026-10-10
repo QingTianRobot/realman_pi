@@ -49,8 +49,8 @@
     @media(max-width:1100px){.replay-studio{grid-template-columns:190px minmax(0,1fr)}.layout.replay-layout{grid-template-columns:minmax(0,1.4fr) minmax(250px,1fr)}}
     @media(max-width:700px){.replay-studio{grid-template-columns:1fr}.replay-camera-grid{grid-template-columns:1fr 1fr}.layout.replay-layout{grid-template-columns:1fr}.layout.replay-layout>.grid-stack-item:nth-child(1){grid-column:1;grid-row:auto;height:320px!important}.layout.replay-layout>.grid-stack-item:nth-child(4),.layout.replay-layout>.grid-stack-item:nth-child(6){grid-column:1;grid-row:auto}.studio-toolbar{flex-wrap:wrap}}
   </style>
-  <script type="module" crossorigin src="/assets/recording-CQX7d1Y1.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/recording-BKWqJm3n.css">
+  <script type="module" crossorigin src="/assets/recording-Rk3lAJxe.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/recording-DXi_5i2U.css">
 </head>
 <body>
   <main class="shell">
@@ -83,14 +83,23 @@
     <section id="tab-replay" style="display:none">
       <section class="replay-studio">
         <aside class="studio-sidebar panel">
-          <div class="panel-head"><h3>数据集 / Episodes</h3><span id="replay-count" class="count">未选择</span></div>
-          <div class="studio-sidebar-body">
+          <div class="panel-head"><h3>数据集</h3><span id="replay-count" class="count">未选择</span></div>
+          <div class="sidebar-tabs">
+            <button class="sidebar-tab active" data-sidebar-tab="episodes" type="button">Episodes</button>
+            <button class="sidebar-tab" data-sidebar-tab="analysis" type="button">Analysis</button>
+          </div>
+          <div id="sidebar-episodes" class="studio-sidebar-body">
             <input id="replay-search" class="studio-search" type="search" placeholder="搜索 session / task…" aria-label="搜索 Episode">
             <select id="replay-filter" class="studio-select" aria-label="按 task 过滤"><option value="">全部 task</option></select>
             <div id="replay-episodes" class="episode-list"><div class="empty">等待 LeRobot 数据集</div></div>
             <div id="replay-hidden" class="episode-list" style="display:none"></div>
-            <div class="studio-meta"><span class="eyebrow">当前任务</span><strong id="replay-task">—</strong><span id="replay-dataset-meta">—</span></div>
           </div>
+          <div id="sidebar-analysis" class="studio-sidebar-body" style="display:none">
+            <div class="analysis-section"><h4>总览</h4><div id="analysis-overview" class="analysis-block"><div class="empty">暂无数据</div></div></div>
+            <div class="analysis-section"><h4>时长</h4><div id="analysis-duration" class="analysis-block"><div class="empty">暂无数据</div></div></div>
+            <div class="analysis-section"><h4>Task 分布</h4><div id="analysis-tasks" class="analysis-block"><div class="empty">暂无数据</div></div></div>
+          </div>
+          <div class="studio-meta"><span class="eyebrow">当前任务</span><strong id="replay-task">—</strong><span id="replay-dataset-meta">—</span></div>
         </aside>
         <section class="studio-center">
           <section class="panel studio-media">
@@ -109,12 +118,13 @@
           <div class="studio-inspector-body">
             <div id="replay-health" class="replay-health"><div class="empty">选择 Episode 后显示健康统计</div></div>
             <div class="inspector-selectors">
-              <label>状态 <select id="replay-feature-select" class="studio-select" aria-label="选择状态字段"></select></label>
-              <label>动作 <select id="replay-action-select" class="studio-select" aria-label="选择动作字段"></select></label>
-              <label>分量 <select id="replay-feature-component" class="studio-select" aria-label="选择向量分量" hidden></select></label>
+              <label>字段 <select id="replay-feature-select" class="studio-select" aria-label="选择要绘制的状态/动作字段"></select></label>
             </div>
-            <div class="chart-legend"><span class="legend-state">— 状态</span><span class="legend-action">- - 动作</span></div>
-            <svg id="replay-feature-chart" viewBox="0 0 320 120" role="img" aria-label="动作/状态叠加时序图"></svg>
+            <div class="chart-toolbar"><button id="replay-split-toggle" type="button" title="把每个维度拆成一张迷你图">拆分视图</button></div>
+            <div id="replay-joint-filter" class="joint-filter"></div>
+            <div id="replay-chart-legend" class="chart-legend"></div>
+            <svg id="replay-feature-chart" viewBox="0 0 320 160" role="img" aria-label="状态/动作时序曲线图"></svg>
+            <div id="replay-split-charts" class="split-charts"></div>
             <pre id="replay-feature-raw">选择一个字段查看数据</pre>
           </div>
         </aside>

@@ -1,5 +1,7 @@
-// Action-vs-state overlay chart + episode health strip. Reuses the numeric
-// feature surface that previously lived in main.ts's renderFeatureInspector.
+// LeRobot Studio-style chart panel: one feature is selected, and every one of its
+// dimensions (joints / ee axes / sync sources) is plotted on a single aggregate
+// chart with a per-dimension colour. A per-joint filter toggles dimensions, and a
+// "split" view renders one mini-chart per dimension instead of overlaying them.
 
 export type HealthMeta = {
   valid_frames?: number;
@@ -44,24 +46,40 @@ function escapeHtml(value: string): string {
 
 function numericComponents(value: ReplayFeatureValue | undefined): number[] {
   if (typeof value === "number" && Number.isFinite(value)) return [value];
-  // Boolean quality flags are plotted as 0/1 while the raw inspector keeps bool.
   if (typeof value === "boolean") return [value ? 1 : 0];
   if (Array.isArray(value)) return value.flatMap((item) => numericComponents(item));
   return [];
 }
 
-function componentLabels(feature: string, count: number, summary: Record<string, FeatureMetadata>, canonical: Record<string, unknown>): string[] {
+// Per-dimension colour: a stable, high-contrast palette cycled across the axes of
+// a feature, matching the existing green/blue/amber recording accent set.
+const PALETTE = [
+  "#67d391", "#55a6ff", "#f4bb63", "#ff717c", "#b18cff", "#4ec9d8",
+  "#e8c547", "#ff9e64", "#7ee787", "#79c0ff", "#f97583", "#d2a8ff",
+  "#56d4dd", "#e3b341", "#ffa657", "#a5d6ff", "#6ee7b7", "#c084fc",
+];
+
+function colorFor(index: number): string {
+  return PALETTE[index % PALETTE.length] ?? "#67d391";
+}
+
+// Dimension labels for a feature, mirroring the exporter's canonical metadata so
+// joints/axes are named instead of bare indices.
+function componentLabels(
+  feature: string,
+  count: number,
+  summary: Record<string, FeatureMetadata>,
+  canonical: Record<string, unknown>,
+): string[] {
   const featureNames = summary[feature]?.names;
   if (Array.isArray(featureNames) && featureNames.length === count
     && featureNames.every((name) => typeof name === "string" && name.length > 0)) {
     return featureNames as string[];
   }
-
   const syncSourceIds = Array.isArray(canonical.quality_sync_source_ids)
     ? canonical.quality_sync_source_ids.filter((source): source is string => typeof source === "string")
     : [];
   if (feature === "quality.sync_error_ns" && syncSourceIds.length === count) return syncSourceIds;
-
   const jointNames = Array.isArray(canonical.joint_names)
     ? canonical.joint_names.filter((name): name is string => typeof name === "string")
     : [];
@@ -73,7 +91,6 @@ function componentLabels(feature: string, count: number, summary: Record<string,
   if (jointFeature && jointNames.length && arms.length * jointNames.length === count) {
     return arms.flatMap((arm) => jointNames.map((joint) => `${arm}.${joint}`));
   }
-
   const positionAxes = ["x", "y", "z"];
   const rotationAxes = ["qx", "qy", "qz", "qw"];
   const linearAxes = ["vx", "vy", "vz"];
@@ -96,24 +113,26 @@ function componentLabels(feature: string, count: number, summary: Record<string,
   return Array.from({ length: count }, (_, index) => `${feature.split(".").at(-1)}[${index}]`);
 }
 
+const WIDTH = 320;
+const HEIGHT = 160;
+const PAD = 8;
+
 export function initCharts(): ChartApi {
-  const stateSelect = $<HTMLSelectElement>("#replay-feature-select");
-  const actionSelect = $<HTMLSelectElement>("#replay-action-select");
-  const componentSelect = $<HTMLSelectElement>("#replay-feature-component");
+  const featureSelect = $<HTMLSelectElement>("#replay-feature-select");
+  const jointFilterEl = $("#replay-joint-filter");
+  const legendEl = $("#replay-chart-legend");
   const chartEl = $("#replay-feature-chart");
+  const splitEl = $("#replay-split-charts");
+  const splitToggle = $<HTMLButtonElement>("#replay-split-toggle");
   const rawEl = $("#replay-feature-raw");
   const countEl = $("#replay-feature-count");
 
   let summary: Record<string, FeatureMetadata> = {};
   let canonical: Record<string, unknown> = {};
-
-  const width = 320;
-  const height = 120;
-  const pad = 8;
-  // The two polylines, their shared y-scale and the min/max legend depend only
-  // on the (state feature, action feature, component, frame count) selection,
-  // not on the current frame. Cache the rebuilt SVG across ticks so a 20k-frame
-  // episode is not re-mapped at 60Hz; per tick only the marker moves.
+  let selectedFeature = "";
+  let dimensions: string[] = [];
+  let selected = new Set<number>();
+  let splitMode = false;
   let cachedKey = "";
   let cachedMarker: SVGLineElement | null = null;
 
@@ -122,110 +141,153 @@ export function initCharts(): ChartApi {
     canonical = nextSummary?.canonical ?? {};
     cachedKey = "";
     cachedMarker = null;
-    const stateFeatures = features.filter((feature) => !feature.startsWith("action."));
-    const actionFeatures = features.filter((feature) => feature.startsWith("action."));
-    stateSelect.innerHTML = stateFeatures
+    featureSelect.innerHTML = features
       .map((feature) => `<option value="${escapeHtml(feature)}">${escapeHtml(feature)}</option>`)
       .join("");
-    actionSelect.innerHTML = actionFeatures.length
-      ? actionFeatures.map((feature) => `<option value="${escapeHtml(feature)}">${escapeHtml(feature)}</option>`).join("")
-      : '<option value="">— 无动作字段 —</option>';
+    selectedFeature = features[0] ?? "";
+    dimensions = [];
+    selected = new Set();
     countEl.textContent = `${features.length} fields`;
-    stateSelect.value = stateFeatures[0] ?? "";
-    actionSelect.value = actionFeatures[0] ?? "";
-    componentSelect.innerHTML = "";
-    componentSelect.hidden = true;
+    jointFilterEl.innerHTML = "";
+    legendEl.innerHTML = "";
+    chartEl.innerHTML = "";
+    splitEl.innerHTML = "";
+    rawEl.textContent = "选择一个字段查看数据";
   }
 
-  function render(frame: ChartFrame, frames: ChartFrame[], index: number): void {
-    const stateFeature = stateSelect.value;
-    const actionFeature = actionSelect.value;
-    const stateValues = numericComponents(frame.features?.[stateFeature]);
-    const actionValues = numericComponents(frame.features?.[actionFeature]);
-    // The component axis follows the state (observation) feature; the action
-    // overlay shares the same index and simply omits out-of-range components.
-    const count = stateValues.length;
-    const labels = componentLabels(stateFeature, count, summary, canonical);
-
-    const optionSignature = [...componentSelect.options].map((option) => `${option.value}\t${option.text}`).join("\n");
-    const nextSignature = labels.map((label, i) => `${i}\t${label}`).join("\n");
-    const previousIndex = Number(componentSelect.value || 0);
-    if (optionSignature !== nextSignature) {
-      componentSelect.innerHTML = labels
-        .map((label, i) => `<option value="${i}">${escapeHtml(label)}</option>`)
+  function renderJointFilter(labels: string[]): void {
+    if (labels.length !== dimensions.length) {
+      dimensions = labels;
+      selected = new Set(labels.map((_, index) => index));
+      jointFilterEl.innerHTML = labels
+        .map((label, index) =>
+          `<label class="joint-chip"><input type="checkbox" data-dim="${index}" checked><span style="--chip:${colorFor(index)}">${escapeHtml(label)}</span></label>`)
         .join("");
+      jointFilterEl.querySelectorAll<HTMLInputElement>("input[data-dim]").forEach((input) => {
+        input.addEventListener("change", () => {
+          const index = Number(input.dataset.dim);
+          if (input.checked) selected.add(index);
+          else selected.delete(index);
+          cachedKey = "";
+          cachedMarker = null;
+        });
+      });
     }
-    componentSelect.hidden = count < 2;
-    const componentIndex = Math.min(Math.max(0, previousIndex), Math.max(0, count - 1));
-    if (count) componentSelect.value = String(componentIndex);
+  }
 
-    const selectedComponent = labels[componentIndex];
-    rawEl.textContent = JSON.stringify(
-      {
-        state_feature: stateFeature || null,
-        action_feature: actionFeature || null,
-        state_value: frame.features?.[stateFeature],
-        action_value: frame.features?.[actionFeature],
-        component: selectedComponent,
-        component_index: componentIndex,
-        state_component: stateValues[componentIndex],
-        action_component: actionValues[componentIndex],
-        frame_index: frame.frame_index,
-        source_timestamps_ns: frame.source_timestamps_ns ?? {},
-        metadata: canonical,
-      },
-      null,
-      2,
-    );
-
-    const key = `${stateFeature}\u0000${actionFeature}\u0000${componentIndex}\u0000${frames.length}`;
-    if (cachedKey !== key) {
-      cachedKey = key;
-      cachedMarker = null;
-      const stateSeries = frames.map((item) => numericComponents(item.features?.[stateFeature])[componentIndex] ?? Number.NaN);
-      const actionSeries = frames.map((item) => numericComponents(item.features?.[actionFeature])[componentIndex] ?? Number.NaN);
-      const all = [...stateSeries, ...actionSeries].filter((value): value is number => Number.isFinite(value));
-      if (!count || !all.length) {
-        chartEl.innerHTML = "";
-        return;
-      }
-      const min = Math.min(...all);
-      const max = Math.max(...all);
-      const span = max - min || 1;
-      const x = (i: number) => pad + (i / Math.max(1, frames.length - 1)) * (width - pad * 2);
-      const y = (value: number) => height - pad - ((value - min) / span) * (height - pad * 2);
-      const polyline = (series: number[]) => series
+  function renderAggregate(frames: ChartFrame[], index: number): void {
+    const series = dimensions
+      .map((_, dim) => ({ dim, values: frames.map((item) => numericComponents(item.features?.[selectedFeature])[dim] ?? Number.NaN) }))
+      .filter((entry) => selected.has(entry.dim));
+    if (!series.length) {
+      chartEl.innerHTML = "";
+      legendEl.innerHTML = "";
+      return;
+    }
+    const all = series.flatMap((entry) => entry.values).filter((value) => Number.isFinite(value));
+    if (!all.length) {
+      chartEl.innerHTML = "";
+      return;
+    }
+    const min = Math.min(...all);
+    const max = Math.max(...all);
+    const span = max - min || 1;
+    const x = (i: number) => PAD + (i / Math.max(1, frames.length - 1)) * (WIDTH - PAD * 2);
+    const y = (value: number) => HEIGHT - PAD - ((value - min) / span) * (HEIGHT - PAD * 2);
+    const polyline = (values: number[], color: string) =>
+      `<polyline points="${values
         .map((value, i) => (Number.isFinite(value) ? `${x(i).toFixed(1)},${y(value).toFixed(1)}` : ""))
         .filter(Boolean)
-        .join(" ");
-      chartEl.innerHTML =
-        `<polyline class="chart-state" points="${polyline(stateSeries)}" fill="none" stroke="#67d391" stroke-width="1.7"/>` +
-        `<polyline class="chart-action" points="${polyline(actionSeries)}" fill="none" stroke="#55a6ff" stroke-width="1.5" stroke-dasharray="4 3"/>` +
-        `<line x1="0" x2="0" y1="${pad}" y2="${height - pad}" stroke="#67d391" stroke-width="1"/>` +
-        `<text x="${pad}" y="${height - 2}" fill="#8793a8" font-size="9">${min.toPrecision(4)} — ${max.toPrecision(4)}</text>`;
-      cachedMarker = chartEl.querySelector<SVGLineElement>("line");
-    }
+        .join(" ")}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
+    chartEl.innerHTML =
+      series.map((entry) => polyline(entry.values, colorFor(entry.dim))).join("") +
+      `<line class="chart-marker" x1="0" x2="0" y1="${PAD}" y2="${HEIGHT - PAD}" stroke="#8793a8" stroke-width="1"/>` +
+      `<text x="${PAD}" y="${HEIGHT - 2}" fill="#8793a8" font-size="9">${min.toPrecision(4)} — ${max.toPrecision(4)}</text>`;
+    cachedMarker = chartEl.querySelector<SVGLineElement>("line.chart-marker");
 
-    // Per-tick: only the vertical marker and the raw inspector move. The
-    // polylines and min/max legend stay in place until the selection changes.
-    const markerX = pad + (index / Math.max(1, frames.length - 1)) * (width - pad * 2);
+    legendEl.innerHTML = series
+      .map((entry) => `<span class="legend-chip"><i style="background:${colorFor(entry.dim)}"></i>${escapeHtml(dimensions[entry.dim])}</span>`)
+      .join("");
+
+    const markerX = PAD + (index / Math.max(1, frames.length - 1)) * (WIDTH - PAD * 2);
     if (cachedMarker) {
       cachedMarker.setAttribute("x1", markerX.toFixed(1));
       cachedMarker.setAttribute("x2", markerX.toFixed(1));
     }
   }
 
+  function renderSplit(frames: ChartFrame[], index: number): void {
+    const rows = dimensions
+      .map((_, dim) => ({ dim, values: frames.map((item) => numericComponents(item.features?.[selectedFeature])[dim] ?? Number.NaN) }))
+      .filter((entry) => selected.has(entry.dim));
+    splitEl.innerHTML = rows.length
+      ? rows.map((entry) => {
+          const values = entry.values;
+          const finite = values.filter((value) => Number.isFinite(value));
+          const min = finite.length ? Math.min(...finite) : 0;
+          const max = finite.length ? Math.max(...finite) : 1;
+          const span = max - min || 1;
+          const x = (i: number) => PAD + (i / Math.max(1, values.length - 1)) * (WIDTH - PAD * 2);
+          const y = (value: number) => 48 - PAD - ((value - min) / span) * (48 - PAD * 2);
+          const polyline = values
+            .map((value, i) => (Number.isFinite(value) ? `${x(i).toFixed(1)},${y(value).toFixed(1)}` : ""))
+            .filter(Boolean)
+            .join(" ");
+          const markerX = PAD + (index / Math.max(1, values.length - 1)) * (WIDTH - PAD * 2);
+          return (
+            `<div class="split-mini"><div class="split-mini-head"><span style="--chip:${colorFor(entry.dim)}">${escapeHtml(dimensions[entry.dim])}</span><b>${max.toPrecision(3)}</b></div>` +
+            `<svg viewBox="0 0 ${WIDTH} 48" preserveAspectRatio="none"><polyline points="${polyline}" fill="none" stroke="${colorFor(entry.dim)}" stroke-width="1.5"/><line x1="${markerX.toFixed(1)}" x2="${markerX.toFixed(1)}" y1="${PAD}" y2="${40}" stroke="#8793a8" stroke-width="1"/></svg></div>`
+          );
+        }).join("")
+      : '<div class="empty">未选择任何维度</div>';
+    legendEl.innerHTML = "";
+  }
+
+  function render(frame: ChartFrame, frames: ChartFrame[], index: number): void {
+    selectedFeature = featureSelect.value;
+    if (!selectedFeature) return;
+    const values = numericComponents(frame.features?.[selectedFeature]);
+    const labels = componentLabels(selectedFeature, values.length, summary, canonical);
+    renderJointFilter(labels);
+
+    rawEl.textContent = JSON.stringify(
+      { feature: selectedFeature, value: frame.features?.[selectedFeature], frame_index: frame.frame_index, dimensions: labels },
+      null,
+      2,
+    );
+
+    if (splitMode) {
+      chartEl.innerHTML = "";
+      renderSplit(frames, index);
+      return;
+    }
+    splitEl.innerHTML = "";
+    renderAggregate(frames, index);
+  }
+
   function clear(): void {
     cachedKey = "";
     cachedMarker = null;
-    stateSelect.innerHTML = "";
-    actionSelect.innerHTML = "";
-    componentSelect.innerHTML = "";
-    componentSelect.hidden = true;
-    countEl.textContent = "—";
+    selectedFeature = "";
+    dimensions = [];
+    selected = new Set();
+    featureSelect.innerHTML = "";
+    jointFilterEl.innerHTML = "";
+    legendEl.innerHTML = "";
     chartEl.innerHTML = "";
+    splitEl.innerHTML = "";
+    countEl.textContent = "—";
     rawEl.textContent = "选择一个字段查看数据";
+    splitToggle.classList.remove("active");
+    splitMode = false;
   }
+
+  splitToggle.addEventListener("click", () => {
+    splitMode = !splitMode;
+    splitToggle.classList.toggle("active", splitMode);
+    cachedKey = "";
+    cachedMarker = null;
+  });
 
   return { setFeatures, render, clear };
 }

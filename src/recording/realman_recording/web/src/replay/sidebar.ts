@@ -20,6 +20,7 @@ export type EpisodeMeta = {
 export type SidebarCallbacks = {
   onSelect(sessionId: string): void;
   onChanged(): void;
+  onRefreshed?(episodes: EpisodeMeta[]): void;
 };
 
 export type SidebarApi = {
@@ -128,6 +129,7 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
     }
     renderFilter();
     render();
+    callbacks.onRefreshed?.(episodes);
   }
 
   async function postAction(sessionId: string, action: "delete" | "restore"): Promise<boolean> {

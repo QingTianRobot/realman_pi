@@ -178,6 +178,8 @@ class RecordingWebServer:
         app.router.add_post("/api/lerobot/{session_id}/restore", self._lerobot_restore)
         app.router.add_get("/api/lerobot/trash", self._lerobot_trash)
         app.router.add_post("/api/lerobot/{session_id}/task", self._lerobot_task)
+        app.router.add_get("/api/lerobot/{session_id}/subtasks", self._lerobot_subtasks)
+        app.router.add_post("/api/lerobot/{session_id}/subtasks", self._lerobot_subtasks_update)
         app.router.add_get("/models/{path:.*}", self._model_asset)
         app.router.add_get("/{path:.*}", self._static_asset)
         self._runner = web.AppRunner(app, access_log=None)
@@ -320,6 +322,49 @@ class RecordingWebServer:
         try:
             directory = self._session_directory(session_id)
             await asyncio.to_thread(SessionStore.update_task, directory, task)
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        except RuntimeError as error:
+            raise web.HTTPConflict(text=str(error)) from error
+        return web.json_response({"ok": True})
+
+    @staticmethod
+    def _read_subtasks(directory: Path) -> list[dict[str, Any]]:
+        """Return the recorded subtask segments, an empty list when unannotated."""
+        manifest_path = directory / "manifest.json"
+        if not manifest_path.is_file():
+            raise ValueError("recording session has no finalized manifest.json")
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("recording manifest must be a JSON object")
+        subtasks = payload.get("subtasks")
+        return subtasks if isinstance(subtasks, list) else []
+
+    async def _lerobot_subtasks(self, request: Any) -> Any:
+        """Return the current subtask annotation on one exported episode."""
+        from aiohttp import web
+        session_id = request.match_info["session_id"]
+        try:
+            directory = self._session_directory(session_id)
+            subtasks = await asyncio.to_thread(self._read_subtasks, directory)
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        return web.json_response({"subtasks": subtasks})
+
+    async def _lerobot_subtasks_update(self, request: Any) -> Any:
+        """Replace the subtask annotation on one exported episode."""
+        from aiohttp import web
+        session_id = request.match_info["session_id"]
+        try:
+            body = await request.json()
+        except Exception as error:  # noqa: BLE001 - malformed body is a client error
+            raise web.HTTPBadRequest(text="request body must be JSON") from error
+        subtasks = body.get("subtasks") if isinstance(body, dict) else None
+        if not isinstance(subtasks, list):
+            raise web.HTTPBadRequest(text="subtasks must be a list")
+        try:
+            directory = self._session_directory(session_id)
+            await asyncio.to_thread(SessionStore.update_subtasks, directory, subtasks)
         except ValueError as error:
             raise web.HTTPNotFound(text=str(error)) from error
         except RuntimeError as error:

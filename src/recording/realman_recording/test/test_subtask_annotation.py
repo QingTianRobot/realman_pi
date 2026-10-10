@@ -162,3 +162,156 @@ def test_validate_subtask_coverage_accepts_full_coverage():
             {"index": 1, "label": "b", "start_frame": 2, "end_frame": 2},
         ],
     )
+
+
+# --- Task 4: GET/POST /api/lerobot/{session_id}/subtasks --------------------------
+
+
+def _endpoint_server(root):
+    from realman_recording.web_server import RecordingWebServer
+
+    class _NullLogger:
+        def warning(self, *_args, **_kwargs):
+            pass
+
+    server = object.__new__(RecordingWebServer)
+    server._recording_root = root
+    server._logger = _NullLogger()
+    return server
+
+
+def _endpoint_app(server):
+    from aiohttp import web
+
+    app = web.Application()
+    app.router.add_get("/api/lerobot/{session_id}/subtasks", server._lerobot_subtasks)
+    app.router.add_post("/api/lerobot/{session_id}/subtasks", server._lerobot_subtasks_update)
+    return app
+
+
+async def _request(app, method, url, **kwargs):
+    from aiohttp.test_utils import TestClient, TestServer
+
+    client = TestClient(TestServer(app))
+    await client.start_server()
+    try:
+        response = await getattr(client, method)(url, **kwargs)
+        status = response.status
+        try:
+            body = await response.json()
+        except Exception:
+            body = None
+        return status, body
+    finally:
+        await client.close()
+
+
+def test_subtasks_endpoint_get_returns_current_subtasks(tmp_path):
+    pytest.importorskip("aiohttp")
+    import asyncio
+
+    root = tmp_path / "rec"
+    root.mkdir()
+    segment = {"index": 0, "label": "pick", "start_frame": 0, "end_frame": 9}
+    _make_session(root / "s1", frame_count=10, subtasks=[segment])
+    server = _endpoint_server(root)
+
+    async def run():
+        status, body = await _request(_endpoint_app(server), "get", "/api/lerobot/s1/subtasks")
+        assert status == 200
+        assert body == {"subtasks": [segment]}
+
+    asyncio.run(run())
+
+
+def test_subtasks_endpoint_get_returns_empty_when_absent(tmp_path):
+    pytest.importorskip("aiohttp")
+    import asyncio
+
+    root = tmp_path / "rec"
+    root.mkdir()
+    _make_session(root / "s1", frame_count=10)
+    server = _endpoint_server(root)
+
+    async def run():
+        status, body = await _request(_endpoint_app(server), "get", "/api/lerobot/s1/subtasks")
+        assert status == 200
+        assert body == {"subtasks": []}
+
+    asyncio.run(run())
+
+
+def test_subtasks_endpoint_post_writes_segments(tmp_path):
+    pytest.importorskip("aiohttp")
+    import asyncio
+
+    root = tmp_path / "rec"
+    root.mkdir()
+    session = root / "s1"
+    _make_session(session, frame_count=10)
+    server = _endpoint_server(root)
+    segments = [{"index": 0, "label": "pick", "start_frame": 0, "end_frame": 9}]
+
+    async def run():
+        status, body = await _request(
+            _endpoint_app(server), "post", "/api/lerobot/s1/subtasks", json={"subtasks": segments}
+        )
+        assert status == 200
+        assert body == {"ok": True}
+        assert json.loads((session / "manifest.json").read_text())["subtasks"] == segments
+
+    asyncio.run(run())
+
+
+def test_subtasks_endpoint_rejects_invalid_segments_with_404(tmp_path):
+    pytest.importorskip("aiohttp")
+    import asyncio
+
+    root = tmp_path / "rec"
+    root.mkdir()
+    _make_session(root / "s1", frame_count=10)
+    server = _endpoint_server(root)
+
+    async def run():
+        status, _body = await _request(
+            _endpoint_app(server), "post", "/api/lerobot/s1/subtasks",
+            json={"subtasks": [{"index": 0, "label": "a", "start_frame": 0, "end_frame": 99}]},
+        )
+        assert status == 404
+
+    asyncio.run(run())
+
+
+def test_subtasks_endpoint_rejects_unknown_session_with_404(tmp_path):
+    pytest.importorskip("aiohttp")
+    import asyncio
+
+    root = tmp_path / "rec"
+    root.mkdir()
+    server = _endpoint_server(root)
+
+    async def run():
+        status, _body = await _request(
+            _endpoint_app(server), "post", "/api/lerobot/nope/subtasks", json={"subtasks": []}
+        )
+        assert status == 404
+
+    asyncio.run(run())
+
+
+def test_subtasks_endpoint_rejects_unexported_session_with_409(tmp_path):
+    pytest.importorskip("aiohttp")
+    import asyncio
+
+    root = tmp_path / "rec"
+    root.mkdir()
+    _make_session(root / "s1", export_state="RUNNING")
+    server = _endpoint_server(root)
+
+    async def run():
+        status, _body = await _request(
+            _endpoint_app(server), "post", "/api/lerobot/s1/subtasks", json={"subtasks": []}
+        )
+        assert status == 409
+
+    asyncio.run(run())

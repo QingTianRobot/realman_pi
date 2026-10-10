@@ -137,6 +137,40 @@ class LeRobotReplayCatalog:
             )
         return result
 
+    def list_hidden(self) -> list[dict[str, Any]]:
+        """Return only sessions with a valid DELETED/SUCCEEDED receipt.
+
+        A hidden session was soft-deleted after a successful export, so its raw
+        files are still present; the restore UI needs ``session_id`` and ``task``
+        even if the dataset handle can no longer be opened.  Frame count therefore
+        degrades to 0 instead of dropping the row.
+        """
+        result: list[dict[str, Any]] = []
+        if not self._recording_root.is_dir():
+            return result
+        for directory in sorted(self._recording_root.iterdir()):
+            if not directory.is_dir() or directory.name.startswith("."):
+                continue
+            try:
+                reference = self._reference(directory.name, decision="DELETED")
+                try:
+                    with self._dataset(reference) as dataset:
+                        frame_count = len(dataset)
+                except (OSError, ValueError, TypeError, RuntimeError):
+                    frame_count = 0
+            except (OSError, ValueError, TypeError, RuntimeError):
+                # A partially written/removed session must not break the trash list.
+                continue
+            result.append(
+                {
+                    "session_id": reference.session_id,
+                    "task": reference.task,
+                    "frames": frame_count,
+                    "fps": reference.fps,
+                }
+            )
+        return result
+
     def summary(self, session_id: str) -> dict[str, Any]:
         """Return schema/provenance/quality metadata without decoding video frames."""
         reference = self._reference(session_id)
@@ -285,7 +319,7 @@ class LeRobotReplayCatalog:
             raise ValueError("episode video file does not exist")
         return candidate
 
-    def _reference(self, session_id: str) -> ReplayDatasetRef:
+    def _reference(self, session_id: str, *, decision: str = "ADOPTED") -> ReplayDatasetRef:
         if not session_id or Path(session_id).name != session_id:
             raise ValueError("invalid session id")
         directory = (self._recording_root / session_id).resolve()
@@ -297,8 +331,8 @@ class LeRobotReplayCatalog:
             raise ValueError("session has no completed LeRobot export")
         manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
         receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
-        if not isinstance(manifest, dict) or manifest.get("decision") != "ADOPTED":
-            raise ValueError("session is not adopted")
+        if not isinstance(manifest, dict) or manifest.get("decision") != decision:
+            raise ValueError(f"session decision is not {decision}")
         export = manifest.get("export")
         if not isinstance(export, dict) or export.get("state") != "SUCCEEDED":
             raise ValueError("session export is not successful")

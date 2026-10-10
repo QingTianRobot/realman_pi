@@ -378,3 +378,36 @@ test("docs link to repository files through GitHub URLs, not relative paths", as
   await walk(root);
   expect(offenders).toEqual([]);
 });
+
+test("TF explorer lists the URDF frame chain and highlights parent and child on hover", async ({ page }) => {
+  await page.goto("./");
+  const explorer = page.locator(".tf-explorer");
+  await explorer.scrollIntoViewIfNeeded();
+  await expect(explorer).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+
+  // world + l/world, l/base_link and link_1..link_6 come from the loaded URDF, not a hand-written list.
+  const frames = await explorer.locator(".tf-explorer-tree [data-frame]").evaluateAll((nodes) => nodes.map((node) => (node as HTMLElement).dataset.frame));
+  expect(frames).toEqual(["world", "l/world", "l/base_link", "l/link_1", "l/link_2", "l/link_3", "l/link_4", "l/link_5", "l/link_6"]);
+
+  await explorer.locator('[data-frame="l/link_3"]').hover();
+  await expect(explorer).toHaveAttribute("data-hovered-frame", "l/link_3");
+  const info = explorer.locator(".tf-explorer-info");
+  await expect(info).toContainText("父坐标系");
+  await expect(info).toContainText("l/link_2");
+  await expect(info).toContainText("joint_3");
+  await expect(explorer.locator('[data-frame="l/link_2"]')).toHaveClass(/related/);
+  await expect(explorer.locator('[data-frame="l/link_3"]')).toHaveClass(/hovered/);
+
+  // The 3D label follows the hovered frame.
+  await expect(explorer.locator(".tf-explorer-label")).toHaveText("l/link_3");
+
+  await page.mouse.move(0, 0);
+  await expect(explorer).toHaveAttribute("data-hovered-frame", "");
+
+  await explorer.getByRole("tab", { name: "R" }).click();
+  await expect(explorer).toHaveAttribute("data-selected-arm", "r");
+  await expect(explorer.locator('[data-frame="r/link_6"]')).toBeVisible();
+
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+});

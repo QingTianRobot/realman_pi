@@ -55,6 +55,16 @@ def test_pika_velocity_uses_configured_work_and_per_session_speed_limits():
     assert "linear speed exceeds Pika session limit" in source
 
 
+def test_pika_velocity_follow_mode_comes_from_the_router_parameter():
+    source = ROUTER.read_text(encoding="utf-8")
+
+    assert 'self.declare_parameter("pika_velocity_follow", False)' in source
+    assert "def _velocity_goal(self, profile: _ArmProfile)" in source
+    assert "goal.follow = self.velocity_follow" in source
+    # The pose goal keeps its fixed low-follow: it streams 20 ms IK targets.
+    assert "goal.follow = False" in source
+
+
 def test_profile_parser_selects_configured_pikabase_work_reference():
     from pika_control_router import parse_arm_profiles
 

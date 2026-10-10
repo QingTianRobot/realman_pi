@@ -79,6 +79,43 @@ _ZERO = (0.0,) * 6
 _ARMS = frozenset({"l", "m", "r"})
 _COMPLETED_ACTION_RESULT_LIMIT = 128
 _MIN_FEEDBACK_PERIOD_SEC = 0.1
+# Joint motion (degrees) between start-trace snapshots that is reported as a warning:
+# the commanded velocity is zero during start, so any visible movement is controller-side.
+_START_TRACE_MOVE_DEG = 0.5
+# How the passthrough target is "re-anchored" before an ordinary motion (see prepare_for_ordinary_motion).
+_REANCHOR_VARIANTS = (
+    "off",
+    "init",
+    "init_zero_stop",
+    "canfd_current",
+    "stop",
+    "delete_current",
+    "delete_all",
+)
+# "cycle" runs a different variant before each ordinary motion (starting with the untouched
+# control) so one test run can compare them; the order alternates controls with changes.
+_REANCHOR_CYCLE = ("off", "delete_current", "stop", "delete_all", "canfd_current", "init_zero_stop")
+_REANCHOR_MODES = (*_REANCHOR_VARIANTS, "cycle")
+# A movev send interval above this multiple of the control period counts as "late" in the
+# diagnostic session statistics (CANFD passthrough needs a steady period).
+_CADENCE_LATE_FACTOR = 1.5
+_CADENCE_SAMPLE_LIMIT = 200_000
+
+
+
+def _error_flag_set(value: Any) -> bool:
+    """True when a controller error field reports a fault (the SDK returns codes as '0' strings)."""
+    if isinstance(value, Mapping):
+        return any(
+            _error_flag_set(item)
+            for key, item in value.items()
+            if not str(key).endswith("_len")  # a count of codes, not a code
+        )
+    if isinstance(value, (list, tuple)):
+        return any(_error_flag_set(item) for item in value)
+    if isinstance(value, str):
+        return value.strip() not in ("", "0")
+    return value not in (0, False, None)
 
 
 class CartesianVelocitySession:
@@ -101,6 +138,9 @@ class CartesianVelocitySession:
         action_type: Any | None = None,
         ros_time_now_ns: Callable[[], int] | None = None,
         avoid_singularity_flag: int = 1,
+        start_trace: bool = False,
+        reanchor_mode: str = "off",
+        init_settle_ms: float = 0.0,
     ) -> None:
         if arm_id not in _ARMS:
             raise ValueError("arm_id must be one of l, m, or r")
@@ -112,6 +152,10 @@ class CartesianVelocitySession:
             raise ValueError("active_frame is required")
         if not isinstance(avoid_singularity_flag, int) or avoid_singularity_flag < 0:
             raise ValueError("avoid_singularity_flag must be a non-negative integer")
+        if reanchor_mode not in _REANCHOR_MODES:
+            raise ValueError(f"reanchor_mode must be one of {', '.join(_REANCHOR_MODES)}")
+        if not math.isfinite(float(init_settle_ms)) or float(init_settle_ms) < 0.0:
+            raise ValueError("init_settle_ms must be a finite non-negative number")
         self.arm_id = arm_id
         self.adapter = adapter
         self.ownership = ownership
@@ -125,6 +169,22 @@ class CartesianVelocitySession:
         self.action_type = action_type
         self._ros_time_now_ns = ros_time_now_ns
         self._avoid_singularity_flag = avoid_singularity_flag
+        # Diagnostic only: log joint angles around the vendor start sequence. Off by
+        # default because each snapshot is an extra SDK read (adapter.get_state()).
+        self._start_trace = bool(start_trace)
+        # (monotonic time the movev call started, seconds it took); filled only with start_trace.
+        self._cadence: list[tuple[float, float]] = []
+        self._cadence_period_sec = 0.0
+        # Experimental, off by default. The controller keeps a passthrough target that an ordinary
+        # motion (MoveJ) does not update, so the next velocity session is pulled back to it.
+        # reanchor_mode selects how it is refreshed right before an ordinary motion;
+        # init_settle_ms pauses between the vendor init and the first zero command.
+        self._reanchor_mode = reanchor_mode
+        self._init_settle_sec = float(init_settle_ms) / 1000.0
+        self._passthrough_dirty = False
+        self._cycle_index = 0
+        self._last_init_args: tuple[int, int, int] | None = None
+        self._last_mode_args: tuple[bool, int, int] = (False, 0, 0)
 
         self._lock = threading.RLock()
         self._condition = threading.Condition(self._lock)
@@ -292,6 +352,10 @@ class CartesianVelocitySession:
             self._done_event.clear()
             self._stop_event.clear()
 
+        trace_t0 = self._monotonic()
+        trace_before = self._trace_joints()
+        self._cadence = []
+        self._cadence_period_sec = validated.control_period_ms / 1000.0
         init_error: Exception | None = None
         try:
             init_status = _status(
@@ -304,6 +368,21 @@ class CartesianVelocitySession:
         except Exception as error:
             init_status = -1
             init_error = error
+        trace_init_ms = (self._monotonic() - trace_t0) * 1000.0
+        trace_after_init = self._trace_joints() if init_status == 0 else None
+        if init_status == 0:
+            with self._condition:
+                self._last_init_args = (
+                    self._avoid_singularity_flag,
+                    _vendor_velocity_frame_type(validated.reference_type),
+                    validated.control_period_ms,
+                )
+                self._last_mode_args = (
+                    validated.follow,
+                    validated.trajectory_mode,
+                    validated.radio,
+                )
+                self._passthrough_dirty = True
 
         finish_canceled_start = False
         with self._condition:
@@ -341,6 +420,9 @@ class CartesianVelocitySession:
             )
             return False
 
+        if self._init_settle_sec > 0.0:
+            self._stop_event.wait(self._init_settle_sec)
+
         zero_error: Exception | None = None
         try:
             zero_status = _status(
@@ -354,6 +436,16 @@ class CartesianVelocitySession:
         except Exception as error:
             zero_status = -1
             zero_error = error
+        trace_zero_ms = (self._monotonic() - trace_t0) * 1000.0
+        trace_after_zero = self._trace_joints()
+        self._log_start_trace(
+            trace_before,
+            trace_after_init,
+            trace_after_zero,
+            trace_init_ms,
+            trace_zero_ms,
+        )
+        self._log_arm_errors()
 
         finish_canceled_start = False
         recover_initial_zero = False
@@ -528,6 +620,7 @@ class CartesianVelocitySession:
                 "velocity command watchdog expired",
             )
 
+        send_started = self._monotonic()
         try:
             status = _status(
                 self.adapter.movev(
@@ -536,6 +629,8 @@ class CartesianVelocitySession:
             )
         except Exception:
             status = -1
+        if self._start_trace and len(self._cadence) < _CADENCE_SAMPLE_LIMIT:
+            self._cadence.append((send_started, self._monotonic() - send_started))
 
         with self._condition:
             self._movev_in_progress = False
@@ -987,6 +1082,7 @@ class CartesianVelocitySession:
                     api2_status=-1,
                 )
         finally:
+            self._log_cadence_summary()
             with self._condition:
                 if self._thread is threading.current_thread():
                     self._thread = None
@@ -1323,6 +1419,187 @@ class CartesianVelocitySession:
         message.api2_status = result.api2_status
         message.message = result.message
         return message
+
+    def prepare_for_ordinary_motion(self) -> None:
+        """Re-anchor the controller's passthrough target right before an ordinary motion.
+
+        Called by the motion coordinator after it owns the arm and before it submits a MoveJ.
+        Does nothing unless reanchor_mode is set and a velocity session ran since the last
+        re-anchor. Never raises: a failed re-anchor must not block the motion.
+        """
+        mode = self._reanchor_mode
+        if mode == "off":
+            return
+        with self._condition:
+            if (
+                self._running
+                or self._starting
+                or self._movev_in_progress
+                or not self._passthrough_dirty
+                or self._last_init_args is None
+            ):
+                return
+            init_args = self._last_init_args
+            follow, trajectory_mode, radio = self._last_mode_args
+            self._passthrough_dirty = False
+            variant = mode
+            if mode == "cycle":
+                variant = _REANCHOR_CYCLE[self._cycle_index % len(_REANCHOR_CYCLE)]
+                self._cycle_index += 1
+        try:
+            statuses = self._run_reanchor_variant(variant, init_args, follow, trajectory_mode, radio)
+            text = " ".join(f"{name}={status}" for name, status in statuses) or "(no controller call)"
+            self._log(
+                "info" if all(status == 0 for _, status in statuses) else "warn",
+                f"arm {self.arm_id} passthrough re-anchor before ordinary motion ({variant}): {text}",
+            )
+        except Exception as error:
+            self._log("warn", f"arm {self.arm_id} passthrough re-anchor ({variant}) failed: {error}")
+
+    def _run_reanchor_variant(
+        self,
+        variant: str,
+        init_args: tuple[int, int, int],
+        follow: bool,
+        trajectory_mode: int,
+        radio: int,
+    ) -> list[tuple[str, int]]:
+        if variant == "off":
+            return []
+        if variant in ("init", "init_zero_stop"):
+            statuses = [("init", _status(self.adapter.set_movev_init(*init_args)))]
+            if variant == "init_zero_stop" and statuses[0][1] == 0:
+                statuses.append(
+                    ("zero", _status(self.adapter.movev(list(_ZERO), follow, trajectory_mode, radio)))
+                )
+                statuses.append(("slow_stop", _status(self.adapter.slow_stop())))
+            return statuses
+        if variant == "stop":
+            return [("stop", _status(self.adapter.stop()))]
+        if variant == "delete_current":
+            return [("delete_current", _status(self.adapter.delete_current_trajectory()))]
+        if variant == "delete_all":
+            return [("delete_all", _status(self.adapter.delete_all_trajectories()))]
+        joints = tuple(float(v) for v in self.adapter.get_state().joint_degrees)
+        if len(joints) < 6 or not all(math.isfinite(v) for v in joints):
+            raise ValueError("no valid joint state")
+        return [("movej_canfd", _status(self.adapter.movej_canfd(list(joints), follow, trajectory_mode, radio)))]
+
+    def _log_cadence_summary(self) -> None:
+        """Diagnostic: one line with the movev send interval and call-duration statistics."""
+        if not self._start_trace:
+            return
+        samples = list(self._cadence)
+        self._cadence = []
+        if len(samples) < 2:
+            return
+        try:
+            starts = [started for started, _ in samples]
+            intervals = sorted((b - a) * 1000.0 for a, b in zip(starts, starts[1:]))
+            durations = sorted(duration * 1000.0 for _, duration in samples)
+            period_ms = self._cadence_period_sec * 1000.0
+            late = sum(1 for value in intervals if value > period_ms * _CADENCE_LATE_FACTOR)
+
+            def pct(values: list[float], fraction: float) -> float:
+                return values[min(len(values) - 1, int(fraction * len(values)))]
+
+            message = (
+                f"arm {self.arm_id} velocity session stats: ticks={len(samples)} "
+                f"period={period_ms:.0f}ms "
+                f"interval_ms p50={pct(intervals, 0.5):.0f} p95={pct(intervals, 0.95):.0f} "
+                f"p99={pct(intervals, 0.99):.0f} max={intervals[-1]:.0f} late={late} "
+                f"movev_ms p50={pct(durations, 0.5):.0f} p99={pct(durations, 0.99):.0f} "
+                f"max={durations[-1]:.0f}"
+            )
+            self._log("warn" if late else "info", message)
+        except Exception as error:
+            self._log("warn", f"arm {self.arm_id} velocity session stats failed: {error}")
+
+    def _log_arm_errors(self) -> None:
+        """Diagnostic: log the controller's error flags (any key containing 'err') once per start."""
+        if not self._start_trace:
+            return
+        query = getattr(self.adapter, "current_arm_state", None)
+        if query is None:
+            return
+        try:
+            result = query()
+            state = result[1] if isinstance(result, (tuple, list)) and len(result) > 1 else None
+            if not isinstance(state, Mapping):
+                return
+            flags = {
+                str(key): value
+                for key, value in state.items()
+                if "err" in str(key).lower()
+            }
+            if not flags:
+                return
+            text = " ".join(f"{key}={value}" for key, value in sorted(flags.items()))
+            nonzero = any(_error_flag_set(value) for value in flags.values())
+            self._log(
+                "warn" if nonzero else "info",
+                f"arm {self.arm_id} velocity start trace: arm error flags: {text}",
+            )
+        except Exception as error:
+            self._log("warn", f"arm {self.arm_id} velocity start trace: arm state read failed: {error}")
+
+    def _trace_joints(self) -> tuple[float, ...] | None:
+        """One diagnostic joint-angle snapshot; never raises, never changes control flow."""
+        if not self._start_trace:
+            return None
+        get_state = getattr(self.adapter, "get_state", None)
+        if get_state is None:
+            return None
+        try:
+            joints = getattr(get_state(), "joint_degrees", None)
+            values = tuple(float(value) for value in joints)
+        except Exception as error:
+            self._log(
+                "warn",
+                f"arm {self.arm_id} velocity start trace: joint read failed: {error}",
+            )
+            return None
+        if len(values) < 6 or not all(math.isfinite(value) for value in values):
+            return None
+        return values
+
+    def _log_start_trace(
+        self,
+        before: tuple[float, ...] | None,
+        after_init: tuple[float, ...] | None,
+        after_zero: tuple[float, ...] | None,
+        init_ms: float,
+        zero_ms: float,
+    ) -> None:
+        if not self._start_trace:
+            return
+
+        def fmt(values: tuple[float, ...] | None) -> str:
+            if values is None:
+                return "n/a"
+            return "[" + " ".join(f"{value:.2f}" for value in values) + "]"
+
+        def delta(a: tuple[float, ...] | None, b: tuple[float, ...] | None) -> float | None:
+            if a is None or b is None:
+                return None
+            return max(abs(x - y) for x, y in zip(a, b))
+
+        delta_init = delta(before, after_init)
+        delta_zero = delta(after_init, after_zero)
+        shown = lambda value: "n/a" if value is None else f"{value:.2f}"  # noqa: E731
+        moved = any(
+            value is not None and value > _START_TRACE_MOVE_DEG
+            for value in (delta_init, delta_zero)
+        )
+        message = (
+            f"arm {self.arm_id} velocity start trace: before_init={fmt(before)} "
+            f"after_init={fmt(after_init)} (+{init_ms:.0f}ms) "
+            f"after_zero={fmt(after_zero)} (+{zero_ms:.0f}ms) "
+            f"delta_init={shown(delta_init)}deg delta_zero={shown(delta_zero)}deg"
+        )
+        if moved:
+            message += " - joints moved during velocity start while the command was zero"
+        self._log("warn" if moved else "info", message)
 
     def _log(self, level: str, message: str) -> None:
         if self._logger is None:

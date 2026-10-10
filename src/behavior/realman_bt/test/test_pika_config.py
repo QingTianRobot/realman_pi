@@ -17,7 +17,7 @@ def test_pika_config_uses_production_default_pose_joint_contract():
     assert pose["right"]["joint_degrees"] == [-9.89, 18.046, 79.074, 15.505, 79.606, -6.194]
 
 
-def test_pika_velocity_has_an_isolated_one_meter_per_second_limit():
+def test_pika_velocity_stays_inside_the_sdk_canfd_limits():
     document = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
     velocity = document["pika_velocity"]
     assert velocity["work_reference"] == "work/pikabase"
@@ -25,8 +25,9 @@ def test_pika_velocity_has_an_isolated_one_meter_per_second_limit():
     # stop the arm long before the session itself is released.
     assert velocity["stale_ms"] == 200
     assert velocity["input_timeout_ms"] == 3000
-    assert velocity["max_linear_speed_mps"] == 1.0
-    assert velocity["max_angular_speed_radps"] == 2.0
+    assert velocity["max_linear_speed_mps"] == 0.25
+    assert velocity["max_angular_speed_radps"] == 0.6
+    assert velocity["follow"] is False
     assert velocity["max_angular_accel_radps2"] == 4.0
     assert velocity["max_linear_accel_mps2"] == 2.0
 
@@ -125,3 +126,45 @@ def test_pika_mixed_loader_passes_every_router_parameter(tmp_path):
     missing.write_text("pika_velocity: {}\n", encoding="utf-8")
     with pytest.raises(ValueError, match="missing pika_mixed"):
         module._load_pika_mixed_config(missing)
+
+
+def test_pika_velocity_follow_defaults_to_low_follow_and_must_be_boolean(tmp_path):
+    import importlib.util
+    import sys
+
+    import pytest
+
+    sys.path.insert(0, str(LAUNCH.parent))
+    spec = importlib.util.spec_from_file_location("control_router_launch", LAUNCH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+
+    base = (
+        "pika_velocity:\n"
+        "  work_reference: work/pikabase\n"
+        "  stale_ms: 200\n"
+        "  input_timeout_ms: 3000\n"
+        "  max_linear_speed_mps: 0.15\n"
+        "  max_angular_speed_radps: 0.25\n"
+        "  max_angular_accel_radps2: 0.5\n"
+    )
+
+    def load(extra: str):
+        path = tmp_path / "pika_config.yaml"
+        path.write_text(base + extra, encoding="utf-8")
+        return module._load_pika_velocity_config(path)
+
+    assert load("")["pika_velocity_follow"] is False
+    assert load("  follow: false\n")["pika_velocity_follow"] is False
+    assert load("  follow: true\n")["pika_velocity_follow"] is True
+    with pytest.raises(ValueError, match="follow must be true or false"):
+        load("  follow: 1\n")
+    with pytest.raises(ValueError, match="follow must be true or false"):
+        load("  follow: high\n")
+
+
+def test_pika_config_follow_matches_what_the_router_launch_forwards():
+    document = yaml.safe_load(CONFIG.read_text(encoding="utf-8"))
+
+    assert isinstance(document["pika_velocity"]["follow"], bool)
+    assert '"pika_velocity_follow"' in LAUNCH.read_text(encoding="utf-8")

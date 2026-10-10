@@ -26,6 +26,13 @@ pika_default_pose:
 pika_velocity:
   # Use per-arm identity WORK frames so Pika BASE-expressed vectors remain unchanged.
   work_reference: work/pikabase
+  # CANFD follow mode of the velocity session. false = RealMan low-follow, true =
+  # high-follow. High-follow made the wrist oscillate and the arm freeze after an
+  # over-limit command (production traces), so Pika uses low-follow. Low-follow pulls
+  # the arm toward the previous session's end pose at session start unless the driver
+  # re-anchors the passthrough target before each MoveJ (passthrough_reanchor_mode in
+  # realman_driver.yaml).
+  follow: false
   # Pika publishes at 20 Hz, but production DDS scheduling can occasionally
   # introduce gaps above the driver's 100 ms watchdog. The router re-sends the
   # latest valid command at the control period while it is younger than
@@ -37,12 +44,10 @@ pika_velocity:
   # Only input older than this releases the velocity session. Re-opening one
   # re-runs rm_set_movev_canfd_init, so the session outlives short pauses.
   input_timeout_ms: 3000
-  max_linear_speed_mps: 1.0
-  # Pika angular commands are accepted up to 2.0 rad/s after the Pika-side unit
-  # conversion. A 0.25 rad/s cap clamped ordinary hand rotation (measured
-  # ~0.45 rad/s on production) and made the wrist feel sluggish. Ordinary
-  # Web/keyboard sessions keep their lower driver limit.
-  max_angular_speed_radps: 2.0
+  # The SDK documents rm_movev_canfd limits of 0.25 m/s and 0.6 rad/s; commands above
+  # them froze the arm on production, so stay inside them.
+  max_linear_speed_mps: 0.25
+  max_angular_speed_radps: 0.6
   # Linear ramp for Pika velocity sessions. The 0.10 m/s^2 ordinary limit made the arm
   # take 10 s to reach 1 m/s, so a hand motion barely moved it. Must not exceed the
   # driver's hard_max_linear_accel_mps2 in realman_motion.yaml.

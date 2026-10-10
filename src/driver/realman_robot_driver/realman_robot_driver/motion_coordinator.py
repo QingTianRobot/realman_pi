@@ -100,6 +100,7 @@ class MotionCoordinator:
         stop_timeout_sec: float = 2.0,
         joint_goal_tolerance_deg: float = 0.25,
         logger: Any | None = None,
+        before_motion: Callable[[], None] | None = None,
     ) -> None:
         if arm_id not in {"l", "m", "r"}:
             raise ValueError("arm_id must be one of l, m, or r")
@@ -133,6 +134,8 @@ class MotionCoordinator:
 
         self.arm_id = arm_id
         self.adapter = adapter
+        # Called once per ordinary motion, with the arm owned and before the SDK submission.
+        self._before_motion = before_motion
         self.coordinate_manager = coordinate_manager
         self.ownership = ownership
         self.reference_resolver = reference_resolver
@@ -410,6 +413,7 @@ class MotionCoordinator:
                         observed_joints,
                         "motion already at target",
                     )
+            self._run_before_motion()
             self._publish_feedback(
                 goal_handle,
                 FeedbackPhase.SUBMITTING,
@@ -1327,6 +1331,15 @@ class MotionCoordinator:
                 return False
             self._condition.wait(min(remaining, self._poll_period_sec))
         return True
+
+    def _run_before_motion(self) -> None:
+        hook = self._before_motion
+        if hook is None:
+            return
+        try:
+            hook()
+        except Exception as error:
+            self._log("warn", f"before-motion hook failed: {error}")
 
     def _submit(self, goal: ValidatedGoal) -> int:
         if goal.command == CommandType.MOVEJ:

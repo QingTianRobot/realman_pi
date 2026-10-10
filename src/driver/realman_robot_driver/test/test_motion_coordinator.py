@@ -333,6 +333,7 @@ def make_coordinator(
     active_reference=None,
     recover_event_channel=None,
     stop_timeout_sec: float = 2.0,
+    before_motion=None,
 ) -> tuple[MotionCoordinator, FakeAdapter, FakeClock, ArmOwnership]:
     adapter = adapter or FakeAdapter()
     clock = clock or FakeClock()
@@ -365,6 +366,7 @@ def make_coordinator(
         sleep=clock.sleep,
         poll_period_sec=0.01,
         stop_timeout_sec=stop_timeout_sec,
+        **({"before_motion": before_motion} if before_motion is not None else {}),
     )
     return coordinator, adapter, clock, ownership
 
@@ -742,6 +744,55 @@ def test_valid_movej_uses_exact_adapter_call_and_event_succeeds():
         FakeFeedback.EXECUTING,
     ]
     assert ownership.is_busy("l") is False
+
+
+def test_before_motion_hook_runs_once_and_strictly_before_the_sdk_movej():
+    order = []
+    coordinator, adapter, clock, _ = make_coordinator(
+        before_motion=lambda: order.append(("hook", len(adapter_calls(adapter))))
+    )
+    handle = FakeGoalHandle(movej_goal())
+    assert coordinator.goal_callback(handle.request) == FakeGoalResponse.ACCEPT
+    complete_after_first_poll(coordinator, adapter, clock)
+
+    result = coordinator.execute(handle)
+
+    assert result.success is True
+    assert len(order) == 1
+    movej_index = next(i for i, call in enumerate(adapter.calls) if call[0] == "movej")
+    assert order[0][1] <= movej_index                   # the hook ran before movej was issued
+
+
+def test_before_motion_hook_failure_does_not_stop_the_motion():
+    def boom():
+        raise RuntimeError("hook exploded")
+
+    coordinator, adapter, clock, _ = make_coordinator(before_motion=boom)
+    handle = FakeGoalHandle(movej_goal())
+    assert coordinator.goal_callback(handle.request) == FakeGoalResponse.ACCEPT
+    complete_after_first_poll(coordinator, adapter, clock)
+
+    result = coordinator.execute(handle)
+
+    assert result.success is True
+    assert any(call[0] == "movej" for call in adapter.calls)
+
+
+def test_before_motion_hook_is_not_called_when_the_arm_is_already_at_the_target():
+    called = []
+    coordinator, adapter, clock, _ = make_coordinator(before_motion=lambda: called.append(1))
+    handle = FakeGoalHandle(movej_goal())
+    adapter.joints = [1.0, 2.0, 3.0, 4.0, 5.0, 6.0]
+    assert coordinator.goal_callback(handle.request) == FakeGoalResponse.ACCEPT
+
+    result = coordinator.execute(handle)
+
+    assert result.success is True
+    assert called == []
+
+
+def adapter_calls(adapter):
+    return list(adapter.calls)
 
 
 def test_movej_already_at_target_succeeds_without_sdk_motion_submission():

@@ -101,6 +101,20 @@ class RealManDriverNode(Node):
             self.declare_parameter("reconnect_interval", 5.0).value
         )
         self.state_publish_rate = float(self.declare_parameter("state_publish_rate", 10.0).value)
+        # Diagnostic only: log joint angles around each velocity-session start.
+        self.velocity_start_trace = bool(
+            self.declare_parameter("velocity_start_trace", False).value
+        )
+        # Refresh the controller's stale velocity-passthrough target before ordinary motion (see
+        # CartesianVelocitySession.prepare_for_ordinary_motion). Bench-tested on the real arms:
+        # only "canfd_current" stops the next session being pulled back to the previous end pose;
+        # off/init_zero_stop/stop/delete_current/delete_all all still pull.
+        self.passthrough_reanchor_mode = str(
+            self.declare_parameter("passthrough_reanchor_mode", "canfd_current").value
+        )
+        self.velocity_init_settle_ms = float(
+            self.declare_parameter("velocity_init_settle_ms", 0.0).value
+        )
         self.coordinate_state_publish_rate = float(
             self.declare_parameter("coordinate_state_publish_rate", 1.0).value
         )
@@ -194,6 +208,7 @@ class RealManDriverNode(Node):
             stop_timeout_sec=self.motion_settings.stop_timeout_sec,
             joint_goal_tolerance_deg=self.motion_settings.joint_goal_tolerance_deg,
             logger=self.get_logger(),
+            before_motion=lambda: self.velocity_session.prepare_for_ordinary_motion(),
         )
         self._active_velocity_frames = {
             ReferenceType.BASE: ("base", f"{self.arm_id}/base_link"),
@@ -220,6 +235,9 @@ class RealManDriverNode(Node):
             logger=self.get_logger(),
             action_type=CartesianVelocity,
             ros_time_now_ns=lambda: self.get_clock().now().nanoseconds,
+            start_trace=self.velocity_start_trace,
+            reanchor_mode=self.passthrough_reanchor_mode,
+            init_settle_ms=self.velocity_init_settle_ms,
         )
         try:
             from .ik_solver import RealManIK
@@ -990,7 +1008,12 @@ class RealManDriverNode(Node):
                 raise ValueError("TwistStamped header.stamp must be set")
             self.velocity_session.accept_command(command)
         except (RuntimeError, ValueError) as error:
-            self.get_logger().debug(f"Cartesian velocity command rejected: {error}")
+            # Commands arrive at the router's control rate (100 Hz), so a rejected
+            # stream would otherwise log once per message.
+            self.get_logger().warning(
+                f"Cartesian velocity command rejected: {error}",
+                throttle_duration_sec=1.0,
+            )
 
     def _pose_command(self, command: PoseStamped) -> None:
         try:

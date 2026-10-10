@@ -102,6 +102,14 @@ def _validate_subtask_coverage(index_list: Sequence[int], subtasks: Sequence[dic
         raise ValueError("every subtask segment requires a non-empty label")
 
 
+def _subtasks_table(subtasks: Sequence[dict[str, Any]]) -> tuple[list[str], list[int]]:
+    """Return the subtask label-table columns: (labels, indices) in segment order."""
+    return (
+        [str(segment["label"]) for segment in subtasks],
+        [int(segment["index"]) for segment in subtasks],
+    )
+
+
 class LeRobotExporter:
     """Convert a finalized session into a single-episode LeRobot dataset."""
 
@@ -188,9 +196,12 @@ class LeRobotExporter:
                     dataset.add_frame(payload)
                     self._report(request, index + 1, len(aligned))
                 episode_index = self._dataset_episode_count(dataset)
-                dataset.save_episode(parallel_encoding=True)
                 if subtasks:
+                    # Write the label table before the frames are committed so a
+                    # parquet failure cannot leave an episode whose frames carry
+                    # subtask_index values but no label table.
                     self._write_subtasks_parquet(dataset_root, subtasks)
+                dataset.save_episode(parallel_encoding=True)
             except BaseException:
                 if self._dataset_has_pending_frames(dataset):
                     dataset.clear_episode_buffer()
@@ -410,9 +421,10 @@ class LeRobotExporter:
         import pyarrow as pa
         import pyarrow.parquet as pq
 
+        labels, indices = _subtasks_table(subtasks)
         table = pa.table({
-            "subtask": pa.array([str(segment["label"]) for segment in subtasks], type=pa.string()),
-            "subtask_index": pa.array([int(segment["index"]) for segment in subtasks], type=pa.int64()),
+            "subtask": pa.array(labels, type=pa.string()),
+            "subtask_index": pa.array(indices, type=pa.int64()),
         })
         meta_dir = root / "meta"
         meta_dir.mkdir(parents=True, exist_ok=True)

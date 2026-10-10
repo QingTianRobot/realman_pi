@@ -9,7 +9,7 @@ import json
 
 import pytest
 
-from realman_recording.lerobot_exporter import _frame_subtask_index, _validate_subtask_coverage
+from realman_recording.lerobot_exporter import _frame_subtask_index, _subtasks_table, _validate_subtask_coverage
 from realman_recording.lerobot_schema import schema_from_parameters
 from realman_recording.session_store import SessionStore
 
@@ -162,6 +162,50 @@ def test_validate_subtask_coverage_accepts_full_coverage():
             {"index": 1, "label": "b", "start_frame": 2, "end_frame": 2},
         ],
     )
+
+
+def test_subtasks_table_returns_label_and_index_columns():
+    subtasks = [
+        {"index": 0, "label": "pick", "start_frame": 0, "end_frame": 2},
+        {"index": 3, "label": "place", "start_frame": 3, "end_frame": 5},
+    ]
+    assert _subtasks_table(subtasks) == (["pick", "place"], [0, 3])
+
+
+def test_write_subtasks_parquet_uses_string_and_int64_columns(tmp_path, monkeypatch):
+    import sys
+    import types
+
+    from realman_recording.lerobot_exporter import LeRobotExporter
+
+    captured = {}
+
+    def fake_array(value, type):
+        return (value, type)
+
+    def fake_write_table(table, path):
+        captured["path"] = path
+
+    fake_pq = types.SimpleNamespace(write_table=fake_write_table)
+    fake_pa = types.SimpleNamespace(
+        array=fake_array,
+        string=lambda: "string",
+        int64=lambda: "int64",
+        table=lambda data: captured.update(data) or object(),
+        parquet=fake_pq,
+    )
+    monkeypatch.setitem(sys.modules, "pyarrow", fake_pa)
+    monkeypatch.setitem(sys.modules, "pyarrow.parquet", fake_pq)
+
+    root = tmp_path / "dataset"
+    LeRobotExporter._write_subtasks_parquet(
+        root, [{"index": 3, "label": "place", "start_frame": 0, "end_frame": 1}]
+    )
+
+    assert set(captured) == {"subtask", "subtask_index", "path"}
+    assert captured["subtask"] == (["place"], "string")
+    assert captured["subtask_index"] == ([3], "int64")
+    assert captured["path"] == root / "meta" / "subtasks.parquet"
 
 
 # --- Task 4: GET/POST /api/lerobot/{session_id}/subtasks --------------------------

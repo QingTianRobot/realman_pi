@@ -26,14 +26,11 @@ FROM ${ROS_BASE_IMAGE}
 ARG UBUNTU_APT_MIRROR=https://mirrors.aliyun.com/ubuntu
 ARG UBUNTU_PORTS_APT_MIRROR=https://mirrors.aliyun.com/ubuntu-ports
 ARG ROS2_APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu
+# No longer read by any pip layer (see PIP_INDEX_URL below). It stays declared here
+# only because every ARG before the apt layer is part of that layer's cache key;
+# dropping it would re-install ~1.2 GB of apt packages. Remove it the next time
+# the apt layer is rebuilt anyway.
 ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
-
-# Optional HTTP(S) proxy for pip during the image build. Robot networks often
-# cannot reach files.pythonhosted.org directly (read timeouts); a local proxy
-# (e.g. Clash on 127.0.0.1) routes those downloads reliably. Empty by default.
-ARG HTTP_PROXY
-ARG HTTPS_PROXY
-ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY}
 
 # Avoid interactive package prompts during the reproducible image build.
 ENV DEBIAN_FRONTEND=noninteractive
@@ -87,41 +84,63 @@ WORKDIR /opt/rm65_ws
 # and the behavior-tree runtime are copied after the pip layers instead.
 COPY config/python /opt/rm65_ws/config/python
 
+# Optional HTTP(S) proxy for the pip layers below. Robot networks often cannot
+# reach files.pythonhosted.org directly (read timeouts); a local proxy (e.g.
+# Clash on 127.0.0.1) routes those downloads reliably. Empty by default.
+# Declared here, after the apt layer, and as ARG rather than ENV: a value change
+# must not invalidate the ~1.2 GB apt install above, and the build proxy must not
+# be baked into the image where every container would inherit it at runtime.
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+
 # Every pip layer mounts BuildKit's persistent pip cache (not part of the image),
 # so even when a requirements file does change, pip re-downloads only the wheels
 # that are new. Do not add a `# syntax=` directive for this: it would make
 # BuildKit pull a frontend image from Docker Hub, and the bundled frontend
 # already supports RUN --mount.
 
-# Install CPU-only PyTorch for the recording/export runtime. The recording image
-# does not need CUDA; training images may install their own GPU build separately.
+# Package sources for every pip layer below. None of them talks to pypi.org,
+# files.pythonhosted.org or download.pytorch.org: on the robot LAN those are
+# unreachable much of the time, and with `--retries 5 --timeout 300` a dead source
+# stalled five builds for 13 to 43 minutes before they failed. Both are replaceable
+# mirror ARGs, declared after the apt layer like the proxy ARGs above so changing
+# one never invalidates the apt install.
+#
+# Speed matters as much as reachability. Measured on the robot host on 2026-10-10
+# over plain HTTP/1.1, which is what pip and apt speak: mirrors.aliyun.com gave
+# 70 to 90 KB/s on every path (curl over HTTP/2 got 10 MB/s from it, which hides
+# this), the USTC, Tsinghua, Huawei, BFSU and SJTU PyPI mirrors 10 to 11 MB/s and
+# NJU's PyTorch mirror 3 MB/s. All of those PyPI mirrors carry Robotic_Arm 1.1.6.
+ARG PIP_INDEX_URL=https://pypi.mirrors.ustc.edu.cn/simple
+# CPU-only PyTorch for the recording/export runtime (the recording image does not
+# need CUDA; training images may install their own GPU build separately). The +cpu
+# wheels are not on PyPI. This is a PEP 503 index that mirrors
+# download.pytorch.org/whl/cpu, including torch's own dependencies.
+ARG PYTORCH_INDEX_URL=https://mirrors.nju.edu.cn/pytorch/whl/cpu
+
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install \
-        --index-url "https://download.pytorch.org/whl/cpu" \
+        --index-url "${PYTORCH_INDEX_URL}" \
         --retries 5 \
         --timeout 300 \
         torch==2.6.0+cpu torchvision==0.21.0+cpu
 
 # Recording deps (lerobot/pyarrow/Pillow/setuptools) resolve entirely from
-# PYPI_INDEX_URL. Keep the pypi.org --extra-index-url off this step so pip never
-# round-trips to files.pythonhosted.org for them and stalls the image build.
+# PIP_INDEX_URL.
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install \
-        --index-url "${PYPI_INDEX_URL}" \
+        --index-url "${PIP_INDEX_URL}" \
         --retries 5 \
         --timeout 300 \
         --requirement /opt/rm65_ws/config/python/recording-requirements.txt
 
 # Install the pinned vendor API used by the real driver. Mock tests still avoid
-# importing it, while production launches can read real controller state.
-# Chinese PyPI mirrors (Tsinghua/Aliyun/USTC/Tencent/Huawei/NJU) currently only
-# carry Robotic_Arm up to 1.0.6, but this project is aligned with vendor API
-# V1.7.13 and requires 1.1.6. Fall back to official pypi.org for this single
-# pure-Python wheel.
+# importing it, while production launches can read real controller state. The
+# project is aligned with vendor API V1.7.13 and needs Robotic_Arm 1.1.6, which
+# every mainland PyPI mirror we checked now carries (2026-10-10).
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install \
-        --index-url "${PYPI_INDEX_URL}" \
-        --extra-index-url "https://pypi.org/simple" \
+        --index-url "${PIP_INDEX_URL}" \
         --retries 5 \
         --timeout 300 \
         --requirement /opt/rm65_ws/config/python/realman-sdk-requirements.txt
@@ -130,15 +149,14 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # give the download the same long timeout as the other pip layers.
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install \
-        --index-url "${PYPI_INDEX_URL}" \
-        --extra-index-url "https://pypi.org/simple" \
+        --index-url "${PIP_INDEX_URL}" \
         --retries 5 \
         --timeout 300 \
         --requirement /opt/rm65_ws/config/python/ik-requirements.txt
 
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install \
-        --index-url "${PYPI_INDEX_URL}" \
+        --index-url "${PIP_INDEX_URL}" \
         --retries 5 \
         --timeout 300 \
         --requirement /opt/rm65_ws/config/python/gripper-requirements.txt
@@ -147,7 +165,7 @@ RUN --mount=type=cache,target=/root/.cache/pip \
 # used by policy_bridge.
 RUN --mount=type=cache,target=/root/.cache/pip \
     python3 -m pip install \
-        --index-url "${PYPI_INDEX_URL}" \
+        --index-url "${PIP_INDEX_URL}" \
         --retries 5 \
         --timeout 300 \
         --requirement /opt/rm65_ws/config/python/policy-bridge-requirements.txt

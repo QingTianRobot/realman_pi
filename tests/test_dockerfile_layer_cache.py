@@ -87,6 +87,69 @@ class DockerfileLayerCacheTest(unittest.TestCase):
                 with self.subTest(line=number, path=path):
                     self.assertTrue(path.startswith(copied_to + "/"), f"{path} is not under {copied_to}")
 
+    def test_proxy_args_come_after_the_apt_layer(self):
+        # An ARG/ENV placed ahead of the apt RUN changes that RUN's cache key, so
+        # touching the build proxy re-installed ~1.2 GB of apt packages (an hour
+        # on the robot's Wi-Fi). The proxy is only needed by the pip layers.
+        apt_install = first_line(lambda t: t.startswith("RUN") and "apt-get" in t and "install" in t)
+        proxy_args = [n for n, t in instructions() if re.match(r"ARG\s+(HTTP|HTTPS)_PROXY\b", t)]
+        self.assertIsNotNone(apt_install)
+        self.assertTrue(proxy_args, "the optional pip build proxy ARGs should still exist")
+        for number in proxy_args:
+            self.assertGreater(number, apt_install, f"line {number}: proxy ARG precedes the apt layer")
+
+    def test_proxy_is_not_baked_into_the_image(self):
+        # ENV would persist into every container; with a build proxy set, all
+        # runtime HTTP clients would silently route through it.
+        baked = [t for _, t in instructions() if re.match(r"ENV\b.*\b(HTTP|HTTPS)_PROXY\b", t, re.IGNORECASE)]
+        self.assertEqual(baked, [])
+
+    def test_pip_layers_only_use_the_configured_mirrors(self):
+        # On the robot LAN pypi.org, files.pythonhosted.org and download.pytorch.org
+        # are unreachable much of the time; with `--retries 5 --timeout 300` a dead
+        # extra index stalled five builds for 13 to 43 minutes each before they
+        # failed. Every source must be a replaceable mirror ARG, never a literal host.
+        for number, text in pip_installs():
+            with self.subTest(line=number):
+                self.assertNotIn("--extra-index-url", text)
+                self.assertNotIn("--find-links", text)
+                urls = re.findall(r"--index-url\s+\"?([^\s\"]+)", text)
+                self.assertEqual(len(urls), 1)
+                self.assertIn(urls[0], ("${PIP_INDEX_URL}", "${PYTORCH_INDEX_URL}"), f"hard-coded package source: {urls[0]}")
+                self.assertNotRegex(text, r"pypi\.org|pythonhosted|download\.pytorch\.org")
+
+    def test_torch_uses_the_pytorch_mirror_and_everything_else_the_pypi_mirror(self):
+        torch_layers = [t for _, t in pip_installs() if "torch==" in t]
+        self.assertEqual(len(torch_layers), 1)
+        self.assertIn('--index-url "${PYTORCH_INDEX_URL}"', torch_layers[0])
+        for number, text in pip_installs():
+            if "torch==" not in text:
+                with self.subTest(line=number):
+                    self.assertIn('--index-url "${PIP_INDEX_URL}"', text)
+
+    def test_mirror_args_have_defaults_and_come_after_the_apt_layer(self):
+        # The Aliyun mirror serves plain HTTP/1.1 (pip, apt) at ~85 KB/s while others
+        # do 3 to 11 MB/s, so pip gets its own ARGs. They must sit after the apt layer
+        # (an earlier ARG changes its cache key) and, unlike PYPI_INDEX_URL which is
+        # kept before it only so the existing apt layer stays cached, can be changed
+        # per build without re-installing ~1.2 GB of apt packages.
+        apt_install = first_line(lambda t: t.startswith("RUN") and "apt-get" in t and "install" in t)
+        first_pip = pip_installs()[0][0]
+        for name in ("PIP_INDEX_URL", "PYTORCH_INDEX_URL"):
+            with self.subTest(arg=name):
+                declared = [(n, t) for n, t in instructions() if re.match(rf"ARG {name}=\S+$", t)]
+                self.assertEqual(len(declared), 1, f"{name} needs exactly one declaration with a default")
+                self.assertGreater(declared[0][0], apt_install)
+                self.assertLess(declared[0][0], first_pip)
+
+    def test_compose_passes_the_pip_mirrors_through_with_the_same_defaults(self):
+        compose = (ROOT / "config" / "docker" / "compose.yaml").read_text(encoding="utf-8")
+        dockerfile = DOCKERFILE.read_text(encoding="utf-8")
+        for name in ("PIP_INDEX_URL", "PYTORCH_INDEX_URL"):
+            with self.subTest(arg=name):
+                default = re.search(rf"^ARG {name}=(\S+)$", dockerfile, re.MULTILINE).group(1)
+                self.assertIn(f"{name}: ${{{name}:-{default}}}", compose)
+
     def test_no_syntax_directive(self):
         # `# syntax=docker/dockerfile:1` makes BuildKit pull a frontend image
         # from Docker Hub, which the robot network cannot reach reliably. The

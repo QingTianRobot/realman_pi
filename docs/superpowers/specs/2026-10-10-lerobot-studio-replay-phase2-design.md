@@ -64,7 +64,7 @@
 - 不迁移已有 9 个 session 的 subtask（它们无 subtask_index，保持 -1，读时显示「无 subtask 标签」）。
 - 不做 v3.1 语言标注（Q=question/R=response 那套），只做 v3.0 subtask_index + 标签表。
 
-## 待确认
+## 已确认
 
-1. 阶段节奏：先 Phase 2a（restore+编辑）再 2b（subtask），还是 2a+2b 一起排。
-2. subtask 标签是否要每段强制一个文本标签（label 非空），还是允许仅 index 无 label（回退 "Subtask N"）。
+1. 阶段节奏：先交付 Phase 2a（restore + task 编辑），验收后再排 Phase 2b（subtask 标注）。
+2. subtask 段必须文本标签（非空）；空标签段导出时报错。

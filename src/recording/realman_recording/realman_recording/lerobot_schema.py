@@ -209,6 +209,9 @@ class LeRobotV3Schema:
             "quality.sync_error_ns": {
                 "dtype": "int64", "shape": (len(self.sync_source_ids),), "names": list(self.sync_source_ids),
             },
+            # Per-frame subtask label index (-1 = unannotated).  The subtask label
+            # table itself lives in ``meta/subtasks.parquet`` written by the exporter.
+            "subtask_index": {"dtype": "int64", "shape": (1,)},
         }
         if self.gripper_action_topics:
             result["action.command.gripper"] = {

@@ -134,6 +134,7 @@ export function initCharts(): ChartApi {
   let summary: Record<string, FeatureMetadata> = {};
   let canonical: Record<string, unknown> = {};
   let selectedFeature = "";
+  let renderedFeature = "";
   let dimensions: string[] = [];
   let selected = new Set<number>();
   let splitMode = false;
@@ -158,6 +159,7 @@ export function initCharts(): ChartApi {
         `<optgroup label="${label}">${list.map((feature) => `<option value="${escapeHtml(feature)}">${escapeHtml(shortName(feature))}</option>`).join("")}</optgroup>`)
       .join("");
     selectedFeature = featureSelect.querySelector("option")?.value ?? "";
+    renderedFeature = "";
     dimensions = [];
     selected = new Set();
     countEl.textContent = `${features.length} fields`;
@@ -169,23 +171,65 @@ export function initCharts(): ChartApi {
   }
 
   function renderJointFilter(labels: string[]): void {
-    if (labels.length !== dimensions.length) {
-      dimensions = labels;
-      selected = new Set(labels.map((_, index) => index));
-      jointFilterEl.innerHTML = labels
-        .map((label, index) =>
-          `<label class="joint-chip"><input type="checkbox" data-dim="${index}" checked><span style="--chip:${colorFor(index)}">${escapeHtml(label)}</span></label>`)
-        .join("");
-      jointFilterEl.querySelectorAll<HTMLInputElement>("input[data-dim]").forEach((input) => {
-        input.addEventListener("change", () => {
-          const index = Number(input.dataset.dim);
-          if (input.checked) selected.add(index);
-          else selected.delete(index);
-          cachedKey = "";
-          cachedMarker = null;
-        });
-      });
+    if (selectedFeature === renderedFeature) {
+      // Same feature: only the selected count may have changed via chip toggles.
+      const count = jointFilterEl.querySelector(".joint-count");
+      if (count) count.textContent = `已选 ${selected.size}/${labels.length}`;
+      return;
     }
+    renderedFeature = selectedFeature;
+    dimensions = labels;
+    selected = new Set(labels.map((_, index) => index));
+
+    // Group dimensions by arm (l/m/r) so an 18-joint feature collapses into
+    // three labelled groups instead of a wall of flat chips. Features without a
+    // single-letter arm prefix (e.g. sync sources) share one "维度" group.
+    const groups = new Map<string, number[]>();
+    labels.forEach((label, index) => {
+      const key = /^([a-z])\./.exec(label)?.[1] ?? "维度";
+      if (!groups.has(key)) groups.set(key, []);
+      groups.get(key)!.push(index);
+    });
+    const groupHtml = ["l", "m", "r", "维度"]
+      .filter((key) => groups.has(key))
+      .map((key) => {
+        const chips = groups.get(key)!.map((index) =>
+          `<label class="joint-chip"><input type="checkbox" data-dim="${index}" checked><span style="--chip:${colorFor(index)}">${escapeHtml(labels[index])}</span></label>`)
+          .join("");
+        return `<div class="joint-group"><span class="joint-group-label">${key === "维度" ? "其他" : key}</span><div class="joint-group-chips">${chips}</div></div>`;
+      })
+      .join("");
+
+    jointFilterEl.innerHTML =
+      `<details class="joint-details"><summary>维度筛选 · <b class="joint-count">已选 ${labels.length}/${labels.length}</b></summary>` +
+      `<div class="joint-filter-toolbar"><button type="button" data-joint="all">全选</button><button type="button" data-joint="none">全不选</button></div>` +
+      groupHtml +
+      `</details>`;
+
+    jointFilterEl.querySelectorAll<HTMLInputElement>("input[data-dim]").forEach((input) => {
+      input.addEventListener("change", () => {
+        const index = Number(input.dataset.dim);
+        if (input.checked) selected.add(index);
+        else selected.delete(index);
+        cachedKey = "";
+        cachedMarker = null;
+        const count = jointFilterEl.querySelector(".joint-count");
+        if (count) count.textContent = `已选 ${selected.size}/${labels.length}`;
+      });
+    });
+    jointFilterEl.querySelectorAll<HTMLButtonElement>("button[data-joint]").forEach((button) => {
+      button.addEventListener("click", () => {
+        const all = button.dataset.joint === "all";
+        selected = new Set(all ? labels.map((_, index) => index) : []);
+        jointFilterEl.querySelectorAll<HTMLInputElement>("input[data-dim]").forEach((input) => {
+          input.checked = all;
+        });
+        cachedKey = "";
+        cachedMarker = null;
+        const count = jointFilterEl.querySelector(".joint-count");
+        if (count) count.textContent = `已选 ${selected.size}/${labels.length}`;
+      });
+    });
   }
 
   function renderAggregate(frames: ChartFrame[], index: number): void {
@@ -282,6 +326,7 @@ export function initCharts(): ChartApi {
     cachedKey = "";
     cachedMarker = null;
     selectedFeature = "";
+    renderedFeature = "";
     dimensions = [];
     selected = new Set();
     featureSelect.innerHTML = "";

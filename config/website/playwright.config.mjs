@@ -12,7 +12,8 @@ const { defineConfig, devices } = requireFromWebsite("@playwright/test");
 export default defineConfig({
   testDir: resolve(websiteDirectory, "tests"),
   // The browser action console has its own Vite server and configuration.
-  testIgnore: ["web-control/**"],
+  // The recording replay UI is a different app (Vite on :4175) with its own config in config/recording/.
+  testIgnore: ["web-control/**", "recording-replay.spec.ts"],
   outputDir: resolve(websiteDirectory, "test-results"),
   fullyParallel: false,
   workers: 1,

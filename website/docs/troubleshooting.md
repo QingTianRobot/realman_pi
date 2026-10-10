@@ -66,7 +66,7 @@ ros2 service call /l/coordinates/select_work realman_msgs/srv/SelectFrame "{name
 - Mixed 模式必须**同时**收到 `cartesian_velocity` 和 `cartesian_pose`。
 - 日志里的 `Custom CasADi IK unavailable, falling back to the RealMan SDK IK` 是已知状态（生产镜像没有 `pinocchio.casadi`），不是故障。
 - **手臂一顿一顿**：先在两端量 `/pika/*` 到达率。Pika 流走 Wi‑Fi，实测入站丢包可达约 25%（`ping` 看不出来），间隔超过 `stale_ms` 会被指令为零速，见[链路与已知问题](./development/pika-teleop#链路与已知问题)。
-- **每次进入速度控制手臂先动一下**：已测量的已知现象，见同一节"每次速度 session 启动时手臂被拉动"。
+- **每次进入速度控制手臂先动一下**：控制器残留的 CANFD 透传目标导致，driver 已在每次普通运动前重新锚定来修复（`passthrough_reanchor_mode: canfd_current`）。如果仍然出现，确认运行的镜像包含该修复，并开 `velocity_start_trace` 诊断，见同一节。
 - 两端（Pika 主机和机械臂侧）联合排查见 `debugging-pika-teleop-two-ends` skill；机制见[Pika 遥操作](./development/pika-teleop)。
 
 ### 夹爪不动或显示离线

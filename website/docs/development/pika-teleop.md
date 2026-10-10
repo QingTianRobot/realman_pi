@@ -65,8 +65,8 @@ Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/com
 
 `pikavelocity` 是实时速度流，而不是单点位置目标。其逐会话限值来自
 [`config/ros/pika_config.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/pika_config.yaml) 的 `pika_velocity`：线速度
-`max_linear_speed_mps=0.15 m/s`、角速度 `max_angular_speed_radps=2.0 rad/s`、角加速度
-`max_angular_accel_radps2=4.0 rad/s²`（从静止到 `2.0 rad/s` 约 `0.5 s`）。Pika 输入的线速度或角速度三轴
+`max_linear_speed_mps=0.25 m/s`、角速度 `max_angular_speed_radps=0.6 rad/s`，线加速度 `max_linear_accel_mps2=2.0 m/s²`、角加速度
+`max_angular_accel_radps2=4.0 rad/s²`。前两个数取自 SDK 文档给出的 `rm_movev_canfd` 限值（`0.25 m/s`、`0.6 rad/s`）：生产上超过它们的指令会让手臂卡住，所以 Pika 现在刻意保持在限值之内（此前曾配置到 `1.0 m/s` / `2.0 rad/s`）。限值上限仍由 [`realman_motion.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/realman_motion.yaml) 的 `hard_max_*` 给出，`pika_velocity` 不得超过它们。Pika 输入的线速度或角速度三轴
 向量模长超过上限时，router 按模长等比例缩放并保留方向，而不是丢弃整条消息；缩放诊断按每臂限频。
 Pika 速度 Goal 使用 `follow=false`，周期与键盘相同，为 l/r 的 `10 ms`（driver 每臂只接受一个周期）。
 
@@ -208,7 +208,7 @@ driver 的 `100 ms` watchdog 仍会独立零速并终止 session。正常停止�
 [`config/ros/realman_coordinates.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/realman_coordinates.yaml)，保持 BASE 速度向量
 数值不变。键盘和默认会话仍使用 `cell`。
 Replay 只发布 `/pika/l|r/cartesian_velocity` 与 `/pika/l|r/gripper_percentage`，夹爪值是
-`Float32` 的归一化百分比（`0` 闭合、`1` 张开），Pika 限制为 `1.0 m/s` 和 `2.0 rad/s`。
+`Float32` 的归一化百分比（`0` 闭合、`1` 张开），Pika 限制为 `0.25 m/s` 和 `0.6 rad/s`（`pika_velocity` 的当前值）。
 进入执行并尝试选择坐标后，每次结束或失败会向两路速度 ingress 发送终端零向量，等待超过 `100 ms`
 watchdog 后把已选或可能已选的坐标恢复为 `cell`；只读预检不会选择坐标或执行这段 cleanup。
 恢复失败必须先人工确认 `/<arm>/coordinates/state`，再调用 `/<arm>/coordinates/select_work` 选择 `cell`。
@@ -248,18 +248,25 @@ Pika 主机和生产机之间**没有共同的有线网段**，唯一共用的�
 - router 用本机单调时钟判断输入新鲜度并重新打时间戳，所以 Pika 主机的时钟偏差（重启后可能慢几秒）**不会**影响这条链路。
 - **排查顺序**：先在两端分别量 `/pika/*` 的速率（`ros2 topic hz`），确认问题在链路上，再动 router 或 driver。解决要落在链路本身：两机之间走有线，或换非 USB 的无线网卡。尚未区分是"AP 到网卡的空口丢包"还是"网卡自身的接收路径"。
 
-### 每次速度 session 启动时手臂被拉动
+### 每次速度 session 启动时手臂被拉动（已在 driver 中修复）
 
-**现象（已测量，不只是推断）**：每次速度 session 启动，即使命令为零，手臂也会动一下。
+**现象（现场实测）**：在修复之前，每次速度 session 启动，即使命令为零，手臂也会朝**上一个 session 的结束位姿**动一下。左臂（左 Pika 不动）每个 session 都漂移到同一个姿态、约 `1.54°`、约 `1.4 s`；右臂间歇出现，最大约 `27°/s` 关节速度、`0.5 m/s` TCP 速度。所有"没有指令的真实转动"事件都发生在 session 启动后 `1.3 s` 内。
 
-- 左臂（左 Pika 不动）：每个 session 都漂移到同一个姿态 `[13.71 24.35 74.48 -15.55 79.06 13.04]°`，幅度约 `1.54°`，约 `1.4 s`，跨数小时、多次复位 MoveJ 都一致，像是控制器侧残留了一个旧的透传目标。
-- 右臂：间歇出现，最大约 `27°/s` 关节速度、`0.5 m/s` TCP 速度，朝大致是上一个 session 结束位姿的方向。所有"没有指令的真实转动"事件（8/8）都发生在 session 启动后 `1.3 s` 内。
+**原因**：控制器里保存着一个 CANFD 透传目标，它在 MoveJ、`rm_set_movev_canfd_init`、"init + 零速 + 慢停"、模式切换乃至 driver 重启之后都还在，低跟随速度 session 一启动就被拉向这个旧目标。已排除 Pika 输入和网络、router、复位 MoveJ（目标是固定默认位姿）和 driver 启动序列本身（关节变化 0.00°）。
 
-**已排除**：Pika 输入和网络（命令流是零）、router、复位用的 MoveJ（目标是固定默认位姿）、driver 的启动序列本身（`rm_set_movev_canfd_init` 加第一条零 `movev`，约 `20 ms`，关节变化 0.00°）。拉动出现在 `session_active` 之后。
+**修复**：在真机上对六种方案做了 A/B 对比，**只有**"用 `movej_canfd` 重发当前关节角"（`canfd_current`）能消除拉动；`off`、`init_zero_stop`、`stop`、`delete_current`、`delete_all` 都仍会拉。于是 driver 在每次**普通运动**（MoveJ 等）之前先重新锚定透传目标：`MotionCoordinator` 的 `before_motion` 钩子调用 `CartesianVelocitySession.prepare_for_ordinary_motion`，由 driver 参数控制：
 
-**尝试过但没解决**：`pika_velocity` 改用高跟随（`follow: true`），左臂的 `1.5°` 拉动不变（4/4 个 session）；右臂的大幅拉动在 3 次试验里没出现，样本太少不能下结论。键盘 router 使用高跟随，`realman_motion.yaml` 的注释里也提到低跟随在启动时有瞬态。
+| driver 参数 | 默认 | 说明 |
+| --- | --- | --- |
+| `passthrough_reanchor_mode` | `canfd_current` | 重新锚定方式：`off`、`init`、`init_zero_stop`、`canfd_current`、`stop`、`delete_current`、`delete_all`、`cycle`（循环试验）。只有 `canfd_current` 经真机验证有效，其余保留用于诊断 |
+| `velocity_start_trace` | `false` | 诊断：在每次速度 session 启动前后记录关节角、节拍统计和控制器错误标志 |
+| `velocity_init_settle_ms` | `0.0` | `init` 之后等待的毫秒数，用于试验 |
 
-**待向睿尔曼确认**：`rm_set_movev_canfd_init` 是否会把内部目标重置为当前位姿；`follow` 的确切含义；SDK 注释里 `movev_canfd` 的限值是 `0.25 m/s` 和 `0.6 rad/s`，而 Pika 配置的是 `1.0 m/s` 和 `2.0 rad/s`。官方文档对"目标是否重置"没有说明。
+这几个参数没有写进 `realman_driver.yaml`，使用节点默认值。被拒绝的速度命令现在以 warning 记录（此前是 DEBUG）。
+
+**跟随模式**：Pika 速度 Goal 使用低跟随（`pika_velocity.follow: false`，router 参数 `pika_velocity_follow`）。高跟随在生产上让手腕振荡，并在一次超限指令之后手臂冻结，所以不用；键盘 router 仍使用高跟随。
+
+**仍未解决的问题**：向睿尔曼确认 `rm_set_movev_canfd_init` 是否应当重置内部目标，以及 `follow` 的确切含义；官方文档没有说明"目标是否重置"。修复是一个经验性的绕过，不是厂商认可的行为，换控制器固件后要重新验证。
 
 ### 测量时的陷阱
 
@@ -271,7 +278,6 @@ Pika 主机和生产机之间**没有共同的有线网段**，唯一共用的�
 
 - `./rm65 bt control` 默认 `REALMAN_BT_DRY_RUN=true`：dry-run 下 router 接收 Pika 输入但**什么都不发**，手臂"不动"是预期行为。真实运动要加 `REALMAN_BT_DRY_RUN=false`。
 - 放到后台运行的实例**忽略 `SIGINT`**，用 `SIGTERM` 停止。
-- 在没有澄清厂商语义和诊断之前，不建议加"检测到未指令的关节运动就中止"的启动守卫——它可能阻止正常启动。
 
 ## 相关页面
 

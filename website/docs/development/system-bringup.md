@@ -233,7 +233,10 @@ Compose 默认通过国内镜像加速首次构建，具体值都以 Docker buil
 | `UBUNTU_APT_MIRROR` | `https://mirrors.aliyun.com/ubuntu` | amd64 Ubuntu Jammy 软件包 |
 | `UBUNTU_PORTS_APT_MIRROR` | `https://mirrors.aliyun.com/ubuntu-ports` | arm64 Ubuntu Jammy 软件包 |
 | `ROS2_APT_MIRROR` | `https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu` | ROS 2 Humble 软件包 |
-| `PYPI_INDEX_URL` | `https://pypi.tuna.tsinghua.edu.cn/simple` | `Robotic_Arm` 之外的 Python 依赖（例如夹爪）|
+| `PYPI_INDEX_URL` | `https://pypi.tuna.tsinghua.edu.cn/simple`（`.env` 里为阿里云） | 早期 pip 层（例如夹爪依赖） |
+| `PIP_INDEX_URL` | `https://pypi.mirrors.ustc.edu.cn/simple` | 后面的 pip 层：`Robotic_Arm`、IK、录制依赖（含 LeRobot） |
+| `PYTORCH_INDEX_URL` | `https://mirrors.nju.edu.cn/pytorch/whl/cpu` | CPU 版 PyTorch（LeRobot 依赖） |
+| `HTTP_PROXY` / `HTTPS_PROXY` | 空 | 构建期代理（pip 层使用） |
 
 镜像 URL 不要带末尾 `/`。若某个公共镜像暂时不可用，可只覆盖该项；需要完全使用官方源时：
 
@@ -246,12 +249,13 @@ PYPI_INDEX_URL=https://pypi.org/simple \
 docker compose build realman_bringup
 ```
 
-`Robotic_Arm==1.1.6` 是特例：目前清华、阿里、USTC、腾讯、华为、南大等国内 PyPI 镜像都
-只索引到 `1.0.6`，而项目按厂商 API `V1.7.13` 语义锁死 `1.1.6`。因此 Dockerfile 中安装
-`config/python/realman-sdk-requirements.txt` 的那一步会额外附加
-`--extra-index-url https://pypi.org/simple`，仅让这个纯 Python 小包回落到官方 PyPI；
-其它依赖仍然走 `PYPI_INDEX_URL`。若企业环境完全阻断 pypi.org，请预先把 wheel 缓存到内部
-仓库，然后通过 `PYPI_INDEX_URL` 指向该仓库。
+`Robotic_Arm==1.1.6`：此前只有官方 PyPI 提供，Dockerfile 为它额外附加 `--extra-index-url https://pypi.org/simple`。2026-10-10 起阿里云、清华、USTC、腾讯、华为、南大、北外和上交的镜像都已包含 `1.1.6`，镜像构建不再访问 `pypi.org`（也去掉了会拖慢构建的 `rerun-sdk`）。若某个镜像滞后，构建会在这一层**快速失败**，换一个镜像（`PIP_INDEX_URL`）即可。
+
+构建的网络与缓存约定（`config/docker/compose.yaml`、Dockerfile 注释里有实测依据）：
+
+- 构建使用 `network: host`：生产机用 systemd-resolved（`127.0.0.53`），桥接网络的构建容器解析不了，pip 会报 `Temporary failure in name resolution`；
+- pip 层放在复制 `config` 和 `src` **之前**，只改源码或配置时 pip 层命中缓存，不会重新下载数 GB 依赖；
+- 选镜像看的是纯 HTTP/1.1 下的实际速度，而不只是能不能连上；IK 依赖层的下载超时放宽到 `300 s`。
 
 这些变量只影响镜像构建，不进入机械臂运行配置。公共镜像属于第三方基础设施；发布到生产前
 应核对最终基础镜像 digest，或改用组织内部已审计的 registry/软件仓库。

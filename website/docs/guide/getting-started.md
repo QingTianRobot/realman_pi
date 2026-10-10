@@ -45,7 +45,7 @@ cd realman_pi
 ./rm65 up
 ```
 
-它按顺序启动：宿主机 ROS 2 彩色相机 → Docker `realman_bringup_remote`（三臂真实驱动、TF、标定健康诊断、夹爪 manager）→ `realman_web_control`。相机失败则不启动 Docker；Docker 失败则清理相机。默认不启动 RViz，生产机不需要桌面。
+它按顺序启动：宿主机 ROS 2 彩色相机 → Docker `realman_bringup_remote`（三臂真实驱动、TF、标定健康诊断、夹爪 manager）→ `realman_web_control` → `realman_recording`（数据录制与回放网页，`http://127.0.0.1:8770/`，见[独立数据录制平台](../development/recording-platform)）。相机失败则不启动 Docker；Docker 失败则清理相机。默认不启动 RViz，生产机不需要桌面。
 
 | 命令 | 用途 |
 | --- | --- |

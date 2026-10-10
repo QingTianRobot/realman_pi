@@ -269,6 +269,8 @@ ros2 topic pub --rate 20 /l/cartesian_velocity/command \
 | `reconnect_interval` | `5.0` 秒 | 连接失败、断线或事件通道隔离后的重连/恢复周期；`0.0` 禁用 |
 | `state_publish_rate` | `10.0` Hz | 必须大于零；后续应按网络和控制器能力测定 |
 | `coordinate_state_publish_rate` | `1.0` Hz | 必须大于零；低频重发最近一次完整坐标校验结果，覆盖首个样本早于 DDS endpoint discovery 的启动时序 |
+| `passthrough_reanchor_mode` | `canfd_current` | 每次普通运动前重新锚定 CANFD 透传目标，避免下个速度 session 被拉向旧位姿；只有该值经真机验证（见[Pika 遥操作](./pika-teleop#每次速度-session-启动时手臂被拉动已在-driver-中修复)）。不在 `realman_driver.yaml` 中，使用节点默认值 |
+| `velocity_start_trace` / `velocity_init_settle_ms` | `false` / `0.0` | 诊断：记录速度 session 启动前后的关节角和节拍；`init` 之后的等待毫秒数 |
 | `joint_names` | `joint_1` 到 `joint_6` | 数量必须与 SDK 返回的自由度一致 |
 | `coordinates_config_file` | `config/ros/realman_coordinates.yaml` | 工具/工作坐标和启动验证策略的权威配置 |
 | `motion_config_file` | `config/ros/realman_motion.yaml` | 每臂速度、加速度、控制周期、watchdog 和停止超时的权威配置 |

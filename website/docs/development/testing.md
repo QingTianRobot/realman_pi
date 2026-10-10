@@ -19,7 +19,9 @@ description: 各组件的测试位置、运行方式、哪些测试需要 ROS/Do
 | `realman_bt`（树契约、router、launch） | `src/behavior/realman_bt/test/test_*.py` | pytest | Humble |
 | `realman_bt_mock` | `src/behavior/realman_bt_mock/test/` | pytest | Humble |
 | 行为树启动器 / 容器入口 / `./rm65` | `scripts/test_bt_*.sh`、`tests/*.sh`、`tests/test_bt_*.py` | bash / unittest | 宿主机（`RM65_DRY_RUN=1`，不启动容器） |
-| `gripper_ros2` | `src/gripper/gripper_ros2/test/` | pytest | Humble（假串口） |
+| `gripper_ros2`（含行程覆盖、`set_limits` / `move_raw`） | `src/gripper/gripper_ros2/test/` | pytest | Humble（假串口） |
+| `realman_recording` | `src/recording/realman_recording/test/` | pytest | Humble；部分用例需要 `lerobot`、`pyarrow`、`rosbag2_py` |
+| 录制回放页 | `website/tests/recording-replay.spec.ts` | Playwright（**独立配置** `config/recording/playwright.config.mjs`，起 Vite `:4175`） | 宿主机 Node；先 `npm ci`（含 `gridstack`）和 `npx playwright install chromium`；不属于 `npm run test:e2e` |
 | `policy_bridge` | `src/policy_bridge/test/` | pytest | Humble 或装有依赖的 Python |
 | `realman_camera_calibration` | `src/sensor/realman_camera_calibration/test/` | pytest | Humble |
 | `realman_bringup` launch | `src/realman_bringup/test/` | pytest | Humble |
@@ -66,6 +68,13 @@ cd website && npm run build:web-control && npm run test:web-control
 **策略桥**：`cd src/policy_bridge && PYTEST_DISABLE_PLUGIN_AUTOLOAD=1 PYTHONPATH=".:$PYTHONPATH" python3 -m pytest test/ -q`。
 
 **速度跟随工具**：`cd tools/velocity_follow && PYTHONPATH=. python3 -m pytest tests -q`。
+
+**录制回放页**（需要 Playwright 自带的 Chromium）：
+
+```bash
+cd website && npx playwright install chromium
+node_modules/.bin/playwright test --config ../config/recording/playwright.config.mjs
+```
 
 **文档站**：
 

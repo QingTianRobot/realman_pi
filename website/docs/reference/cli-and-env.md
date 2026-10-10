@@ -12,7 +12,7 @@ description: ./rm65 统一入口、行为树启动器、.env 与 Compose 环境�
 | 命令 | 作用 |
 | --- | --- |
 | `./rm65 build` | 重建 `realman_bringup_remote` 与 `realman_web_control` 镜像；不改变容器状态 |
-| `./rm65 up` | 生产默认：ROS 2 彩色相机 + 三臂真实驱动 + Web control + 标定健康诊断；无 RViz，不需要 `DISPLAY` |
+| `./rm65 up` | 生产默认：ROS 2 彩色相机 + 三臂真实驱动 + Web control + 数据录制 recorder 与回放网页（`:8770`）+ 标定健康诊断；无 RViz，不需要 `DISPLAY` |
 | `./rm65 up desktop` | 同上，并启动 RViz-only 的远程查看服务 `realman_remote_rviz` |
 | `./rm65 up policy` | 生产图 + VLA 策略桥容器 `policy_bridge`（等待模式路由选中 `policy` 并调用 `/policy/activate`） |
 | `./rm65 up model` | 离线三臂模型 + RViz，不连接真机 |
@@ -58,6 +58,8 @@ description: ./rm65 统一入口、行为树启动器、.env 与 Compose 环境�
 | `REALMAN_DRIVER_CONFIG_FILE` `COORDINATES_` `MOTION_` `WEB_CONTROL_` `CAMERA_CALIBRATION_` `…_CONFIG_FILE` | 覆盖对应 YAML 的**容器内路径**；`*mock.yaml` 会让 `./rm65` 自动关闭夹爪 |
 | `REALMAN_START_GRIPPER`、`REALMAN_GRIPPER_{RIGHT,LEFT,MID}_DEVICE` | 夹爪 manager 开关与宿主设备路径（默认 `/dev/realman/gripper_*`） |
 | `REALMAN_JOY_DEVICE`、`REALMAN_WAIT_FOR_JOY_DEVICE`、`REALMAN_JOY_POLL_INTERVAL` | Xbox 手柄设备与等待策略 |
+| `REALMAN_RECORDING_ROOT`、`REALMAN_START_RECORDING_WEB` | 录制 session 根目录（容器内默认 `/data/realman-recordings`，宿主挂载仓库 `recordings/`）与是否启动回放网页（默认 `true`） |
+| `PIP_INDEX_URL`、`PYTORCH_INDEX_URL`、`HTTP_PROXY`、`HTTPS_PROXY` | 构建镜像时 pip 阶段的包源（默认国内镜像，见[系统 Bringup：国内镜像](../development/system-bringup#国内镜像与官方源切换)）与代理；构建使用宿主网络（`network: host`），因为生产机的 systemd-resolved DNS 在桥接网络里不可达 |
 | `POLICY_WS_HOST`、`POLICY_BRIDGE_CONFIG_FILE`、`POLICY_BRIDGE_ACTIVE_SIDE` | 策略服务地址、配置文件、当前驱动的一侧（`left`/`right`） |
 | `DISPLAY`、`XAUTHORITY`、`LIBGL_ALWAYS_SOFTWARE` | 带 RViz 的服务需要；headless 服务不需要 |
 | `REALMAN_LOG_ROOT` | 日志根目录（容器内 `/opt/rm65_ws/logs`，映射到仓库 `logs/`） |
@@ -71,6 +73,7 @@ Web control 不做任何身份校验：`:8765` 能被访问的浏览器就能发
 | 端口 | 服务 | 说明 |
 | --- | --- | --- |
 | `8765` | `realman_web_control` | 控制页 `/`、标定页 `/calibration.html`、WebSocket |
+| `8770` | `realman_recording` | 录制实时页与 LeRobot 回放页，默认只绑定回环地址；无认证，不要直接暴露 |
 | `8080` | 行为树只读监视器 | 仅在 `./rm65 bt …` 运行期间；所有 `/api/` 写请求返回 `405` |
 | `18000` | 外部 VLA 策略服务 | `policy_bridge` 作为客户端连接，不由本仓库启动 |
 | `8554`、`8100–8103` | 旧 RTSP/TCP 相机推流 | 已弃用 |

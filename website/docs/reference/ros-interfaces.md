@@ -65,6 +65,9 @@ description: realman_pi 所有对外 ROS 2 节点、Action、Service 和 Topic �
 | `/<name>/enable` | `std_srvs/SetBool` | 使能 / 失能 |
 | `/<name>/percentage` | `gripper_ros2_msgs/GripperPercentage` | 一次性同步目标（`0..1`） |
 | `/<name>/percentage/command` | `std_msgs/Float32`（订阅） | 非阻塞连续目标；流式触发被限制为 4 Hz |
+| `/<name>/set_limits` | `gripper_ros2_msgs/SetGripperLimits` | 校验、保存并立即应用开位/闭位（写入 `gripper_overrides.yaml`） |
+| `/<name>/move_raw` | `gripper_ros2_msgs/MoveGripperRaw` | 点动到 `min..max` 内的原始位置，越界拒绝 |
+| `/<name>/limits` | `gripper_ros2_msgs/GripperLimits`（发布） | 当前生效的开/闭位与 `min/max`；reliable + transient-local；Web 与策略桥订阅它 |
 | `/<name>/position` `speed` `current` `torque_reached` `alarm` `connected` | `Float64` / `Int32` / `Int32` / `Bool` / `Int32` / `Bool` | 反馈；只有 `connected=true` 才表示 Modbus 反馈在成功 |
 
 ## Web 控制 `realman_web_control`
@@ -83,6 +86,16 @@ HTTP / WebSocket `:8765`，浏览器不直接访问 ROS。它调用上面的 Act
 | `/camera_calibration/diagnostics` | `diagnostic_msgs/DiagnosticArray` | 标定节点诊断 |
 
 契约：[三臂 ChArUco 手眼标定](../development/camera-calibration)、[相机指南](../guide/cameras)。
+
+## 数据录制 `realman_recording`
+
+只订阅驱动与夹爪输出，不创建 SDK 客户端，不发布运动命令。契约：[独立数据录制平台](../development/recording-platform)。
+
+| 名称 | 类型 | 说明 |
+| --- | --- | --- |
+| `/recording/manage` | `realman_recording_msgs/ManageRecording`（Service） | 唯一的会话控制入口：`PREPARE` / `START` / `STOP` / `ADOPT` / `DISCARD` |
+| `/recording/status` | `realman_recording_msgs/RecordingStatus` | 网页状态的唯一权威来源（倒计时、session、导出状态） |
+| `:8770` HTTP / WebSocket | — | 实时只读页与 LeRobot 回放页；`/api/lerobot/*` 见专题页 |
 
 ## VLA 策略桥 `policy_bridge`
 

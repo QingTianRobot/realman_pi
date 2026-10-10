@@ -7,7 +7,7 @@ description: RealMan 驱动输出的隔离录制、预检、低清展示与 LeRo
 
 `realman_recording` 是一个**订阅式数据录制与回放** ROS 2 节点组：它只订阅已有的驱动与夹爪输出，不创建 `Robotic_Arm`/RealMan SDK 客户端，也不发布机械臂运动命令。`./rm65 up` 通过 `realman_recording` 容器随生产 ROS 图一起启动它（默认开启）；正常实时展示继续由 `realman_web_control` 提供。recording 自带网页仅用于录制与已导出 episode 的只读回放，不发起任何录制控制；上游系统通过 `/recording/manage` Service 控制录制生命周期，不能复用或代理 `realman_web_control` 的运动面板。
 
-录制和数据集转换是两个阶段：停止时只原子收尾原始 MCAP/JPEG 帧 session；上游明确采用后才会请求独立 LeRobot worker。转换占用的 CPU、GPU、图像解码或失败均不得减慢下一次 ROS 数据录制。
+录制和数据集转换是两个阶段：停止时只原子收尾原始 MCAP/JPEG 帧 session；转换由独立的 LeRobot worker 完成。`config/ros/recording.yaml` 的 `auto_export_on_stop`（默认 `true`）让**干净收尾**的 session 在 STOP 后自动采用并入队导出，由单个串行 worker 一次只转换一个；有 MCAP 或相机写错误的 `FAILED` session 永远不会自动导出。设为 `false` 恢复手动 `ADOPT`。转换占用的 CPU、GPU、图像解码或失败均不得减慢下一次 ROS 数据录制。
 
 MCAP 状态写入、ROS `Image` 有界 JPEG 录制、低清 JPEG 预览、夹爪/相机健康状态、Three.js/URDF 三臂展示、预检和预约控制已经接入。`ADOPT` 会在 ROS executor 外把完成 session 异步转换为 `lerobot==0.4.4` 的 canonical v3 episode；失败会持久化为 `FAILED`，不会伪造成功的数据集。
 MCAP 的 `accepted_samples` 仅在序列化并成功交给 writer 后递增；`enqueued_samples`
@@ -43,7 +43,28 @@ ROS Image ──► bounded JPEG archive ──► videos/
 LeRobot v3 的每个向量 feature 都在 `features.<key>.names` 中声明分量名，作为 Studio 风格检视器的维度标签唯一优先来源：关节按配置的机械臂顺序展开为 `<arm>.<joint>`，末端位置按 `x/y/z`、末端姿态按 `qx/qy/qz/qw`、末端线速度按 `vx/vy/vz`、末端角速度按 `wx/wy/wz` 展开，控制动作与执行动作按 `vx/vy/vz/wx/wy/wz` 展开，夹爪使用 topic namespace 名称，同步误差使用 `quality_sync_source_ids` 顺序。回放前端先读 feature metadata；旧数据没有 `names` 时才从 receipt canonical metadata 推导兼容标签。布尔质量字段在原始值检视器中仍显示 `true/false`，图表按 `1/0` 绘制。
 
 此行为参考 [LeRobot Studio 的图表数据模型](https://github.com/ioai-tech/lerobot-studio/blob/main/src/react/components/panels/ChartPanel/chartPanelModel.ts)：保留其 feature metadata 驱动维度命名、任意 observation/action 数值字段进入检视器的做法，但沿用本项目现有 Web 工作台和 `/api/lerobot` 只读 API，不引入 Studio 的 React 应用或额外服务。
-回放相机 JPEG 按请求生成并缩放至 640×360、quality 65；这只影响 Web 预览传输，不修改 LeRobot 原视频。
+回放页现在用 `<video>` 同步播放导出的 LeRobot 视频（`/api/lerobot/<session>/video/<camera>`，支持 HTTP Range），不再逐帧拉 JPEG；按帧 JPEG endpoint 仍保留，按请求缩放至 640×360、quality 65，只影响 Web 预览传输，不修改 LeRobot 原视频。
+
+## 回放与整理（Phase 2）
+
+回放页是只读展示加**整理**操作：整理只改元数据，不删除任何原始文件。所有端点都挂在 `:8770`（默认只绑定回环地址，无认证），`session_id` 先解析到录制根目录下并拒绝目录穿越。
+
+| 端点 | 作用 |
+| --- | --- |
+| `GET /api/lerobot` | 已导出 episode 目录（不含被隐藏的） |
+| `GET /api/lerobot/queue` | 导出队列：每个 session 的 `QUEUED` / `RUNNING` / `SUCCEEDED` / `FAILED`，不暴露文件系统路径 |
+| `GET /api/lerobot/<id>/summary`、`/frames` | 摘要与动态字段帧数据（见上文） |
+| `GET /api/lerobot/<id>/video/<camera>` | 导出视频，支持 `Range`（返回 `206`） |
+| `GET /api/lerobot/<id>/frames/<n>/cameras/<camera>` | 单帧 JPEG（调试用，前端不再使用） |
+| `POST /api/lerobot/<id>/delete` | **软隐藏**一个 episode（"回收站"），原始文件保留 |
+| `GET /api/lerobot/trash` | 列出被隐藏的 episode |
+| `POST /api/lerobot/<id>/restore` | 把隐藏的 episode 恢复回目录 |
+| `POST /api/lerobot/<id>/task` | 请求体 `{"task": "…"}`，原子改写该 episode 的 `metadata.task`；空字符串返回 `400` |
+| `GET` / `POST /api/lerobot/<id>/subtasks` | 读取 / 整体替换子任务标注 |
+
+**子任务标注**：请求体 `{"subtasks": [{"index", "label", "start_frame", "end_frame"}, …]}`，要求 `index` 严格递增、`label` 非空、`0 ≤ start_frame ≤ end_frame < 帧数`、片段互不重叠，否则拒绝。标注原子写入，并在导出时进入 LeRobot v3 数据集：schema 声明 `subtask_index` 特征，同时导出一张子任务标签表（写在 `save_episode` 之前）。同一 session 被重复导出时有防止多 episode 标注互相覆盖的保护。
+
+**前端**（`web/`，`npm run build:recording` 构建）：左侧 episode 侧栏支持搜索、筛选、隐藏/恢复和就地编辑任务；中央同步多相机视频与时间轴，可在时间轴上标注子任务；右侧是 action 与 state 的对比曲线和健康面板；导出队列面板显示转换进度。回放渲染循环被限频，图表做了记忆化，视频 I/O 在工作线程里，选择范围被钳制。
 
 ## ROS 接口
 

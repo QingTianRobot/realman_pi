@@ -28,6 +28,10 @@ flowchart TB
   subgraph C2["容器 realman_web_control"]
     WEB["Web 控制 :8765"]
   end
+  subgraph C3["容器 realman_recording"]
+    REC["recorder + 回放网页 :8770"]
+  end
+  REPO -- "recordings/ 可写挂载" --> C3
   REPO -- "config/ros 可写挂载" --> C1
   REPO -- "config 只读挂载" --> C2
   UDEV --> C1
@@ -35,7 +39,7 @@ flowchart TB
 ```
 
 - **ROS 栈只在容器里**：`/opt/rm65_ws`（安装空间、源码副本、`config/ros/*.yaml`）只存在于容器内部。宿主上 `ps` 能看到这些进程（以 root 运行），但路径在宿主上不存在。读配置和日志用 `docker exec` / `docker logs`。
-- **容器名**：`realman_pi-realman_bringup_remote-1`（驱动、夹爪、相机、router）和 `realman_pi-realman_web_control-1`（`:8765`）。取决于部署，还可能有策略桥、数据录制等容器；以 `docker ps` 为准。
+- **容器名**：`realman_pi-realman_bringup_remote-1`（驱动、夹爪、相机、router）、`realman_pi-realman_web_control-1`（`:8765`）和 `realman_pi-realman_recording-1`（数据录制与回放网页 `:8770`，`./rm65 up` 会一并启动，见[独立数据录制平台](./recording-platform)）。取决于部署，还可能有策略桥；以 `docker ps` 为准。
 - **配置是宿主文件**：`config/ros` 以可写方式挂进 `realman_bringup_remote`，`config` 以只读方式挂进 `realman_web_control`。所以改**宿主**上的 YAML，重启对应进程即可生效，不用重建镜像。
 - **ROS domain** 是 `65`（来自 `.env`）。
 
@@ -129,11 +133,15 @@ curl -s http://127.0.0.1:8765/api/layout | head -c 200
 - `gripper_manager` **不记录告警跳变**，没有历史，只有 live topic；需要事后追溯要自己录 topic。
 - 告警可能**锁存**：例如 `0x20` 在夹爪重新通电、能动之后依然是 `32`。键盘 router 和 Web 控制都会拒绝任何 `alarm != 0` 的夹爪，所以恢复供电后可能要对该夹爪执行一次 `reset`。
 
-**行程标定**：`open_position` / `close_position` 必须贴着机械真实行程，否则"全开"只是半开。2026-09-28 的标定实测机械极限（设备单位）是：右 `8..8668`、左 `1..919`（左夹爪量级约为右的 1/10，单位待确认）、中 `0..9000`。曾经仓库里右夹爪是 `4000/12000`、左是 `400/949`，导致"全开"只有约 55%。生产机已改为右 `50/8500`、左 `20/900`（各留约 2% 余量，操作员确认开合正常）。
+**行程标定与网页覆盖**：`open_position` / `close_position` 必须贴着机械真实行程，否则"全开"只是半开。2026-09-28 的标定实测机械极限（设备单位）是：右 `8..8668`、左 `1..919`（左夹爪量级约为右的 1/10，单位待确认）、中 `0..9000`。曾经的配置（右 `4000/12000`、左 `400/949`）让"全开"只有约 55%；现在 `config/ros/gripper.yaml` 已是标定值（右 `50/8500`、左 `20/900`、中 `0/9000`，各留约 2% 余量），并已合入 `main`。
 
-::: warning 仓库 main 与生产机的行程不一致
-截至 2026-10-10，生产机宿主上的 `config/ros/gripper.yaml` 已是上面的标定值，而仓库 `main` 里仍是旧值。此时执行 `./rm65 sync`（或任何 rsync）会把生产机的行程**覆盖回旧值**。在把标定值合回仓库之前，不要同步 `config/ros/gripper.yaml`。
-:::
+现场还可以在 Web 控制页的"行程设置"里在线改开位/闭位，结果保存在 `gripper.yaml` 同目录的 `gripper_overrides.yaml`（见[夹爪控制](./gripper-control)）。这个文件：
+
+- 是这台机器的**运行时状态**，被 `config/ros/.gitignore` 忽略，不进 git，所以 `./rm65 sync` / rsync 不会覆盖它，也不会把它带到别的机器；
+- 由容器以 root 写入，宿主上手工改它需要 `sudo`；
+- 优先于 `gripper.yaml` 的默认值。想让某个行程值成为所有机器的新默认，要把它写回 `gripper.yaml` 并提交。
+
+`gripper_manager` 和 `realman_web_control` 在启动时读取 `gripper.yaml` 与覆盖文件，运行中通过 `/<name>/limits` 同步。改了宿主上的 YAML 后，需要重启这两个进程，网页上的开合百分比和 3D 夹爪模型才会用新端点。
 
 ## 清理日志
 
@@ -141,10 +149,10 @@ curl -s http://127.0.0.1:8765/api/layout | head -c 200
 
 - 许多目录属于 root，宿主直接 `rm` 会失败，改用 `docker exec realman_pi-realman_bringup_remote-1 rm -rf /opt/rm65_ws/logs/<目录>`。
 - 删"昨天"的目录前先查容器里哪些目录**仍被打开**（`/proc/*/fd`）：当前 launch 目录和录制目录会连续几天保持打开，不能删。
-- 有意不动的：`behavior-trees/`（每次运行的 XML 与 `runtime.json` 快照，不是普通日志）、`velocity-follow/`（测试数据）、Docker 自己的 json-file 日志（无法选择性裁剪）。
+- 有意不动的：`recordings/`（录制 session 与导出的数据集，是数据不是日志，目录权限属于容器内用户，宿主上 `git status` 会因此打印"权限不够"警告，属正常）、`behavior-trees/`（每次运行的 XML 与 `runtime.json` 快照，不是普通日志）、`velocity-follow/`（测试数据）、Docker 自己的 json-file 日志（无法选择性裁剪）。
 
 ## 现场常见问题
 
-- **Pika 时而抖动、时而不动**：见[Pika 遥操作：链路与已知问题](./pika-teleop#链路与已知问题)——Wi‑Fi 丢包、会话启动时手臂被拉动、`dry-run` 默认值。
+- **Pika 时而抖动、时而不动**：见[Pika 遥操作：链路与已知问题](./pika-teleop#链路与已知问题)——Wi‑Fi 丢包、会话启动拉动的修复与诊断开关、`dry-run` 默认值。
 - **`Custom CasADi IK unavailable`**：每次驱动启动都会出现，镜像里没有 `pinocchio` / `casadi`，使用 SDK IK，属正常。
 - **在容器里看不到任何节点**：没 source `/opt/rm65_ws/install/setup.bash`，或 `ROS_DOMAIN_ID` 不是 `65`。

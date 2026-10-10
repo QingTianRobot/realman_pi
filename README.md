@@ -7,6 +7,7 @@ ROS 2 Humble 控制平台，面向三台 RealMan RM65 机械臂（左 `l`、中 
 - **行为树**：常驻输入路由器、分阶段 MoveJ 任务树、只读运行监视器。
 - **末端与感知**：Changingtek 夹爪（Modbus RTU）、三路 Orbbec 腕部相机 + RealSense D435、ChArUco 手眼标定。
 - **策略**：OpenPI WebSocket ⇄ ROS 2 的 VLA 策略桥。
+- **数据**：只订阅驱动输出的录制平台（MCAP/JPEG、预检、LeRobot v3 导出）和 Web 回放整理页。
 - **底座**：RM65 URDF、三臂 TF 与 RViz 2；Web 控制台带 URDF 影子。
 
 所有组件运行在可复现的 Docker 环境中，权威配置只有一份：根目录 `config/`。
@@ -29,7 +30,7 @@ ROS 2 Humble 控制平台，面向三台 RealMan RM65 机械臂（左 `l`、中 
 
 ```bash
 ./rm65 build          # 首次或代码更新后：重建驱动与 Web 控制镜像
-./rm65 up             # ROS 2 彩色相机 + 三臂驱动 + Web 控制台（:8765），默认无 RViz
+./rm65 up             # ROS 2 彩色相机 + 三臂驱动 + Web 控制台（:8765）+ 数据录制/回放（:8770），默认无 RViz
 ./rm65 status         # 查看相机与服务状态
 ./rm65 logs
 ./rm65 down
@@ -63,6 +64,7 @@ realman_pi/
 │   ├── behavior/  realman_bt（执行器 + 键盘/Pika router）、realman_bt_mock
 │   ├── gripper/   gripper_ros2、gripper_ros2_msgs
 │   ├── policy_bridge/  VLA 策略桥
+│   ├── recording/      数据录制与回放（realman_recording、realman_recording_msgs）
 │   ├── sensor/ sensor_bringup/  相机、标定与 launch（含 vendor 驱动）
 │   ├── realman_bringup/  系统 launch 编排
 │   └── rm65_description/ URDF、mesh、TF、RViz

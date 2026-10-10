@@ -104,6 +104,9 @@ const exportPanel = $("#export-panel");
 const exportState = $("#export-state");
 const exportProgressEl = $("#export-progress");
 const exportDirEl = $("#export-dir");
+const queuePanel = $("#queue-panel");
+const queueCount = $("#queue-count");
+const queueList = $("#lerobot-queue");
 const replayCount = $("#replay-count");
 const replayDataset = $<HTMLSelectElement>("#replay-dataset");
 const replaySlider = $<HTMLInputElement>("#replay-slider");
@@ -473,6 +476,7 @@ function render(payload: Snapshot) {
     exportState.style.color = "";
     exportProgressEl.style.width = `${Math.round(exportProgress * 100)}%`;
     exportDirEl.textContent = "";
+    syncQueueProgress(exportProgress);
   } else if (exportProgress >= 1 && exportDir) {
     exportPanel.style.display = "";
     exportState.textContent = "转换完成";
@@ -487,6 +491,71 @@ function render(payload: Snapshot) {
 
   latestLiveSnapshot = payload;
   renderLiveRobot(payload);
+}
+
+type QueueJob = {
+  session_id: string;
+  decision: string | null;
+  export_state: string | null;
+  requested_realtime_ns: number;
+  error: string;
+};
+
+const QUEUE_GROUPS = [
+  { state: "RUNNING", label: "转换中" },
+  { state: "QUEUED", label: "排队中" },
+  { state: "SUCCEEDED", label: "已完成" },
+  { state: "FAILED", label: "失败" },
+] as const;
+
+let queueJobs: QueueJob[] = [];
+let latestExportProgress = 0;
+let lastRenderedProgress = -1;
+
+function renderQueue() {
+  const active = queueJobs.filter((job) => job.decision === "ADOPTED" && job.export_state);
+  if (!active.length) {
+    queuePanel.style.display = "none";
+    queueList.innerHTML = '<div class="empty">暂无待转换会话</div>';
+    queueCount.textContent = "0 个会话";
+    return;
+  }
+  queuePanel.style.display = "";
+  queueCount.textContent = `${active.length} 个会话`;
+  const groups: string[] = [];
+  for (const group of QUEUE_GROUPS) {
+    const members = active.filter((job) => job.export_state === group.state);
+    if (!members.length) continue;
+    const rows = members
+      .map((job) => {
+        const progress = job.export_state === "RUNNING" ? ` · ${Math.round(latestExportProgress * 100)}%` : "";
+        const error = job.error ? ` · ${escapeHtml(job.error)}` : "";
+        return `<div class="queue-row"><span class="queue-session">${escapeHtml(job.session_id)}</span><span class="queue-state">${group.label}${progress}${error}</span></div>`;
+      })
+      .join("");
+    groups.push(`<div class="queue-group"><span class="queue-group-label">${group.label}</span>${rows}</div>`);
+  }
+  queueList.innerHTML = groups.join("");
+}
+
+function refreshQueue() {
+  fetch("/api/lerobot/queue")
+    .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
+    .then((payload) => {
+      queueJobs = (payload.jobs ?? []) as QueueJob[];
+      renderQueue();
+    })
+    .catch(() => {
+      /* keep the last rendered queue on transient failure */
+    });
+}
+
+function syncQueueProgress(progress: number) {
+  latestExportProgress = progress;
+  const pct = Math.round(progress * 100);
+  if (pct === lastRenderedProgress) return;
+  lastRenderedProgress = pct;
+  renderQueue();
 }
 
 function renderLiveRobot(payload: Snapshot) {
@@ -885,6 +954,8 @@ fetch("/api/layout")
   });
 connect();
 loadReplayDatasets();
+refreshQueue();
+setInterval(refreshQueue, 5000);
 replayDataset.addEventListener("change", () => selectReplaySession(replayDataset.value));
 replaySlider.addEventListener("input", () => {
   stopReplayPlay();

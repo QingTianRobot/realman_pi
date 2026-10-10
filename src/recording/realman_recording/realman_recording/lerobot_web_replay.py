@@ -264,6 +264,25 @@ class LeRobotReplayCatalog:
             raise ValueError("camera frame is unavailable")
         return self._jpeg(frame)
 
+    def video_path(self, session_id: str, camera_id: str) -> Path:
+        """Resolve the exported MP4 for one episode camera without opening the SDK.
+
+        The exporter writes one MP4 per episode under
+        ``<dataset_root>/videos/observation.images.<camera_id>/chunk-000/``, so the
+        file index always equals the episode index.  A bogus camera (or a
+        traversal attempt) produces an absent file and therefore ``ValueError``.
+        """
+        reference = self._reference(session_id)
+        key = f"observation.images.{camera_id}"
+        candidate = (
+            reference.dataset_root / "videos" / key / "chunk-000"
+            / f"file-{reference.episode_index:03d}.mp4"
+        )
+        # Path-traversal guard: the resolved file must stay inside dataset_root.
+        if reference.dataset_root not in candidate.parents or not candidate.is_file():
+            raise ValueError("episode video file does not exist")
+        return candidate
+
     def _reference(self, session_id: str) -> ReplayDatasetRef:
         if not session_id or Path(session_id).name != session_id:
             raise ValueError("invalid session id")

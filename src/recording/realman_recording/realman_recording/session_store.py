@@ -286,3 +286,42 @@ class SessionStore:
         )
         atomic_json_write(final, payload)
         return payload
+
+    @staticmethod
+    def hide_final_session(directory: str | Path, *, hidden_realtime_ns: int | None = None) -> dict[str, Any]:
+        """Soft-delete one exported session without removing any raw artifacts."""
+        return SessionStore._set_decision(directory, "DELETED", "hidden_realtime_ns", hidden_realtime_ns)
+
+    @staticmethod
+    def restore_final_session(directory: str | Path) -> dict[str, Any]:
+        """Re-adopt one previously hidden exported session."""
+        return SessionStore._set_decision(directory, "ADOPTED", None, None)
+
+    @staticmethod
+    def _set_decision(
+        directory: str | Path,
+        decision: str,
+        ts_field: str | None,
+        ts_value: int | None,
+    ) -> dict[str, Any]:
+        """Flip the decision of a successfully exported READY session.
+
+        Hiding and restoring are deliberate reviewer actions on finalized data, so
+        unlike ``adopt``/``discard`` they do not require a PENDING or ADOPTED+QUEUED
+        precondition: any successfully exported session may be hidden, and a hidden
+        one is restored back to ADOPTED.  Files are never deleted.
+        """
+        final = Path(directory).resolve() / "manifest.json"
+        if not final.is_file():
+            raise ValueError("recording session has no finalized manifest.json")
+        payload = json.loads(final.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("state") != "READY":
+            raise RuntimeError("only READY recording sessions can be hidden/restored")
+        export = payload.get("export") or {}
+        if export.get("state") != "SUCCEEDED":
+            raise RuntimeError("only successfully exported sessions can be hidden/restored")
+        payload["decision"] = decision
+        if ts_field:
+            payload[ts_field] = _timestamp_or_now(ts_value, name=ts_field)
+        atomic_json_write(final, payload)
+        return payload

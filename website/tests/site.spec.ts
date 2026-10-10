@@ -127,6 +127,7 @@ test("documentation routes render", async ({ page }) => {
     "development/",
     "development/testing",
     "development/pika-teleop",
+    "development/production-operations",
     "development/documentation-workflow",
     "development/startup-entries",
     "development/camera-calibration",
@@ -246,6 +247,7 @@ test("mermaid labels stay inside their boxes and the SVG", async ({ page }) => {
     "development/behavior-tree-control",
     "development/pika-teleop",
     "development/realman-driver-scaffold",
+    "development/production-operations",
   ]) {
     await page.goto(route);
     await expect(page.locator(".vp-doc .mermaid svg").first()).toBeVisible({ timeout: 15_000 });
@@ -353,4 +355,26 @@ test("the joint panel never covers the arms or the headline", async ({ page }) =
   });
   expect(result.right, "arms must end left of the panel").toBeLessThanOrEqual(result.panelLeft);
   expect(result.left, "arms must start right of the headline column").toBeGreaterThanOrEqual(result.copyRight - 2);
+});
+
+test("docs link to repository files through GitHub URLs, not relative paths", async () => {
+  // A relative link such as ../../../config/ros/x.yaml escapes docs/ and 404s on the published site.
+  const { readdir } = await import("node:fs/promises");
+  const root = resolve("docs");
+  const offenders: string[] = [];
+  async function walk(directory: string) {
+    for (const entry of await readdir(directory, { withFileTypes: true })) {
+      if (entry.name === ".vitepress" || entry.name === "node_modules") continue;
+      const path = resolve(directory, entry.name);
+      if (entry.isDirectory()) await walk(path);
+      else if (entry.name.endsWith(".md")) {
+        const text = await readFile(path, "utf8");
+        for (const match of text.matchAll(/\]\(((?:\.\.\/)+(?:config|src|docs|scripts|tools|tests|\.agents|docker)[^)\s]*)\)/g)) {
+          offenders.push(`${path.replace(root, "docs")}: ${match[1]}`);
+        }
+      }
+    }
+  }
+  await walk(root);
+  expect(offenders).toEqual([]);
 });

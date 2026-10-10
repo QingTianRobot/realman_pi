@@ -650,6 +650,23 @@ def test_node_source_registers_connected_trajectory_and_recovery_interfaces():
     assert "self._recover_event_channel()" in source
 
 
+def test_node_source_passes_the_velocity_start_trace_parameter_to_the_session():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert 'declare_parameter("velocity_start_trace", False)' in source
+    assert "start_trace=self.velocity_start_trace" in source
+
+
+def test_node_source_wires_the_passthrough_reanchor_hook_and_settle_parameters():
+    source = NODE_PATH.read_text(encoding="utf-8")
+
+    assert 'declare_parameter("passthrough_reanchor_mode", "canfd_current")' in source
+    assert 'declare_parameter("velocity_init_settle_ms", 0.0)' in source
+    assert "reanchor_mode=self.passthrough_reanchor_mode" in source
+    assert "init_settle_ms=self.velocity_init_settle_ms" in source
+    assert "before_motion=lambda: self.velocity_session.prepare_for_ordinary_motion()" in source
+
+
 def test_node_source_registers_cartesian_velocity_action_and_command_topic():
     source = NODE_PATH.read_text(encoding="utf-8")
 

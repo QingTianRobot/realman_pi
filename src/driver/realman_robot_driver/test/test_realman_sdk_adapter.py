@@ -42,6 +42,12 @@ class FakeRobot:
     def rm_set_arm_stop(self):
         return self._call("rm_set_arm_stop")
 
+    def rm_set_delete_current_trajectory(self):
+        return self._call("rm_set_delete_current_trajectory")
+
+    def rm_set_arm_delete_trajectory(self):
+        return self._call("rm_set_arm_delete_trajectory")
+
     def rm_get_arm_current_trajectory(self):
         return self._call("rm_get_arm_current_trajectory")
 
@@ -224,6 +230,19 @@ def test_stop_motion_and_state_calls_preserve_vendor_results(adapter, fake_robot
         "rm_set_arm_stop",
         "rm_get_arm_current_trajectory",
         "rm_get_current_arm_state",
+    ]
+
+
+def test_trajectory_deletion_calls_map_to_the_vendor_functions_and_return_their_status(adapter, fake_robot):
+    fake_robot.results.update(
+        {"rm_set_delete_current_trajectory": 7, "rm_set_arm_delete_trajectory": 8}
+    )
+
+    assert adapter.delete_current_trajectory() == 7
+    assert adapter.delete_all_trajectories() == 8
+    assert [call[0] for call in fake_robot.calls[-2:]] == [
+        "rm_set_delete_current_trajectory",
+        "rm_set_arm_delete_trajectory",
     ]
 
 

@@ -104,6 +104,13 @@ def _load_pika_velocity_config(config_file: Path) -> dict[str, str | float | int
         ):
             raise ValueError(f"{config_file}: pika_velocity.{config_name} must be positive")
         result[parameter_name] = float(value)
+    # RealMan CANFD follow mode of the velocity session: False is low-follow, True is
+    # high-follow (requires a control period of at most 10 ms). Optional so existing
+    # configs keep their behaviour.
+    follow = velocity.get("follow", False)
+    if not isinstance(follow, bool):
+        raise ValueError(f"{config_file}: pika_velocity.follow must be true or false")
+    result["pika_velocity_follow"] = follow
     linear_accel = velocity.get("max_linear_accel_mps2")
     if linear_accel is not None:
         if (

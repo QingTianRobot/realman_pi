@@ -197,10 +197,22 @@ def make_session(
     ros_clock=None,
     active_frame=None,
     prepare_reference=None,
+    logger=None,
+    start_trace=None,
+    reanchor_mode=None,
+    init_settle_ms=None,
 ):
     kwargs = {}
     if ros_clock is not None:
         kwargs["ros_time_now_ns"] = ros_clock
+    if logger is not None:
+        kwargs["logger"] = logger
+    if start_trace is not None:
+        kwargs["start_trace"] = start_trace
+    if reanchor_mode is not None:
+        kwargs["reanchor_mode"] = reanchor_mode
+    if init_settle_ms is not None:
+        kwargs["init_settle_ms"] = init_settle_ms
     return CartesianVelocitySession(
         arm_id="l",
         adapter=adapter or FakeAdapter(),
@@ -2099,3 +2111,454 @@ def test_base_velocity_is_rejected_even_with_namespaced_base_link_frame():
         session.start(goal)
 
     assert adapter.init_calls == []
+
+
+class RecordingLogger:
+    def __init__(self) -> None:
+        self.messages = []
+
+    def info(self, message):
+        self.messages.append(("info", message))
+
+    def warning(self, message):
+        self.messages.append(("warning", message))
+
+    def debug(self, message):
+        self.messages.append(("debug", message))
+
+    def error(self, message):
+        self.messages.append(("error", message))
+
+    def trace_lines(self):
+        return [(level, text) for level, text in self.messages if "velocity start trace" in text]
+
+
+class TracingAdapter(FakeAdapter):
+    """FakeAdapter whose get_state replays a scripted joint-angle sequence."""
+
+    def __init__(self, sequence, **kwargs) -> None:
+        super().__init__(**kwargs)
+        self._sequence = list(sequence)
+        self.get_state_calls = 0
+
+    def get_state(self):
+        self.get_state_calls += 1
+        item = self._sequence.pop(0)
+        if isinstance(item, Exception):
+            raise item
+        return SimpleNamespace(joint_degrees=item, connected=item is not None)
+
+
+def test_start_trace_is_off_by_default_and_never_reads_the_arm_state():
+    adapter = TracingAdapter([])
+    logger = RecordingLogger()
+    session = make_session(adapter=adapter, logger=logger)
+
+    assert session.start(valid_goal()) is True
+    assert adapter.get_state_calls == 0
+    assert logger.trace_lines() == []
+    session.shutdown()
+
+
+def test_start_trace_logs_joint_angles_before_init_after_init_and_after_zero():
+    same = (-9.89, 18.05, 79.07, 15.5, 79.6, -6.19)
+    adapter = TracingAdapter([same, same, same])
+    logger = RecordingLogger()
+    session = make_session(adapter=adapter, logger=logger, start_trace=True)
+
+    assert session.start(valid_goal()) is True
+    assert adapter.get_state_calls == 3
+    lines = logger.trace_lines()
+    assert len(lines) == 1
+    level, text = lines[0]
+    assert level == "info"
+    for token in ("arm l", "before_init=", "after_init=", "after_zero=", "-9.89"):
+        assert token in text
+    assert "delta_init=0.00" in text and "delta_zero=0.00" in text
+    session.shutdown()
+
+
+def test_start_trace_warns_when_joints_move_during_the_zero_command_start():
+    before = (-9.89, 18.05, 79.07, 15.5, 79.6, -6.19)
+    moved = (-1.23, 28.63, 67.97, 16.93, 81.08, -0.99)
+    adapter = TracingAdapter([before, before, moved])
+    logger = RecordingLogger()
+    session = make_session(adapter=adapter, logger=logger, start_trace=True)
+
+    assert session.start(valid_goal()) is True
+    (level, text), = logger.trace_lines()
+    assert level == "warning"
+    assert "delta_init=0.00" in text and "delta_zero=11.10" in text
+    assert "moved" in text
+    # Diagnostics only: the session still started normally.
+    assert adapter.velocity_calls[0][0] == [0.0] * 6
+    session.shutdown()
+
+
+def test_start_trace_read_failures_never_change_the_start_result():
+    adapter = TracingAdapter([RuntimeError("boom"), None, RuntimeError("boom")])
+    logger = RecordingLogger()
+    session = make_session(adapter=adapter, logger=logger, start_trace=True)
+
+    assert session.start(valid_goal()) is True
+    assert adapter.init_calls == [(1, 0, 20)]
+    assert adapter.velocity_calls[0][0] == [0.0] * 6
+    assert any("joint read failed" in text for _, text in logger.messages)
+    session.shutdown()
+
+
+def test_start_trace_tolerates_an_adapter_without_get_state():
+    logger = RecordingLogger()
+    session = make_session(adapter=FakeAdapter(), logger=logger, start_trace=True)
+
+    assert session.start(valid_goal()) is True
+    session.shutdown()
+
+
+def test_start_trace_does_not_run_when_vendor_initialization_fails():
+    adapter = TracingAdapter([(0.0,) * 6, (0.0,) * 6, (0.0,) * 6], init_status=-1)
+    logger = RecordingLogger()
+    session = make_session(adapter=adapter, logger=logger, start_trace=True)
+
+    assert session.start(valid_goal()) is False
+    assert adapter.velocity_calls == []
+    session.shutdown()
+
+
+class StatsAdapter(TracingAdapter):
+    """TracingAdapter whose arm-state query returns a scripted vendor-style result."""
+
+    def __init__(self, arm_state, **kwargs) -> None:
+        super().__init__([(0.0,) * 6] * 6, **kwargs)
+        self._arm_state = arm_state
+
+    def current_arm_state(self):
+        if isinstance(self._arm_state, Exception):
+            raise self._arm_state
+        return self._arm_state
+
+
+FRAME = "l/tool/tcpgrip"
+
+
+def _tick(session, clock, step):
+    clock.advance(step)
+    session.accept_command(twist(FRAME, linear=(0.05, 0.0, 0.0)))
+    session.tick()
+
+
+def test_cadence_stats_are_off_by_default():
+    clock = Clock()
+    logger = RecordingLogger()
+    session = make_session(clock=clock, logger=logger)
+    session.start(valid_goal())
+    session.accept_command(twist(FRAME, linear=(0.05, 0.0, 0.0)))
+    for _ in range(5):
+        _tick(session, clock, 0.020)
+
+    session._log_cadence_summary()
+    assert [t for _, t in logger.messages if "velocity session stats" in t] == []
+    session.shutdown()
+
+
+def test_cadence_stats_report_intervals_and_late_ticks_when_enabled():
+    clock = Clock()
+    logger = RecordingLogger()
+    adapter = TracingAdapter([(0.0,) * 6] * 3)
+    session = make_session(adapter=adapter, clock=clock, logger=logger, start_trace=True)
+    session.start(valid_goal())          # 20 ms control period -> "late" means an interval above 30 ms
+    session.accept_command(twist(FRAME, linear=(0.05, 0.0, 0.0)))
+    for step in (0.020, 0.020, 0.020, 0.060, 0.020):
+        _tick(session, clock, step)
+
+    session._log_cadence_summary()
+    (level, text), = [(lv, t) for lv, t in logger.messages if "velocity session stats" in t]
+    assert "arm l" in text and "ticks=5" in text
+    assert "interval_ms" in text and "max=60" in text
+    assert "late=1" in text          # exactly one interval above 1.5x the 20 ms period
+    assert level == "warning"
+    session.shutdown()
+
+
+def test_cadence_stats_stay_info_when_every_tick_is_on_time():
+    clock = Clock()
+    logger = RecordingLogger()
+    adapter = TracingAdapter([(0.0,) * 6] * 3)
+    session = make_session(adapter=adapter, clock=clock, logger=logger, start_trace=True)
+    session.start(valid_goal())
+    session.accept_command(twist(FRAME, linear=(0.05, 0.0, 0.0)))
+    for _ in range(6):
+        _tick(session, clock, 0.020)
+
+    session._log_cadence_summary()
+    (level, text), = [(lv, t) for lv, t in logger.messages if "velocity session stats" in t]
+    assert level == "info" and "late=0" in text
+    session.shutdown()
+
+
+def test_start_trace_logs_nonzero_arm_error_flags_as_a_warning():
+    adapter = StatsAdapter((0, {"joint": [0.0] * 6, "arm_err": 16, "sys_err": 0}))
+    logger = RecordingLogger()
+    session = make_session(adapter=adapter, logger=logger, start_trace=True)
+
+    assert session.start(valid_goal()) is True
+    errs = [(lv, t) for lv, t in logger.messages if "arm error flags" in t]
+    assert len(errs) == 1
+    level, text = errs[0]
+    assert level == "warning" and "arm_err=16" in text and "sys_err=0" in text
+    session.shutdown()
+
+
+def test_start_trace_logs_zero_arm_error_flags_as_info_and_survives_query_failure():
+    ok = StatsAdapter((0, {"joint": [0.0] * 6, "arm_err": 0, "sys_err": 0}))
+    logger = RecordingLogger()
+    session = make_session(adapter=ok, logger=logger, start_trace=True)
+    assert session.start(valid_goal()) is True
+    (level, text), = [(lv, t) for lv, t in logger.messages if "arm error flags" in t]
+    assert level == "info" and "arm_err=0" in text
+    session.shutdown()
+
+    bad = StatsAdapter(RuntimeError("sdk down"))
+    session = make_session(adapter=bad, logger=RecordingLogger(), start_trace=True)
+    assert session.start(valid_goal()) is True          # diagnostics never change the start result
+    session.shutdown()
+
+
+class ReanchorAdapter(FakeAdapter):
+    """FakeAdapter recording every call in order, with a scripted joint state."""
+
+    def __init__(self, joints=(1.0, 2.0, 3.0, 4.0, 5.0, 6.0), **kwargs) -> None:
+        super().__init__(**kwargs)
+        self.order = []
+        self.joints = joints
+        self.canfd_calls = []
+        self.raise_on = None
+
+    def _maybe_raise(self, name):
+        if self.raise_on == name:
+            raise RuntimeError(f"{name} exploded")
+
+    def set_movev_init(self, avoid_singularity_flag, frame_type, period_ms):
+        self.order.append("init")
+        self._maybe_raise("init")
+        return super().set_movev_init(avoid_singularity_flag, frame_type, period_ms)
+
+    def movev(self, vector, follow, trajectory_mode, radio):
+        self.order.append("movev")
+        return super().movev(vector, follow, trajectory_mode, radio)
+
+    def slow_stop(self):
+        self.order.append("slow_stop")
+        return super().slow_stop()
+
+    def get_state(self):
+        self.order.append("get_state")
+        self._maybe_raise("get_state")
+        return SimpleNamespace(joint_degrees=self.joints, connected=True)
+
+    def stop(self):
+        self.order.append("stop")
+        self._maybe_raise("stop")
+        return 0
+
+    def delete_current_trajectory(self):
+        self.order.append("delete_current")
+        self._maybe_raise("delete_current")
+        return 0
+
+    def delete_all_trajectories(self):
+        self.order.append("delete_all")
+        self._maybe_raise("delete_all")
+        return 0
+
+    def movej_canfd(self, joints, follow, trajectory_mode, radio):
+        self.order.append("movej_canfd")
+        self._maybe_raise("movej_canfd")
+        self.canfd_calls.append((list(joints), follow, trajectory_mode, radio))
+        return 0
+
+
+def _started_then_stopped(adapter, **kwargs):
+    session = make_session(adapter=adapter, **kwargs)
+    assert session.start(valid_goal(follow=False)) is True
+    session.cancel()
+    adapter.order.clear()
+    adapter.init_calls.clear()
+    adapter.velocity_calls.clear()
+    return session
+
+
+def test_reanchor_defaults_to_off_and_never_touches_the_controller():
+    adapter = ReanchorAdapter()
+    session = _started_then_stopped(adapter)
+
+    session.prepare_for_ordinary_motion()
+
+    assert adapter.order == []
+
+
+def test_reanchor_rejects_an_unknown_mode():
+    import pytest
+
+    with pytest.raises(ValueError, match="reanchor_mode"):
+        make_session(reanchor_mode="rewind")
+
+
+def test_reanchor_init_repeats_the_last_vendor_init_once_per_session():
+    adapter = ReanchorAdapter()
+    session = _started_then_stopped(adapter, reanchor_mode="init")
+
+    session.prepare_for_ordinary_motion()
+    assert adapter.order == ["init"]
+    assert adapter.init_calls == [(1, 0, 20)]          # same arguments the session start used
+
+    session.prepare_for_ordinary_motion()               # nothing ran since: no second init
+    assert adapter.order == ["init"]
+
+    assert session.start(valid_goal(follow=False)) is True
+    session.cancel()
+    adapter.order.clear()
+    session.prepare_for_ordinary_motion()               # a new session makes it due again
+    assert adapter.order == ["init"]
+
+
+def test_reanchor_init_zero_stop_sends_init_then_a_zero_command_then_a_slow_stop():
+    adapter = ReanchorAdapter()
+    session = _started_then_stopped(adapter, reanchor_mode="init_zero_stop")
+
+    session.prepare_for_ordinary_motion()
+
+    assert adapter.order == ["init", "movev", "slow_stop"]
+    assert adapter.velocity_calls == [([0.0] * 6, False, 0, 0)]
+
+
+def test_reanchor_canfd_current_streams_the_present_joint_angles_once():
+    adapter = ReanchorAdapter(joints=(10.0, 20.0, 30.0, 40.0, 50.0, 60.0))
+    session = _started_then_stopped(adapter, reanchor_mode="canfd_current")
+
+    session.prepare_for_ordinary_motion()
+
+    assert adapter.order == ["get_state", "movej_canfd"]
+    assert adapter.canfd_calls == [([10.0, 20.0, 30.0, 40.0, 50.0, 60.0], False, 0, 0)]
+
+
+def test_reanchor_is_skipped_while_a_velocity_session_is_running():
+    adapter = ReanchorAdapter()
+    session = make_session(adapter=adapter, reanchor_mode="init_zero_stop")
+    assert session.start(valid_goal(follow=False)) is True
+    adapter.order.clear()
+
+    session.prepare_for_ordinary_motion()
+
+    assert adapter.order == []
+    session.shutdown()
+
+
+def test_reanchor_is_skipped_when_no_velocity_session_ever_ran():
+    adapter = ReanchorAdapter()
+    session = make_session(adapter=adapter, reanchor_mode="init")
+
+    session.prepare_for_ordinary_motion()
+
+    assert adapter.order == []
+
+
+def test_reanchor_never_raises_even_when_the_sdk_call_fails():
+    for failing in ("init", "get_state", "movej_canfd"):
+        for mode in ("init", "init_zero_stop", "canfd_current"):
+            adapter = ReanchorAdapter()
+            logger = RecordingLogger()
+            session = _started_then_stopped(adapter, reanchor_mode=mode, logger=logger)
+            adapter.raise_on = failing
+
+            session.prepare_for_ordinary_motion()          # must not raise
+            session.prepare_for_ordinary_motion()
+
+
+def test_init_settle_waits_between_the_vendor_init_and_the_first_zero_command():
+    import time as real_time
+
+    adapter = ReanchorAdapter()
+    session = make_session(adapter=adapter, init_settle_ms=80)
+    began = real_time.monotonic()
+
+    assert session.start(valid_goal(follow=False)) is True
+
+    assert real_time.monotonic() - began >= 0.07
+    assert adapter.order[:2] == ["init", "movev"]
+    session.shutdown()
+
+
+def test_init_settle_defaults_to_no_wait():
+    import time as real_time
+
+    adapter = ReanchorAdapter()
+    session = make_session(adapter=adapter)
+    began = real_time.monotonic()
+
+    assert session.start(valid_goal(follow=False)) is True
+
+    assert real_time.monotonic() - began < 0.05
+    session.shutdown()
+
+
+def test_reanchor_trajectory_clearing_variants_send_exactly_one_vendor_call():
+    for mode, expected in (
+        ("stop", ["stop"]),
+        ("delete_current", ["delete_current"]),
+        ("delete_all", ["delete_all"]),
+    ):
+        adapter = ReanchorAdapter()
+        session = _started_then_stopped(adapter, reanchor_mode=mode)
+
+        session.prepare_for_ordinary_motion()
+
+        assert adapter.order == expected, mode
+
+
+def test_reanchor_cycle_rotates_through_the_variants_and_includes_a_do_nothing_control():
+    adapter = ReanchorAdapter()
+    logger = RecordingLogger()
+    session = _started_then_stopped(adapter, reanchor_mode="cycle", logger=logger)
+
+    seen = []
+    for _ in range(7):
+        adapter.order.clear()
+        session.prepare_for_ordinary_motion()
+        seen.append(tuple(adapter.order))
+        assert session.start(valid_goal(follow=False)) is True      # a new session makes it due again
+        session.cancel()
+        adapter.order.clear()
+
+    assert seen == [
+        (),                                  # off: the untouched control
+        ("delete_current",),
+        ("stop",),
+        ("delete_all",),
+        ("get_state", "movej_canfd"),
+        ("init", "movev", "slow_stop"),
+        (),                                  # wraps around to the control again
+    ]
+    variants = [text for _, text in logger.messages if "passthrough re-anchor" in text]
+    assert len(variants) == 7
+    assert "(off)" in variants[0] and "(delete_current)" in variants[1] and "(stop)" in variants[2]
+
+
+def test_reanchor_trajectory_clearing_variants_never_raise():
+    for mode in ("stop", "delete_current", "delete_all", "cycle"):
+        adapter = ReanchorAdapter()
+        session = _started_then_stopped(adapter, reanchor_mode=mode)
+        adapter.raise_on = {"stop": "stop", "delete_current": "delete_current", "delete_all": "delete_all", "cycle": "delete_current"}[mode]
+
+        session.prepare_for_ordinary_motion()          # must not raise
+
+
+def test_start_trace_treats_sdk_string_zero_error_codes_as_no_fault():
+    adapter = StatsAdapter((0, {"joint": [0.0] * 6, "err": {"err_len": 1, "err": ["0"]}}))
+    logger = RecordingLogger()
+    session = make_session(adapter=adapter, logger=logger, start_trace=True)
+
+    assert session.start(valid_goal()) is True
+    (level, _), = [(lv, t) for lv, t in logger.messages if "arm error flags" in t]
+    assert level == "info"
+    session.shutdown()

@@ -394,6 +394,22 @@ class RealManSdkAdapter:
             "rm_set_arm_slow_stop", "SDK slow-stop request failed", bypass_sdk_lock=True
         )
 
+    def delete_current_trajectory(self) -> int:
+        """Ask the controller to discard its current trajectory."""
+        return self._command(
+            "rm_set_delete_current_trajectory",
+            "SDK delete-current-trajectory request failed",
+            bypass_sdk_lock=True,
+        )
+
+    def delete_all_trajectories(self) -> int:
+        """Ask the controller to discard every stored trajectory."""
+        return self._command(
+            "rm_set_arm_delete_trajectory",
+            "SDK delete-all-trajectories request failed",
+            bypass_sdk_lock=True,
+        )
+
     def movej(
         self,
         joint_degrees: list[float],

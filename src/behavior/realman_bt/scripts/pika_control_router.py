@@ -452,6 +452,8 @@ class PikaControlRouter(Node):
             self.declare_parameter("pika_velocity_max_linear_accel_mps2", 0.0).value
             or None,
         )
+        # CANFD follow mode requested for Pika velocity sessions (False = low-follow).
+        self.velocity_follow = bool(self.declare_parameter("pika_velocity_follow", False).value)
         self.mode = ""
         self._arms: dict[str, _ArmState] = {}
         self._last_unavailable_log: dict[tuple[str, str], float] = {}
@@ -1003,8 +1005,7 @@ class PikaControlRouter(Node):
         goal.blend_radius_percent = 100
         return goal
 
-    @staticmethod
-    def _velocity_goal(profile: _ArmProfile) -> CartesianVelocity.Goal:
+    def _velocity_goal(self, profile: _ArmProfile) -> CartesianVelocity.Goal:
         goal = CartesianVelocity.Goal()
         goal.reference_type = CartesianVelocity.Goal.WORK
         goal.reference_name = profile.reference_name
@@ -1014,7 +1015,7 @@ class PikaControlRouter(Node):
         goal.max_angular_speed_radps = profile.max_angular_speed_radps
         goal.max_linear_accel_mps2 = profile.max_linear_accel_mps2
         goal.max_angular_accel_radps2 = profile.max_angular_accel_radps2
-        goal.follow = False
+        goal.follow = self.velocity_follow
         goal.trajectory_mode = 0
         goal.radio = 0
         return goal

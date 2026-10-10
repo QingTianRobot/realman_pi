@@ -426,7 +426,7 @@ session。
 `Custom CasADi IK unavailable, falling back to the RealMan SDK IK` 并使用 SDK 逆解。
 
 自定义逆解的工具偏移不写死：driver 取
-[`config/ros/realman_coordinates.yaml`](../../../config/ros/realman_coordinates.yaml) 中该臂的
+[`config/ros/realman_coordinates.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/realman_coordinates.yaml) 中该臂的
 `default_tool`（`tcpgrip`，`xyz_m` 与 `quaternion_wxyz`）。启动时坐标管理器会把控制器激活工具
 协调为同一个 `tcpgrip`，所以两边指向同一个 TCP。由于运行中仍可通过 `select_tool_frame` 切换
 激活工具，每个位姿 session 第一次求解前都会在种子关节（session 起点即实测关节）上比较自定义 FK 与

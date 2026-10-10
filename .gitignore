@@ -23,6 +23,13 @@ Log/
 !.agents/skills/developing-realman-behavior-trees/**
 !.agents/skills/debugging-pika-teleop-two-ends/
 !.agents/skills/debugging-pika-teleop-two-ends/**
+# Versioned website skills: they pin the published site's style, components and deploy path.
+!.agents/skills/realman-site-design-system/
+!.agents/skills/realman-site-design-system/**
+!.agents/skills/realman-site-components/
+!.agents/skills/realman-site-components/**
+!.agents/skills/realman-site-deploy/
+!.agents/skills/realman-site-deploy/**
 .codex/
 src/.agents/
 src/.codex/

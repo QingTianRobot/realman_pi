@@ -1,0 +1,22 @@
+# Upstream integration service.  The recorder alone owns raw-data lifecycle;
+# ADOPT queues asynchronous LeRobot conversion and DISCARD makes a finalized
+# session ineligible for export without deleting its forensic raw artifacts.
+uint8 START=0
+uint8 STOP=1
+uint8 ADOPT=2
+uint8 DISCARD=3
+uint8 PREPARE=4
+
+uint8 command
+string session_id
+string profile
+string task
+uint32 duration_sec
+bool record_cameras
+# Zero starts immediately. A positive value is a ROS 2 SYSTEM_TIME epoch timestamp.
+uint64 start_at_walltime_ns
+---
+bool success
+string session_id
+string state
+string message

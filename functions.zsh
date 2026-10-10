@@ -556,7 +556,48 @@ rm65_camera_ros2() {
     print -u2 -r -- "rm65: build src/sensor/realsense/realsense_ws or set REALMAN_REALSENSE_ROS2_SETUP to its install/setup.sh"
     return 1
   fi
-  command ros2 launch sensor_bringup cameras_ros2.launch.py "${launch_args[@]}"
+  # Gemini 305 devices occasionally start with a live publisher but no frames
+  # (a hot-swap quirk the wrapper already double-starts around). Launch in the
+  # background, verify every color stream is actually producing frames, and
+  # restart the whole set until they all come up.
+  local max_attempts="${REALMAN_CAMERA_MAX_ATTEMPTS:-4}"
+  local settle_seconds="${REALMAN_CAMERA_SETTLE_SECONDS:-32}"
+  local check_timeout="${REALMAN_CAMERA_CHECK_TIMEOUT:-15}"
+  local check_script="$RM65_PROJECT_ROOT/src/sensor_bringup/scripts/check_cameras.py"
+  local attempt
+  local launch_pid=""
+  local check_output=""
+
+  if [[ ! -r "$check_script" ]]; then
+    print -u2 -r -- "rm65: camera health check missing: ${check_script}"
+    return 1
+  fi
+
+  for ((attempt = 1; attempt <= max_attempts; attempt++)); do
+    print -r -- "rm65: camera bringup attempt ${attempt}/${max_attempts}"
+    if [[ -n "$launch_pid" ]]; then
+      kill "$launch_pid" 2>/dev/null || true
+      wait "$launch_pid" 2>/dev/null || true
+      rm65_camera_ros2_stop
+      sleep 3
+    fi
+    command ros2 launch sensor_bringup cameras_ros2.launch.py "${launch_args[@]}" \
+      > "${run_log_dir}/attempt_${attempt}.log" 2>&1 &
+    launch_pid=$!
+    print -r -- "rm65: launched (pid ${launch_pid}); settling ${settle_seconds}s"
+    sleep "$settle_seconds"
+    if check_output="$(command python3 "$check_script" "$check_timeout" 2>&1)"; then
+      print -r -- "$check_output"
+      print -r -- "rm65: all cameras publishing (attempt ${attempt})"
+      wait "$launch_pid"
+      return $?
+    fi
+    print -u2 -r -- "$check_output"
+    print -u2 -r -- "rm65: attempt ${attempt} left silent camera(s); retrying"
+  done
+
+  print -u2 -r -- "rm65: cameras did not all come up after ${max_attempts} attempts"
+  return 1
 }
 
 rm65_camera_ros2_stop() {

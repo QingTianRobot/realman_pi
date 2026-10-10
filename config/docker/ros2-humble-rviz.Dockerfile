@@ -51,10 +51,12 @@ RUN find -L /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
         python3-numpy \
         python3-opencv \
         python3-yaml \
+        ffmpeg \
         cmake \
         curl \
         ros-humble-ament-cmake-gtest \
         ros-humble-ament-cmake-pytest \
+        ros-humble-rosbag2-storage-mcap \
         ros-humble-diagnostic-msgs \
         ros-humble-joint-state-publisher \
         ros-humble-joint-state-publisher-gui \
@@ -64,26 +66,27 @@ RUN find -L /etc/apt -type f \( -name '*.list' -o -name '*.sources' \) \
         ros-humble-tf2-ros \
     && rm -rf /var/lib/apt/lists/*
 
+# Prefer IPv4 for DNS resolution.  Robot LANs frequently have no public IPv6
+# route, yet some resolvers return AAAA-first for pypi.org/files.pythonhosted.org;
+# the default getaddrinfo sort then hangs pip on an unreachable IPv6 address.
+RUN echo "precedence ::ffff:0:0/96  100" >> /etc/gai.conf
+
 WORKDIR /opt/rm65_ws
 
 # CMake installs the repository-root configuration into the package share
 # directory. Keep this path aligned with ROOT_CONFIG_DIR in CMakeLists.txt.
+# Config is copied before the pip layers because they read requirements files
+# from it; the source copy is deferred until after pip so a source-only change
+# does not invalidate the (large) torch/Robotic_Arm/etc. downloads.
 COPY config /opt/rm65_ws/config
-COPY src /opt/rm65_ws/src
-# Keep the behavior-tree runtime reproducible inside the image. The source is
-# copied from the repository snapshot rather than a developer's Downloads path.
-COPY third_party/behavior_tree_cpp /opt/rm65_ws/src/behavior_tree_cpp
-RUN mkdir -p /opt/rm65_ws/third_party && ln -s /opt/rm65_ws/src/behavior_tree_cpp /opt/rm65_ws/third_party/behavior_tree_cpp
 
-# Build the preview-only HTTP server independently of ROS packages. Its editor
-# files are copied from the Node build stage below and served from one origin.
-RUN cmake -S /opt/rm65_ws/src/behavior_tree_cpp -B /opt/rm65_ws/behavior_tree/build \
-        -DBT_BUILD_NODES=OFF \
-        -DBT_BUILD_SERVER=ON \
-        -DBT_BUILD_TESTS=OFF \
-        -DBT_BUILD_EXAMPLES=OFF \
-    && cmake --build /opt/rm65_ws/behavior_tree/build --target bt_server \
-    && install -D -m 0755 /opt/rm65_ws/behavior_tree/build/bin/bt_server /opt/rm65_ws/behavior_tree/bin/bt_server
+# Install CPU-only PyTorch for the recording/export runtime. The recording image
+# does not need CUDA; training images may install their own GPU build separately.
+RUN python3 -m pip install --no-cache-dir \
+        --index-url "https://download.pytorch.org/whl/cpu" \
+        --retries 5 \
+        --timeout 300 \
+        torch==2.6.0+cpu torchvision==0.21.0+cpu
 
 # Install the pinned vendor API used by the real driver. Mock tests still avoid
 # importing it, while production launches can read real controller state.
@@ -95,17 +98,18 @@ RUN python3 -m pip install --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
         --extra-index-url "https://pypi.org/simple" \
         --retries 5 \
-        --timeout 60 \
-        --requirement /opt/rm65_ws/config/python/realman-sdk-requirements.txt
+        --timeout 300 \
+        --requirement /opt/rm65_ws/config/python/realman-sdk-requirements.txt \
+        --requirement /opt/rm65_ws/config/python/recording-requirements.txt
 
 # Custom CasADi + IPOPT inverse kinematics (Pinocchio for FK). Large wheels;
-# give the download a longer timeout.
-RUN python3 -m pip install --no-cache-dir --index-url "${PYPI_INDEX_URL}" --extra-index-url "https://pypi.org/simple" --retries 5 --timeout 120 --requirement /opt/rm65_ws/config/python/ik-requirements.txt
+# give the download the same long timeout as the other pip layers.
+RUN python3 -m pip install --no-cache-dir --index-url "${PYPI_INDEX_URL}" --extra-index-url "https://pypi.org/simple" --retries 5 --timeout 300 --requirement /opt/rm65_ws/config/python/ik-requirements.txt
 
 RUN python3 -m pip install --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
         --retries 5 \
-        --timeout 60 \
+        --timeout 300 \
         --requirement /opt/rm65_ws/config/python/gripper-requirements.txt
 
 # Transport deps (msgpack + websockets) for the vendored OpenPI policy client
@@ -113,13 +117,29 @@ RUN python3 -m pip install --no-cache-dir \
 RUN python3 -m pip install --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \
         --retries 5 \
-        --timeout 60 \
+        --timeout 300 \
         --requirement /opt/rm65_ws/config/python/policy-bridge-requirements.txt
+
+# Source and the behavior-tree runtime land after the pip layers so a source-only
+# change invalidates only the colcon build while the pip downloads stay cached.
+COPY src /opt/rm65_ws/src
+COPY third_party/behavior_tree_cpp /opt/rm65_ws/src/behavior_tree_cpp
+RUN mkdir -p /opt/rm65_ws/third_party && ln -s /opt/rm65_ws/src/behavior_tree_cpp /opt/rm65_ws/third_party/behavior_tree_cpp
+
+# Build the preview-only HTTP server independently of ROS packages. Its editor
+# files are copied from the Node build stage and served from one origin.
+RUN cmake -S /opt/rm65_ws/src/behavior_tree_cpp -B /opt/rm65_ws/behavior_tree/build \
+        -DBT_BUILD_NODES=OFF \
+        -DBT_BUILD_SERVER=ON \
+        -DBT_BUILD_TESTS=OFF \
+        -DBT_BUILD_EXAMPLES=OFF \
+    && cmake --build /opt/rm65_ws/behavior_tree/build --target bt_server \
+    && install -D -m 0755 /opt/rm65_ws/behavior_tree/build/bin/bt_server /opt/rm65_ws/behavior_tree/bin/bt_server
 
 RUN . /opt/ros/humble/setup.sh \
     && colcon build --symlink-install \
-        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock policy_bridge \
-    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock policy_bridge \
+        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock realman_recording realman_recording_msgs policy_bridge \
+    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock realman_recording realman_recording_msgs policy_bridge \
     && colcon test-result --verbose
 
 COPY --from=bt_editor_build /opt/bt_editor/dist /opt/rm65_ws/behavior_tree/editor-dist

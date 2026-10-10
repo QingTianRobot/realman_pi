@@ -119,11 +119,14 @@ class Changingtek_rtu_psdk:
 
     def temp_move(self, position_mm: int, speed_pct: int = 100, force_pct: int = 60,
                   accel: int = 2000, decel: int = 2000, trigger: bool = True):
+        key = (speed_pct, force_pct, accel, decel)
+        if getattr(self, '_last_move_params', None) != key:
+            self.set_temp_speed_pct(speed_pct)
+            self.set_temp_force_pct(force_pct)
+            self.set_temp_accel(accel)
+            self.set_temp_decel(decel)
+            self._last_move_params = key
         self.set_temp_position_mm(position_mm)
-        self.set_temp_speed_pct(speed_pct)
-        self.set_temp_force_pct(force_pct)
-        self.set_temp_accel(accel)
-        self.set_temp_decel(decel)
         if trigger:
             self.trigger_temp_move()
 

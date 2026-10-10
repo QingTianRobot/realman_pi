@@ -34,6 +34,7 @@ from .camera_workers import (
     load_camera_sources,
 )
 from .lerobot_exporter import ExportRequest, LeRobotExporter
+from .export_queue import SerialExportWorker, should_auto_export
 from .kinematics import urdf_joint_limits
 from .lerobot_schema import schema_from_parameters
 from .preflight import PreflightChecker, PreflightRequirements, PreflightResult, configured_required_topics
@@ -102,6 +103,7 @@ class RecordingRecorderNode(Node):
         self.declare_parameter("max_camera_image_queue", 64)
         self.declare_parameter("export_target_fps", 10.0)
         self.declare_parameter("export_max_gap_sec", 2.0)
+        self.declare_parameter("auto_export_on_stop", True)
         self.declare_parameter("preflight_max_age_sec", 2.0)
         # A larger fresh-data skew requests asynchronous post-record alignment; it
         # never masks a stale/disconnected sensor, which remains a hard PREPARE fail.
@@ -155,6 +157,10 @@ class RecordingRecorderNode(Node):
         self._export_progress = 0.0
         self._export_dir = ""
         self._export_error = ""
+        # One daemon worker serializes every adopted session's export so conversions
+        # never overlap and never run on the ROS executor.  START/STOP never block.
+        self._export_worker = SerialExportWorker(self._run_export_job)
+        self._export_worker.start()
 
         self._topic_types: dict[str, str] = {}
         self._register_subscriptions()
@@ -583,8 +589,14 @@ class RecordingRecorderNode(Node):
             self._last_archive_stats = archive_stats
             self._last_camera_summary = camera_summary
             self._state = SessionState.READY if final_success else SessionState.FAILED
-        # STOP only seals raw data.  The upstream ADOPT request is the single explicit
-        # authorization to spend CPU and append an episode to the training dataset.
+        # Auto-export enqueues a clean STOP for conversion; a FAILED session (write
+        # errors) is never adopted.  auto_export_on_stop=false restores the manual
+        # ADOPT-only flow.
+        if should_auto_export(
+            auto_export_on_stop=bool(self.get_parameter("auto_export_on_stop").value),
+            final_success=final_success,
+        ):
+            self._adopt_session(session_id)
         return session_id
 
     def _stop_or_cancel(self, *, reason: str) -> str | None:
@@ -620,13 +632,12 @@ class RecordingRecorderNode(Node):
         return session_id
 
     def _queue_export(self, directory: Path, session_id: str) -> None:
-        """Start the worker after ``adopt_final_session`` has durably queued it."""
-        threading.Thread(
-            target=self._export_adopted_session,
-            args=(directory,),
-            name=f"recording-export-{session_id}",
-            daemon=True,
-        ).start()
+        """Enqueue the session for the single serialized worker after adoption."""
+        self._export_worker.enqueue(session_id)
+
+    def _run_export_job(self, session_id: str) -> None:
+        """Worker callback: resolve the session id and run one export."""
+        self._export_adopted_session(self._session_directory(session_id))
 
     def _discard_session(self, session_id: str) -> str:
         """Logically discard a finalized session while retaining raw artifacts for audit."""
@@ -640,6 +651,13 @@ class RecordingRecorderNode(Node):
 
     def _export_adopted_session(self, directory: Path) -> None:
         """Run expensive LeRobot conversion away from every ROS callback/executor thread."""
+        try:
+            decision = json.loads((directory / "manifest.json").read_text(encoding="utf-8")).get("decision")
+        except (OSError, json.JSONDecodeError):
+            decision = None
+        if decision == "DISCARDED":
+            self.get_logger().info(f"LeRobot export skipped: {directory.name} was discarded")
+            return
         export_root = Path(str(self.get_parameter("lerobot_export_dir").value))
         # This is one append-only v3 dataset.  A session becomes one episode, rather
         # than creating a v2-shaped dataset directory per session.

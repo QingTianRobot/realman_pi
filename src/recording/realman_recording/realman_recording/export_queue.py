@@ -7,6 +7,16 @@ import threading
 from typing import Callable
 
 
+def should_auto_export(*, auto_export_on_stop: bool, final_success: bool) -> bool:
+    """Auto-enqueue export only for a cleanly finalized session when enabled.
+
+    ``final_success`` is the recorder's verdict that the raw session finalized with
+    zero MCAP and camera write errors; ``auto_export_on_stop`` is the operator's
+    opt-in.  A FAILED session (write errors) must never auto-export.
+    """
+    return auto_export_on_stop and final_success
+
+
 class SerialExportWorker:
     """Serialize arbitrary one-session-at-a-time jobs in FIFO order."""
 

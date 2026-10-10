@@ -13,6 +13,7 @@ from pathlib import Path
 from typing import Any
 
 from .lerobot_web_replay import LeRobotReplayCatalog, queue_from_manifests
+from .session_store import SessionStore
 
 
 def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
@@ -173,6 +174,8 @@ class RecordingWebServer:
         app.router.add_get(
             "/api/lerobot/{session_id}/video/{camera_id}", self._lerobot_video
         )
+        app.router.add_post("/api/lerobot/{session_id}/delete", self._lerobot_delete)
+        app.router.add_post("/api/lerobot/{session_id}/restore", self._lerobot_restore)
         app.router.add_get("/models/{path:.*}", self._model_asset)
         app.router.add_get("/{path:.*}", self._static_asset)
         self._runner = web.AppRunner(app, access_log=None)
@@ -251,6 +254,45 @@ class RecordingWebServer:
         except Exception as error:  # noqa: BLE001 - read-only endpoint must stay available
             self._logger.warning(f"LeRobot queue listing failed: {error}")
             raise web.HTTPServiceUnavailable(text="LeRobot queue is unavailable") from error
+
+    def _session_directory(self, session_id: str) -> Path:
+        """Resolve a recording session id to its directory, rejecting traversal.
+
+        Mirrors the ``LeRobotReplayCatalog`` guard so hide/restore can only ever touch
+        a directory directly inside ``self._recording_root``.
+        """
+        if not session_id or Path(session_id).name != session_id:
+            raise ValueError("invalid session id")
+        directory = (self._recording_root / session_id).resolve()
+        if directory.parent != self._recording_root or not directory.is_dir():
+            raise ValueError("session does not exist")
+        return directory
+
+    async def _lerobot_delete(self, request: Any) -> Any:
+        """Soft-hide one exported episode without deleting its raw files."""
+        from aiohttp import web
+        session_id = request.match_info["session_id"]
+        try:
+            directory = self._session_directory(session_id)
+            await asyncio.to_thread(SessionStore.hide_final_session, directory)
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        except RuntimeError as error:
+            raise web.HTTPConflict(text=str(error)) from error
+        return web.json_response({"ok": True})
+
+    async def _lerobot_restore(self, request: Any) -> Any:
+        """Re-adopt one previously hidden exported episode."""
+        from aiohttp import web
+        session_id = request.match_info["session_id"]
+        try:
+            directory = self._session_directory(session_id)
+            await asyncio.to_thread(SessionStore.restore_final_session, directory)
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        except RuntimeError as error:
+            raise web.HTTPConflict(text=str(error)) from error
+        return web.json_response({"ok": True})
 
     async def _lerobot_frames(self, request: Any) -> Any:
         from aiohttp import web

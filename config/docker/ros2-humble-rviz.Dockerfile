@@ -28,6 +28,13 @@ ARG UBUNTU_PORTS_APT_MIRROR=https://mirrors.aliyun.com/ubuntu-ports
 ARG ROS2_APT_MIRROR=https://mirrors.tuna.tsinghua.edu.cn/ros2/ubuntu
 ARG PYPI_INDEX_URL=https://pypi.tuna.tsinghua.edu.cn/simple
 
+# Optional HTTP(S) proxy for pip during the image build. Robot networks often
+# cannot reach files.pythonhosted.org directly (read timeouts); a local proxy
+# (e.g. Clash on 127.0.0.1) routes those downloads reliably. Empty by default.
+ARG HTTP_PROXY
+ARG HTTPS_PROXY
+ENV HTTP_PROXY=${HTTP_PROXY} HTTPS_PROXY=${HTTPS_PROXY}
+
 # Avoid interactive package prompts during the reproducible image build.
 ENV DEBIAN_FRONTEND=noninteractive
 

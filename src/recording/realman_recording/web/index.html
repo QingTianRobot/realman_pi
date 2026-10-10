@@ -100,7 +100,7 @@
             <label>速度 <select id="replay-speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label>
             <span id="replay-frame-label" class="frame-label">— / —</span>
           </section>
-          <section class="panel replay-timeline"><input id="replay-slider" type="range" min="0" max="0" value="0" step="1"><div><span id="replay-time-label">—</span><span>LeRobot policy timeline</span></div></section>
+          <section class="panel replay-timeline"><input id="replay-slider" type="range" min="0" max="0" value="0" step="1"><div class="timeline-meta"><span id="replay-time-label">—</span><span>LeRobot policy timeline</span></div><div class="annotation-bar"><button id="annotation-toggle" type="button" title="进入标注模式，Q 标记起点，R 标记终点">标注</button><span id="annotation-status" class="annotation-status"></span><span id="annotation-frame" class="annotation-frame"></span></div><div id="annotation-panel" class="annotation-panel" hidden><div id="annotation-list" class="annotation-list"><div class="annotation-empty">暂无已标注段</div></div><div class="annotation-actions"><button id="annotation-save" type="button" title="保存当前标注">保存</button><button id="annotation-cancel" type="button" title="取消当前未完成段">取消当前段</button></div></div></section>
         </section>
         <aside class="studio-inspector panel">
           <div class="panel-head"><h3>动作 / 状态</h3><span id="replay-feature-count" class="count">—</span></div>

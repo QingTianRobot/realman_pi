@@ -7,6 +7,7 @@ import "./styles.css";
 import { initSidebar } from "./replay/sidebar";
 import { initVideo, type VideoContext } from "./replay/video";
 import { initCharts, renderHealth } from "./replay/charts";
+import { initAnnotation } from "./replay/annotation";
 
 type ArmId = "l" | "m" | "r";
 type Robot = {
@@ -649,6 +650,7 @@ async function selectReplaySession(sessionId: string) {
     replayExit.style.display = "";
     video.load();
     renderHealth(summary.quality ?? session?.quality);
+    void annotation.load(sessionId);
     renderReplayFrame(0);
   } catch (error) {
     notify(`回放加载失败: ${String(error)}`, true);
@@ -658,6 +660,7 @@ async function selectReplaySession(sessionId: string) {
 function exitReplay() {
   video.clear();
   charts.clear();
+  annotation.clear();
   renderHealth(undefined);
   sidebar.setActive(null);
   replay = null;
@@ -702,6 +705,7 @@ function renderReplayFrame(frameIndex: number) {
     .map((name, i) => gripperBar(name, frame.state[18 + i] ?? 0))
     .join("");
   charts.render(frame, replay.frames, replay.index);
+  annotation.onFrameChange(frameIndex);
 }
 
 function connect() {
@@ -745,6 +749,11 @@ function getReplayVideoContext(): VideoContext | null {
 
 const video = initVideo({ getSession: getReplayVideoContext, onFrameChange: renderReplayFrame });
 const charts = initCharts();
+const annotation = initAnnotation({
+  getSessionId: () => replay?.session ?? null,
+  getCurrentFrame: () => replay?.index ?? 0,
+  notify,
+});
 const sidebar = initSidebar({
   onSelect: (sessionId) => {
     sidebar.setActive(sessionId);

@@ -180,18 +180,28 @@ export function initAnnotation(callbacks: AnnotationCallbacks): AnnotationApi {
   async function load(nextSessionId: string): Promise<void> {
     sessionId = nextSessionId;
     pendingStart = null;
+    // Clear the previous episode's list synchronously, before the GET resolves.
+    // selectReplaySession renders frame 0 right after load(), so a fast R (or a
+    // click on a stale remove ×) must never see or edit the old episode's
+    // segments. The editVersion bump also voids any in-flight save refresh from
+    // the previous session so its stale GET cannot re-populate the list.
+    segments = [];
+    editVersion += 1;
+    const versionAtLoad = editVersion;
+    render();
     try {
       const response = await fetch(`/api/lerobot/${encodeURIComponent(nextSessionId)}/subtasks`);
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       const payload = (await response.json()) as { subtasks?: unknown };
-      if (sessionId !== nextSessionId) return;
+      if (sessionId !== nextSessionId || editVersion !== versionAtLoad) return;
       segments = Array.isArray(payload.subtasks) ? (payload.subtasks as SubtaskSegment[]) : [];
     } catch (error) {
       if (sessionId !== nextSessionId) return;
-      segments = [];
+      // A local edit made while the GET was in flight is authoritative and must
+      // not be wiped by the (now stale) server list.
+      if (editVersion === versionAtLoad) segments = [];
       callbacks.notify(`加载标注失败: ${String(error)}`, true);
     }
-    editVersion += 1;
     render();
   }
 

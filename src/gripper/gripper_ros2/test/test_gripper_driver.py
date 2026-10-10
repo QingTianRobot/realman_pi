@@ -160,6 +160,37 @@ class DriverTest(unittest.TestCase):
         bus._process_pending(100.05)
         self.assertAlmostEqual(bus._next_due(100.05), 0.20, places=3)
 
+    def test_is_streaming_covers_pending_and_recent_sends(self):
+        bus = self._stream_bus()
+        self.assertFalse(bus.is_streaming(1, now=100.0))
+        bus.request_move(1, 5000, now=100.0)
+        self.assertTrue(bus.is_streaming(1, now=100.0))
+        bus._process_pending(100.0)
+        self.assertTrue(bus.is_streaming(1, now=101.9))
+        self.assertFalse(bus.is_streaming(1, now=102.1))
+
+    def test_is_streaming_survives_deduped_targets_that_are_never_sent(self):
+        bus = self._stream_bus()
+        for step in range(40):  # held-still 20 Hz stream from 100.0 to 101.95
+            now = 100.0 + step * 0.05
+            bus.request_move(1, 5000, now=now)
+            bus._process_pending(now)
+        self.assertEqual(bus._last_sent[1][0], 100.0)  # only the first target hit the bus
+        self.assertTrue(bus.is_streaming(1, now=102.0))
+        self.assertFalse(bus.is_streaming(1, now=104.0))
+
+    def test_apply_endpoints_updates_device_and_clears_stream_state(self):
+        bus = self._stream_bus()
+        bus.request_move(1, 5000)
+        bus._process_pending(100.0)
+        bus.request_move(1, 9000)
+        bus.apply_endpoints(1, 50, 8500)
+        device = bus.get(1)
+        self.assertEqual((device.open_position, device.close_position), (50, 8500))
+        self.assertEqual(bus._pending, {})
+        self.assertNotIn(1, bus._last_sent)
+        self.assertNotIn(1, bus._last_request)
+
     def test_missing_port_can_reconnect(self):
         FakeSDK.fail_ports = {"/bad"}
         manager = gd.GripperManager()

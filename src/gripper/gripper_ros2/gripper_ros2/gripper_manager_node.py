@@ -6,25 +6,44 @@ import math
 from pathlib import Path
 
 import std_msgs.msg
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy
 from std_srvs.srv import SetBool, Trigger
-from gripper_ros2_msgs.srv import GripperPercentage
+from gripper_ros2_msgs.msg import GripperLimits
+from gripper_ros2_msgs.srv import GripperPercentage, MoveGripperRaw, SetGripperLimits
 
 from .gripper_config import load_gripper_config, percentage_to_position
 from .gripper_driver import GripperManager
+from .gripper_limits import (
+    LimitsStore,
+    apply_overrides,
+    check_raw_position,
+    load_overrides,
+    overrides_path,
+    position_ranges,
+)
 
 
 class GripperManagerNode:
     """Expose one compatible service/topic namespace for every configured device."""
 
-    def __init__(self, node, config_file: str):
+    def __init__(self, node, config_file: str, overrides_file: str = ""):
         self.node = node
         self.config = load_gripper_config(config_file)
+        path = overrides_path(config_file, overrides_file)
+        overrides, problems = load_overrides(path, position_ranges(self.config))
+        for problem in problems:
+            node.get_logger().error(f"Ignoring gripper override: {problem}")
+        apply_overrides(self.config, overrides)
         self.manager = GripperManager.from_config(self.config)
+        self.limits = LimitsStore(self.manager, path, overrides)
         self._services = []
         self._subscriptions = []
         self._publishers = {}
+        self._limits_publishers = {}
         for name in self.manager.device_names:
             self._create_device_interfaces(name)
+        for name in self.manager.device_names:
+            self._publish_limits(name)
         result = self.manager.connect_all()
         for port, connected in result.items():
             level = node.get_logger().info if connected else node.get_logger().warning
@@ -42,6 +61,8 @@ class GripperManagerNode:
             self.node.create_service(Trigger, f"{prefix}/grasp_check", lambda req, res, n=name: self._grasp(n, res)),
             self.node.create_service(GripperPercentage, f"{prefix}/percentage", lambda req, res, n=name: self._percentage(n, req, res)),
             self.node.create_service(Trigger, f"{prefix}/calibrate", lambda req, res, n=name: self._calibrate(n, res)),
+            self.node.create_service(SetGripperLimits, f"{prefix}/set_limits", lambda req, res, n=name: self._set_limits(n, req, res)),
+            self.node.create_service(MoveGripperRaw, f"{prefix}/move_raw", lambda req, res, n=name: self._move_raw(n, req, res)),
         ])
         self._subscriptions.append(
             self.node.create_subscription(
@@ -62,6 +83,15 @@ class GripperManagerNode:
                 "connected": std_msgs.msg.Bool,
             }.items()
         }
+        self._limits_publishers[name] = self.node.create_publisher(
+            GripperLimits,
+            f"{prefix}/limits",
+            QoSProfile(
+                depth=1,
+                reliability=QoSReliabilityPolicy.RELIABLE,
+                durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+            ),
+        )
 
     @staticmethod
     def _response(response, success: bool, message: str):
@@ -186,6 +216,44 @@ class GripperManagerNode:
             "Calibration is disabled by default; configure safe open/close positions",
         )
 
+    def _publish_limits(self, name):
+        self._limits_publishers[name].publish(GripperLimits(**self.limits.current(name)))
+
+    def _set_limits(self, name, request, response):
+        success, message = self.limits.set_limits(
+            name, int(request.open_position), int(request.close_position),
+        )
+        if success:
+            self._publish_limits(name)
+        current = self.limits.current(name)
+        response.open_position = current["open_position"]
+        response.close_position = current["close_position"]
+        return self._response(response, success, message)
+
+    def _move_raw(self, name, request, response):
+        device = self.manager.get(name)
+        problem = check_raw_position(request.position, device.min_position, device.max_position)
+        if problem:
+            return self._response(response, False, problem)
+        device, error = self._ready(name)
+        if error:
+            return self._response(response, False, error)
+        position = int(request.position)
+        try:
+            device.move_to(position)
+            result = device.bus.transaction(
+                device.slave_id,
+                lambda sdk: sdk.wait_until_pos_or_torque(20.0),
+            )
+            feedback = device.read_feedback()
+            return self._response(
+                response,
+                result != "timeout",
+                f"raw -> pos={position} ({result}, pos_fb={feedback['position']})",
+            )
+        except Exception as error:
+            return self._response(response, False, f"Move error: {error}")
+
     def _publish_feedback(self):
         for name in self.manager.device_names:
             device = self.manager.get(name)
@@ -215,13 +283,16 @@ def main(args=None):
     rclpy.init(args=args)
     node = Node("gripper_manager")
     node.declare_parameter("config_file", "")
+    node.declare_parameter("overrides_file", "")
     config_file = node.get_parameter("config_file").value
     if not config_file:
         node.get_logger().error("config_file parameter is required")
         node.destroy_node()
         rclpy.shutdown()
         return
-    adapter = GripperManagerNode(node, str(Path(config_file)))
+    adapter = GripperManagerNode(
+        node, str(Path(config_file)), node.get_parameter("overrides_file").value,
+    )
     try:
         rclpy.spin(node)
     except KeyboardInterrupt:

@@ -187,7 +187,8 @@ Pika 提高到 `0.15 m/s`，线速度比例相应设为 `0.13333333`，当前 l/
 `0.10 rad/s`（角速度比例 `0.4` × `0.25 rad/s`）角速度。WORK 名称和 frame ID 仍来自
 [`config/ros/realman_coordinates.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/realman_coordinates.yaml)，键盘配置不会复制
 运动上限或坐标定义。`grippers.l|r.open|close` 定义夹爪物理键；全部机械臂和夹爪键码必须全局唯一。
-实际全开／全闭位置仍只由 `config/ros/gripper.yaml` 管理。
+实际全开／全闭位置由 `config/ros/gripper.yaml` 叠加运行时覆盖文件 `gripper_overrides.yaml`（由夹爪面板的"行程设置"写入）决定，
+并通过 `/<name>/limits` 实时发布，见[在网页上设置开位和闭位](./gripper-control#在网页上设置开位和闭位)；`min_position` / `max_position` 仍只来自 `gripper.yaml`。
 
 每臂速度必须独立满足默认 WORK gate；一侧失配只清空该侧速度键，不清除健康夹爪键。卡片状态含义是：
 `READY`（活动模式下至少一侧 WORK 可用且没有速度键按下）、`MOVING`（浏览器存在速度键）、`RELEASED`（未处于活动
@@ -477,7 +478,7 @@ Action cancel。浏览器刷新不会留下仍由网页拥有的速度命令。
 | 内容 | 来源 |
 | --- | --- |
 | 每臂挂哪个夹爪、挂在哪个 link、`xyz` / `rpy`、驱动关节与闭合/全开弧度、`gripper_name` | [`config/ros/end_effectors.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/end_effectors.yaml) → `model_manifest.py` 的 `end_effectors` 字段 |
-| 每个夹爪的 `open_position` / `close_position`（设备单位） | `config/ros/gripper.yaml` → `gripper_list` 事件 |
+| 每个夹爪的 `open_position` / `close_position`（设备单位） | `config/ros/gripper.yaml` 叠加覆盖文件 `gripper_overrides.yaml` → `gripper_list` 事件；`gripper_manager` 每次发布新的 `/<name>/limits`，Web 节点就重新广播 `gripper_list`，页面随之刷新 |
 | 实时位置 | `/<name>/position`（`Float64`，设备单位）→ `gripper_state` 事件，`gripper_manager` 约 `20 Hz` 发布 |
 
 **映射**：`l`、`m`、`r` 分别对应 `gripper_left`、`gripper_mid`、`gripper_right`（`end_effectors.yaml` 的 `gripper_name`）。页面用该夹爪**自己的**端点把设备位置换算成开合度 `(position − close) / (open − close)`，限制在 `0..1`（`0` 闭合、`1` 全开，与 `percentage` 约定一致），再换算成驱动关节角 `closed_rad + (open_rad − closed_rad) × 开合度`；其余可动关节由 URDF 的 `mimic` 跟随。三个夹爪的行程单位不同也不影响显示。

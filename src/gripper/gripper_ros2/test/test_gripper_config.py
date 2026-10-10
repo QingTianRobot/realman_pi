@@ -27,6 +27,12 @@ class GripperConfigTest(unittest.TestCase):
         self.assertEqual(names["percentage_command"], "/gripper_left/percentage/command")
         self.assertEqual(names["position"], "/gripper_left/position")
 
+    def test_interfaces_include_limit_endpoints(self):
+        names = interface_names("gripper_right")
+        self.assertEqual(names["set_limits"], "/gripper_right/set_limits")
+        self.assertEqual(names["move_raw"], "/gripper_right/move_raw")
+        self.assertEqual(names["limits"], "/gripper_right/limits")
+
     def test_percentage_maps_closed_zero_and_open_one(self):
         self.assertEqual(percentage_to_position(0.0, open_position=400, close_position=949), 949)
         self.assertEqual(percentage_to_position(1.0, open_position=400, close_position=949), 400)

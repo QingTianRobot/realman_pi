@@ -15,10 +15,10 @@ buses:
     grippers:
       - name: gripper_right
         slave_id: 1
-        open_position: 4000
-        close_position: 12000
+        open_position: 50      # 实测机械全开 ≈ 8，留余量避免顶到限位
+        close_position: 8500   # 实测机械全闭 ≈ 8668（堵转），留约 2% 余量
         min_position: 0
-        max_position: 12000
+        max_position: 8500
         speed_pct: 100
         force_pct: 60
         accel: 2000
@@ -36,10 +36,10 @@ buses:
     grippers:
       - name: gripper_left
         slave_id: 1
-        open_position: 400
-        close_position: 949
+        open_position: 20      # 实测机械全开 ≈ 1，留余量避免顶到限位
+        close_position: 900    # 实测机械全闭 ≈ 919，留约 2% 余量
         min_position: 0
-        max_position: 949
+        max_position: 900
         speed_pct: 100
         force_pct: 60
         accel: 2000

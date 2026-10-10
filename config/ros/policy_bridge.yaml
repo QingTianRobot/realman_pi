@@ -52,7 +52,8 @@ observation:
       left: /l/joint_states
       right: /r/joint_states
     # state[6] 夹爪开合 0~1。来源为 gripper_manager 发布的 Float64 设备单位，
-    # 用 gripper_config 的 open/close_position 换算（0=close, 1=open）。
+    # 用 open/close_position 换算（0=close, 1=open）：启动时取 gripper_config，
+    # 之后跟随 gripper_manager 发布的 /<name>/limits（网页"行程设置"修改后立即生效）。
     gripper_position_topics:
       left: /gripper_left/position
       right: /gripper_right/position

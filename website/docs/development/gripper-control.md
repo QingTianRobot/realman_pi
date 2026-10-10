@@ -30,9 +30,11 @@
 
 | ROS 名称 | 宿主机和容器内稳定路径 | `slave_id` | 打开/闭合位置 |
 | --- | --- | --- | --- |
-| `gripper_right` | `/dev/realman/gripper_right` | `1` | `4000` / `12000` |
-| `gripper_left` | `/dev/realman/gripper_left` | `1` | `400` / `949` |
+| `gripper_right` | `/dev/realman/gripper_right` | `1` | `50` / `8500` |
+| `gripper_left` | `/dev/realman/gripper_left` | `1` | `20` / `900` |
 | `gripper_mid` | `/dev/realman/gripper_mid` | `1` | `0` / `9000` |
+
+上表的打开/闭合位置是 `gripper.yaml` 中的默认值；实际生效的开位和闭位可以在网页"行程设置"面板里于运行时覆盖（见[在网页上设置开位和闭位](#在网页上设置开位和闭位)），`gripper_manager` 把生效值发布在 `/<name>/limits` 上。
 
 `/dev/ttyUSB0`、`/dev/ttyUSB1`、`/dev/ttyUSB2` 会因重连或启动顺序变化，只能作为稳定别名当前指向的实现细节。开发机可用 `REALMAN_GRIPPER_RIGHT_DEVICE`、`REALMAN_GRIPPER_LEFT_DEVICE`、`REALMAN_GRIPPER_MID_DEVICE` 覆盖 Compose 的宿主路径；容器内路径仍保持 `/dev/realman/gripper_*`。
 
@@ -63,6 +65,9 @@ Web `percentage` 的范围是 `0.0..1.0`：`0` 映射到 `close_position`，`1` 
 | `/<name>/enable` | `std_srvs/srv/SetBool` | `true` 使能，`false` 禁用 |
 | `/<name>/percentage` | `gripper_ros2_msgs/srv/GripperPercentage` | 按 `0.0..1.0` 移动 |
 | `/<name>/percentage/command` | `std_msgs/msg/Float32` | 非阻塞持续目标；`0.0` 闭合，`1.0` 张开 |
+| `/<name>/set_limits` | `gripper_ros2_msgs/srv/SetGripperLimits` | 校验、保存并立即应用开位和闭位 |
+| `/<name>/move_raw` | `gripper_ros2_msgs/srv/MoveGripperRaw` | 把夹爪点动到 `min..max` 内的原始位置，越界直接拒绝 |
+| `/<name>/limits` | `gripper_ros2_msgs/msg/GripperLimits` | 当前生效的开位、闭位和 `min/max`；可靠、`transient_local`、深度 1 |
 | `/<name>/position` | `std_msgs/msg/Float64` | 反馈位置 |
 | `/<name>/speed`、`current`、`alarm` | `std_msgs/msg/Int32` | 反馈速度、电流和报警码 |
 | `/<name>/torque_reached`、`connected` | `std_msgs/msg/Bool` | 力矩到达和通信健康状态 |
@@ -90,12 +95,40 @@ Pika 不控制 `gripper_mid`；切出 Pika 模式后不会自动发送开、合�
 同样按 `gripper_publish_rate_hz`（默认 4.0）发布 `/pika/{l,r}/gripper_percentage`，其余位姿和速度话题仍按
 `command_rate_hz` 发布；两端保持一致，避免夹爪端丢弃中间目标。router 不再需要额外限速。
 
+## 在网页上设置开位和闭位
+
+夹爪面板的"行程设置"折叠区可以查看并修改所选夹爪的 `open_position` 和 `close_position`：
+
+- 直接输入数值，或点"开位=当前位置"／"闭位=当前位置"把实时读数填入输入框（仅在夹爪在线且速度为 0 时可用，只填入，不保存）。
+- 用"原始位置"滑块点动夹爪到 `min_position..max_position` 内的任意位置；松手时才发送一次 `move_raw`。
+- 点"应用行程"，确认弹窗会显示"旧值 → 新值"；确认后发送 `set_limits`。
+
+`gripper_manager` 按以下规则校验，不满足时返回 `success=false` 和原因，状态不变：
+
+1. 两个值都是整数，且都在该夹爪的 `[min_position, max_position]` 内；
+2. `open_position < close_position`；
+3. `close_position − open_position` 不小于 `max_position − min_position` 的 5%；
+4. 该夹爪有待发目标，或最近 2 秒内通过 `request_move` 收到过连续控制（Pika、键盘）的目标（即使目标因重复或死区未被下发）时拒绝，返回"忙"。
+
+通过后依次：原子写入覆盖文件、更新内存中的端点（同时清掉该夹爪待发目标）、发布 `/<name>/limits`。Web 节点订阅该话题并向所有浏览器广播 `gripper_list`，所以网页的开合百分比和 3D 夹爪不需要重启就会跟上。
+
+覆盖文件是 `gripper.yaml` 同目录下的 `gripper_overrides.yaml`（可用节点参数 `overrides_file` 指定其他路径），只包含开位和闭位：
+
+```yaml
+grippers:
+  gripper_right:
+    open_position: 50
+    close_position: 8500
+```
+
+它是这台机器的运行时状态，被 `config/ros/.gitignore` 忽略，不进 git；容器以 root 写入，主机上手工修改需要 `sudo`。`gripper_manager` 启动时在 `gripper.yaml` 之上叠加该文件。无法读取或解析的文件整体被忽略；夹爪名不存在，或数值不满足上述规则 1–3（忙检查只在运行时 `set_limits` 时适用）的条目单独被忽略。两种情况都会打 ERROR 日志，节点照常用 `gripper.yaml` 启动。要恢复默认，删除该文件并重启 `gripper_manager`。`min_position` / `max_position` 只能在 `gripper.yaml` 中修改，网页无法越过。
+
 ## 键盘双夹爪全开／全闭
 
 启动 `control.xml` 后，8765 网页会根据动态目录显示键盘卡片。选择 `keyboard` 并获得独占 WebSocket lease 后，
 左侧 `1/2` 分别全开／全闭，右侧 `9/0` 分别全开／全闭；两侧可独立或同时操作，也可与机械臂速度键并用。
 按键配置是 `config/ros/keyboard_control.yaml` 的 `grippers.l|r.open|close`（物理 `Digit*` 码）；
-位置端点沿用本页的 `gripper.yaml`，不复制行程值，不新增中间夹爪键盘入口。
+位置端点来自 `gripper.yaml` 加上运行时覆盖（见[在网页上设置开位和闭位](#在网页上设置开位和闭位)），不在键盘配置里复制行程值，不新增中间夹爪键盘入口。
 
 ```text
 :8765 keyboard_state（每侧完整按键集合、递增 sequence）
@@ -143,7 +176,7 @@ AG2F90-C（厂商包名 `ctag2f90c`）是 Changingtek 的两指平行夹爪。�
 1. 网格 URI 改为 `package://rm65_description/meshes/ctag2f90c/…`；
 2. 厂商导出的 mimic 关节限位是 `0..0`，会让按限位截断 mimic 值的加载器（网页 `urdf-loader`、MoveIt）把手指冻住，已改为 mimic 倍率实际产生的范围（`Left_2_Joint` 为 `-1..0`，其余为 `0..1`）。`robot_state_publisher` 不受影响。
 
-**与真实夹爪的对应**：厂商示例脚本把驱动关节线性映射为设备位置 `p = (1 − q) × 9000`（`q` 为 `Left_1_Joint` 弧度，单位 `0.01 mm`），即全开 `q=1` ↔ 位置 `0`，闭合 `q=0` ↔ 位置 `9000`。其寄存器（使能 `0x0100`、位置 `0x0102/0x0103`、速度 `0x0104`、力 `0x0105`、加减速 `0x0106/0x0107`、触发 `0x0108`）与本项目 `rtu_psdk.py` 一致，波特率 `115200`、从站 `1`。本项目的 `percentage` 约定（`0` 闭合、`1` 张开）与模型的 `q`（`0` 闭合、`1` 全开）方向相同。三台机械臂末端的夹爪均为 AG2F90-C，因此网页场景给 `l/m/r` 各挂一个。注意 `gripper.yaml` 中三个夹爪的行程并不一致：`gripper_mid` 是 `0..9000`（与上面的 `9000` 映射吻合），`gripper_right` 是 `4000..12000`，`gripper_left` 是 `400..949`。若三者确为同一型号，这些差异要么是单位不同，要么是配置有误，请现场核对后再改 `gripper.yaml`，本页和网页场景不依赖这些数值。
+**与真实夹爪的对应**：厂商示例脚本把驱动关节线性映射为设备位置 `p = (1 − q) × 9000`（`q` 为 `Left_1_Joint` 弧度，单位 `0.01 mm`），即全开 `q=1` ↔ 位置 `0`，闭合 `q=0` ↔ 位置 `9000`。其寄存器（使能 `0x0100`、位置 `0x0102/0x0103`、速度 `0x0104`、力 `0x0105`、加减速 `0x0106/0x0107`、触发 `0x0108`）与本项目 `rtu_psdk.py` 一致，波特率 `115200`、从站 `1`。本项目的 `percentage` 约定（`0` 闭合、`1` 张开）与模型的 `q`（`0` 闭合、`1` 全开）方向相同。三台机械臂末端的夹爪均为 AG2F90-C，因此网页场景给 `l/m/r` 各挂一个。注意 `gripper.yaml` 中三个夹爪的行程并不一致：`gripper_mid` 是 `0..9000`（与上面的 `9000` 映射吻合），`gripper_right` 是 `50..8500`，`gripper_left` 是 `20..900`。后两个数值来自 2026-09-28 对机械限位的实测标定（右：全开 ≈ 8、全闭 ≈ 8668，堵转到力矩；左：全开 ≈ 1、全闭 ≈ 919），两端各留约 2% 余量避免顶到硬限位。此前开位误设为右 `4000`、左 `400`，会让 `percentage=1`（以及键盘和 Pika 的全开）只张开约 55%，闭位 `12000`／`949` 又超出机械极限，使百分比下端出现一段落在全闭的死区；2026-10-09 已改正。左夹爪量级只有右夹爪的约十分之一，单位可能不同（待确认）。若三者确为同一型号，这些差异要么是单位不同，要么是配置有误，改 `gripper.yaml` 前请现场核对机械限位，本页和网页场景不依赖这些数值。
 
 **当前集成范围**：模型用于两处——文档站首页的三维场景（每臂 `link_6` 末端各挂一个，带开合滑块，见[三臂配置驱动可视化](./three-arm-visualization#末端夹爪与关节滑块)），以及 `:8765` Web 控制页的 URDF 视图（随真实夹爪的位置反馈实时开合，见[WebSocket 浏览器控制](./realman-web-control#夹爪模型与实时开合反馈)）。驱动侧的 `robot_state_publisher` / RViz 的 TF 树**还没有**包含夹爪，真实夹爪仍通过 `gripper_manager` 驱动；要在 RViz 里显示并跟随真实开合，需要另外把 `/<name>/position` 转成夹爪关节状态，这是后续工作。安装位姿 `xyz` / `rpy` 的默认值是"夹爪 `base_link` 原点沿 `link_6` 的 `+z` 方向偏移 `0.014 m`（夹爪底座网格在自身原点后方延伸 `14 mm`，这样底面刚好贴在法兰面上而不与腕部重叠）、无转角"，如果现场有转接板或绕轴向转了角度，请按实物修改 `end_effectors.yaml`。
 
@@ -155,7 +188,7 @@ AG2F90-C（厂商包名 `ctag2f90c`）是 Changingtek 的两指平行夹爪。�
 {"type":"gripper_command","request_id":"req-1","name":"gripper_left","command":"percentage","percentage":0.5}
 ```
 
-`command` 支持 `open`、`close`、`reset`、`enable`、`disable`、`grasp_check` 和 `percentage`；Web 协议目前不暴露 `calibrate`。输入通过 `protocol.py` 校验，未知名称、越界百分比或 service 不可用会返回协议错误。
+`command` 支持 `open`、`close`、`reset`、`enable`、`disable`、`grasp_check`、`percentage`、`set_limits`（字段 `open_position`、`close_position`，整数）和 `move_raw`（字段 `position`，整数）；Web 协议目前不暴露 `calibrate`。服务器处于 `read_only` 时，`set_limits` 和 `move_raw` 在服务端被拒绝（错误码 `read_only`）。输入通过 `protocol.py` 校验，未知名称、越界百分比或 service 不可用会返回协议错误。
 
 接受请求后，Web control 先向发起客户端发送 `gripper_result`，其中 `state="requested"`；ROS future 完成后再发送 `state="completed"` 和 service 的 `success/message`，异常则发送 `state="failed"`。`request_id` 用于关联同一请求。当前 Web server 的 `/healthz` 报告 `read_only=false`，即 direct control enabled；如果部署方增加只读策略，必须在服务器入口拒绝 WebSocket 写命令，不能只依赖前端隐藏按钮。
 

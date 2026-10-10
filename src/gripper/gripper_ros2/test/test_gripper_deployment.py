@@ -22,6 +22,30 @@ class GripperDeploymentTest(unittest.TestCase):
         self.assertIn("self.manager.request_move(name, target)", command_callback)
         self.assertNotIn("wait_until_pos_or_torque", command_callback)
 
+    def test_runtime_overrides_file_is_not_tracked(self):
+        ignored = (ROOT / "config/ros/.gitignore").read_text(encoding="utf-8").splitlines()
+        self.assertIn("gripper_overrides.yaml", ignored)
+        self.assertIn(".gripper_overrides.yaml.*.tmp", ignored)
+
+    def test_limit_interfaces_are_declared_in_the_msgs_package(self):
+        msgs = ROOT / "src/gripper/gripper_ros2_msgs"
+        cmake = (msgs / "CMakeLists.txt").read_text(encoding="utf-8")
+        for path in ("msg/GripperLimits.msg", "srv/SetGripperLimits.srv", "srv/MoveGripperRaw.srv"):
+            self.assertTrue((msgs / path).is_file(), path)
+            self.assertIn(f'"{path}"', cmake)
+
+    def test_manager_exposes_limit_services_and_latched_limits_topic(self):
+        source = MANAGER_NODE.read_text(encoding="utf-8")
+        self.assertIn('f"{prefix}/set_limits"', source)
+        self.assertIn('f"{prefix}/move_raw"', source)
+        self.assertIn('f"{prefix}/limits"', source)
+        self.assertIn("QoSDurabilityPolicy.TRANSIENT_LOCAL", source)
+        start = source.index("    def _move_raw(")
+        end = source.index("    def _publish_feedback(", start)
+        body = source[start:end]
+        # An out-of-range jog must be rejected before the gripper is auto-enabled.
+        self.assertLess(body.index("check_raw_position("), body.index("self._ready("))
+
     def test_root_config_uses_three_stable_gripper_aliases(self):
         config = load_gripper_config(ROOT / "config/ros/gripper.yaml")
         ports = {bus["port"] for bus in config["buses"]}

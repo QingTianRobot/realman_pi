@@ -13,6 +13,8 @@
   <exec_depend>ament_index_python</exec_depend>
   <exec_depend>diagnostic_msgs</exec_depend>
   <exec_depend>geometry_msgs</exec_depend>
+  <!-- GripperLimits (latched effective open/close endpoints). -->
+  <exec_depend>gripper_ros2_msgs</exec_depend>
   <!-- InputModeState is the sole source of the active input mode. -->
   <exec_depend>realman_msgs</exec_depend>
   <exec_depend>sensor_msgs</exec_depend>

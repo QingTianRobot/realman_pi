@@ -13,6 +13,9 @@ ACTION_NAMES = frozenset(
     {"execute_motion", "execute_trajectory", "cartesian_velocity"}
 )
 MAX_REQUEST_ID_LENGTH = 96
+# Sanity cap only; gripper_manager enforces the real per-gripper travel.
+MAX_GRIPPER_POSITION = 1_000_000
+WRITE_LIMIT_COMMANDS = frozenset({"set_limits", "move_raw"})
 
 
 class ProtocolError(ValueError):
@@ -88,6 +91,19 @@ def _reference(goal: dict[str, Any]) -> tuple[int, str]:
     reference_type = _integer(goal.get("reference_type"), "goal.reference_type", 0, 3)
     reference_name = _string(goal.get("reference_name"), "goal.reference_name", maximum=128)
     return reference_type, reference_name
+
+
+def _gripper_position(message: dict[str, Any], field: str, request_id: str) -> int:
+    try:
+        return _integer(message.get(field), field, 0, MAX_GRIPPER_POSITION)
+    except ProtocolError as error:
+        raise ProtocolError(error.code, error.message, request_id) from error
+
+
+def reject_if_read_only(command: str, read_only: bool, request_id: str = "") -> None:
+    """Refuse gripper travel writes at the server boundary in read-only mode."""
+    if read_only and command in WRITE_LIMIT_COMMANDS:
+        raise ProtocolError("read_only", "the server is read-only", request_id)
 
 
 def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]:
@@ -179,13 +195,21 @@ def parse_message(raw: str | bytes, *, max_bytes: int = 65536) -> dict[str, Any]
         request_id = _request_id(message)
         name = _string(message.get("name"), "name", maximum=96)
         command = message.get("command")
-        if command not in {"open", "close", "reset", "enable", "disable", "percentage", "grasp_check"}:
+        if command not in {
+            "open", "close", "reset", "enable", "disable", "percentage", "grasp_check",
+            "set_limits", "move_raw",
+        }:
             raise ProtocolError("invalid_command", "unsupported gripper command", request_id)
         normalized = {"type": message_type, "request_id": request_id, "name": name, "command": command}
         if command == "percentage":
             normalized["percentage"] = _number(message.get("percentage"), "percentage")
             if not 0.0 <= normalized["percentage"] <= 1.0:
                 raise ProtocolError("invalid_field", "percentage must be from 0.0 through 1.0", request_id)
+        if command == "set_limits":
+            normalized["open_position"] = _gripper_position(message, "open_position", request_id)
+            normalized["close_position"] = _gripper_position(message, "close_position", request_id)
+        if command == "move_raw":
+            normalized["position"] = _gripper_position(message, "position", request_id)
         return normalized
 
     arm = _arm(message)

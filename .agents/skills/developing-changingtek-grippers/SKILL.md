@@ -26,12 +26,13 @@ When comparing a supplied reference SDK, read its RTU implementation, driver, an
 - Keep authoritative configuration under root `config/`. Compose maps host aliases into `realman_bringup_remote`; Web control does not access serial devices directly.
 - Treat `connect()`/`connect_all()` as “serial file opened.” Treat `/<name>/connected=true` as “background Modbus feedback reads currently succeed.” Compare systems with the same safe read transaction, not their open-port messages.
 - Position is a configured device-unit integer. Web `percentage` is `0.0..1.0`, where `0` maps to `close_position` and `1` maps to `open_position`.
+- Only `open_position` and `close_position` are editable at runtime (`set_limits` service, web "行程设置" panel). They persist in `gripper_overrides.yaml` next to `gripper.yaml`, written atomically by `gripper_manager` only; `min_position`/`max_position` stay in `gripper.yaml`. Validation lives in `gripper_limits.py`; do not duplicate it in the Web layer.
 
 ## Interface Contract
 
-Each configured name exposes Trigger services `open`, `close`, `reset`, `grasp_check`, and `calibrate`; `enable` uses `std_srvs/SetBool`; `percentage` uses `gripper_ros2_msgs/GripperPercentage`. State topics are `position`, `speed`, `current`, `torque_reached`, `alarm`, and `connected`.
+Each configured name exposes Trigger services `open`, `close`, `reset`, `grasp_check`, and `calibrate`; `enable` uses `std_srvs/SetBool`; `percentage` uses `gripper_ros2_msgs/GripperPercentage`; `set_limits` uses `gripper_ros2_msgs/SetGripperLimits` and `move_raw` uses `gripper_ros2_msgs/MoveGripperRaw`. State topics are `position`, `speed`, `current`, `torque_reached`, `alarm`, and `connected`, plus `limits` (`gripper_ros2_msgs/GripperLimits`; latched: reliable, `transient_local`) carrying the effective endpoints and `min`/`max`.
 
-Web control reads the same YAML, sends ROS service requests, and publishes `gripper_list`, `gripper_state`, and `gripper_result` WebSocket events. Validate browser input in `protocol.py`. The current server reports `read_only=false` and enables direct control; any future read-only policy must reject write commands at the Web server boundary rather than relying on the UI.
+Web control reads the same YAML, but the effective open/close endpoints come from `gripper.yaml` overlaid by `gripper_overrides.yaml` and arrive live through `/<name>/limits`. It sends ROS service requests, and publishes `gripper_list`, `gripper_state`, and `gripper_result` WebSocket events. Validate browser input in `protocol.py`. The current server reports `read_only=false` and enables direct control; any future read-only policy must reject write commands at the Web server boundary rather than relying on the UI.
 
 ## Diagnostic Order
 

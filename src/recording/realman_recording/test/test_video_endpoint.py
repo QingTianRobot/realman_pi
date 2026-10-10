@@ -49,9 +49,14 @@ def test_video_path_rejects_unknown_camera(tmp_path):
 def test_video_path_rejects_camera_path_traversal(tmp_path):
     root = tmp_path / "rec"; root.mkdir()
     _make_session(root, "s1", 0, ["orbbec-left"])
+    # Create a real file at the escaped location so the traversal guard, not the
+    # file-existence check, is what rejects the request.
+    escaped = root / "escape" / "chunk-000"
+    escaped.mkdir(parents=True)
+    (escaped / "file-000.mp4").write_bytes(b"mp4")
     catalog = LeRobotReplayCatalog(root, root / "ds")
     with pytest.raises(ValueError):
-        catalog.video_path("s1", "../../escape")
+        catalog.video_path("s1", "../../../../escape")
 
 
 def test_parse_range_full_and_partial():

@@ -278,8 +278,10 @@ class LeRobotReplayCatalog:
             reference.dataset_root / "videos" / key / "chunk-000"
             / f"file-{reference.episode_index:03d}.mp4"
         )
-        # Path-traversal guard: the resolved file must stay inside dataset_root.
-        if reference.dataset_root not in candidate.parents or not candidate.is_file():
+        # Path-traversal guard: after resolving ``..`` the file must stay inside
+        # dataset_root.  ``candidate.parents`` alone is lexical and never
+        # normalizes ``..``, so it cannot reject a traversal attempt.
+        if not candidate.resolve().is_relative_to(reference.dataset_root) or not candidate.is_file():
             raise ValueError("episode video file does not exist")
         return candidate
 

@@ -273,7 +273,10 @@ class SessionStore:
         payload = json.loads(final.read_text(encoding="utf-8"))
         if not isinstance(payload, dict) or payload.get("state") != SessionState.READY.value:
             raise RuntimeError("only READY recording sessions can be discarded")
-        if payload.get("decision") != "PENDING":
+        export_state = (payload.get("export") or {}).get("state")
+        decision = payload.get("decision")
+        cancellable = decision == "ADOPTED" and export_state == "QUEUED"
+        if decision != "PENDING" and not cancellable:
             raise RuntimeError("recording session was already adopted or discarded")
         payload.update(
             decision="DISCARDED",

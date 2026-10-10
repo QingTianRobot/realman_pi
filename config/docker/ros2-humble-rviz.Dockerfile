@@ -75,22 +75,10 @@ WORKDIR /opt/rm65_ws
 
 # CMake installs the repository-root configuration into the package share
 # directory. Keep this path aligned with ROOT_CONFIG_DIR in CMakeLists.txt.
+# Config is copied before the pip layers because they read requirements files
+# from it; the source copy is deferred until after pip so a source-only change
+# does not invalidate the (large) torch/Robotic_Arm/etc. downloads.
 COPY config /opt/rm65_ws/config
-COPY src /opt/rm65_ws/src
-# Keep the behavior-tree runtime reproducible inside the image. The source is
-# copied from the repository snapshot rather than a developer's Downloads path.
-COPY third_party/behavior_tree_cpp /opt/rm65_ws/src/behavior_tree_cpp
-RUN mkdir -p /opt/rm65_ws/third_party && ln -s /opt/rm65_ws/src/behavior_tree_cpp /opt/rm65_ws/third_party/behavior_tree_cpp
-
-# Build the preview-only HTTP server independently of ROS packages. Its editor
-# files are copied from the Node build stage below and served from one origin.
-RUN cmake -S /opt/rm65_ws/src/behavior_tree_cpp -B /opt/rm65_ws/behavior_tree/build \
-        -DBT_BUILD_NODES=OFF \
-        -DBT_BUILD_SERVER=ON \
-        -DBT_BUILD_TESTS=OFF \
-        -DBT_BUILD_EXAMPLES=OFF \
-    && cmake --build /opt/rm65_ws/behavior_tree/build --target bt_server \
-    && install -D -m 0755 /opt/rm65_ws/behavior_tree/build/bin/bt_server /opt/rm65_ws/behavior_tree/bin/bt_server
 
 # Install CPU-only PyTorch for the recording/export runtime. The recording image
 # does not need CUDA; training images may install their own GPU build separately.
@@ -131,6 +119,22 @@ RUN python3 -m pip install --no-cache-dir \
         --retries 5 \
         --timeout 300 \
         --requirement /opt/rm65_ws/config/python/policy-bridge-requirements.txt
+
+# Source and the behavior-tree runtime land after the pip layers so a source-only
+# change invalidates only the colcon build while the pip downloads stay cached.
+COPY src /opt/rm65_ws/src
+COPY third_party/behavior_tree_cpp /opt/rm65_ws/src/behavior_tree_cpp
+RUN mkdir -p /opt/rm65_ws/third_party && ln -s /opt/rm65_ws/src/behavior_tree_cpp /opt/rm65_ws/third_party/behavior_tree_cpp
+
+# Build the preview-only HTTP server independently of ROS packages. Its editor
+# files are copied from the Node build stage and served from one origin.
+RUN cmake -S /opt/rm65_ws/src/behavior_tree_cpp -B /opt/rm65_ws/behavior_tree/build \
+        -DBT_BUILD_NODES=OFF \
+        -DBT_BUILD_SERVER=ON \
+        -DBT_BUILD_TESTS=OFF \
+        -DBT_BUILD_EXAMPLES=OFF \
+    && cmake --build /opt/rm65_ws/behavior_tree/build --target bt_server \
+    && install -D -m 0755 /opt/rm65_ws/behavior_tree/build/bin/bt_server /opt/rm65_ws/behavior_tree/bin/bt_server
 
 RUN . /opt/ros/humble/setup.sh \
     && colcon build --symlink-install \

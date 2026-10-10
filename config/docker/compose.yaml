@@ -6,6 +6,10 @@ x-realman-common: &realman-common
   build:
     context: .
     dockerfile: config/docker/ros2-humble-rviz.Dockerfile
+    # Build-time network.  host is required: robot hosts use systemd-resolved
+    # (127.0.0.53), which a bridge-networked build container cannot reach, so
+    # pip DNS resolution would fail with "Temporary failure in name resolution".
+    network: host
     args:
       # Domestic defaults accelerate first-time builds. Every value can be
       # replaced by an official upstream or an internal mirror at invocation.

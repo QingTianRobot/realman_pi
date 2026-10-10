@@ -42,6 +42,9 @@ class ExportRequest:
     # An explicit path is useful for deterministic offline re-export tooling.
     urdf_path: Path | None = None
     progress_callback: Callable[[int, int], None] | None = None
+    # When true, the export requires full-frame subtask coverage (no frame maps to
+    # -1) and non-empty labels; partial or empty annotation fails the export.
+    include_subtasks: bool = False
 
 
 def _split_ee_pose(pose: Sequence[float], arm_count: int) -> tuple[tuple[float, ...], tuple[float, ...]]:
@@ -68,6 +71,35 @@ def _split_ee_velocity(velocity: Sequence[float], arm_count: int) -> tuple[tuple
         linear.extend(values[:3])
         angular.extend(values[3:])
     return tuple(linear), tuple(angular)
+
+
+def _frame_subtask_index(subtasks: Sequence[dict[str, Any]], frame_count: int) -> list[int]:
+    """Map each exported frame to its subtask segment ``index``, -1 when unannotated.
+
+    Segments are assumed to be non-overlapping and in-bounds (the store validates
+    them at write time); a frame inside a segment's ``[start_frame, end_frame]``
+    inherits that segment's index.
+    """
+    result = [-1] * frame_count
+    for segment in subtasks:
+        index = int(segment["index"])
+        start = int(segment["start_frame"])
+        end = int(segment["end_frame"])
+        for frame in range(start, end + 1):
+            if 0 <= frame < frame_count:
+                result[frame] = index
+    return result
+
+
+def _validate_subtask_coverage(index_list: Sequence[int], subtasks: Sequence[dict[str, Any]]) -> None:
+    """Require every exported frame annotated and every subtask label non-empty."""
+    if any(index == -1 for index in index_list):
+        raise ValueError("subtask annotation does not cover every exported frame")
+    if any(
+        not isinstance(segment.get("label"), str) or not segment["label"].strip()
+        for segment in subtasks
+    ):
+        raise ValueError("every subtask segment requires a non-empty label")
 
 
 class LeRobotExporter:
@@ -115,6 +147,12 @@ class LeRobotExporter:
             aligned, schema, solvers,
             {camera: [timestamp for timestamp, _ in frames] for camera, frames in images.items()},
         )
+        raw_subtasks = manifest.get("subtasks")
+        subtasks = raw_subtasks if isinstance(raw_subtasks, list) else []
+        frame_count = len(canonical)
+        subtask_index = _frame_subtask_index(subtasks, frame_count)
+        if request.include_subtasks:
+            _validate_subtask_coverage(subtask_index, subtasks)
         # ``lerobot_export_dir`` is a collection root in the ROS node, while the
         # SDK expects the directory passed to ``create`` to be one dataset root.
         # Older deployments also leave per-session legacy directories below that
@@ -140,6 +178,7 @@ class LeRobotExporter:
                         "action.executed_action": np.asarray(frame.ee_velocity_base, dtype=np.float32),
                         "quality.valid": np.asarray([frame.valid], dtype=np.bool_),
                         "quality.sync_error_ns": np.asarray(frame.sync_error_ns, dtype=np.int64),
+                        "subtask_index": np.asarray([subtask_index[index]], dtype=np.int64),
                         "task": task,
                     }
                     if frame.command_gripper is not None:
@@ -150,6 +189,8 @@ class LeRobotExporter:
                     self._report(request, index + 1, len(aligned))
                 episode_index = self._dataset_episode_count(dataset)
                 dataset.save_episode(parallel_encoding=True)
+                if subtasks:
+                    self._write_subtasks_parquet(dataset_root, subtasks)
             except BaseException:
                 if self._dataset_has_pending_frames(dataset):
                     dataset.clear_episode_buffer()
@@ -357,6 +398,25 @@ class LeRobotExporter:
                                               "ee_velocity": "driver_measured_v1" if schema.arm_velocity_topics else "quaternion_shortest_arc_v1"},
                    }}
         atomic_json_write(session_dir / "export" / "lerobot-v3.json", receipt)
+
+    @staticmethod
+    def _write_subtasks_parquet(root: Path, subtasks: Sequence[dict[str, Any]]) -> None:
+        """Write the subtask index -> label table beside the dataset metadata.
+
+        LeRobot 0.4.4 has no native subtask writer, so the label table is persisted
+        directly as ``meta/subtasks.parquet``: a string column ``subtask`` keyed by an
+        int64 ``subtask_index`` column (the same index stored per-frame).
+        """
+        import pyarrow as pa
+        import pyarrow.parquet as pq
+
+        table = pa.table({
+            "subtask": pa.array([str(segment["label"]) for segment in subtasks], type=pa.string()),
+            "subtask_index": pa.array([int(segment["index"]) for segment in subtasks], type=pa.int64()),
+        })
+        meta_dir = root / "meta"
+        meta_dir.mkdir(parents=True, exist_ok=True)
+        pq.write_table(table, meta_dir / "subtasks.parquet")
 
     @staticmethod
     def _camera_archive_quality(session_dir: Path) -> dict[str, Any]:

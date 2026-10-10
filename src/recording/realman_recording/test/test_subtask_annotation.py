@@ -9,6 +9,7 @@ import json
 
 import pytest
 
+from realman_recording.lerobot_exporter import _frame_subtask_index, _validate_subtask_coverage
 from realman_recording.lerobot_schema import schema_from_parameters
 from realman_recording.session_store import SessionStore
 
@@ -115,3 +116,49 @@ def test_update_subtasks_clears_existing_segments(tmp_path):
     _make_session(directory, frame_count=10, subtasks=[{"index": 0, "label": "a", "start_frame": 0, "end_frame": 1}])
     payload = SessionStore.update_subtasks(directory, [])
     assert payload["subtasks"] == []
+
+
+# --- Task 3: pure frame->subtask mapping and coverage validation ------------------
+
+
+def test_frame_subtask_index_maps_segments_and_leaves_uncovered():
+    subtasks = [
+        {"index": 0, "label": "a", "start_frame": 0, "end_frame": 2},
+        {"index": 1, "label": "b", "start_frame": 4, "end_frame": 4},
+    ]
+    assert _frame_subtask_index(subtasks, 6) == [0, 0, 0, -1, 1, -1]
+
+
+def test_frame_subtask_index_empty_returns_all_uncovered():
+    assert _frame_subtask_index([], 4) == [-1, -1, -1, -1]
+
+
+def test_frame_subtask_index_includes_end_frame():
+    subtasks = [{"index": 7, "label": "x", "start_frame": 2, "end_frame": 3}]
+    assert _frame_subtask_index(subtasks, 5) == [-1, -1, 7, 7, -1]
+
+
+def test_validate_subtask_coverage_rejects_uncovered_frame():
+    with pytest.raises(ValueError):
+        _validate_subtask_coverage(
+            [0, -1, 0],
+            [{"index": 0, "label": "a", "start_frame": 0, "end_frame": 2}],
+        )
+
+
+def test_validate_subtask_coverage_rejects_empty_label():
+    with pytest.raises(ValueError):
+        _validate_subtask_coverage(
+            [0, 0],
+            [{"index": 0, "label": "", "start_frame": 0, "end_frame": 1}],
+        )
+
+
+def test_validate_subtask_coverage_accepts_full_coverage():
+    _validate_subtask_coverage(
+        [0, 0, 1],
+        [
+            {"index": 0, "label": "a", "start_frame": 0, "end_frame": 1},
+            {"index": 1, "label": "b", "start_frame": 2, "end_frame": 2},
+        ],
+    )

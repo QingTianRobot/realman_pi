@@ -83,6 +83,7 @@ export default withMermaid(defineConfig({
         items: [
           { text: "启动入口索引", link: "/development/startup-entries" },
           { text: "系统 Bringup", link: "/development/system-bringup" },
+          { text: "生产运维手册", link: "/development/production-operations" },
         ],
       },
       {

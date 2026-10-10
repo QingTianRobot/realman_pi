@@ -225,6 +225,54 @@ Replay 部署到 `$HOME/pika_realman_replay`，使用独立 Compose 与生产 RO
 重启生产 driver/control tree。生命周期见 [Pika replay 边界](./behavior-tree-motion#pika-rosbag-replay-边界)，
 driver 侧契约见 [ingress 与坐标桥接](./realman-action-development#pika-rosbag-replay-的-ingress-与坐标桥接)。
 
+## 链路与已知问题
+
+以下是 2026-10-08 至 10-10 在生产机上排查 Pika 速度控制时的**现场记录**（实测数据，不是契约）。
+
+### 输入链路是 Wi‑Fi，入站会丢包
+
+Pika 主机和生产机之间**没有共同的有线网段**，唯一共用的是 Wi‑Fi，所以 20 Hz 的 `/pika/*` DDS 流走无线。生产机的无线网卡是 USB 网卡。
+
+| 测量 | 结果 |
+| --- | --- |
+| Pika 主机 → 生产机，UDP 20 包/秒、30 秒 | 丢包 **25.3%**，p95 间隔 150 ms，最大 414 ms |
+| 生产机 → Pika 主机，同样条件 | 丢包 0.0% |
+| DDS 实测（同方向） | 发 696 收 514，最大间隔 340 ms |
+| 发送端本机发布 | 20.0 Hz，最大间隔 58 ms（干净） |
+| router → driver 的 `/r/cartesian_velocity/command` | 100 Hz，最大间隔 10 ms（干净） |
+
+要点：
+
+- **`ping` 看不出来**：每秒 5 个包的 ICMP 丢包为 0%，需要用 20 pps 的 UDP 或直接数 `/pika/*` 的实际到达率。
+- 输入间隔超过 `stale_ms`（`200 ms`，见 `pika_config.yaml`）时 router 会指令**零速**，所以丢包的表现就是手臂一顿一顿（35 秒里出现过 10 次这样的间隔）。
+- router 用本机单调时钟判断输入新鲜度并重新打时间戳，所以 Pika 主机的时钟偏差（重启后可能慢几秒）**不会**影响这条链路。
+- **排查顺序**：先在两端分别量 `/pika/*` 的速率（`ros2 topic hz`），确认问题在链路上，再动 router 或 driver。解决要落在链路本身：两机之间走有线，或换非 USB 的无线网卡。尚未区分是"AP 到网卡的空口丢包"还是"网卡自身的接收路径"。
+
+### 每次速度 session 启动时手臂被拉动
+
+**现象（已测量，不只是推断）**：每次速度 session 启动，即使命令为零，手臂也会动一下。
+
+- 左臂（左 Pika 不动）：每个 session 都漂移到同一个姿态 `[13.71 24.35 74.48 -15.55 79.06 13.04]°`，幅度约 `1.54°`，约 `1.4 s`，跨数小时、多次复位 MoveJ 都一致，像是控制器侧残留了一个旧的透传目标。
+- 右臂：间歇出现，最大约 `27°/s` 关节速度、`0.5 m/s` TCP 速度，朝大致是上一个 session 结束位姿的方向。所有"没有指令的真实转动"事件（8/8）都发生在 session 启动后 `1.3 s` 内。
+
+**已排除**：Pika 输入和网络（命令流是零）、router、复位用的 MoveJ（目标是固定默认位姿）、driver 的启动序列本身（`rm_set_movev_canfd_init` 加第一条零 `movev`，约 `20 ms`，关节变化 0.00°）。拉动出现在 `session_active` 之后。
+
+**尝试过但没解决**：`pika_velocity` 改用高跟随（`follow: true`），左臂的 `1.5°` 拉动不变（4/4 个 session）；右臂的大幅拉动在 3 次试验里没出现，样本太少不能下结论。键盘 router 使用高跟随，`realman_motion.yaml` 的注释里也提到低跟随在启动时有瞬态。
+
+**待向睿尔曼确认**：`rm_set_movev_canfd_init` 是否会把内部目标重置为当前位姿；`follow` 的确切含义；SDK 注释里 `movev_canfd` 的限值是 `0.25 m/s` 和 `0.6 rad/s`，而 Pika 配置的是 `1.0 m/s` 和 `2.0 rad/s`。官方文档对"目标是否重置"没有说明。
+
+### 测量时的陷阱
+
+- driver 的 `/<arm>/cartesian_velocity/state` 里 `measured_angular_velocity_radps` 是**欧拉角 (rx, ry, rz) 的变化率**，不是真正的角速度。要真实角速度，用 TF `r/base_link → r/link_6` 的四元数做差分。有转动指令时，手臂跟随得很好（真实角速度与指令之比约 0.95，方向余弦约 0.96）。
+- `joint_states` 和速度状态 topic 都是 `10 Hz`，时间精度只有约 `0.1 s`。
+- 左臂在 Pika 不动时是干净的"零命令"试验台。
+
+### 运行时的陷阱
+
+- `./rm65 bt control` 默认 `REALMAN_BT_DRY_RUN=true`：dry-run 下 router 接收 Pika 输入但**什么都不发**，手臂"不动"是预期行为。真实运动要加 `REALMAN_BT_DRY_RUN=false`。
+- 放到后台运行的实例**忽略 `SIGINT`**，用 `SIGTERM` 停止。
+- 在没有澄清厂商语义和诊断之前，不建议加"检测到未指令的关节运动就中止"的启动守卫——它可能阻止正常启动。
+
 ## 相关页面
 
 - [行为树控制权与 Mock 测试](./behavior-tree-control)：输入模式目录、`control.xml`、模式切换与 Web override。

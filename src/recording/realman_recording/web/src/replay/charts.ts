@@ -140,6 +140,8 @@ export function initCharts(): ChartApi {
   let splitMode = false;
   let cachedKey = "";
   let cachedMarker: SVGLineElement | null = null;
+  let lastFrames: ChartFrame[] = [];
+  let lastIndex = 0;
 
   function setFeatures(features: string[], nextSummary?: ChartSummary): void {
     summary = nextSummary?.features ?? {};
@@ -213,6 +215,7 @@ export function initCharts(): ChartApi {
         else selected.delete(index);
         cachedKey = "";
         cachedMarker = null;
+        renderChart();
         const count = jointFilterEl.querySelector(".joint-count");
         if (count) count.textContent = `已选 ${selected.size}/${labels.length}`;
       });
@@ -226,6 +229,7 @@ export function initCharts(): ChartApi {
         });
         cachedKey = "";
         cachedMarker = null;
+        renderChart();
         const count = jointFilterEl.querySelector(".joint-count");
         if (count) count.textContent = `已选 ${selected.size}/${labels.length}`;
       });
@@ -300,9 +304,22 @@ export function initCharts(): ChartApi {
     legendEl.innerHTML = "";
   }
 
+  function renderChart(): void {
+    if (!selectedFeature || !lastFrames.length) return;
+    if (splitMode) {
+      chartEl.innerHTML = "";
+      renderSplit(lastFrames, lastIndex);
+    } else {
+      splitEl.innerHTML = "";
+      renderAggregate(lastFrames, lastIndex);
+    }
+  }
+
   function render(frame: ChartFrame, frames: ChartFrame[], index: number): void {
     selectedFeature = featureSelect.value;
     if (!selectedFeature) return;
+    lastFrames = frames;
+    lastIndex = index;
     const values = numericComponents(frame.features?.[selectedFeature]);
     const labels = componentLabels(selectedFeature, values.length, summary, canonical);
     renderJointFilter(labels);
@@ -313,13 +330,7 @@ export function initCharts(): ChartApi {
       2,
     );
 
-    if (splitMode) {
-      chartEl.innerHTML = "";
-      renderSplit(frames, index);
-      return;
-    }
-    splitEl.innerHTML = "";
-    renderAggregate(frames, index);
+    renderChart();
   }
 
   function clear(): void {

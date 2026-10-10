@@ -20,8 +20,14 @@ def should_auto_export(*, auto_export_on_stop: bool, final_success: bool) -> boo
 class SerialExportWorker:
     """Serialize arbitrary one-session-at-a-time jobs in FIFO order."""
 
-    def __init__(self, run_one: Callable[[str], None]) -> None:
+    def __init__(
+        self,
+        run_one: Callable[[str], None],
+        *,
+        on_error: Callable[[str, BaseException], None] | None = None,
+    ) -> None:
         self._run_one = run_one
+        self._on_error = on_error
         self._queue: "queue.Queue[str]" = queue.Queue()
         self._thread: threading.Thread | None = None
         self._stopping = threading.Event()
@@ -50,5 +56,8 @@ class SerialExportWorker:
                 continue
             try:
                 self._run_one(session_id)
+            except Exception as error:  # noqa: BLE001 - one bad job must not kill the worker
+                if self._on_error is not None:
+                    self._on_error(session_id, error)
             finally:
                 self._queue.task_done()

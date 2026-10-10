@@ -159,7 +159,7 @@ class RecordingRecorderNode(Node):
         self._export_error = ""
         # One daemon worker serializes every adopted session's export so conversions
         # never overlap and never run on the ROS executor.  START/STOP never block.
-        self._export_worker = SerialExportWorker(self._run_export_job)
+        self._export_worker = SerialExportWorker(self._run_export_job, on_error=self._on_export_job_error)
         self._export_worker.start()
 
         self._topic_types: dict[str, str] = {}
@@ -639,6 +639,10 @@ class RecordingRecorderNode(Node):
         """Worker callback: resolve the session id and run one export."""
         self._export_adopted_session(self._session_directory(session_id))
 
+    def _on_export_job_error(self, session_id: str, error: BaseException) -> None:
+        """Log a worker-thread failure so a bad job never kills the queue silently."""
+        self.get_logger().error(f"LeRobot export worker failed for {session_id}: {error}")
+
     def _discard_session(self, session_id: str) -> str:
         """Logically discard a finalized session while retaining raw artifacts for audit."""
         directory = self._session_directory(session_id)
@@ -651,18 +655,23 @@ class RecordingRecorderNode(Node):
 
     def _export_adopted_session(self, directory: Path) -> None:
         """Run expensive LeRobot conversion away from every ROS callback/executor thread."""
-        try:
-            decision = json.loads((directory / "manifest.json").read_text(encoding="utf-8")).get("decision")
-        except (OSError, json.JSONDecodeError):
-            decision = None
-        if decision == "DISCARDED":
-            self.get_logger().info(f"LeRobot export skipped: {directory.name} was discarded")
-            return
         export_root = Path(str(self.get_parameter("lerobot_export_dir").value))
         # This is one append-only v3 dataset.  A session becomes one episode, rather
         # than creating a v2-shaped dataset directory per session.
         output_dir = export_root
+        # Re-check DISCARDED atomically with the RUNNING mark.  DISCARD also takes
+        # ``_decision_lock``, so it can only land before this critical section (skip)
+        # or after it (rejected: the session is already RUNNING); it can never
+        # interleave the re-check and the mark to slip a discarded session into export.
         with self._decision_lock:
+            try:
+                manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+                decision = manifest.get("decision") if isinstance(manifest, dict) else None
+            except (OSError, json.JSONDecodeError):
+                decision = None
+            if decision == "DISCARDED":
+                self.get_logger().info(f"LeRobot export skipped: {directory.name} was discarded")
+                return
             self._export_progress = 0.0
             self._export_dir = ""
             self._export_error = ""

@@ -30,3 +30,50 @@ def test_worker_runs_jobs_one_at_a_time_in_fifo_order():
 
     assert order == ["a", "b", "c"]
     assert max_active == 1
+
+
+def test_worker_survives_a_raising_job():
+    processed: list[str] = []
+
+    def run_one(session_id: str) -> None:
+        if session_id == "boom":
+            raise RuntimeError("boom")
+        processed.append(session_id)
+
+    worker = SerialExportWorker(run_one)
+    worker.start()
+    worker.enqueue("boom")
+    worker.enqueue("ok")
+    deadline = time.monotonic() + 2.0
+    while "ok" not in processed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    worker.stop()
+
+    assert processed == ["ok"]
+
+
+def test_worker_reports_a_job_error_without_stopping():
+    processed: list[str] = []
+    errors: list[tuple[str, BaseException]] = []
+
+    def run_one(session_id: str) -> None:
+        if session_id == "boom":
+            raise RuntimeError("boom")
+        processed.append(session_id)
+
+    def on_error(session_id: str, error: BaseException) -> None:
+        errors.append((session_id, error))
+
+    worker = SerialExportWorker(run_one, on_error=on_error)
+    worker.start()
+    worker.enqueue("boom")
+    worker.enqueue("ok")
+    deadline = time.monotonic() + 2.0
+    while "ok" not in processed and time.monotonic() < deadline:
+        time.sleep(0.01)
+    worker.stop()
+
+    assert processed == ["ok"]
+    assert len(errors) == 1
+    assert errors[0][0] == "boom"
+    assert isinstance(errors[0][1], RuntimeError)

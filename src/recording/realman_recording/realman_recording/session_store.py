@@ -298,6 +298,33 @@ class SessionStore:
         return SessionStore._set_decision(directory, "ADOPTED", None, None)
 
     @staticmethod
+    def update_task(directory: str | Path, task: str) -> dict[str, Any]:
+        """Atomically relabel one successfully exported session's ``metadata.task``.
+
+        Relabeling is a deliberate reviewer action on finalized data, so like
+        ``hide``/``restore`` it only requires READY + a successful export.  The
+        label is a nested ``metadata`` field, so the shallow top-level
+        ``update_final_manifest`` must not be reused here.
+        """
+        if not isinstance(task, str) or not task.strip():
+            raise ValueError("task must be a non-empty string")
+        final = Path(directory).resolve() / "manifest.json"
+        if not final.is_file():
+            raise ValueError("recording session has no finalized manifest.json")
+        payload = json.loads(final.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("state") != "READY":
+            raise RuntimeError("only READY recording sessions can be relabeled")
+        export = payload.get("export") or {}
+        if export.get("state") != "SUCCEEDED":
+            raise RuntimeError("only successfully exported sessions can be relabeled")
+        metadata = payload.setdefault("metadata", {})
+        if not isinstance(metadata, dict):
+            raise RuntimeError("recording metadata is malformed")
+        metadata["task"] = task
+        atomic_json_write(final, payload)
+        return payload
+
+    @staticmethod
     def _set_decision(
         directory: str | Path,
         decision: str,

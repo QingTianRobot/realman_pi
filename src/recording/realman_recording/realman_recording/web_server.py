@@ -39,7 +39,7 @@ def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
             end = int(end_s) if end_s else size - 1
     except ValueError:
         return None
-    if start >= size or start > end:
+    if start < 0 or start >= size or start > end:
         return None
     return start, min(end, size - 1)
 
@@ -343,7 +343,7 @@ class RecordingWebServer:
             )
         except ValueError as error:
             raise web.HTTPNotFound(text=str(error)) from error
-        size = path.stat().st_size
+        size = (await asyncio.to_thread(path.stat)).st_size
         rng = _parse_range(request.headers.get("Range"), size)
         if rng is None:
             # aiohttp 3.8.1 FileResponse has no Range support; a headerless
@@ -360,15 +360,21 @@ class RecordingWebServer:
             },
         )
         await resp.prepare(request)
-        with path.open("rb") as source:
-            source.seek(start)
+        # Video files can be large and the seek/read path may hit slow storage;
+        # keep every file operation off the event loop so concurrent streams do
+        # not contend with WebSocket snapshot broadcasts.
+        source = await asyncio.to_thread(path.open, "rb")
+        try:
+            await asyncio.to_thread(source.seek, start)
             remaining = end - start + 1
             while remaining > 0:
-                chunk = source.read(min(256 * 1024, remaining))
+                chunk = await asyncio.to_thread(source.read, min(256 * 1024, remaining))
                 if not chunk:
                     break
                 await resp.write(chunk)
                 remaining -= len(chunk)
+        finally:
+            await asyncio.to_thread(source.close)
         await resp.write_eof()
         return resp
 

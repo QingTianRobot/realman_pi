@@ -107,9 +107,21 @@ export function initCharts(): ChartApi {
   let summary: Record<string, FeatureMetadata> = {};
   let canonical: Record<string, unknown> = {};
 
+  const width = 320;
+  const height = 120;
+  const pad = 8;
+  // The two polylines, their shared y-scale and the min/max legend depend only
+  // on the (state feature, action feature, component, frame count) selection,
+  // not on the current frame. Cache the rebuilt SVG across ticks so a 20k-frame
+  // episode is not re-mapped at 60Hz; per tick only the marker moves.
+  let cachedKey = "";
+  let cachedMarker: SVGLineElement | null = null;
+
   function setFeatures(features: string[], nextSummary?: ChartSummary): void {
     summary = nextSummary?.features ?? {};
     canonical = nextSummary?.canonical ?? {};
+    cachedKey = "";
+    cachedMarker = null;
     const stateFeatures = features.filter((feature) => !feature.startsWith("action."));
     const actionFeatures = features.filter((feature) => feature.startsWith("action."));
     stateSelect.innerHTML = stateFeatures
@@ -166,34 +178,46 @@ export function initCharts(): ChartApi {
       2,
     );
 
-    const stateSeries = frames.map((item) => numericComponents(item.features?.[stateFeature])[componentIndex] ?? Number.NaN);
-    const actionSeries = frames.map((item) => numericComponents(item.features?.[actionFeature])[componentIndex] ?? Number.NaN);
-    const all = [...stateSeries, ...actionSeries].filter((value): value is number => Number.isFinite(value));
-    if (!count || !all.length) {
-      chartEl.innerHTML = "";
-      return;
+    const key = `${stateFeature}\u0000${actionFeature}\u0000${componentIndex}\u0000${frames.length}`;
+    if (cachedKey !== key) {
+      cachedKey = key;
+      cachedMarker = null;
+      const stateSeries = frames.map((item) => numericComponents(item.features?.[stateFeature])[componentIndex] ?? Number.NaN);
+      const actionSeries = frames.map((item) => numericComponents(item.features?.[actionFeature])[componentIndex] ?? Number.NaN);
+      const all = [...stateSeries, ...actionSeries].filter((value): value is number => Number.isFinite(value));
+      if (!count || !all.length) {
+        chartEl.innerHTML = "";
+        return;
+      }
+      const min = Math.min(...all);
+      const max = Math.max(...all);
+      const span = max - min || 1;
+      const x = (i: number) => pad + (i / Math.max(1, frames.length - 1)) * (width - pad * 2);
+      const y = (value: number) => height - pad - ((value - min) / span) * (height - pad * 2);
+      const polyline = (series: number[]) => series
+        .map((value, i) => (Number.isFinite(value) ? `${x(i).toFixed(1)},${y(value).toFixed(1)}` : ""))
+        .filter(Boolean)
+        .join(" ");
+      chartEl.innerHTML =
+        `<polyline class="chart-state" points="${polyline(stateSeries)}" fill="none" stroke="#67d391" stroke-width="1.7"/>` +
+        `<polyline class="chart-action" points="${polyline(actionSeries)}" fill="none" stroke="#55a6ff" stroke-width="1.5" stroke-dasharray="4 3"/>` +
+        `<line x1="0" x2="0" y1="${pad}" y2="${height - pad}" stroke="#67d391" stroke-width="1"/>` +
+        `<text x="${pad}" y="${height - 2}" fill="#8793a8" font-size="9">${min.toPrecision(4)} — ${max.toPrecision(4)}</text>`;
+      cachedMarker = chartEl.querySelector<SVGLineElement>("line");
     }
-    const min = Math.min(...all);
-    const max = Math.max(...all);
-    const span = max - min || 1;
-    const width = 320;
-    const height = 120;
-    const pad = 8;
-    const x = (i: number) => pad + (i / Math.max(1, frames.length - 1)) * (width - pad * 2);
-    const y = (value: number) => height - pad - ((value - min) / span) * (height - pad * 2);
-    const polyline = (series: number[]) => series
-      .map((value, i) => (Number.isFinite(value) ? `${x(i).toFixed(1)},${y(value).toFixed(1)}` : ""))
-      .filter(Boolean)
-      .join(" ");
-    const markerX = x(index);
-    chartEl.innerHTML =
-      `<polyline class="chart-state" points="${polyline(stateSeries)}" fill="none" stroke="#67d391" stroke-width="1.7"/>` +
-      `<polyline class="chart-action" points="${polyline(actionSeries)}" fill="none" stroke="#55a6ff" stroke-width="1.5" stroke-dasharray="4 3"/>` +
-      `<line x1="${markerX}" x2="${markerX}" y1="${pad}" y2="${height - pad}" stroke="#67d391" stroke-width="1"/>` +
-      `<text x="${pad}" y="${height - 2}" fill="#8793a8" font-size="9">${min.toPrecision(4)} — ${max.toPrecision(4)}</text>`;
+
+    // Per-tick: only the vertical marker and the raw inspector move. The
+    // polylines and min/max legend stay in place until the selection changes.
+    const markerX = pad + (index / Math.max(1, frames.length - 1)) * (width - pad * 2);
+    if (cachedMarker) {
+      cachedMarker.setAttribute("x1", markerX.toFixed(1));
+      cachedMarker.setAttribute("x2", markerX.toFixed(1));
+    }
   }
 
   function clear(): void {
+    cachedKey = "";
+    cachedMarker = null;
     stateSelect.innerHTML = "";
     actionSelect.innerHTML = "";
     componentSelect.innerHTML = "";

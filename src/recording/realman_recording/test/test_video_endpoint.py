@@ -81,6 +81,11 @@ def test_parse_range_rejects_invalid_and_multi_specs():
     assert _parse_range("bytes=0-199, 300-399", 1000) == (0, 199)
 
 
+def test_parse_range_rejects_negative_start():
+    from realman_recording.web_server import _parse_range
+    assert _parse_range("bytes=-5-10", 1000) is None
+
+
 def test_video_endpoint_serves_full_and_range_content(tmp_path):
     pytest.importorskip("aiohttp")
     import asyncio

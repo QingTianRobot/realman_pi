@@ -76,12 +76,16 @@ export function initVideo(callbacks: VideoCallbacks): VideoApi {
   function renderLoop(): void {
     if (!playing || !context) return;
     const index = clampIndex(Math.round(masterTime() * context.fps));
-    currentIndex = index;
-    slider.value = String(index);
-    callbacks.onFrameChange(index);
+    // The video is ~15fps while requestAnimationFrame fires at ~60Hz, so the
+    // rounded frame index repeats for several ticks. Only propagate a change;
+    // re-rendering the arm/chart panels for the same index is wasted work.
+    if (index !== currentIndex) {
+      currentIndex = index;
+      slider.value = String(index);
+      callbacks.onFrameChange(index);
+    }
     if (index >= context.frameCount - 1) {
       pause();
-      callbacks.onFrameChange(context.frameCount - 1);
       return;
     }
     raf = requestAnimationFrame(renderLoop);

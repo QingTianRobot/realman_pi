@@ -156,7 +156,7 @@ class LeRobotReplayCatalog:
                 try:
                     with self._dataset(reference) as dataset:
                         frame_count = len(dataset)
-                except (OSError, ValueError, TypeError, RuntimeError):
+                except Exception:  # noqa: BLE001 - any dataset-open failure only degrades frames
                     frame_count = 0
             except (OSError, ValueError, TypeError, RuntimeError):
                 # A partially written/removed session must not break the trash list.

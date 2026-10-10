@@ -86,6 +86,24 @@ def test_list_hidden_degrades_frames_when_dataset_is_unavailable(tmp_path):
     assert hidden[0]["fps"] == 10.0
 
 
+def test_list_hidden_survives_nonstandard_dataset_open_failure(tmp_path):
+    root, export_root = _catalog(tmp_path)
+    _make_catalog_session(root, export_root, "deleted-session", decision="DELETED", task="pick")
+
+    def corrupt_factory(_reference):
+        # A truncated parquet typically surfaces as pyarrow ArrowInvalid/KeyError,
+        # which is outside the manifest-validation exception tuple and must not
+        # turn the whole /trash list into a 503.
+        raise KeyError("corrupt parquet")
+
+    catalog = LeRobotReplayCatalog(root, export_root, dataset_factory=corrupt_factory)
+    hidden = catalog.list_hidden()
+    assert [h["session_id"] for h in hidden] == ["deleted-session"]
+    assert hidden[0]["frames"] == 0
+    assert hidden[0]["task"] == "pick"
+    assert hidden[0]["fps"] == 10.0
+
+
 # --- Task 2: SessionStore.update_task() -------------------------------------------
 
 

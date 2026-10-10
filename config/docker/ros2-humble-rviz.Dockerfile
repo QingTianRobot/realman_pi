@@ -80,16 +80,23 @@ RUN echo "precedence ::ffff:0:0/96  100" >> /etc/gai.conf
 
 WORKDIR /opt/rm65_ws
 
-# CMake installs the repository-root configuration into the package share
-# directory. Keep this path aligned with ROOT_CONFIG_DIR in CMakeLists.txt.
-# Config is copied before the pip layers because they read requirements files
-# from it; the source copy is deferred until after pip so a source-only change
-# does not invalidate the (large) torch/Robotic_Arm/etc. downloads.
-COPY config /opt/rm65_ws/config
+# The pip layers below read only config/python/*.txt, so copy just that directory
+# ahead of them. Runtime YAML elsewhere under config/ is edited on the robot host
+# before almost every build; copying the whole tree here would change this layer
+# and re-download every pip package after it. The full config tree, the source
+# and the behavior-tree runtime are copied after the pip layers instead.
+COPY config/python /opt/rm65_ws/config/python
+
+# Every pip layer mounts BuildKit's persistent pip cache (not part of the image),
+# so even when a requirements file does change, pip re-downloads only the wheels
+# that are new. Do not add a `# syntax=` directive for this: it would make
+# BuildKit pull a frontend image from Docker Hub, and the bundled frontend
+# already supports RUN --mount.
 
 # Install CPU-only PyTorch for the recording/export runtime. The recording image
 # does not need CUDA; training images may install their own GPU build separately.
-RUN python3 -m pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install \
         --index-url "https://download.pytorch.org/whl/cpu" \
         --retries 5 \
         --timeout 300 \
@@ -98,7 +105,8 @@ RUN python3 -m pip install --no-cache-dir \
 # Recording deps (lerobot/pyarrow/Pillow/setuptools) resolve entirely from
 # PYPI_INDEX_URL. Keep the pypi.org --extra-index-url off this step so pip never
 # round-trips to files.pythonhosted.org for them and stalls the image build.
-RUN python3 -m pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install \
         --index-url "${PYPI_INDEX_URL}" \
         --retries 5 \
         --timeout 300 \
@@ -110,7 +118,8 @@ RUN python3 -m pip install --no-cache-dir \
 # carry Robotic_Arm up to 1.0.6, but this project is aligned with vendor API
 # V1.7.13 and requires 1.1.6. Fall back to official pypi.org for this single
 # pure-Python wheel.
-RUN python3 -m pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install \
         --index-url "${PYPI_INDEX_URL}" \
         --extra-index-url "https://pypi.org/simple" \
         --retries 5 \
@@ -119,9 +128,16 @@ RUN python3 -m pip install --no-cache-dir \
 
 # Custom CasADi + IPOPT inverse kinematics (Pinocchio for FK). Large wheels;
 # give the download the same long timeout as the other pip layers.
-RUN python3 -m pip install --no-cache-dir --index-url "${PYPI_INDEX_URL}" --extra-index-url "https://pypi.org/simple" --retries 5 --timeout 300 --requirement /opt/rm65_ws/config/python/ik-requirements.txt
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install \
+        --index-url "${PYPI_INDEX_URL}" \
+        --extra-index-url "https://pypi.org/simple" \
+        --retries 5 \
+        --timeout 300 \
+        --requirement /opt/rm65_ws/config/python/ik-requirements.txt
 
-RUN python3 -m pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install \
         --index-url "${PYPI_INDEX_URL}" \
         --retries 5 \
         --timeout 300 \
@@ -129,7 +145,8 @@ RUN python3 -m pip install --no-cache-dir \
 
 # Transport deps (msgpack + websockets) for the vendored OpenPI policy client
 # used by policy_bridge.
-RUN python3 -m pip install --no-cache-dir \
+RUN --mount=type=cache,target=/root/.cache/pip \
+    python3 -m pip install \
         --index-url "${PYPI_INDEX_URL}" \
         --retries 5 \
         --timeout 300 \
@@ -150,6 +167,12 @@ RUN cmake -S /opt/rm65_ws/src/behavior_tree_cpp -B /opt/rm65_ws/behavior_tree/bu
         -DBT_BUILD_EXAMPLES=OFF \
     && cmake --build /opt/rm65_ws/behavior_tree/build --target bt_server \
     && install -D -m 0755 /opt/rm65_ws/behavior_tree/build/bin/bt_server /opt/rm65_ws/behavior_tree/bin/bt_server
+
+# CMake installs the repository-root configuration into the package share
+# directory. Keep this path aligned with ROOT_CONFIG_DIR in CMakeLists.txt.
+# Only the colcon build reads it, so the full tree is copied last: a runtime
+# YAML edit re-runs colcon but not the pip, cmake or source layers before it.
+COPY config /opt/rm65_ws/config
 
 RUN . /opt/ros/humble/setup.sh \
     && colcon build --symlink-install \

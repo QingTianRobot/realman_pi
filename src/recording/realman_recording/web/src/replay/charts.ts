@@ -63,6 +63,10 @@ function colorFor(index: number): string {
   return PALETTE[index % PALETTE.length] ?? "#67d391";
 }
 
+function shortName(feature: string): string {
+  return feature.replace(/^(observation|action|quality)\./, "");
+}
+
 // Dimension labels for a feature, mirroring the exporter's canonical metadata so
 // joints/axes are named instead of bare indices.
 function componentLabels(
@@ -141,10 +145,19 @@ export function initCharts(): ChartApi {
     canonical = nextSummary?.canonical ?? {};
     cachedKey = "";
     cachedMarker = null;
-    featureSelect.innerHTML = features
-      .map((feature) => `<option value="${escapeHtml(feature)}">${escapeHtml(feature)}</option>`)
+    // Group the flat feature list into 动作 / 质量 / 状态 optgroups so the
+    // dropdown stays readable instead of a long unlabelled list.
+    const groups: Array<[string, string[]]> = [
+      ["动作", features.filter((feature) => feature.startsWith("action."))],
+      ["质量", features.filter((feature) => feature.startsWith("quality."))],
+      ["状态", features.filter((feature) => !feature.startsWith("action.") && !feature.startsWith("quality."))],
+    ];
+    featureSelect.innerHTML = groups
+      .filter(([, list]) => list.length)
+      .map(([label, list]) =>
+        `<optgroup label="${label}">${list.map((feature) => `<option value="${escapeHtml(feature)}">${escapeHtml(shortName(feature))}</option>`).join("")}</optgroup>`)
       .join("");
-    selectedFeature = features[0] ?? "";
+    selectedFeature = featureSelect.querySelector("option")?.value ?? "";
     dimensions = [];
     selected = new Set();
     countEl.textContent = `${features.length} fields`;

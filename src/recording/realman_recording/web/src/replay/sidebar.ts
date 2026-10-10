@@ -57,6 +57,8 @@ function toast(message: string, error = false): void {
 export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   const searchEl = $<HTMLInputElement>("#replay-search");
   const filterEl = $<HTMLSelectElement>("#replay-filter");
+  const durationMinEl = $<HTMLInputElement>("#replay-duration-min");
+  const durationMaxEl = $<HTMLInputElement>("#replay-duration-max");
   const episodesEl = $("#replay-episodes");
   const hiddenEl = $("#replay-hidden");
   const countEl = $("#replay-count");
@@ -68,11 +70,18 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   function visibleEpisodes(): EpisodeMeta[] {
     const query = searchEl.value.trim().toLowerCase();
     const task = filterEl.value;
+    const minSec = durationMinEl.value ? Number(durationMinEl.value) : null;
+    const maxSec = durationMaxEl.value ? Number(durationMaxEl.value) : null;
     return episodes.filter((episode) => {
       if (task && (episode.task ?? "") !== task) return false;
       if (query) {
         const haystack = `${episode.session_id} ${episode.task ?? ""}`.toLowerCase();
         if (!haystack.includes(query)) return false;
+      }
+      if ((minSec !== null || maxSec !== null) && (episode.fps ?? 0) > 0) {
+        const seconds = (episode.frames || 0) / (episode.fps || 1);
+        if (minSec !== null && seconds < minSec) return false;
+        if (maxSec !== null && seconds > maxSec) return false;
       }
       return true;
     });
@@ -206,6 +215,8 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   hiddenEl.addEventListener("click", onContainerClick);
   searchEl.addEventListener("input", render);
   filterEl.addEventListener("change", render);
+  durationMinEl.addEventListener("input", render);
+  durationMaxEl.addEventListener("input", render);
 
   void refresh();
 

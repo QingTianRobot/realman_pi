@@ -35,22 +35,11 @@
     .replay-camera-grid .empty{grid-column:1/-1;align-self:center}
     .studio-toolbar{min-height:54px}
     .replay-timeline{padding-top:12px;padding-bottom:12px}
-    .layout.replay-layout{grid-template-columns:minmax(0,1.65fr) minmax(300px,1fr);grid-template-rows:390px auto;align-items:start;gap:12px;margin-top:12px}
-    .layout.replay-layout>.grid-stack-item{position:relative!important;inset:auto!important;width:auto!important;height:auto!important;padding:0!important;min-height:0}
-    .layout.replay-layout>.grid-stack-item>.grid-stack-item-content{position:relative!important;inset:auto!important;width:100%!important;height:auto!important;overflow:hidden}
-    .layout.replay-layout>.grid-stack-item:nth-child(1){grid-column:1;grid-row:1;height:390px!important}
-    .layout.replay-layout>.grid-stack-item:nth-child(1)>.grid-stack-item-content{height:100%!important}
-    .layout.replay-layout>.grid-stack-item:nth-child(2),.layout.replay-layout>.motion-3d-panel{display:none!important}
-    .layout.replay-layout>.grid-stack-item:nth-child(3){display:none!important}
-    .layout.replay-layout>.grid-stack-item:nth-child(4){grid-column:2;grid-row:1}
-    .layout.replay-layout>.grid-stack-item:nth-child(6){grid-column:2;grid-row:2}
-    .layout.replay-layout #viewer{height:100%;min-height:0}
-    .layout.replay-layout #previews{display:none}
-    @media(max-width:1100px){.replay-studio{grid-template-columns:190px minmax(0,1fr)}.layout.replay-layout{grid-template-columns:minmax(0,1.4fr) minmax(250px,1fr)}}
-    @media(max-width:700px){.replay-studio{grid-template-columns:1fr}.replay-camera-grid{grid-template-columns:1fr 1fr}.layout.replay-layout{grid-template-columns:1fr}.layout.replay-layout>.grid-stack-item:nth-child(1){grid-column:1;grid-row:auto;height:320px!important}.layout.replay-layout>.grid-stack-item:nth-child(4),.layout.replay-layout>.grid-stack-item:nth-child(6){grid-column:1;grid-row:auto}.studio-toolbar{flex-wrap:wrap}}
+    @media(max-width:1100px){.replay-studio{grid-template-columns:190px minmax(0,1fr)}}
+    @media(max-width:700px){.replay-studio{grid-template-columns:1fr}.replay-camera-grid{grid-template-columns:1fr 1fr}.studio-toolbar{flex-wrap:wrap}}
   </style>
-  <script type="module" crossorigin src="/assets/recording-Rk3lAJxe.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/recording-DXi_5i2U.css">
+  <script type="module" crossorigin src="/assets/recording-D97kS1SE.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/recording-CbU38C11.css">
 </head>
 <body>
   <main class="shell">
@@ -91,6 +80,11 @@
           <div id="sidebar-episodes" class="studio-sidebar-body">
             <input id="replay-search" class="studio-search" type="search" placeholder="搜索 session / task…" aria-label="搜索 Episode">
             <select id="replay-filter" class="studio-select" aria-label="按 task 过滤"><option value="">全部 task</option></select>
+            <div class="episode-duration-filter">
+              <input id="replay-duration-min" type="number" min="0" step="0.5" placeholder="最短秒" aria-label="最短时长(秒)">
+              <span>—</span>
+              <input id="replay-duration-max" type="number" min="0" step="0.5" placeholder="最长秒" aria-label="最长时长(秒)">
+            </div>
             <div id="replay-episodes" class="episode-list"><div class="empty">等待 LeRobot 数据集</div></div>
             <div id="replay-hidden" class="episode-list" style="display:none"></div>
           </div>
@@ -107,7 +101,7 @@
             <div id="replay-cameras" class="replay-camera-grid"><div class="empty">选择一个 Episode 开始回放</div></div>
           </section>
           <section class="panel studio-toolbar">
-            <div class="studio-toolbar-group"><button id="replay-exit" style="display:none">退出回放</button><button id="replay-prev" title="上一帧">‹</button><button id="replay-play" style="display:none">▶ 播放</button><button id="replay-next" title="下一帧">›</button></div>
+            <div class="studio-toolbar-group"><button id="replay-exit" style="display:none">退出回放</button><button id="replay-prev" title="上一帧">‹</button><button id="replay-play" style="display:none">▶ 播放</button><button id="replay-next" title="下一帧">›</button><button id="replay-loop" type="button" title="循环播放">循环</button></div>
             <label>速度 <select id="replay-speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label>
             <span id="replay-frame-label" class="frame-label">— / —</span>
           </section>

@@ -825,27 +825,16 @@ grid.on("change", () => {
   localStorage.setItem(LAYOUT_KEY, JSON.stringify(grid.save(false)));
 });
 
-// 标签页：录制 / 回放。共享的 3D/相机/机械臂/夹爪面板在下方，随当前标签切换数据。
+// 标签页：录制 / 回放。回放只显示 LeRobot Studio 回放工作区；录制页（3D/相机/机械臂/夹爪）整体隐藏。
 function switchTab(tab: "record" | "replay") {
   document.querySelectorAll(".tab").forEach((button) => {
     button.classList.toggle("active", button.getAttribute("data-tab") === tab);
   });
   const recordTab = document.querySelector<HTMLElement>("#tab-record");
   const replayTab = document.querySelector<HTMLElement>("#tab-replay");
-  const layout = document.querySelector<HTMLElement>(".layout.grid-stack");
-  // The record grid (3D viewer + arm/gripper panels) stays visible during
-  // replay and is repurposed by `.replay-layout`; only the live monitoring
-  // chrome (status/export/queue/footer) is hidden via `.replay-mode`.
-  if (recordTab) recordTab.classList.toggle("replay-mode", tab === "replay");
+  if (recordTab) recordTab.style.display = tab === "replay" ? "none" : "";
   if (replayTab) replayTab.style.display = tab === "replay" ? "" : "none";
-  if (tab === "replay") {
-    layout?.classList.add("replay-layout");
-    grid.disable();
-  } else {
-    if (replay) exitReplay();
-    layout?.classList.remove("replay-layout");
-    grid.enable();
-  }
+  if (tab !== "replay" && replay) exitReplay();
 }
 document.querySelectorAll(".tab").forEach((button) => {
   button.addEventListener("click", () => switchTab((button.getAttribute("data-tab") as "record" | "replay")));

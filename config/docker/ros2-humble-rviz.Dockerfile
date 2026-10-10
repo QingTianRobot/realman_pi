@@ -103,8 +103,8 @@ RUN python3 -m pip install --no-cache-dir \
         --requirement /opt/rm65_ws/config/python/recording-requirements.txt
 
 # Custom CasADi + IPOPT inverse kinematics (Pinocchio for FK). Large wheels;
-# give the download a longer timeout.
-RUN python3 -m pip install --no-cache-dir --index-url "${PYPI_INDEX_URL}" --extra-index-url "https://pypi.org/simple" --retries 5 --timeout 120 --requirement /opt/rm65_ws/config/python/ik-requirements.txt
+# give the download the same long timeout as the other pip layers.
+RUN python3 -m pip install --no-cache-dir --index-url "${PYPI_INDEX_URL}" --extra-index-url "https://pypi.org/simple" --retries 5 --timeout 300 --requirement /opt/rm65_ws/config/python/ik-requirements.txt
 
 RUN python3 -m pip install --no-cache-dir \
         --index-url "${PYPI_INDEX_URL}" \

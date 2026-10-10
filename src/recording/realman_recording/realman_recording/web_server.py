@@ -15,6 +15,34 @@ from typing import Any
 from .lerobot_web_replay import LeRobotReplayCatalog, queue_from_manifests
 
 
+def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
+    """Parse a single-range ``Range`` header into an inclusive ``(start, end)`` pair.
+
+    Returns ``None`` when the header is absent, is not a ``bytes=`` range, or is
+    unsatisfiable for the given size.  Only the first range of a multi-range
+    header is honored; the video endpoint serves a single media file.
+    """
+    if not header or not header.startswith("bytes="):
+        return None
+    spec = header[len("bytes="):].split(",", 1)[0]
+    start_s, _, end_s = spec.partition("-")
+    try:
+        if start_s == "":
+            if not end_s:
+                return None
+            suffix = int(end_s)
+            start = max(0, size - suffix)
+            end = size - 1
+        else:
+            start = int(start_s)
+            end = int(end_s) if end_s else size - 1
+    except ValueError:
+        return None
+    if start >= size or start > end:
+        return None
+    return start, min(end, size - 1)
+
+
 class RecordingWebServer:
     def __init__(
         self,
@@ -142,6 +170,9 @@ class RecordingWebServer:
             "/api/lerobot/{session_id}/frames/{frame_index}/cameras/{camera_id}",
             self._lerobot_image,
         )
+        app.router.add_get(
+            "/api/lerobot/{session_id}/video/{camera_id}", self._lerobot_video
+        )
         app.router.add_get("/models/{path:.*}", self._model_asset)
         app.router.add_get("/{path:.*}", self._static_asset)
         self._runner = web.AppRunner(app, access_log=None)
@@ -259,6 +290,45 @@ class RecordingWebServer:
             self._logger.warning(f"LeRobot replay image failed: {error}")
             raise web.HTTPServiceUnavailable(text="LeRobot image is unavailable") from error
         return web.Response(body=image, content_type="image/jpeg", headers={"Cache-Control": "no-store"})
+
+    async def _lerobot_video(self, request: Any) -> Any:
+        from aiohttp import web
+        try:
+            path = await asyncio.to_thread(
+                self._replay.video_path,
+                request.match_info["session_id"],
+                request.match_info["camera_id"],
+            )
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        size = path.stat().st_size
+        rng = _parse_range(request.headers.get("Range"), size)
+        if rng is None:
+            # aiohttp 3.8.1 FileResponse has no Range support; a headerless
+            # request is the only case where the whole-file path is correct.
+            return web.FileResponse(path)
+        start, end = rng
+        resp = web.StreamResponse(
+            status=206,
+            headers={
+                "Content-Type": "video/mp4",
+                "Content-Range": f"bytes {start}-{end}/{size}",
+                "Accept-Ranges": "bytes",
+                "Content-Length": str(end - start + 1),
+            },
+        )
+        await resp.prepare(request)
+        with path.open("rb") as source:
+            source.seek(start)
+            remaining = end - start + 1
+            while remaining > 0:
+                chunk = source.read(min(256 * 1024, remaining))
+                if not chunk:
+                    break
+                await resp.write(chunk)
+                remaining -= len(chunk)
+        await resp.write_eof()
+        return resp
 
     async def _websocket(self, request: Any) -> Any:
         from aiohttp import web

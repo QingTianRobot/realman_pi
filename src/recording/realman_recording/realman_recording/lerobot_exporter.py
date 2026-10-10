@@ -189,18 +189,42 @@ class LeRobotExporter:
         return int(max_gap_sec * 1e9)
 
     @staticmethod
+    def _zero_action_samples(reference: Sequence[TimedSample]) -> list[TimedSample]:
+        """Commanded-zero Cartesian velocity at each reference timestamp.
+
+        An arm that is never commanded during an episode contributes zero action, not a
+        failed export: manual recordings leave all arms idle, and dual-arm teleoperation
+        leaves the non-teleoperated arm zero.
+        """
+        zero = (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)
+        return [TimedSample(timestamp_ns=sample.timestamp_ns, value=zero) for sample in reference]
+
+    @staticmethod
+    def _reference_timeline(streams: dict[str, list[TimedSample]], joint_topics: Sequence[str]) -> Sequence[TimedSample] | None:
+        """Pick a dense, episode-spanning state stream to anchor zero-filled actions."""
+        for topic in joint_topics:
+            samples = streams.get(topic)
+            if samples:
+                return samples
+        return next((samples for samples in streams.values() if samples), None)
+
+    @staticmethod
     def _v3_streams(streams: dict[str, list[TimedSample]], schema: LeRobotV3Schema) -> list[tuple[str, list[TimedSample], AlignmentPolicy]]:
-        declared = ((schema.arm_joint_topics, AlignmentPolicy.LINEAR),
-                    (schema.gripper_position_topics, AlignmentPolicy.FORWARD_FILL),
-                    (schema.arm_action_topics, AlignmentPolicy.LINEAR),
-                    (schema.arm_velocity_topics, AlignmentPolicy.NEAREST),
-                    (schema.gripper_action_topics, AlignmentPolicy.FORWARD_FILL))
+        declared = ((schema.arm_joint_topics, AlignmentPolicy.LINEAR, False),
+                    (schema.gripper_position_topics, AlignmentPolicy.FORWARD_FILL, False),
+                    (schema.arm_action_topics, AlignmentPolicy.LINEAR, True),
+                    (schema.arm_velocity_topics, AlignmentPolicy.NEAREST, False),
+                    (schema.gripper_action_topics, AlignmentPolicy.FORWARD_FILL, False))
+        reference = LeRobotExporter._reference_timeline(streams, schema.arm_joint_topics)
         result = []
-        for topics, policy in declared:
+        for topics, policy, zero_fill in declared:
             for topic in topics:
-                if not streams.get(topic):
+                samples = streams.get(topic)
+                if not samples and zero_fill and reference:
+                    samples = LeRobotExporter._zero_action_samples(reference)
+                if not samples:
                     raise ValueError(f"required LeRobot v3 stream has no samples: {topic}")
-                result.append((topic, streams[topic], policy))
+                result.append((topic, samples, policy))
         return result
 
     @staticmethod

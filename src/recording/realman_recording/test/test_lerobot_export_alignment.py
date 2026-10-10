@@ -1,6 +1,8 @@
 """Exporter alignment tests; run in the recording image with NumPy installed."""
 from pathlib import Path
 
+import pytest
+
 from realman_recording.lerobot_align import TimedSample
 from realman_recording.lerobot_exporter import LeRobotExporter, _split_ee_pose, _split_ee_velocity
 from realman_recording.lerobot_schema import schema_from_parameters
@@ -84,3 +86,45 @@ def test_dataset_root_uses_stable_repo_child_for_collection_directory(tmp_path: 
     (tmp_path / "meta").mkdir()
     (tmp_path / "meta" / "info.json").write_text("{}", encoding="utf-8")
     assert LeRobotExporter._dataset_root(tmp_path, schema) == tmp_path
+
+
+def _three_arm_schema():
+    return schema_from_parameters(
+        repo_id="realman/pi05-three-arm", fps=15.0, arms=["l", "m", "r"],
+        arm_action_topics=["/l/cartesian_velocity/command", "/m/cartesian_velocity/command", "/r/cartesian_velocity/command"],
+        gripper_position_topics=["/gripper_left/position", "/gripper_mid/position", "/gripper_right/position"],
+        gripper_action_topics=[], camera_ids=["front"],
+    )
+
+
+def test_v3_streams_zero_fills_a_never_commanded_arm():
+    schema = _three_arm_schema()
+    joint = [TimedSample(0, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)), TimedSample(100_000_000, (0.1, 0.0, 0.0, 0.0, 0.0, 0.0))]
+    command = [TimedSample(0, (1.0, 0.0, 0.0, 0.0, 0.0, 0.0)), TimedSample(100_000_000, (1.0, 0.0, 0.0, 0.0, 0.0, 0.0))]
+    gripper = [TimedSample(0, 0.0), TimedSample(100_000_000, 0.5)]
+    streams = {
+        "/l/joint_states": joint, "/m/joint_states": joint, "/r/joint_states": joint,
+        "/gripper_left/position": gripper, "/gripper_mid/position": gripper, "/gripper_right/position": gripper,
+        "/l/cartesian_velocity/command": command, "/r/cartesian_velocity/command": command,
+        # Middle arm was never commanded during this episode.
+    }
+    by_name = {name: samples for name, samples, _ in LeRobotExporter._v3_streams(streams, schema)}
+    middle = by_name["/m/cartesian_velocity/command"]
+    assert len(middle) == len(joint)
+    assert [sample.timestamp_ns for sample in middle] == [sample.timestamp_ns for sample in joint]
+    assert all(sample.value == (0.0, 0.0, 0.0, 0.0, 0.0, 0.0) for sample in middle)
+
+
+def test_v3_streams_still_rejects_a_missing_state_stream():
+    schema = _three_arm_schema()
+    joint = [TimedSample(0, (0.0, 0.0, 0.0, 0.0, 0.0, 0.0)), TimedSample(100_000_000, (0.1, 0.0, 0.0, 0.0, 0.0, 0.0))]
+    command = [TimedSample(0, (1.0, 0.0, 0.0, 0.0, 0.0, 0.0)), TimedSample(100_000_000, (1.0, 0.0, 0.0, 0.0, 0.0, 0.0))]
+    gripper = [TimedSample(0, 0.0), TimedSample(100_000_000, 0.5)]
+    streams = {
+        # /m/joint_states missing — this is a recording defect, not an idle arm.
+        "/l/joint_states": joint, "/r/joint_states": joint,
+        "/gripper_left/position": gripper, "/gripper_mid/position": gripper, "/gripper_right/position": gripper,
+        "/l/cartesian_velocity/command": command, "/m/cartesian_velocity/command": command, "/r/cartesian_velocity/command": command,
+    }
+    with pytest.raises(ValueError):
+        LeRobotExporter._v3_streams(streams, schema)

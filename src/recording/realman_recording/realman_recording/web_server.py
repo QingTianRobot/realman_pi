@@ -176,6 +176,8 @@ class RecordingWebServer:
         )
         app.router.add_post("/api/lerobot/{session_id}/delete", self._lerobot_delete)
         app.router.add_post("/api/lerobot/{session_id}/restore", self._lerobot_restore)
+        app.router.add_get("/api/lerobot/trash", self._lerobot_trash)
+        app.router.add_post("/api/lerobot/{session_id}/task", self._lerobot_task)
         app.router.add_get("/models/{path:.*}", self._model_asset)
         app.router.add_get("/{path:.*}", self._static_asset)
         self._runner = web.AppRunner(app, access_log=None)
@@ -288,6 +290,36 @@ class RecordingWebServer:
         try:
             directory = self._session_directory(session_id)
             await asyncio.to_thread(SessionStore.restore_final_session, directory)
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        except RuntimeError as error:
+            raise web.HTTPConflict(text=str(error)) from error
+        return web.json_response({"ok": True})
+
+    async def _lerobot_trash(self, _request: Any) -> Any:
+        """List soft-deleted exported episodes without exposing filesystem paths."""
+        from aiohttp import web
+        try:
+            sessions = await asyncio.to_thread(self._replay.list_hidden)
+            return web.json_response({"sessions": sessions})
+        except Exception as error:  # noqa: BLE001 - read-only endpoint must stay available
+            self._logger.warning(f"LeRobot trash listing failed: {error}")
+            raise web.HTTPServiceUnavailable(text="LeRobot trash is unavailable") from error
+
+    async def _lerobot_task(self, request: Any) -> Any:
+        """Set the user-facing task label on one exported episode."""
+        from aiohttp import web
+        session_id = request.match_info["session_id"]
+        try:
+            body = await request.json()
+        except Exception as error:  # noqa: BLE001 - malformed body is a client error
+            raise web.HTTPBadRequest(text="request body must be JSON") from error
+        task = body.get("task") if isinstance(body, dict) else None
+        if not isinstance(task, str) or not task.strip():
+            raise web.HTTPBadRequest(text="task must be a non-empty string")
+        try:
+            directory = self._session_directory(session_id)
+            await asyncio.to_thread(SessionStore.update_task, directory, task)
         except ValueError as error:
             raise web.HTTPNotFound(text=str(error)) from error
         except RuntimeError as error:

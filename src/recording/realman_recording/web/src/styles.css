@@ -14,6 +14,7 @@
 .episode-main strong{word-break:break-all}
 .episode-action{background:#1c2d45;color:var(--text);border:1px solid #2b4665;border-radius:5px;padding:4px 8px;cursor:pointer;font:11px inherit;white-space:nowrap}
 .episode-action:hover{background:#294463}
+.episode-actions{display:flex;gap:4px}
 .hidden-heading{margin:12px 0 6px;padding-top:10px;border-top:1px solid var(--line);color:var(--muted);font:11px ui-monospace,Menlo,monospace;letter-spacing:.06em}
 /* Synchronized replay video tiles. */
 .replay-camera-grid .camera-card video{display:block;width:100%;height:100%;object-fit:contain;background:#080b12}

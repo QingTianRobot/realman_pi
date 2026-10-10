@@ -29,10 +29,9 @@ export type SidebarApi = {
   setActive(sessionId: string | null): void;
 };
 
-// Hidden episodes are only known locally: `/api/lerobot` drops non-ADOPTED
-// sessions, so the restore affordance must come from the browser's memory of
-// what it hid. Persisting them keeps "restore" usable across a page reload.
-const HIDDEN_KEY = "recording-hidden-episodes-v1";
+// Hidden episodes come from the backend `/api/lerobot/trash` listing, which
+// returns DELETED sessions that `/api/lerobot` drops. Restore is therefore a
+// server round-trip rather than a browser-local registry.
 
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector(selector) as T;
 
@@ -62,25 +61,8 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   const countEl = $("#replay-count");
 
   let episodes: EpisodeMeta[] = [];
-  let hidden: EpisodeMeta[] = loadHidden();
+  let hidden: EpisodeMeta[] = [];
   let activeId: string | null = null;
-
-  function loadHidden(): EpisodeMeta[] {
-    try {
-      const parsed = JSON.parse(localStorage.getItem(HIDDEN_KEY) ?? "[]");
-      return Array.isArray(parsed) ? (parsed as EpisodeMeta[]) : [];
-    } catch {
-      return [];
-    }
-  }
-
-  function saveHidden(): void {
-    try {
-      localStorage.setItem(HIDDEN_KEY, JSON.stringify(hidden));
-    } catch {
-      /* storage unavailable is not fatal */
-    }
-  }
 
   function visibleEpisodes(): EpisodeMeta[] {
     const query = searchEl.value.trim().toLowerCase();
@@ -107,10 +89,10 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   function row(episode: EpisodeMeta, kind: "visible" | "hidden"): string {
     const task = episode.task ? `<small>${escapeHtml(episode.task)}</small>` : "";
     const active = kind === "visible" && activeId === episode.session_id ? " active" : "";
-    const button = kind === "visible"
-      ? `<button class="episode-action" data-action="hide" data-session="${escapeHtml(episode.session_id)}" title="隐藏该 episode">隐藏</button>`
+    const buttons = kind === "visible"
+      ? `<div class="episode-actions"><button class="episode-action" data-action="edit" data-session="${escapeHtml(episode.session_id)}" title="编辑 task 标签">编辑</button><button class="episode-action" data-action="hide" data-session="${escapeHtml(episode.session_id)}" title="隐藏该 episode">隐藏</button></div>`
       : `<button class="episode-action" data-action="restore" data-session="${escapeHtml(episode.session_id)}" title="恢复该 episode">恢复</button>`;
-    return `<div class="episode-item${active}" data-session="${escapeHtml(episode.session_id)}"><div class="episode-main"><strong>${escapeHtml(episode.session_id)}</strong>${task}<small>${episode.frames} 帧 · ${episode.fps} Hz</small></div>${button}</div>`;
+    return `<div class="episode-item${active}" data-session="${escapeHtml(episode.session_id)}"><div class="episode-main"><strong>${escapeHtml(episode.session_id)}</strong>${task}<small>${episode.frames} 帧 · ${episode.fps} Hz</small></div>${buttons}</div>`;
   }
 
   function render(): void {
@@ -120,11 +102,6 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
       ? list.map((episode) => row(episode, "visible")).join("")
       : '<div class="empty">暂无已导出 episode</div>';
 
-    // Drop any "hidden" entry that the backend reports as visible again
-    // (e.g. restored from another tab or an earlier session).
-    const visibleIds = new Set(episodes.map((episode) => episode.session_id));
-    hidden = hidden.filter((episode) => !visibleIds.has(episode.session_id));
-    saveHidden();
     hiddenEl.innerHTML = hidden.length
       ? `<div class="hidden-heading">已隐藏</div>` + hidden.map((episode) => row(episode, "hidden")).join("")
       : "";
@@ -133,13 +110,21 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
 
   async function refresh(): Promise<void> {
     try {
-      const response = await fetch("/api/lerobot");
-      if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      const data = await response.json();
-      episodes = (data.sessions ?? []) as EpisodeMeta[];
+      const [visibleResponse, trashResponse] = await Promise.all([
+        fetch("/api/lerobot"),
+        fetch("/api/lerobot/trash"),
+      ]);
+      if (!visibleResponse.ok) throw new Error(`HTTP ${visibleResponse.status}`);
+      if (!trashResponse.ok) throw new Error(`HTTP ${trashResponse.status}`);
+      const [visibleData, trashData] = await Promise.all([
+        visibleResponse.json(),
+        trashResponse.json(),
+      ]);
+      episodes = (visibleData.sessions ?? []) as EpisodeMeta[];
+      hidden = (trashData.sessions ?? []) as EpisodeMeta[];
     } catch {
       countEl.textContent = "回放不可用";
-      // keep the last known list on a transient failure
+      // keep the last known lists on a transient failure
     }
     renderFilter();
     render();
@@ -148,6 +133,20 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   async function postAction(sessionId: string, action: "delete" | "restore"): Promise<boolean> {
     try {
       const response = await fetch(`/api/lerobot/${encodeURIComponent(sessionId)}/${action}`, { method: "POST" });
+      if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      return true;
+    } catch {
+      return false;
+    }
+  }
+
+  async function postTask(sessionId: string, task: string): Promise<boolean> {
+    try {
+      const response = await fetch(`/api/lerobot/${encodeURIComponent(sessionId)}/task`, {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({ task }),
+      });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
       return true;
     } catch {
@@ -165,25 +164,37 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
       toast(`${verb}失败`, true);
       return;
     }
-    if (action === "delete") {
-      const removed = episodes.find((item) => item.session_id === sessionId);
-      if (removed) hidden.push(removed);
-      episodes = episodes.filter((item) => item.session_id !== sessionId);
-    } else {
-      hidden = hidden.filter((item) => item.session_id !== sessionId);
-    }
-    saveHidden();
-    render();
+    await refresh();
     callbacks.onChanged();
+  }
+
+  async function handleEdit(sessionId: string): Promise<void> {
+    const episode = episodes.find((item) => item.session_id === sessionId);
+    const task = window.prompt("编辑 task 标签", episode?.task ?? "");
+    if (task === null) return;
+    const trimmed = task.trim();
+    if (!trimmed) {
+      toast("task 不能为空", true);
+      return;
+    }
+    const ok = await postTask(sessionId, trimmed);
+    if (!ok) {
+      toast("编辑失败", true);
+      return;
+    }
+    await refresh();
   }
 
   function onContainerClick(event: Event): void {
     const target = (event.target as HTMLElement).closest<HTMLElement>("[data-session]");
     if (!target) return;
     const sessionId = target.dataset.session ?? "";
-    const action = (event.target as HTMLElement).closest<HTMLElement>("[data-action]");
-    if (action) {
-      void handleAction(sessionId, action.getAttribute("data-action") === "hide" ? "delete" : "restore");
+    const actionEl = (event.target as HTMLElement).closest<HTMLElement>("[data-action]");
+    if (actionEl) {
+      const action = actionEl.getAttribute("data-action");
+      if (action === "hide") void handleAction(sessionId, "delete");
+      else if (action === "restore") void handleAction(sessionId, "restore");
+      else if (action === "edit") void handleEdit(sessionId);
       return;
     }
     callbacks.onSelect(sessionId);

@@ -501,6 +501,12 @@ let queueJobs: QueueJob[] = [];
 let latestExportProgress = 0;
 let lastRenderedProgress = -1;
 
+function queueRow(job: QueueJob, label: string): string {
+  const progress = job.export_state === "RUNNING" ? ` · ${Math.round(latestExportProgress * 100)}%` : "";
+  const error = job.error ? ` · ${escapeHtml(job.error)}` : "";
+  return `<div class="queue-row"><span class="queue-session">${escapeHtml(job.session_id)}</span><span class="queue-state">${label}${progress}${error}</span></div>`;
+}
+
 function renderQueue() {
   const active = queueJobs.filter((job) => job.decision === "ADOPTED" && job.export_state);
   if (!active.length) {
@@ -511,20 +517,25 @@ function renderQueue() {
   }
   queuePanel.style.display = "";
   queueCount.textContent = `${active.length} 个会话`;
-  const groups: string[] = [];
-  for (const group of QUEUE_GROUPS) {
-    const members = active.filter((job) => job.export_state === group.state);
+
+  const parts: string[] = [];
+  // Running/queued jobs stay expanded; the rest collapse into a history fold.
+  for (const state of ["RUNNING", "QUEUED"] as const) {
+    const members = active.filter((job) => job.export_state === state);
     if (!members.length) continue;
-    const rows = members
-      .map((job) => {
-        const progress = job.export_state === "RUNNING" ? ` · ${Math.round(latestExportProgress * 100)}%` : "";
-        const error = job.error ? ` · ${escapeHtml(job.error)}` : "";
-        return `<div class="queue-row"><span class="queue-session">${escapeHtml(job.session_id)}</span><span class="queue-state">${group.label}${progress}${error}</span></div>`;
-      })
-      .join("");
-    groups.push(`<div class="queue-group"><span class="queue-group-label">${group.label}</span>${rows}</div>`);
+    const label = QUEUE_GROUPS.find((group) => group.state === state)?.label ?? state;
+    parts.push(`<div class="queue-group"><span class="queue-group-label">${label}</span>${members.map((job) => queueRow(job, label)).join("")}</div>`);
   }
-  queueList.innerHTML = groups.join("");
+  const succeeded = active.filter((job) => job.export_state === "SUCCEEDED");
+  const failed = active.filter((job) => job.export_state === "FAILED");
+  if (succeeded.length || failed.length) {
+    const summary = `${succeeded.length} 完成${failed.length ? ` · ${failed.length} 失败` : ""}`;
+    const body =
+      (succeeded.length ? `<div class="queue-group"><span class="queue-group-label">已完成</span>${succeeded.map((job) => queueRow(job, "已完成")).join("")}</div>` : "") +
+      (failed.length ? `<div class="queue-group"><span class="queue-group-label">失败</span>${failed.map((job) => queueRow(job, "失败")).join("")}</div>` : "");
+    parts.push(`<details class="queue-done"><summary>历史记录 · ${summary}</summary>${body}</details>`);
+  }
+  queueList.innerHTML = parts.join("");
 }
 
 function refreshQueue() {

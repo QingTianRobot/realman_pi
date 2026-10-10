@@ -35,13 +35,13 @@
     base_frames: [l/base_link, m/base_link, r/base_link]
     ee_links: [link_6, link_6, link_6]
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
-    # Cartesian commands use metres/s and radians/s. The current RealMan control
-    # router publishes these TwistStamped commands in each arm's active work
-    # frame (cell), not the URDF base frame. The command header frame is archived
-    # separately and must agree with this configured convention; changing the
-    # controller's active work profile requires updating this list as one unit.
+    # Cartesian commands use metres/s and radians/s. The Pika teleop router publishes
+    # these TwistStamped commands in each arm's pika base work frame (pikabase), not
+    # the URDF base frame. The command header frame is archived separately and must
+    # agree with this configured convention; changing the controller's active work
+    # profile requires updating this list as one unit.
     cartesian_command_representation: velocity
-    cartesian_command_frames: [l/work/cell, m/work/cell, r/work/cell]
+    cartesian_command_frames: [l/work/pikabase, m/work/pikabase, r/work/pikabase]
     # Point this at the immutable result from realman_camera_calibration after a
     # solved hand-eye calibration. Empty keeps 2D data recordable but marks its
     # geometric calibration provenance as UNAVAILABLE.

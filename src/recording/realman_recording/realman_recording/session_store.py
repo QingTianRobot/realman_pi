@@ -27,6 +27,40 @@ def _timestamp_or_now(value: int | None, *, name: str) -> int:
     return value
 
 
+def _validate_subtask_segments(subtasks: list[dict[str, Any]], frame_count: int) -> None:
+    """Reject subtask segments that are malformed, overlapping, or out of bounds.
+
+    Each segment must be ``{"index": int, "label": str, "start_frame": int,
+    "end_frame": int}`` with ``0 <= start_frame <= end_frame < frame_count``.
+    ``index`` must be strictly ascending and segments must not overlap in frame
+    space, so the per-frame ``subtask_index`` mapping is unambiguous.
+    """
+    previous_end = -1
+    previous_index: int | None = None
+    for segment in subtasks:
+        if not isinstance(segment, dict):
+            raise ValueError("each subtask segment must be an object")
+        index = segment.get("index")
+        label = segment.get("label")
+        start = segment.get("start_frame")
+        end = segment.get("end_frame")
+        if not isinstance(index, int) or isinstance(index, bool):
+            raise ValueError("subtask index must be an integer")
+        if not isinstance(label, str) or not label.strip():
+            raise ValueError("subtask label must be a non-empty string")
+        if (not isinstance(start, int) or isinstance(start, bool)
+                or not isinstance(end, int) or isinstance(end, bool)):
+            raise ValueError("subtask frame bounds must be integers")
+        if not 0 <= start <= end < frame_count:
+            raise ValueError("subtask frame bounds must be within the exported frame count")
+        if previous_index is not None and index <= previous_index:
+            raise ValueError("subtask indices must be strictly ascending")
+        if start <= previous_end:
+            raise ValueError("subtask segments must not overlap")
+        previous_index = index
+        previous_end = end
+
+
 class SessionState(str, Enum):
     IDLE = "IDLE"
     PREPARING = "PREPARING"
@@ -321,6 +355,43 @@ class SessionStore:
         if not isinstance(metadata, dict):
             raise RuntimeError("recording metadata is malformed")
         metadata["task"] = task
+        atomic_json_write(final, payload)
+        return payload
+
+    @staticmethod
+    def _export_frame_count(directory: Path) -> int:
+        """Read the exported frame count from the finalized v3 export receipt."""
+        receipt_path = directory / "export" / "lerobot-v3.json"
+        if not receipt_path.is_file():
+            raise RuntimeError("recording session has no export receipt")
+        receipt = json.loads(receipt_path.read_text(encoding="utf-8"))
+        if not isinstance(receipt, dict) or not isinstance(receipt.get("frame_count"), int):
+            raise RuntimeError("recording export receipt has no frame_count")
+        return int(receipt["frame_count"])
+
+    @staticmethod
+    def update_subtasks(directory: str | Path, subtasks: list[dict[str, Any]]) -> dict[str, Any]:
+        """Atomically annotate one successfully exported session with subtask segments.
+
+        Subtask annotation is a deliberate reviewer action on finalized data, so like
+        ``update_task`` it only requires READY + a successful export.  Segments are
+        validated against the exported frame count before they replace any previous
+        annotation; the empty list clears the annotation.
+        """
+        if not isinstance(subtasks, list):
+            raise ValueError("subtasks must be a list of segments")
+        final = Path(directory).resolve() / "manifest.json"
+        if not final.is_file():
+            raise ValueError("recording session has no finalized manifest.json")
+        payload = json.loads(final.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict) or payload.get("state") != "READY":
+            raise RuntimeError("only READY recording sessions can be subtask-annotated")
+        export = payload.get("export") or {}
+        if export.get("state") != "SUCCEEDED":
+            raise RuntimeError("only successfully exported sessions can be subtask-annotated")
+        frame_count = SessionStore._export_frame_count(final.parent)
+        _validate_subtask_segments(subtasks, frame_count)
+        payload["subtasks"] = subtasks
         atomic_json_write(final, payload)
         return payload
 

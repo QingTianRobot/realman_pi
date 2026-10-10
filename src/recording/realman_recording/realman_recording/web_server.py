@@ -12,7 +12,7 @@ import threading
 from pathlib import Path
 from typing import Any
 
-from .lerobot_web_replay import LeRobotReplayCatalog
+from .lerobot_web_replay import LeRobotReplayCatalog, queue_from_manifests
 
 
 class RecordingWebServer:
@@ -33,6 +33,7 @@ class RecordingWebServer:
         self._static_root = Path(static_root).resolve()
         self._manifest = manifest
         self._description_root = Path(description_root).resolve()
+        self._recording_root = Path(recording_root).resolve()
         self._replay = LeRobotReplayCatalog(recording_root, lerobot_export_dir)
         self._logger = logger
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -134,6 +135,7 @@ class RecordingWebServer:
         app.router.add_get("/ws", self._websocket)
         app.router.add_get("/preview/{camera_id}.jpg", self._preview)
         app.router.add_get("/api/lerobot", self._lerobot_list)
+        app.router.add_get("/api/lerobot/queue", self._lerobot_queue)
         app.router.add_get("/api/lerobot/{session_id}/summary", self._lerobot_summary)
         app.router.add_get("/api/lerobot/{session_id}/frames", self._lerobot_frames)
         app.router.add_get(
@@ -208,6 +210,16 @@ class RecordingWebServer:
             # SDK or a decoder failure is a distinct operational state and must
             # be visible to the UI as 503 without taking down live WebSocket data.
             raise web.HTTPServiceUnavailable(text="LeRobot replay is unavailable") from error
+
+    async def _lerobot_queue(self, _request: Any) -> Any:
+        """Return the per-session conversion queue without exposing filesystem paths."""
+        from aiohttp import web
+        try:
+            jobs = await asyncio.to_thread(queue_from_manifests, self._recording_root)
+            return web.json_response({"jobs": jobs})
+        except Exception as error:  # noqa: BLE001 - read-only endpoint must stay available
+            self._logger.warning(f"LeRobot queue listing failed: {error}")
+            raise web.HTTPServiceUnavailable(text="LeRobot queue is unavailable") from error
 
     async def _lerobot_frames(self, request: Any) -> Any:
         from aiohttp import web

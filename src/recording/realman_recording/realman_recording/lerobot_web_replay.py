@@ -21,6 +21,44 @@ _REPLAY_IMAGE_SIZE = (640, 360)
 _REPLAY_JPEG_QUALITY = 65
 
 
+def queue_from_manifests(recording_root: Path) -> list[dict]:
+    """Return the per-session conversion queue from finalized manifests.
+
+    Scans ``<recording_root>/<session_id>/manifest.json`` — the durable source of
+    truth written by the recorder — and returns one row per session with a
+    decision/export receipt.  A session directory with a missing or corrupt
+    manifest is skipped rather than failing the whole listing.  Rows are ordered
+    by their requested export time.
+    """
+    root = Path(recording_root)
+    if not root.is_dir():
+        return []
+    jobs = []
+    for directory in root.iterdir():
+        if not directory.is_dir() or directory.name.startswith("."):
+            continue
+        manifest = directory / "manifest.json"
+        if not manifest.is_file():
+            continue
+        try:
+            payload = json.loads(manifest.read_text(encoding="utf-8"))
+        except (OSError, json.JSONDecodeError):
+            continue
+        if not isinstance(payload, dict):
+            continue
+        export = payload.get("export") or {}
+        jobs.append({
+            "session_id": directory.name,
+            "decision": payload.get("decision"),
+            "export_state": export.get("state"),
+            "requested_realtime_ns": export.get("requested_realtime_ns") or 0,
+            "error": export.get("message", ""),
+        })
+    jobs.sort(key=lambda j: j["requested_realtime_ns"])
+    return jobs
+
+
+
 @dataclass(frozen=True)
 class ReplayDatasetRef:
     """Stable public identity for one exported recording episode."""

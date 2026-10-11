@@ -17,6 +17,7 @@ import threading
 import time
 from typing import Any, Callable, Mapping, Sequence
 
+from .validation import positive_int
 from .motion_types import MotionSettings, ReferenceType
 from .quaternion_math import conjugate, multiply, normalize
 from .pose_math import euler_to_quaternion, quaternion_to_euler
@@ -466,10 +467,10 @@ class CartesianPoseSession:
         controller, ros_frame = _frame_value(expected)
         if reference_name != controller:
             raise ValueError(f"reference_name must equal active verified frame {controller!r}")
-        period = _positive_int(_field(goal, "control_period_ms"), "control_period_ms")
+        period = positive_int(_field(goal, "control_period_ms"), "control_period_ms")
         if period > self.settings.velocity_watchdog_ms:
             raise ValueError("control_period_ms must not exceed the configured watchdog")
-        watchdog = _positive_int(_field(goal, "watchdog_ms"), "watchdog_ms")
+        watchdog = positive_int(_field(goal, "watchdog_ms"), "watchdog_ms")
         if watchdog > self.settings.velocity_watchdog_ms:
             raise ValueError("watchdog_ms exceeds the configured watchdog")
         linear_speed = _bounded_positive(_field(goal, "max_linear_speed_mps"), self.settings.max_linear_speed_mps, "max_linear_speed_mps")
@@ -596,12 +597,6 @@ def _frame_value(value: Any) -> tuple[str, str]:
 
 def _field(value: Any, name: str) -> Any:
     return value.get(name) if isinstance(value, Mapping) else getattr(value, name)
-
-
-def _positive_int(value: Any, name: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{name} must be a positive integer")
-    return value
 
 
 def _bounded_positive(value: Any, maximum: float, name: str) -> float:

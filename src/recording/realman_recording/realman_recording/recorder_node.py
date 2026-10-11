@@ -30,7 +30,6 @@ from .camera_workers import (
     CameraSource,
     RosImageArchive,
     camera_summary_error_count,
-    image_to_jpeg,
     load_camera_sources,
 )
 from .lerobot_exporter import ExportRequest, LeRobotExporter
@@ -572,7 +571,6 @@ class RecordingRecorderNode(Node):
             f"{reason}; MCAP write/close errors: {archive_write_errors}; "
             f"camera JPEG write errors: {camera_write_errors}"
         )
-        directory = store.session.directory
         store.finalize(
             final_success,
             ended_realtime_ns=self._receipt_wall_clock.now().nanoseconds,

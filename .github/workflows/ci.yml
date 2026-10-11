@@ -1,0 +1,84 @@
+name: CI
+
+# Lightweight checks that need no ROS or hardware. ROS-dependent tests (rclpy, rosbag2, generated
+# messages) still have to be run in the Humble image, see website/docs/development/testing.md.
+# GitHub only discovers workflows here; lint rules live in config/python/ruff.toml.
+
+on:
+  pull_request:
+  push:
+    branches: [main]
+
+permissions:
+  contents: read
+
+concurrency:
+  group: ci-${{ github.ref }}
+  cancel-in-progress: true
+
+jobs:
+  lint:
+    name: Lint and shell syntax
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Ruff (project-owned Python)
+        run: |
+          python -m pip install ruff
+          ruff check --config config/python/ruff.toml src tools scripts docker
+      - name: Shell syntax
+        run: |
+          sudo apt-get update -qq && sudo apt-get install -y -qq zsh
+          bash -n rm65 start_sensors.sh scripts/*.sh docker/*.sh tests/*.sh
+          zsh -n functions.zsh
+
+  python-tests:
+    name: Python unit tests (no ROS)
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-python@v5
+        with:
+          python-version: "3.10"
+      - name: Install test dependencies
+        run: python -m pip install pytest pyyaml numpy aiohttp
+      - name: Run the suites that import without rclpy
+        run: |
+          set -e
+          for suite in \
+            src/driver/realman_robot_driver:test \
+            src/driver/realman_web_control:test \
+            src/driver/realman_msgs:test \
+            src/gripper/gripper_ros2:test \
+            src/behavior/realman_bt_mock:test \
+            src/sensor/realman_camera_calibration:test/test_config.py \
+            tools/velocity_follow:tests; do
+            dir="${suite%%:*}"; target="${suite#*:}"
+            echo "== $dir"
+            (cd "$dir" && PYTHONPATH=. python -m pytest -q "$target" -p no:cacheprovider)
+          done
+
+  site:
+    name: Website build, style gate and e2e
+    runs-on: ubuntu-latest
+    steps:
+      - uses: actions/checkout@v4
+      - uses: actions/setup-node@v4
+        with:
+          node-version: 22
+          cache: npm
+          cache-dependency-path: website/package-lock.json
+      - run: npm ci
+        working-directory: website
+      - name: Build
+        run: npm run build
+        working-directory: website
+      - name: Style gate
+        run: node ../.agents/skills/realman-site-design-system/scripts/check-site-style.mjs
+        working-directory: website
+      - name: End-to-end tests
+        run: npm run test:e2e
+        working-directory: website

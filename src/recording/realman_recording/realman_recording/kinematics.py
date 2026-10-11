@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 from dataclasses import dataclass
-from math import acos, cos, isfinite, pi, sin, sqrt
+from math import acos, cos, isfinite, sin, sqrt
 from pathlib import Path
 from typing import Iterable
 from xml.etree import ElementTree as ET
@@ -161,7 +161,7 @@ def finite_difference(samples: list[tuple[int, tuple[float, ...]]]) -> list[tupl
     if not width or any(len(value) != width for _, value in samples):
         raise ValueError("sample vectors must have one non-zero dimension")
     result = []
-    for index, (timestamp, _value) in enumerate(samples):
+    for index in range(len(samples)):
         left = max(0, index - 1)
         right = min(len(samples) - 1, index + 1)
         dt = (samples[right][0] - samples[left][0]) / 1e9

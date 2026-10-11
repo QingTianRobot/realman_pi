@@ -52,6 +52,7 @@ description: 仓库根目录 config/ 下每个配置文件的职责、消费者�
 | `docker/ros2-humble-rviz.Dockerfile` | 多阶段镜像：Node 构建 BT 编辑器静态文件 → ROS 2 Humble 运行镜像 |
 | `python/realman-sdk-requirements.txt` | 固定 `Robotic_Arm==1.1.6`（只有官方 PyPI 提供，镜像源需回退） |
 | `python/ik-requirements.txt` | 自定义 IK 依赖 `casadi`；**刻意不含 pinocchio**（见驱动页） |
+| `python/ruff.toml` | 项目自有 Python 的 lint 规则（pyflakes、语法错误、几条会抓真 bug 的 bugbear 规则），CI 用同一份配置；vendor 目录已排除 | [测试与验证](../development/testing) |
 | `python/gripper-requirements.txt` / `policy-bridge-requirements.txt` | 夹爪 Modbus 与策略桥传输依赖 |
 | `python/recording-requirements.txt` | 录制导出依赖：`lerobot==0.4.4`、Pillow、PyArrow（有意不装 `rerun-sdk`） |
 | `recording/vite.config.mjs`、`recording/playwright.config.mjs` | 录制回放前端（`npm run build:recording`）的构建与浏览器测试配置 |

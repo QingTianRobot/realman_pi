@@ -13,7 +13,6 @@ import argparse
 import logging
 import sys
 
-import numpy as np
 import yaml
 
 log = logging.getLogger("ros2_bridge")

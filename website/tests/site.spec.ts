@@ -411,3 +411,90 @@ test("TF explorer lists the URDF frame chain and highlights parent and child on 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(1);
 });
+
+test("docs-data.json carries the numbers and modes straight from the configs", async ({ request }) => {
+  const data = await (await request.get("docs-data.json")).json();
+  const motion = YAML.parse(await readFile(resolve("../config/ros/realman_motion.yaml"), "utf8"));
+  const pika = YAML.parse(await readFile(resolve("../config/ros/pika_config.yaml"), "utf8"));
+  const gripper = YAML.parse(await readFile(resolve("../config/ros/gripper.yaml"), "utf8"));
+  expect(data.motion.l.max_linear_speed_mps).toBe(motion.robots.l.max_linear_speed_mps);
+  expect(data.pika.velocity.max_linear_speed_mps).toBe(pika.pika_velocity.max_linear_speed_mps);
+  const first = gripper.buses[0].grippers[0];
+  expect(data.grippers[first.name].openPosition).toBe(first.open_position);
+  // Same catalog order the executor reads from control.xml.
+  expect(data.modes.map((mode: { id: string }) => mode.id)).toEqual(["web", "keyboard", "policy", "pikaposition", "pikavelocity", "pikamixed", "none"]);
+});
+
+test("interactive doc blocks respond: architecture map, mode explorer, limit explorer", async ({ page }) => {
+  await page.goto("architecture/overview");
+  const map = page.locator(".arch-map");
+  await map.scrollIntoViewIfNeeded();
+  await map.getByRole("link", { name: "行为树 · 输入模式" }).hover();
+  await expect(map.locator(".arch-note")).toContainText("决定当前哪一个输入拥有控制权");
+  await expect(map.locator(".arch-block.related").first()).toBeVisible();
+  await expect(map.locator(".arch-block.dim").first()).toBeVisible();
+
+  await page.goto("development/pika-teleop");
+  const modes = page.locator(".mode-explorer");
+  await modes.scrollIntoViewIfNeeded();
+  await modes.getByRole("tab", { name: "pikavelocity" }).click();
+  // 0.25 m/s is pika_velocity.max_linear_speed_mps in pika_config.yaml, shown from the generated data.
+  await expect(modes.locator(".mode-explorer-stats")).toContainText("0.25 m/s");
+  await modes.getByRole("tab", { name: "keyboard" }).click();
+  await expect(modes.locator(".mode-explorer-flow")).toContainText("keyboard_control_router");
+
+  const limits = page.locator(".limit-explorer");
+  await limits.scrollIntoViewIfNeeded();
+  await limits.getByRole("tab", { name: "Pika 速度" }).click();
+  await limits.locator('input[type="range"]').fill("1.2");
+  await expect(limits.locator(".mode-explorer-stats")).toContainText("已被限幅");
+  await limits.getByRole("tab", { name: "M" }).click();
+  // The middle arm has no Pika channel, so that client is disabled.
+  await expect(limits.getByRole("tab", { name: "Pika 速度" })).toBeDisabled();
+});
+
+test("URDF figure, TF explorer and annotated screenshot work inside doc pages", async ({ page }) => {
+  await page.goto("development/gripper-control");
+  const figure = page.locator(".urdf-figure").first();
+  await figure.scrollIntoViewIfNeeded();
+  await expect(figure).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+  const slider = figure.locator(".urdf-figure-row input").last();
+  await slider.fill("0");
+  // Fully closed: the readout shows each gripper's own close position from gripper.yaml.
+  await expect(figure.locator(".urdf-figure-readout")).toContainText("0.00 rad");
+
+  await page.goto("architecture/tf-tree");
+  const explorer = page.locator(".tf-explorer");
+  await explorer.scrollIntoViewIfNeeded();
+  await expect(explorer).toHaveAttribute("data-state", "ready", { timeout: 30_000 });
+
+  await page.goto("development/realman-web-control");
+  const marks = page.locator(".doc-figure-mark");
+  await expect(marks).toHaveCount(6);
+  await marks.nth(2).hover();
+  await expect(page.locator(".doc-figure-legend li.active")).toContainText("全局输入模式");
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test("pages with the new doc blocks never scroll horizontally on a phone", async ({ page }) => {
+  await page.setViewportSize({ width: 375, height: 812 });
+  const pages = [
+    "development/",
+    "architecture/overview",
+    "architecture/tf-tree",
+    "guide/getting-started",
+    "development/pika-teleop",
+    "development/gripper-control",
+    "development/realman-driver-scaffold",
+    "development/realman-web-control",
+    "development/production-operations",
+    "development/recording-platform",
+  ];
+  for (const path of pages) {
+    await page.goto(path);
+    await page.waitForLoadState("networkidle");
+    const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+    expect(overflow, path).toBeLessThanOrEqual(1);
+  }
+});

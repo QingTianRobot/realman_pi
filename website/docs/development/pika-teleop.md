@@ -51,6 +51,12 @@ flowchart LR
 三种模式共用同一套门控：进入前由行为树先用 `ThreeArmMoveJ` 把 l/m/r 移到 `pika_default_pose`，成功后才发布
 `ACTIVE`；其它模式下 router 丢弃 Pika 输入，不自动开合夹爪。
 
+### 交互：逐个模式看数据怎么走
+
+点一个模式，看它的输入、router、driver session、参考系和关键限值。模式列表和数字都是构建时从 `control.xml` 与各 YAML 复制的，不会和配置脱节。
+
+<ModeExplorer />
+
 ## 路由与门控
 
 同一 launch 还启动 `pika_control_router`。它接收 executor 的 active mode，并只为 l/r 管理 Pika
@@ -62,6 +68,12 @@ Action session，同时将夹爪百分比转发到 `/gripper_left/percentage/com
 
 
 ## 速度模式（`pikavelocity`）
+
+::: tip 试一试
+下面的试算器按真实配置计算：选臂和客户端，拖动请求速度，看哪一层限值生效、加速到该速度要多久。
+:::
+
+<LimitExplorer />
 
 `pikavelocity` 是实时速度流，而不是单点位置目标。其逐会话限值来自
 [`config/ros/pika_config.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/pika_config.yaml) 的 `pika_velocity`：线速度

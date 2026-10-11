@@ -169,6 +169,10 @@ AG2F90-C（厂商包名 `ctag2f90c`）是 Changingtek 的两指平行夹爪。�
 | 厂商许可（BSD，ROS-Industrial） | `src/rm65_description/meshes/ctag2f90c/LICENSE` |
 | 安装位置（挂在哪一节、位姿）与开合端点 | [`config/ros/end_effectors.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/end_effectors.yaml) |
 
+拖动"夹爪"滑块：下方读数把开合度换算成驱动关节角和三个夹爪各自的设备位置（端点取自 `gripper.yaml`），所以不同行程单位的夹爪在这里一目了然。
+
+<UrdfFigure model="arm-gripper" controls animate caption="AG2F90-C 挂在 link_6 上：开合度 → 驱动关节 Left_1_Joint → 各夹爪的设备位置" />
+
 **模型结构**：`base_link` 是安装面，指尖朝 `+z`，指垫在 `base_link` 前方约 `0.18–0.20 m` 处。**只有 `Left_1_Joint`（`0..1 rad`）是驱动关节**，其余可动关节（`Left_Support`、`Left_2`、`Right_1`、`Right_2`、`Right_Support`）都用 `mimic` 跟随它；两个指垫是固定关节。对 URDF 做正运动学，`0 rad` 时指垫间距约 `2.5 mm`（闭合），`1 rad` 时约 `99 mm`（全开，指垫坐标系中心间距）。
 
 **对厂商文件的两处本地修改**（URDF 头部注释里也有说明）：

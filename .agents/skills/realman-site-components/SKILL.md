@@ -17,7 +17,13 @@ Compose pages only from these blocks. Copy the template verbatim, change text/li
 | TF network | `templates/tf-network.md` | in a section | one `.tf-branch` per arm; `arm-l/m/r` colors fixed |
 | TF explorer | `templates/tf-explorer.md` | home TF section | `<TfExplorer />` only; data comes from the URDF at runtime; exposes `data-state`, `data-selected-arm`, `data-hovered-frame`, `data-frame-count` |
 | Final CTA | `templates/final-cta.md` | last on home | dark band, one `rm-action` |
-| Doc page | `templates/doc-page.md` | `docs/**` | frontmatter `title` + `description`; no custom HTML |
+| Doc page | `templates/doc-page.md` | `docs/**` | frontmatter `title` + `description`; Markdown plus the doc blocks below; no raw layout HTML |
+| Glance strip | `templates/doc-blocks.md` | top of long doc pages | `<Glance :items="[{label,value}]" />`, 3–4 facts |
+| Link cards | `templates/doc-blocks.md` | hub pages | `<Cards><Card kicker title href>text</Card></Cards>` |
+| Steps | `templates/doc-blocks.md` | procedures | `<Steps>` around a Markdown ordered list |
+| Figure | `templates/doc-blocks.md` | screenshots | `<DocFigure src alt caption :marks>`; images live in `website/docs-assets/screenshots/` (regenerate with `scripts/capture-screenshots.mjs`) |
+| URDF figure | `templates/doc-blocks.md` | any page about arms/grippers | `<UrdfFigure model="arm\|gripper\|arm-gripper" controls frames animate focus caption />` |
+| Interactive explainers | `templates/doc-blocks.md` | architecture / Pika / driver pages | `<ArchitectureMap />`, `<ModeExplorer />`, `<LimitExplorer />`, `<TfExplorer />` (data from `docs-data.json` / the URDF; never hard-code numbers) |
 | Mermaid | `templates/doc-page.md` | doc pages | ` ```mermaid `; rules below |
 
 ## Fixed behaviours (do not reimplement)

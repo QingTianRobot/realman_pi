@@ -5,6 +5,8 @@ description: RealMan 驱动输出的隔离录制、预检、低清展示与 LeRo
 
 # 独立数据录制平台
 
+<Glance :items="[{ label: '角色', value: '只订阅，不发命令' }, { label: '格式', value: 'MCAP → LeRobot v3' }, { label: '回放页', value: ':8770（回环）' }, { label: '控制入口', value: '/recording/manage' }]" />
+
 `realman_recording` 是一个**订阅式数据录制与回放** ROS 2 节点组：它只订阅已有的驱动与夹爪输出，不创建 `Robotic_Arm`/RealMan SDK 客户端，也不发布机械臂运动命令。`./rm65 up` 通过 `realman_recording` 容器随生产 ROS 图一起启动它（默认开启）；正常实时展示继续由 `realman_web_control` 提供。recording 自带网页仅用于录制与已导出 episode 的只读回放，不发起任何录制控制；上游系统通过 `/recording/manage` Service 控制录制生命周期，不能复用或代理 `realman_web_control` 的运动面板。
 
 录制和数据集转换是两个阶段：停止时只原子收尾原始 MCAP/JPEG 帧 session；转换由独立的 LeRobot worker 完成。`config/ros/recording.yaml` 的 `auto_export_on_stop`（默认 `true`）让**干净收尾**的 session 在 STOP 后自动采用并入队导出，由单个串行 worker 一次只转换一个；有 MCAP 或相机写错误的 `FAILED` session 永远不会自动导出。设为 `false` 恢复手动 `ADOPT`。转换占用的 CPU、GPU、图像解码或失败均不得减慢下一次 ROS 数据录制。

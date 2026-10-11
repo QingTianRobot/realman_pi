@@ -95,6 +95,8 @@ curl -s http://127.0.0.1:8765/api/layout | head -c 200
 
 驱动容器里，`{l,m,r}_realman_driver` 是 PID 1（`ros2 launch`）的子进程，launch **不会自动拉起**它们，各进程互不影响。需要只重启一台臂的驱动或只重启夹爪 manager 时：
 
+<Steps>
+
 1. 取该进程的环境：`cat /proc/<兄弟进程 pid>/environ`（用同类进程的环境）。
 2. 发 `SIGINT` 让它干净退出（约 1 秒）：`kill -INT <pid>`。
 3. 用相同的可执行文件和参数重新启动，参数文件用 launch 生成的 `/tmp/launch_params_<hash>`，并指定节点名与命名空间（驱动）：
@@ -107,6 +109,8 @@ curl -s http://127.0.0.1:8765/api/layout | head -c 200
    ```
 
    夹爪 manager 同理：`gripper_ros2/lib/gripper_ros2/gripper_manager --ros-args -r __node:=gripper_manager --params-file /tmp/launch_params_<hash>`，用 `setsid nohup … > /opt/rm65_ws/logs/gripper_manager.<时间>.log` 启动；启动本身不会让夹爪动作。
+
+</Steps>
 
 两个坑：
 

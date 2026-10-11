@@ -71,6 +71,8 @@ jobs:
           node-version: 22
           cache: npm
           cache-dependency-path: website/package-lock.json
+      - name: zsh (the startup-entries e2e specs source functions.zsh)
+        run: sudo apt-get update -qq && sudo apt-get install -y -qq zsh
       - run: npm ci
         working-directory: website
       - name: Build

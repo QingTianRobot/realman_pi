@@ -1,7 +1,12 @@
-// LeRobot Studio-style chart panel: one feature is selected, and every one of its
-// dimensions (joints / ee axes / sync sources) is plotted on a single aggregate
-// chart with a per-dimension colour. A per-joint filter toggles dimensions, and a
-// "split" view renders one mini-chart per dimension instead of overlaying them.
+// LeRobot Studio-style chart panel, rendered with the same charting library
+// LeRobot Studio uses (uPlot). One feature is selected and every dimension is
+// plotted as a colour-coded series. uPlot provides the y-axis ticks, gridlines
+// and drag-to-zoom, so the aggregate chart needs no hand-rolled SVG. A per-joint
+// filter toggles dimensions, and a "split" view renders one mini-chart per
+// dimension (hand-rolled SVG, since uPlot is overkill for 48px strips).
+
+import uPlot from "uplot";
+import "uplot/dist/uPlot.min.css";
 
 export type HealthMeta = {
   valid_frames?: number;
@@ -51,8 +56,6 @@ function numericComponents(value: ReplayFeatureValue | undefined): number[] {
   return [];
 }
 
-// Per-dimension colour: a stable, high-contrast palette cycled across the axes of
-// a feature, matching the existing green/blue/amber recording accent set.
 const PALETTE = [
   "#67d391", "#55a6ff", "#f4bb63", "#ff717c", "#b18cff", "#4ec9d8",
   "#e8c547", "#ff9e64", "#7ee787", "#79c0ff", "#f97583", "#d2a8ff",
@@ -117,9 +120,8 @@ function componentLabels(
   return Array.from({ length: count }, (_, index) => `${feature.split(".").at(-1)}[${index}]`);
 }
 
-const WIDTH = 320;
-const HEIGHT = 160;
-const PAD = 8;
+const PAD = 10;
+const SPLIT_HEIGHT = 48;
 
 export function initCharts(): ChartApi {
   const featureSelect = $<HTMLSelectElement>("#replay-feature-select");
@@ -128,6 +130,7 @@ export function initCharts(): ChartApi {
   const chartEl = $("#replay-feature-chart");
   const splitEl = $("#replay-split-charts");
   const splitToggle = $<HTMLButtonElement>("#replay-split-toggle");
+  const resetZoomBtn = $<HTMLButtonElement>("#replay-zoom-reset");
   const rawEl = $("#replay-feature-raw");
   const countEl = $("#replay-feature-count");
 
@@ -138,18 +141,15 @@ export function initCharts(): ChartApi {
   let dimensions: string[] = [];
   let selected = new Set<number>();
   let splitMode = false;
-  let cachedKey = "";
-  let cachedMarker: SVGLineElement | null = null;
   let lastFrames: ChartFrame[] = [];
   let lastIndex = 0;
+  let plot: uPlot | null = null;
+  let lastSeriesSignature = "";
+  let markerIndex = -1;
 
   function setFeatures(features: string[], nextSummary?: ChartSummary): void {
     summary = nextSummary?.features ?? {};
     canonical = nextSummary?.canonical ?? {};
-    cachedKey = "";
-    cachedMarker = null;
-    // Group the flat feature list into 动作 / 质量 / 状态 optgroups so the
-    // dropdown stays readable instead of a long unlabelled list.
     const groups: Array<[string, string[]]> = [
       ["动作", features.filter((feature) => feature.startsWith("action."))],
       ["质量", features.filter((feature) => feature.startsWith("quality."))],
@@ -164,6 +164,7 @@ export function initCharts(): ChartApi {
     renderedFeature = "";
     dimensions = [];
     selected = new Set();
+    lastSeriesSignature = "";
     countEl.textContent = `${features.length} fields`;
     jointFilterEl.innerHTML = "";
     legendEl.innerHTML = "";
@@ -174,7 +175,6 @@ export function initCharts(): ChartApi {
 
   function renderJointFilter(labels: string[]): void {
     if (selectedFeature === renderedFeature) {
-      // Same feature: only the selected count may have changed via chip toggles.
       const count = jointFilterEl.querySelector(".joint-count");
       if (count) count.textContent = `已选 ${selected.size}/${labels.length}`;
       return;
@@ -183,9 +183,6 @@ export function initCharts(): ChartApi {
     dimensions = labels;
     selected = new Set(labels.map((_, index) => index));
 
-    // Group dimensions by arm (l/m/r) so an 18-joint feature collapses into
-    // three labelled groups instead of a wall of flat chips. Features without a
-    // single-letter arm prefix (e.g. sync sources) share one "维度" group.
     const groups = new Map<string, number[]>();
     labels.forEach((label, index) => {
       const key = /^([a-z])\./.exec(label)?.[1] ?? "维度";
@@ -213,8 +210,7 @@ export function initCharts(): ChartApi {
         const index = Number(input.dataset.dim);
         if (input.checked) selected.add(index);
         else selected.delete(index);
-        cachedKey = "";
-        cachedMarker = null;
+        lastSeriesSignature = "";
         renderChart();
         const count = jointFilterEl.querySelector(".joint-count");
         if (count) count.textContent = `已选 ${selected.size}/${labels.length}`;
@@ -227,8 +223,7 @@ export function initCharts(): ChartApi {
         jointFilterEl.querySelectorAll<HTMLInputElement>("input[data-dim]").forEach((input) => {
           input.checked = all;
         });
-        cachedKey = "";
-        cachedMarker = null;
+        lastSeriesSignature = "";
         renderChart();
         const count = jointFilterEl.querySelector(".joint-count");
         if (count) count.textContent = `已选 ${selected.size}/${labels.length}`;
@@ -236,83 +231,127 @@ export function initCharts(): ChartApi {
     });
   }
 
-  function renderAggregate(frames: ChartFrame[], index: number): void {
-    const series = dimensions
-      .map((_, dim) => ({ dim, values: frames.map((item) => numericComponents(item.features?.[selectedFeature])[dim] ?? Number.NaN) }))
-      .filter((entry) => selected.has(entry.dim));
-    if (!series.length) {
+  function selectedDimensions(): number[] {
+    return dimensions.map((_, dim) => dim).filter((dim) => selected.has(dim));
+  }
+
+  function renderAggregate(): void {
+    const dims = selectedDimensions();
+    const signature = `${selectedFeature}\u0000${dims.join(",")}\u0000${lastFrames.length}\u0000${lastFrames[0]?.frame_index ?? 0}`;
+    if (!dims.length) {
+      if (plot) { plot.destroy(); plot = null; lastSeriesSignature = ""; }
       chartEl.innerHTML = "";
       legendEl.innerHTML = "";
       return;
     }
-    const all = series.flatMap((entry) => entry.values).filter((value) => Number.isFinite(value));
-    if (!all.length) {
+    if (!plot || signature !== lastSeriesSignature) {
+      if (plot) { plot.destroy(); plot = null; }
+      lastSeriesSignature = signature;
+      const series: uPlot.Series[] = [
+        { label: "帧" },
+        ...dims.map((dim) => ({ label: dimensions[dim], stroke: colorFor(dim), width: 1.5 })),
+      ];
+      const xs = lastFrames.map((_, i) => i);
+      const data: uPlot.AlignedData = [
+        xs,
+        ...dims.map((dim) => lastFrames.map((frame) => numericComponents(frame.features?.[selectedFeature])[dim] ?? Number.NaN)),
+      ];
       chartEl.innerHTML = "";
-      return;
+      plot = new uPlot(
+        {
+          width: chartEl.clientWidth || 800,
+          height: chartEl.clientHeight || 240,
+          series,
+          axes: [
+            {
+              stroke: "#263246",
+              grid: { stroke: "#263246", width: 1 },
+              ticks: { stroke: "#263246", width: 1 },
+              font: "10px ui-monospace,Menlo,monospace",
+              size: 24,
+            },
+            {
+              stroke: "#263246",
+              grid: { stroke: "#263246", width: 1 },
+              ticks: { stroke: "#263246", width: 1 },
+              font: "10px ui-monospace,Menlo,monospace",
+              size: 56,
+            },
+          ],
+          scales: { x: { time: false } },
+          cursor: { drag: { x: true, y: true, setScale: true }, points: { show: false } },
+          legend: { show: false },
+          padding: [8, 10, 8, 10],
+          hooks: {
+            draw: [(u) => {
+              if (markerIndex < 0) return;
+              const x = u.valToPos(markerIndex, "x");
+              if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
+              u.ctx.save();
+              u.ctx.strokeStyle = "#8793a8";
+              u.ctx.lineWidth = 1;
+              u.ctx.beginPath();
+              u.ctx.moveTo(x, u.bbox.top);
+              u.ctx.lineTo(x, u.bbox.top + u.bbox.height);
+              u.ctx.stroke();
+              u.ctx.restore();
+            }],
+          },
+        },
+        data,
+        chartEl,
+      );
     }
-    const min = Math.min(...all);
-    const max = Math.max(...all);
-    const span = max - min || 1;
-    const x = (i: number) => PAD + (i / Math.max(1, frames.length - 1)) * (WIDTH - PAD * 2);
-    const y = (value: number) => HEIGHT - PAD - ((value - min) / span) * (HEIGHT - PAD * 2);
-    const polyline = (values: number[], color: string) =>
-      `<polyline points="${values
-        .map((value, i) => (Number.isFinite(value) ? `${x(i).toFixed(1)},${y(value).toFixed(1)}` : ""))
-        .filter(Boolean)
-        .join(" ")}" fill="none" stroke="${color}" stroke-width="1.5"/>`;
-    chartEl.innerHTML =
-      series.map((entry) => polyline(entry.values, colorFor(entry.dim))).join("") +
-      `<line class="chart-marker" x1="0" x2="0" y1="${PAD}" y2="${HEIGHT - PAD}" stroke="#8793a8" stroke-width="1"/>` +
-      `<text x="${PAD}" y="${HEIGHT - 2}" fill="#8793a8" font-size="9">${min.toPrecision(4)} — ${max.toPrecision(4)}</text>`;
-    cachedMarker = chartEl.querySelector<SVGLineElement>("line.chart-marker");
-
-    legendEl.innerHTML = series
-      .map((entry) => `<span class="legend-chip"><i style="background:${colorFor(entry.dim)}"></i>${escapeHtml(dimensions[entry.dim])}</span>`)
+    markerIndex = lastIndex;
+    plot.redraw(false, false);
+    legendEl.innerHTML = dims
+      .map((dim) => `<span class="legend-chip"><i style="background:${colorFor(dim)}"></i>${escapeHtml(dimensions[dim])}</span>`)
       .join("");
-
-    const markerX = PAD + (index / Math.max(1, frames.length - 1)) * (WIDTH - PAD * 2);
-    if (cachedMarker) {
-      cachedMarker.setAttribute("x1", markerX.toFixed(1));
-      cachedMarker.setAttribute("x2", markerX.toFixed(1));
-    }
   }
 
-  function renderSplit(frames: ChartFrame[], index: number): void {
-    const rows = dimensions
-      .map((_, dim) => ({ dim, values: frames.map((item) => numericComponents(item.features?.[selectedFeature])[dim] ?? Number.NaN) }))
-      .filter((entry) => selected.has(entry.dim));
-    splitEl.innerHTML = rows.length
-      ? rows.map((entry) => {
-          const values = entry.values;
+  function renderSplit(): void {
+    const dims = selectedDimensions();
+    splitEl.innerHTML = dims.length
+      ? dims.map((dim) => {
+          const values = lastFrames.map((frame) => numericComponents(frame.features?.[selectedFeature])[dim] ?? Number.NaN);
           const finite = values.filter((value) => Number.isFinite(value));
           const min = finite.length ? Math.min(...finite) : 0;
           const max = finite.length ? Math.max(...finite) : 1;
           const span = max - min || 1;
-          const x = (i: number) => PAD + (i / Math.max(1, values.length - 1)) * (WIDTH - PAD * 2);
-          const y = (value: number) => 48 - PAD - ((value - min) / span) * (48 - PAD * 2);
+          const width = Math.max(320, splitEl.clientWidth || 320);
+          const x = (i: number) => PAD + (i / Math.max(1, values.length - 1)) * (width - PAD * 2);
+          const y = (value: number) => SPLIT_HEIGHT - PAD - ((value - min) / span) * (SPLIT_HEIGHT - PAD * 2);
           const polyline = values
             .map((value, i) => (Number.isFinite(value) ? `${x(i).toFixed(1)},${y(value).toFixed(1)}` : ""))
             .filter(Boolean)
             .join(" ");
-          const markerX = PAD + (index / Math.max(1, values.length - 1)) * (WIDTH - PAD * 2);
+          const markerX = x(Math.max(0, Math.min(values.length - 1, lastIndex)));
           return (
-            `<div class="split-mini"><div class="split-mini-head"><span style="--chip:${colorFor(entry.dim)}">${escapeHtml(dimensions[entry.dim])}</span><b>${max.toPrecision(3)}</b></div>` +
-            `<svg viewBox="0 0 ${WIDTH} 48" preserveAspectRatio="none"><polyline points="${polyline}" fill="none" stroke="${colorFor(entry.dim)}" stroke-width="1.5"/><line x1="${markerX.toFixed(1)}" x2="${markerX.toFixed(1)}" y1="${PAD}" y2="${40}" stroke="#8793a8" stroke-width="1"/></svg></div>`
+            `<div class="split-mini"><div class="split-mini-head"><span style="--chip:${colorFor(dim)}">${escapeHtml(dimensions[dim])}</span><b>${max.toPrecision(3)}</b></div>` +
+            `<svg viewBox="0 0 ${width} ${SPLIT_HEIGHT}" preserveAspectRatio="none"><polyline points="${polyline}" fill="none" stroke="${colorFor(dim)}" stroke-width="1.5" vector-effect="non-scaling-stroke"/><line x1="${markerX.toFixed(1)}" x2="${markerX.toFixed(1)}" y1="${PAD}" y2="${SPLIT_HEIGHT - PAD}" stroke="#8793a8" stroke-width="1"/></svg></div>`
           );
         }).join("")
       : '<div class="empty">未选择任何维度</div>';
     legendEl.innerHTML = "";
   }
 
+  function resetZoom(): void {
+    if (plot) { plot.destroy(); plot = null; }
+    lastSeriesSignature = "";
+    renderAggregate();
+  }
+
   function renderChart(): void {
     if (!selectedFeature || !lastFrames.length) return;
     if (splitMode) {
+      if (plot) { plot.destroy(); plot = null; lastSeriesSignature = ""; }
       chartEl.innerHTML = "";
-      renderSplit(lastFrames, lastIndex);
+      renderSplit();
     } else {
       splitEl.innerHTML = "";
-      renderAggregate(lastFrames, lastIndex);
+      renderAggregate();
     }
+    resetZoomBtn.style.display = splitMode ? "none" : "";
   }
 
   function render(frame: ChartFrame, frames: ChartFrame[], index: number): void {
@@ -334,12 +373,15 @@ export function initCharts(): ChartApi {
   }
 
   function clear(): void {
-    cachedKey = "";
-    cachedMarker = null;
+    if (plot) { plot.destroy(); plot = null; }
     selectedFeature = "";
     renderedFeature = "";
     dimensions = [];
     selected = new Set();
+    lastFrames = [];
+    lastIndex = 0;
+    lastSeriesSignature = "";
+    markerIndex = -1;
     featureSelect.innerHTML = "";
     jointFilterEl.innerHTML = "";
     legendEl.innerHTML = "";
@@ -349,13 +391,17 @@ export function initCharts(): ChartApi {
     rawEl.textContent = "选择一个字段查看数据";
     splitToggle.classList.remove("active");
     splitMode = false;
+    resetZoomBtn.style.display = "none";
   }
 
   splitToggle.addEventListener("click", () => {
     splitMode = !splitMode;
     splitToggle.classList.toggle("active", splitMode);
-    cachedKey = "";
-    cachedMarker = null;
+    renderChart();
+  });
+  resetZoomBtn.addEventListener("click", resetZoom);
+  chartEl.addEventListener("dblclick", () => {
+    if (!splitMode) resetZoom();
   });
 
   return { setFeatures, render, clear };

@@ -111,10 +111,10 @@
             <div class="inspector-selectors">
               <label>字段 <select id="replay-feature-select" class="studio-select" aria-label="选择要绘制的状态/动作字段"></select></label>
             </div>
-            <div class="chart-toolbar"><button id="replay-split-toggle" type="button" title="把每个维度拆成一张迷你图">拆分视图</button></div>
+            <div class="chart-toolbar"><button id="replay-split-toggle" type="button" title="把每个维度拆成一张迷你图">拆分视图</button><button id="replay-zoom-reset" type="button" title="重置缩放（也可双击图表）" style="display:none">重置缩放</button></div>
             <div id="replay-joint-filter" class="joint-filter"></div>
             <div id="replay-chart-legend" class="chart-legend"></div>
-            <svg id="replay-feature-chart" viewBox="0 0 320 160" preserveAspectRatio="none" role="img" aria-label="状态/动作时序曲线图"></svg>
+            <div id="replay-feature-chart" class="chart-container" role="img" aria-label="状态/动作时序曲线图"></div>
             <div id="replay-split-charts" class="split-charts"></div>
             <pre id="replay-feature-raw">选择一个字段查看数据</pre>
           </div>

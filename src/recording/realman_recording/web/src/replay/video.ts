@@ -149,6 +149,7 @@ export function initVideo(callbacks: VideoCallbacks): VideoApi {
       camerasEl.innerHTML = '<div class="empty">该 Episode 无相机字段</div>';
       cameraCount.textContent = "该 Episode 无相机字段";
     } else {
+      camerasEl.innerHTML = "";
       cameraCount.textContent = `${next.cameraIds.length} 路 · 同步视频`;
       for (const cameraId of next.cameraIds) {
         const card = document.createElement("div");

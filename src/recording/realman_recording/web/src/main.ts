@@ -772,9 +772,9 @@ const sidebar = initSidebar({
     selectReplaySession(sessionId);
   },
   onChanged: () => {
-    sidebar.refresh().then(() => {
-      if (replay && !sidebar.getSession(replay.session)) exitReplay();
-    });
+    // handleAction already refreshed the sidebar; only check whether the
+    // currently-open replay session was just hidden so we can exit replay.
+    if (replay && !sidebar.getSession(replay.session)) exitReplay();
   },
   onRefreshed: (episodes) => renderAnalysis(episodes),
 });

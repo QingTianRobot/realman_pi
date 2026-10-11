@@ -69,9 +69,13 @@
 .chart-toolbar{display:flex;gap:6px}
 .chart-toolbar button{background:#1c2d45;color:var(--text);border:1px solid #2b4665;border-radius:6px;padding:5px 10px;cursor:pointer;font:10px inherit}
 .chart-toolbar button:hover{background:#294463}.chart-toolbar button.active{background:#2a4a6b;border-color:var(--blue)}
-.joint-details summary{cursor:pointer;display:flex;align-items:center;gap:6px;color:var(--muted);font:10px inherit;padding:2px 0;user-select:none}
-.joint-details summary:hover{color:var(--text)}
-.joint-details summary .joint-count{color:var(--text);font-weight:600}
+.joint-dropdown{position:relative}
+.joint-dropdown-trigger{display:flex;align-items:center;gap:6px;width:100%;background:#0d1420;color:var(--muted);border:1px solid #202c40;border-radius:7px;padding:7px 10px;cursor:pointer;font:10px inherit;text-align:left}
+.joint-dropdown-trigger:hover{border-color:var(--blue)}
+.joint-dropdown-trigger .joint-count{color:var(--text);font-weight:600}
+.joint-dropdown-trigger .joint-caret{color:var(--muted);margin-left:auto}
+.joint-dropdown-menu{display:none;position:absolute;left:0;right:0;top:calc(100% + 4px);z-index:50;background:#141c2a;border:1px solid #263246;border-radius:8px;box-shadow:0 12px 30px #0008;padding:8px;max-height:260px;overflow:auto}
+.joint-dropdown.open .joint-dropdown-menu{display:block}
 .joint-filter-toolbar{display:flex;gap:6px;margin:6px 0}
 .joint-filter-toolbar button{background:#1c2d45;color:var(--text);border:1px solid #2b4665;border-radius:5px;padding:3px 8px;cursor:pointer;font:10px inherit}
 .joint-filter-toolbar button:hover{background:#294463}

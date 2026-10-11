@@ -200,10 +200,16 @@ export function initCharts(): ChartApi {
       .join("");
 
     jointFilterEl.innerHTML =
-      `<details class="joint-details"><summary>维度筛选 · <b class="joint-count">已选 ${labels.length}/${labels.length}</b></summary>` +
+      `<button class="joint-dropdown-trigger" type="button">维度筛选 · <b class="joint-count">已选 ${labels.length}/${labels.length}</b><span class="joint-caret">▾</span></button>` +
+      `<div class="joint-dropdown-menu">` +
       `<div class="joint-filter-toolbar"><button type="button" data-joint="all">全选</button><button type="button" data-joint="none">全不选</button></div>` +
       groupHtml +
-      `</details>`;
+      `</div>`;
+
+    jointFilterEl.querySelector<HTMLButtonElement>(".joint-dropdown-trigger")?.addEventListener("click", (event) => {
+      event.stopPropagation();
+      jointFilterEl.classList.toggle("open");
+    });
 
     jointFilterEl.querySelectorAll<HTMLInputElement>("input[data-dim]").forEach((input) => {
       input.addEventListener("change", () => {
@@ -402,6 +408,9 @@ export function initCharts(): ChartApi {
   resetZoomBtn.addEventListener("click", resetZoom);
   chartEl.addEventListener("dblclick", () => {
     if (!splitMode) resetZoom();
+  });
+  document.addEventListener("click", (event) => {
+    if (!jointFilterEl.contains(event.target as Node)) jointFilterEl.classList.remove("open");
   });
 
   return { setFeatures, render, clear };

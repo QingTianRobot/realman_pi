@@ -108,7 +108,13 @@ class LeRobotReplayCatalog:
         self._datasets_lock = threading.Lock()
 
     def list_datasets(self) -> list[dict[str, Any]]:
-        """Return only sessions with a valid ADOPTED/SUCCEEDED receipt."""
+        """Return only sessions with a valid ADOPTED/SUCCEEDED receipt.
+
+        The export receipt already carries ``frame_count`` and a ``quality``
+        summary, so the dashboard list can be built without opening each LeRobot
+        dataset (the expensive step on the robot host).  Only sessions exported
+        before those fields existed fall back to opening the dataset.
+        """
         result: list[dict[str, Any]] = []
         if not self._recording_root.is_dir():
             return result
@@ -117,9 +123,14 @@ class LeRobotReplayCatalog:
                 continue
             try:
                 reference = self._reference(directory.name)
-                with self._dataset(reference) as dataset:
-                    frame_count = len(dataset)
-                    quality = self._summary(reference, dataset)["quality"]
+                receipt = self._read_receipt(reference.session_id)
+                if isinstance(receipt, dict) and isinstance(receipt.get("frame_count"), int) and isinstance(receipt.get("quality"), dict):
+                    frame_count = receipt["frame_count"]
+                    quality = receipt["quality"]
+                else:
+                    with self._dataset(reference) as dataset:
+                        frame_count = len(dataset)
+                        quality = self._summary(reference, dataset)["quality"]
             except (OSError, ValueError, TypeError, RuntimeError):
                 # A partially written/removed session must not break the dashboard
                 # list.  It remains available from the filesystem for audit.
@@ -137,6 +148,15 @@ class LeRobotReplayCatalog:
             )
         return result
 
+    def _read_receipt(self, session_id: str) -> dict[str, Any] | None:
+        """Read the export receipt, or ``None`` when it is missing or corrupt."""
+        receipt_path = self._recording_root / session_id / "export" / "lerobot-v3.json"
+        try:
+            payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return None
+        return payload if isinstance(payload, dict) else None
+
     def list_hidden(self) -> list[dict[str, Any]]:
         """Return only sessions with a valid DELETED/SUCCEEDED receipt.
 
@@ -153,11 +173,15 @@ class LeRobotReplayCatalog:
                 continue
             try:
                 reference = self._reference(directory.name, decision="DELETED")
-                try:
-                    with self._dataset(reference) as dataset:
-                        frame_count = len(dataset)
-                except Exception:  # noqa: BLE001 - any dataset-open failure only degrades frames
-                    frame_count = 0
+                receipt = self._read_receipt(reference.session_id)
+                if isinstance(receipt, dict) and isinstance(receipt.get("frame_count"), int):
+                    frame_count = receipt["frame_count"]
+                else:
+                    try:
+                        with self._dataset(reference) as dataset:
+                            frame_count = len(dataset)
+                    except Exception:  # noqa: BLE001 - any dataset-open failure only degrades frames
+                        frame_count = 0
             except (OSError, ValueError, TypeError, RuntimeError):
                 # A partially written/removed session must not break the trash list.
                 continue

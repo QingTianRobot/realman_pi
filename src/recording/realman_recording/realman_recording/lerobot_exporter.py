@@ -229,6 +229,11 @@ class LeRobotExporter:
                 # Required by the SDK: flushes metadata/parquet footers before another
                 # adopted session calls resume().
                 dataset.finalize()
+        quality = {
+            "valid_frames": sum(1 for frame in canonical if frame.valid),
+            "invalid_frames": sum(1 for frame in canonical if not frame.valid),
+            "max_sync_error_ns": max((abs(int(item)) for frame in canonical for item in frame.sync_error_ns), default=0),
+        }
         self._write_v3_receipt(
             request.session_dir,
             dataset_root,
@@ -238,6 +243,7 @@ class LeRobotExporter:
             anchors,
             urdf_path,
             camera_archive_quality,
+            quality,
         )
         self._report(request, 100, 100)
         return dataset_root
@@ -401,9 +407,11 @@ class LeRobotExporter:
         anchors: Sequence[int],
         urdf_path: Path,
         camera_archive_quality: dict[str, Any],
+        quality: dict[str, Any],
     ) -> None:
         receipt = {"dataset_root": str(root), "repo_id": schema.repo_id, "fps": schema.fps, "episode_index": episode_index,
                    "schema_fingerprint": schema.fingerprint, "frame_count": len(anchors),
+                   "quality": quality,
                    "first_walltime_ns": anchors[0], "last_walltime_ns": anchors[-1],
                    "source_session_id": manifest.get("session_id", session_dir.name),
                    "canonical": {

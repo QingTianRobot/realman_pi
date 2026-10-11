@@ -39,6 +39,10 @@
 .episode-action:hover{background:#294463}
 .episode-actions{display:flex;gap:4px;justify-content:flex-end;margin-top:2px}
 .hidden-heading{margin:12px 0 6px;padding-top:10px;border-top:1px solid var(--line);color:var(--muted);font:11px ui-monospace,Menlo,monospace;letter-spacing:.06em}
+.hidden-fold{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.hidden-fold summary{cursor:pointer;color:var(--muted);font:11px ui-monospace,Menlo,monospace;letter-spacing:.06em;user-select:none;padding:2px 0}
+.hidden-fold summary:hover{color:var(--text)}
+.hidden-fold[open] summary{margin-bottom:6px}
 /* Synchronized replay video tiles. */
 .replay-camera-grid .camera-card video{display:block;width:100%;height:100%;object-fit:contain;background:#080b12}
 /* Action-vs-state chart + health strip. */

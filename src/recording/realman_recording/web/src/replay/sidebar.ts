@@ -113,7 +113,7 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
       : '<div class="empty">暂无已导出 episode</div>';
 
     hiddenEl.innerHTML = hidden.length
-      ? `<div class="hidden-heading">已隐藏</div>` + hidden.map((episode) => row(episode, "hidden")).join("")
+      ? `<details class="hidden-fold"><summary>已隐藏 (${hidden.length})</summary>` + hidden.map((episode) => row(episode, "hidden")).join("") + `</details>`
       : "";
     hiddenEl.style.display = hidden.length ? "" : "none";
   }

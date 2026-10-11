@@ -91,7 +91,7 @@ colcon build --symlink-install --packages-up-to realman_bringup
 source install/setup.bash
 ```
 
-本仓库**没有 ROS 测试的 CI**（`.github/workflows/` 只做文档站部署），提交前请按[测试与验证](https://qingtianrobot.github.io/realman_pi/development/testing)自行运行对应组件的测试。约定：权威配置只放根 `config/` 并写清注释；功能变化与文档在同一次提交中更新；`src/sensor/OrbbecSDK_ROS2`、`src/sensor/realsense`、`third_party/behavior_tree_cpp` 为 vendor 快照，不在其中做项目改动。
+CI（`.github/workflows/ci.yml`）只跑不需要 ROS 的检查：ruff、shell 语法、无 rclpy 的单元测试、文档站构建与端到端测试；ROS 相关测试没有 CI，提交前请按[测试与验证](https://qingtianrobot.github.io/realman_pi/development/testing)自行运行对应组件的测试。约定：权威配置只放根 `config/` 并写清注释；功能变化与文档在同一次提交中更新；`src/sensor/OrbbecSDK_ROS2`、`src/sensor/realsense`、`third_party/behavior_tree_cpp` 为 vendor 快照，不在其中做项目改动。
 
 ## 模型来源
 

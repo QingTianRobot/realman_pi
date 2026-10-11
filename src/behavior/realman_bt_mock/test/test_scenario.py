@@ -10,7 +10,7 @@ def test_mode_request_accepts_only_known_modes():
     assert normalize_mode_request('policy', 'policy-a') == {'mode': 'policy', 'owner_id': 'policy-a'}
     try:
         normalize_mode_request('joystick', 'device-a')
-        assert False
+        raise AssertionError('expected ValueError')
     except ValueError as error:
         assert 'unknown control mode' in str(error)
 

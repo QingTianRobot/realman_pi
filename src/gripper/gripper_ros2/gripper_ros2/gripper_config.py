@@ -21,10 +21,7 @@ def interface_names(name: str) -> dict[str, str]:
     if not NAME_PATTERN.fullmatch(name):
         raise ValueError(f"invalid gripper name: {name!r}")
     interfaces = {suffix: f"/{name}/{suffix}" for suffix in SERVICE_SUFFIXES + TOPIC_SUFFIXES}
-    interfaces.update({
-        "percentage_command": f"/{name}/{suffix}"
-        for suffix in COMMAND_SUFFIXES
-    })
+    interfaces["percentage_command"] = f"/{name}/{COMMAND_SUFFIXES[-1]}"
     return interfaces
 
 

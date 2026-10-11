@@ -8,7 +8,6 @@ The Three.js visualization should reuse only the existing Web Control live URDF 
 from __future__ import annotations
 
 import os
-import json
 import threading
 import time
 from pathlib import Path

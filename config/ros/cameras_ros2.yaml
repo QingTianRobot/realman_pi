@@ -13,7 +13,7 @@ wrist_cameras:
     color:
       width: 640
       height: 480
-      fps: 15
+      fps: 30
       format: YUYV          # 非压缩,规避 Gemini 305 的 MJPEG 撕裂
     depth:
       width: 640

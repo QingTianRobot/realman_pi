@@ -34,6 +34,21 @@ realman_web_control (aiohttp 线程 + ROS 2 executor)
 RealMan SDK / 三台控制器
 ```
 
+
+<DocFigure
+  src="/screenshots/web-control-overview.png"
+  alt="Web 控制页总览：三臂 URDF、输入模式、键盘面板与坐标状态"
+  caption=":8765 控制页（脚本化数据生成的截图，无需机器人）。悬停编号或下方说明，两边同步高亮；点击图片放大。"
+  :marks="[
+    { x: 33, y: 40, label: '三维视图：实体姿态（青/橙/灰三色）与目标影子，末端挂 AG2F90-C 并随夹爪反馈开合' },
+    { x: 7.5, y: 24, label: '机械臂切换条：L / M / R 的连接与 joint_states 状态，点击切换控制焦点' },
+    { x: 72, y: 12, label: '全局输入模式：来自行为树的模式目录，显示当前 ACTIVE 模式' },
+    { x: 72, y: 33, label: '双臂键盘面板：l/r 各 12 个速度键与夹爪全开/全闭键' },
+    { x: 96, y: 4, label: '软件停止：直接调用 /<arm>/stop，不是控制柜物理急停' },
+    { x: 33, y: 80, label: '命令与实际末端速度：driver 的 cartesian_velocity/state' },
+  ]"
+/>
+
 ## 启动
 
 配置在 `config/ros/realman_web_control.yaml`。Web 服务默认监听 `0.0.0.0:8765`，所以

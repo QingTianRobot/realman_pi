@@ -11,6 +11,12 @@ description: RM65 描述包中 world、机械臂连杆和相机坐标系的连�
 
 每个 URDF 都显式声明 `world`，并通过固定关节连接 `base_link`。这让 RViz 的 Fixed Frame 可以稳定设置为 `world`，也避免独立查看模型时出现多个不相连的 TF 子树。
 
+## 交互浏览
+
+悬停左侧的坐标系（或右侧三维视图里的连杆）：橙色是子坐标系，青色是它的父坐标系，橙色箭头从父指向子。
+
+<TfExplorer />
+
 ## RM65-B 主链
 
 <div class="tf-tree-doc">

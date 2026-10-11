@@ -7,6 +7,12 @@ description: realman_pi 的运行拓扑、控制权所有权、数据流和各�
 
 realman_pi 是一套面向**三台 RealMan RM65 机械臂**（左 `l`、中 `m`、右 `r`）的 ROS 2 Humble 控制平台。它把硬件驱动、坐标与安全、多种人机输入（Web、键盘、Pika 手持设备、VLA 策略）、夹爪、相机与标定，以及行为树编排，放进同一个可复现的 Docker 运行环境。机器人描述（URDF、TF、RViz）是它的底座，不是它的主题。
 
+<Glance :items="[{ label: '机械臂', value: 'l / m / r' }, { label: '运行环境', value: 'ROS 2 Humble · Docker' }, { label: '生产入口', value: './rm65 up' }, { label: '默认安全态', value: 'dry-run' }]" />
+
+## 系统一览
+
+<ArchitectureMap />
+
 ## 运行拓扑
 
 ```mermaid

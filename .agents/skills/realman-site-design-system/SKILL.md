@@ -27,7 +27,7 @@ It fails on token drift, unregistered breakpoints, literal colors outside token 
 | Shape | Radius 4px (buttons, nodes, callouts), 6px (cards, mermaid buttons), 8px (mermaid frame, joint panel). Hairline 1px `--vp-c-divider` borders; no shadows, no gradients. |
 | Layout | Content width `min(1180px, calc(100% - 48px))`; section padding 92px (64px phone). Alternate sections `rm-section` / `rm-section alt`. |
 | Breakpoints | Only `900px` and `640px` (max-width). |
-| Motion | Only `160ms ease` border/background transitions, plus the 3D auto-rotate. Honor `prefers-reduced-motion` (already global; do not override). |
+| Motion | `160ms ease` border/background transitions; the 3D auto-rotate and idle joint swing; one-time scroll reveal (`v-reveal`, 320ms ease-out); dashed Mermaid edges flowing along their arrows and the architecture-map flow dashes. No other animation. Honor `prefers-reduced-motion` (reveal and 3D motion check it in JS; transitions are already neutralised globally). |
 | Language | UI and prose in Chinese (`zh-CN`); identifiers, paths, topics verbatim. |
 | Kicker | Section kickers are short English mono uppercase (`Capabilities`, `Control path`); headings are Chinese sentences. |
 

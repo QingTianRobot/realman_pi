@@ -7,14 +7,14 @@ description: 用 ./rm65 启动生产运行时、打开 Web 控制台，或在没
 
 本页按"你手上有什么"组织。先看[系统架构总览](../architecture/overview)了解各组件，再选一条路径：
 
-| 我想… | 路径 |
-| --- | --- |
-| 在工控机上运行三臂真实系统（相机 + 驱动 + Web 控制） | [启动生产运行时](#启动生产运行时) → [打开 Web 控制台](#浏览器-web-控制台) |
-| 用键盘 / Pika / 策略控制机械臂，或跑分阶段任务 | 先运行生产运行时，再[启动行为树](#启动行为树) |
-| 没有机器人，只想看模型或跑 mock | [离线模型与 mock](#离线模型与-mock) |
-| 查看相机画面 | [相机](./cameras) |
-| 在笔记本上看生产机的 RViz | [远程 RViz](./remote-rviz) |
-| 开发并本地构建 | [本地 Humble 工作空间](#本地-humble-工作空间)与[开发者手册](../development/) |
+<Cards>
+<Card kicker="01" title="运行三臂真实系统" href="#启动生产运行时">相机 + 驱动 + Web 控制 + 数据录制，一条 ./rm65 up。</Card>
+<Card kicker="02" title="键盘 / Pika / 策略控制" href="#启动行为树">先运行生产运行时，再启动行为树输入路由。</Card>
+<Card kicker="03" title="没有机器人" href="#离线模型与-mock">看三臂模型，或跑 mock 驱动。</Card>
+<Card kicker="04" title="查看相机画面" href="/guide/cameras">四路彩色画面与 RViz。</Card>
+<Card kicker="05" title="远程 RViz" href="/guide/remote-rviz">在笔记本上看生产机的 ROS 图。</Card>
+<Card kicker="06" title="开发并本地构建" href="/development/">本地 Humble 工作空间与开发者手册。</Card>
+</Cards>
 
 ## 环境要求
 
@@ -45,7 +45,16 @@ cd realman_pi
 ./rm65 up
 ```
 
-它按顺序启动：宿主机 ROS 2 彩色相机 → Docker `realman_bringup_remote`（三臂真实驱动、TF、标定健康诊断、夹爪 manager）→ `realman_web_control` → `realman_recording`（数据录制与回放网页，`http://127.0.0.1:8770/`，见[独立数据录制平台](../development/recording-platform)）。相机失败则不启动 Docker；Docker 失败则清理相机。默认不启动 RViz，生产机不需要桌面。
+它按下面的顺序启动，任何一步失败都会清理已经启动的部分；默认不启动 RViz，生产机不需要桌面：
+
+<Steps>
+
+1. **宿主机 ROS 2 彩色相机**——相机失败则不启动 Docker。
+2. **`realman_bringup_remote`**——三臂真实驱动、TF、标定健康诊断、夹爪 manager；失败则清理相机。
+3. **`realman_web_control`**——`:8765` 控制页。
+4. **`realman_recording`**——数据录制与回放网页 `http://127.0.0.1:8770/`，见[独立数据录制平台](../development/recording-platform)。
+
+</Steps>
 
 | 命令 | 用途 |
 | --- | --- |

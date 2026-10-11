@@ -12,6 +12,12 @@ description: RealMan Python SDK 的 ROS 2 Humble 三臂回读、运动 Action、
 
 运动接口已在生产三臂上运行，但 mock 测试结果不能替代现场安全验证。新的控制器、固件、网络或 SDK 版本，以及任何改变运动路径的修改，都必须重新经过本页末尾的运行门槛。
 
+<Glance :items="[{ label: '命名空间', value: '/l  /m  /r' }, { label: '运动 owner', value: '每臂唯一' }, { label: '失效保护', value: 'watchdog 100 ms' }, { label: 'SDK', value: 'Robotic_Arm 1.1.6' }]" />
+
+拖动关节滑块，看六个关节的真实限位（取自 URDF）和连杆坐标系。
+
+<UrdfFigure model="arm" controls frames focus="link_6" caption="RM65-B：joint_1…joint_6，高亮的是末端 link_6 的坐标系" />
+
 ## 模块边界
 
 ```text
@@ -274,6 +280,10 @@ ros2 topic pub --rate 20 /l/cartesian_velocity/command \
 | `joint_names` | `joint_1` 到 `joint_6` | 数量必须与 SDK 返回的自由度一致 |
 | `coordinates_config_file` | `config/ros/realman_coordinates.yaml` | 工具/工作坐标和启动验证策略的权威配置 |
 | `motion_config_file` | `config/ros/realman_motion.yaml` | 每臂速度、加速度、控制周期、watchdog 和停止超时的权威配置 |
+
+先用试算器直观感受"普通会话上限 / Pika 限值 / 硬上限"三层限制，再看下面的参数表：
+
+<LimitExplorer />
 
 `realman_motion.yaml` 对 `l/m/r` 分别定义下列字段，所有值必须为正且有限。每个字段在文件中都有注释说明用途；**数值以该文件为准**，下表只列出当前值和约束，避免本页与配置漂移。
 

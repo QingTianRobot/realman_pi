@@ -5,7 +5,7 @@ description: 各组件的测试位置、运行方式、哪些测试需要 ROS/Do
 
 # 测试与验证
 
-本仓库**没有 ROS 测试的 CI**：`.github/workflows/` 里只有 GitHub Pages 的文档构建与发布。ROS 与硬件相关的测试必须由开发者在 Humble 环境（通常是项目 Docker 镜像）里运行，**提交前自己跑完下面对应的那一行**，并在提交说明里写清楚跑了什么、没跑什么。
+`.github/workflows/ci.yml` 在每个 PR 和 `main` 上运行**不需要 ROS 的轻量检查**：ruff（规则在 `config/python/ruff.toml`）、shell 语法（`bash -n` / `zsh -n`）、不依赖 rclpy 的 Python 单元测试（驱动、Web 控制、消息、夹爪、标定配置、速度跟随工具），以及文档站的构建、样式检查和端到端测试。**ROS 与硬件相关的测试仍然没有 CI**：必须由开发者在 Humble 环境（通常是项目 Docker 镜像）里运行，**提交前自己跑完下面对应的那一行**，并在提交说明里写清楚跑了什么、没跑什么；需要 `rclpy` 的用例在 CI 里会被跳过，不代表它们通过。
 
 ## 测试矩阵
 

@@ -51,6 +51,7 @@ description: realman_pi 开发者入口：按任务找到对应页面，了解�
 ## 开发约定
 
 - **配置只有一份**：权威配置在根目录 `config/`，带注释说明用途、单位、取值范围（`project-config-layout` skill）。
+- **Lint**：`ruff check --config config/python/ruff.toml src tools scripts docker` 必须通过（CI 会跑）；规则和 vendor 排除项见该配置的注释。
 - **日志**：只用 `rclpy` / `rclcpp` 官方日志接口，保留彩色 rcutils 输出和 `logs/YYYYMMDD_HHMMSS/` 时间目录（`ros2-logging-conventions` skill）。
 - **安全默认值**：行为树 router 默认 dry-run；限值分"普通会话"与"Pika 硬上限"两层；坐标失配会关闭 motion gate。
 - **vendor 目录不改**：`src/sensor/OrbbecSDK_ROS2`、`src/sensor/realsense`、`third_party/behavior_tree_cpp` 是快照，差异通过配置与自己的包表达。

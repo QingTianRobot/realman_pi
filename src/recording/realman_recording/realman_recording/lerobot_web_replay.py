@@ -124,9 +124,14 @@ class LeRobotReplayCatalog:
             try:
                 reference = self._reference(directory.name)
                 receipt = self._read_receipt(reference.session_id)
-                if isinstance(receipt, dict) and isinstance(receipt.get("frame_count"), int) and isinstance(receipt.get("quality"), dict):
+                if isinstance(receipt, dict) and isinstance(receipt.get("frame_count"), int):
                     frame_count = receipt["frame_count"]
-                    quality = receipt["quality"]
+                    # Receipts written before the quality summary existed lack it;
+                    # the /summary endpoint recomputes the real quality for the
+                    # selected episode, so the list only needs a harmless stand-in.
+                    quality = receipt["quality"] if isinstance(receipt.get("quality"), dict) else {
+                        "valid_frames": frame_count, "invalid_frames": 0, "max_sync_error_ns": 0,
+                    }
                 else:
                     with self._dataset(reference) as dataset:
                         frame_count = len(dataset)

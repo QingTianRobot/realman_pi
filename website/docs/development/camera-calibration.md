@@ -15,6 +15,18 @@ description: 通过 ROS service 原子采样三臂图像/末端 TF，并求解�
 11.25 mm，字典为 `DICT_5X5_100`。配置中的长度统一使用米：
 `square_length_m: 0.015`、`marker_length_m: 0.01125`。
 
+## 一图看懂手眼标定
+
+下面的动画用真实 URDF 的三条 RM65 讲清标定在做什么：相机装在 `link_6` 上、板固定在桌面，
+三臂同时采样多个姿态，再求出让所有样本"说同一件事"的手眼矩阵，最后用同一块板把三个基座连起来。
+可以暂停、拖动进度条、按章节跳转，也可以切换右上角显示哪一路相机的画面，或全屏观看。
+
+<HandEyeExplainer />
+
+动画里的采样姿态和相机安装位置只是示意；标定板尺寸、样本门槛、求解方法和阈值读自
+[`camera_calibration.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/camera_calibration.yaml)，
+最后一章显示的左到中、左到右基座相对位姿则读自生产布局 `three_robots.yaml`。
+
 ## 数据流和坐标约定
 
 每个相机配置一个 `arm_id`，每个机械臂配置 `base_frame` 和

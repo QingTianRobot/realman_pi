@@ -180,7 +180,7 @@ node_modules/.bin/playwright test --config ../config/recording/playwright.config
 
 | 数据种类 | 典型频率 | 对齐策略 |
 | --- | --- | --- |
-| 图像（RGB） | 每路 15 Hz（当前配置） | 基准（anchor），导出帧时间轴；四路相机不会合并成 60 Hz。 |
+| 图像（RGB） | 每路 15 Hz（当前配置） | 基准（anchor），导出帧时间轴；多路相机不会合并成更高频率。默认配置录制左、右腕部相机和全局 D435 三路，middle 相机恢复后在 `config/ros/recording.yaml` 的 `camera_ids` / `camera_image_topics` 补回即为四路。 |
 | 机械臂（State/Action） | 约 10 Hz（当前驱动） | 线性插值；仅在相邻样本间隔不超过 `max_gap_ns` 时允许。 |
 | 夹爪（Gripper） | 约 20 Hz（当前驱动） | 开关量默认 `FORWARD_FILL`（最后一个因果状态）；可显式选 `NEAREST`；连续力控夹爪用线性插值。 |
 

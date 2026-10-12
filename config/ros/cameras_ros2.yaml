@@ -46,17 +46,9 @@ wrist_cameras:
           fps: 30
           # format: MJPG
     middle:
-      serial: "CV2T661000DC"     # 无 streams 覆盖 → 完全继承全局默认
+      serial: "CV2L360000HS"     # 无 streams 覆盖 → 完全继承全局默认
     right:
-      serial: "CV2L360000HS"     # 与 camera_stream/orbbec.yaml 保持一致
-      streams:
-        color:
-          # 右相机在 30 Hz + 自动曝光下实测过曝(约 77% 像素饱和,画面接近全白,
-          # 且曝光长期不变),同配置的左相机正常。改用固定曝光:单位 0.1 ms,
-          # 43 即 4.3 ms,扫描实测亮度约 115(15 Hz 时期的正常水平)、无饱和。
-          # 固定曝光不随光照自适应:换光源或相机位置后需重新扫描该值。
-          auto_exposure: false
-          exposure: 43
+      serial: "CV2T661000DC"     # 中/右相机对换:右位现在是原中位相机(自动曝光,无覆盖)
 
 # ============================================================================
 # 全局相机:单台 RealSense D435,固定俯视全场。

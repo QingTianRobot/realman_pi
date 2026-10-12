@@ -184,6 +184,11 @@ class LeRobotExporter:
         dataset_root = self._dataset_root(request.output_dir, schema)
         with dataset_lock(dataset_root):
             dataset = self._open_v3_dataset(dataset_root, schema, image_shapes)
+            # A dataset resumed from before ``subtask_index`` was added lacks the
+            # feature in its info.json; writing it would fail LeRobot's
+            # validate_frame with "Extra features: {'subtask_index'}".  Only
+            # annotate frames when the dataset actually declares the feature.
+            annotate_subtasks = "subtask_index" in (getattr(dataset, "features", None) or {})
             try:
                 task = str(manifest.get("metadata", {}).get("task") or "recording")
                 for index, frame in enumerate(canonical):
@@ -201,9 +206,10 @@ class LeRobotExporter:
                         "action.executed_action": np.asarray(frame.ee_velocity_base, dtype=np.float32),
                         "quality.valid": np.asarray([frame.valid], dtype=np.bool_),
                         "quality.sync_error_ns": np.asarray(frame.sync_error_ns, dtype=np.int64),
-                        "subtask_index": np.asarray([subtask_index[index]], dtype=np.int64),
                         "task": task,
                     }
+                    if annotate_subtasks:
+                        payload["subtask_index"] = np.asarray([subtask_index[index]], dtype=np.int64)
                     if frame.command_gripper is not None:
                         payload["action.command.gripper"] = np.asarray(frame.command_gripper, dtype=np.float32)
                     for camera_id, selected in images.items():
@@ -211,7 +217,7 @@ class LeRobotExporter:
                     dataset.add_frame(payload)
                     self._report(request, index + 1, len(aligned))
                 episode_index = self._dataset_episode_count(dataset)
-                if subtasks:
+                if subtasks and annotate_subtasks:
                     # A second annotated episode would overwrite the shared
                     # per-dataset label table and silently remap the first
                     # episode's indices; reject that before any frame is written.

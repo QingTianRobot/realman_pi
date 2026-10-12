@@ -26,8 +26,15 @@ D435；宿主机缺少 `realsense2_camera` 驱动时 `rm65_camera_ros2` / `start
 软件触发；启用 wrapper 默认同步参数会导致后启动的 USB2 设备只有 publisher 而没有图像帧。
 三台 Orbbec 与 D435 共用 USB2 root hub 时，还需将生产机 `usbfs_memory_mb` 调到至少 `256`；
 启动函数会检查该值并在过小时打印临时和持久化修复命令。
-`wrist_cameras.devices.left.streams.color` 固定左侧相机为 3 ms 曝光，以避免反光标定板在自动曝光下过曝；当现场光照
-改变时应调整该配置，而不是降低 ChArUco 的最小角点数。现场串号等差异可写进被 `.gitignore` 忽略的
+右侧相机在 30 Hz 下使用固定彩色曝光 `43`（单位 0.1 ms，即 4.3 ms）并关闭自动曝光：实测同一台相机在自动曝光下
+约 77% 像素饱和、画面接近全白，固定后亮度约 115、无饱和，同配置的左相机不受影响。该值由
+`wrist_cameras.devices.right.streams.color` 管理。驱动在启动阶段写入的"关闭自动曝光"在这批设备上不生效
+（日志显示已关闭、画面仍在自动曝光），所以配置了 `auto_exposure: false` 的相机，启动器会在其彩色流出帧后由
+`apply_color_exposure.py` 再下发一次（先关自动曝光、再设曝光），其日志在该次启动的 `logs/<timestamp>/` 中，进程名
+`apply_color_exposure_<side>`。固定曝光不随光照自适应，换光源或相机位置后应在运行中先用
+`/camera_right/set_color_auto_exposure` 与 `set_color_exposure` 扫描验证，再写回配置并重启相机。左侧相机目前使用自动曝光；
+早期为反光标定板写入的固定 3 ms 曝光（`auto_exposure: false`、`exposure: 30`）已在配置重构中移除，如需恢复请写入
+`devices.left.streams.color`，而不是降低 ChArUco 的最小角点数。现场串号等差异可写进被 `.gitignore` 忽略的
 `config/ros/cameras_ros2.local.yaml`（与 base 深合并、优先级 `local > base`，详见
 [开发者手册](../development/startup-entries.md#ros2-图像节点与-rviz2)）。
 生产机的 Orbbec 工作区与 Docker 镜像可能使用不同的 Fast DDS 补丁版本；项目默认从 `.env`

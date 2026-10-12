@@ -227,15 +227,24 @@ RealSense 深度、更高分辨率和 Orbbec 的 `640x400@30` 深度档。
 `enable_frame_sync`、`trigger_out_enabled` 和 `software_trigger_enabled`；官方默认同步参数会导致
 后启动的设备只有 publisher 而没有图像帧。默认只打开彩色流，每次启动都会创建
 `logs/YYYYMMDD_HHMMSS/` 并设置 `ROS_LOG_DIR`，节点日志由 rcutils 官方机制生成。
-左侧相机在反光标定板下使用固定彩色曝光 `30`（3 ms）并关闭自动曝光；该值由
-`cameras_ros2.yaml` 的 `wrist_cameras.devices.left.streams.color` 管理。若更换光源或相机位置，应先通过
-`/camera_left/get_color_exposure` 验证画面，再调整该值，不能为了通过采样降低 ChArUco 角点门槛。
+右侧相机在 30 Hz 下使用固定彩色曝光 `43`（单位 0.1 ms，即 4.3 ms）并关闭自动曝光：实测同一台相机在自动曝光下
+约 77% 像素饱和且曝光长期不变，固定后亮度约 115、无饱和，同配置的左相机不受影响。该值由
+`cameras_ros2.yaml` 的 `wrist_cameras.devices.right.streams.color` 管理。驱动在启动阶段写入的"关闭自动曝光"在这批
+设备上不生效（驱动日志显示 `Setting color auto exposure to OFF`、读回曝光也等于配置值，画面却仍在自动曝光并过曝；
+运行中通过服务设置则有效），因此 `cameras_ros2.launch.py` 对每台配置了 `auto_exposure: false` 的腕部相机追加一个
+`apply_color_exposure.py` 进程：等该相机彩色流出第一帧并稳定 3 s 后，依次调用 `set_color_auto_exposure false`、
+`set_color_exposure <值>` 并读回；前一步失败则不继续。读回只能证明曝光值已写入，不能证明自动曝光已关，验证画面要看亮度
+或饱和像素比例。脚本找不到时启动器打印 WARNING 并跳过，不会中断启动。固定曝光不随光照自适应：若更换光源或相机位置，
+应在运行中通过 `/camera_right/set_color_auto_exposure`、`/camera_right/set_color_exposure` 扫描并用
+`/camera_right/get_color_exposure` 读回验证画面，再把结果写回配置并重启相机（相机配置只在启动时读取一次）。
+左侧相机目前使用自动曝光；早期为反光标定板写入的固定 `30`（3 ms）已在配置重构中移除，如需恢复，在
+`devices.left.streams.color` 写入 `auto_exposure: false` 与 `exposure: 30`，不能为了通过采样降低 ChArUco 角点门槛。
 
 `cameras_ros2.yaml` 按设备族分两段：`wrist_cameras`（三台 Orbbec Gemini 305，含共享的
 `streams`/`mode`/`sync` 与逐台 `devices`）与 `global_camera`（单台 RealSense D435，独立自包含，
 参数模型为 `WxHxFPS` profile 字符串）。两族参数模型不同，`global_camera` 不继承 `wrist_cameras.streams`。
 每台腕部相机的最终 profile = 全局 `wrist_cameras.streams` 深合并本台 `devices.<side>.streams`
-（只写要改的叶子键，例如 `left` 仅覆盖曝光）；未知叶子键会打印 WARNING 而非静默失效。
+（只写要改的叶子键，例如 `right` 仅覆盖曝光）；未知叶子键会打印 WARNING 而非静默失效。
 现场差异（最典型是各相机串号）写进被 `.gitignore` 忽略的 `config/ros/cameras_ros2.local.yaml`：
 它与 base 深合并，优先级 `local > base`，逐叶子覆盖且保留 base 独有键；该文件缺失时仅用 base 正常启动。
 `--symlink-install` 构建下 launch 通过解析符号链接直接在源码 `config/ros/` 发现该文件，改完无需 rebuild；

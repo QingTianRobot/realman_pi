@@ -23,6 +23,17 @@
     reconnect_interval: 5.0
     # State publication period in Hz. Must be greater than zero.
     state_publish_rate: 10.0
+    # Diagnostic: log joint angles around every velocity-session start, the controller's error
+    # flags, and a per-session movev send-interval summary. Costs a few extra SDK reads per start.
+    velocity_start_trace: true
+    # Right before an ordinary motion such as MoveJ, refresh the controller's
+    # velocity-passthrough target. off | init | init_zero_stop | canfd_current. Only
+    # canfd_current removed the stale-target pull at velocity-session start. The code
+    # default is canfd_current, but a driver built before that default changed still
+    # defaults to off, so keep it explicit here.
+    passthrough_reanchor_mode: canfd_current
+    # Pause (ms) between the vendor passthrough init and the first zero command of a session.
+    velocity_init_settle_ms: 0.0
     # Republish the latest coordinate safety state so late DDS consumers recover
     # even when the startup sample preceded endpoint discovery. Unit: Hz; > 0.
     coordinate_state_publish_rate: 1.0
@@ -40,6 +51,17 @@
     auto_connect: true
     reconnect_interval: 5.0
     state_publish_rate: 10.0
+    # Diagnostic: log joint angles around every velocity-session start, the controller's error
+    # flags, and a per-session movev send-interval summary. Costs a few extra SDK reads per start.
+    velocity_start_trace: true
+    # Right before an ordinary motion such as MoveJ, refresh the controller's
+    # velocity-passthrough target. off | init | init_zero_stop | canfd_current. Only
+    # canfd_current removed the stale-target pull at velocity-session start. The code
+    # default is canfd_current, but a driver built before that default changed still
+    # defaults to off, so keep it explicit here.
+    passthrough_reanchor_mode: canfd_current
+    # Pause (ms) between the vendor passthrough init and the first zero command of a session.
+    velocity_init_settle_ms: 0.0
     coordinate_state_publish_rate: 1.0
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]
 
@@ -54,5 +76,16 @@
     auto_connect: true
     reconnect_interval: 5.0
     state_publish_rate: 10.0
+    # Diagnostic: log joint angles around every velocity-session start, the controller's error
+    # flags, and a per-session movev send-interval summary. Costs a few extra SDK reads per start.
+    velocity_start_trace: true
+    # Right before an ordinary motion such as MoveJ, refresh the controller's
+    # velocity-passthrough target. off | init | init_zero_stop | canfd_current. Only
+    # canfd_current removed the stale-target pull at velocity-session start. The code
+    # default is canfd_current, but a driver built before that default changed still
+    # defaults to off, so keep it explicit here.
+    passthrough_reanchor_mode: canfd_current
+    # Pause (ms) between the vendor passthrough init and the first zero command of a session.
+    velocity_init_settle_ms: 0.0
     coordinate_state_publish_rate: 1.0
     joint_names: [joint_1, joint_2, joint_3, joint_4, joint_5, joint_6]

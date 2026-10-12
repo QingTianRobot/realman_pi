@@ -113,6 +113,40 @@ const generatedLayout = {
   endEffectors,
 };
 
+
+// Numbers and mode lists that the interactive documentation components display. They are copied
+// from the authoritative configs at build time so the docs cannot drift from them.
+const rosConfigDirectory = join(repositoryDirectory, "config", "ros");
+const motionConfig = YAML.parse(await readFile(join(rosConfigDirectory, "realman_motion.yaml"), "utf8"));
+const pikaConfig = YAML.parse(await readFile(join(rosConfigDirectory, "pika_config.yaml"), "utf8"));
+const keyboardConfig = YAML.parse(await readFile(join(rosConfigDirectory, "keyboard_control.yaml"), "utf8"));
+const gripperConfig = YAML.parse(await readFile(join(rosConfigDirectory, "gripper.yaml"), "utf8"));
+const controlTree = await readFile(join(repositoryDirectory, "config", "behavior-trees", "control.xml"), "utf8");
+const docsData = {
+  source: ["realman_motion.yaml", "pika_config.yaml", "keyboard_control.yaml", "gripper.yaml", "control.xml"],
+  motion: motionConfig.robots,
+  pika: { velocity: pikaConfig.pika_velocity, mixed: pikaConfig.pika_mixed },
+  keyboard: {
+    linearSpeedFraction: keyboardConfig.linear_speed_fraction,
+    angularSpeedFraction: keyboardConfig.angular_speed_fraction,
+  },
+  grippers: Object.fromEntries(
+    (gripperConfig.buses ?? []).flatMap((bus) => bus.grippers ?? []).map((gripper) => [
+      gripper.name,
+      {
+        openPosition: gripper.open_position,
+        closePosition: gripper.close_position,
+        minPosition: gripper.min_position,
+        maxPosition: gripper.max_position,
+      },
+    ]),
+  ),
+  // Input-mode catalog in XML order: the same source the executor uses.
+  modes: [...controlTree.matchAll(/<InputModeGuard\s+mode="([a-z]+)"\s+label="([^"]*)"\s+selectable="(true|false)"/g)].map(
+    (match) => ({ id: match[1], label: match[2], selectable: match[3] === "true" }),
+  ),
+};
+
 await rm(generatedDirectory, { recursive: true, force: true });
 await mkdir(join(websiteDirectory, "docs", ".vitepress", "cache"), { recursive: true });
 await mkdir(generatedModelsDirectory, { recursive: true });
@@ -134,5 +168,8 @@ for (const name of usedGrippers) {
     { recursive: true },
   );
 }
+// Documentation screenshots live outside docs/ because the site's public directory is generated (see above).
+await cp(join(websiteDirectory, "docs-assets", "screenshots"), join(generatedDirectory, "screenshots"), { recursive: true });
+await writeFile(join(generatedDirectory, "docs-data.json"), `${JSON.stringify(docsData, null, 2)}\n`);
 await writeFile(join(generatedDirectory, "three-robots.json"), `${JSON.stringify(generatedLayout, null, 2)}\n`);
 console.log(`Synced ${robots.length} robots (${modelNames.join(", ")}) from ${configPath}`);

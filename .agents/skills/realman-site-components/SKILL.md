@@ -15,13 +15,21 @@ Compose pages only from these blocks. Copy the template verbatim, change text/li
 | Capability cards | `templates/capability-grid.md` | in a section | `.model-grid` of `.model-item`; first is `featured`; each ends with one `.section-link` |
 | Pipeline | `templates/pipeline.md` | in a section | exactly 4 `.pipeline-step`, index `01`–`04` |
 | TF network | `templates/tf-network.md` | in a section | one `.tf-branch` per arm; `arm-l/m/r` colors fixed |
+| TF explorer | `templates/tf-explorer.md` | home TF section | `<TfExplorer />` only; data comes from the URDF at runtime; exposes `data-state`, `data-selected-arm`, `data-hovered-frame`, `data-frame-count` |
 | Final CTA | `templates/final-cta.md` | last on home | dark band, one `rm-action` |
-| Doc page | `templates/doc-page.md` | `docs/**` | frontmatter `title` + `description`; no custom HTML |
+| Doc page | `templates/doc-page.md` | `docs/**` | frontmatter `title` + `description`; Markdown plus the doc blocks below; no raw layout HTML |
+| Glance strip | `templates/doc-blocks.md` | top of long doc pages | `<Glance :items="[{label,value}]" />`, 3–4 facts |
+| Link cards | `templates/doc-blocks.md` | hub pages | `<Cards><Card kicker title href>text</Card></Cards>` |
+| Steps | `templates/doc-blocks.md` | procedures | `<Steps>` around a Markdown ordered list |
+| Figure | `templates/doc-blocks.md` | screenshots | `<DocFigure src alt caption :marks>`; images live in `website/docs-assets/screenshots/` (regenerate with `scripts/capture-screenshots.mjs`) |
+| URDF figure | `templates/doc-blocks.md` | any page about arms/grippers | `<UrdfFigure model="arm\|gripper\|arm-gripper" controls frames animate focus caption />` |
+| Interactive explainers | `templates/doc-blocks.md` | architecture / Pika / driver pages | `<ArchitectureMap />`, `<ModeExplorer />`, `<LimitExplorer />`, `<TfExplorer />` (data from `docs-data.json` / the URDF; never hard-code numbers) |
 | Mermaid | `templates/doc-page.md` | doc pages | ` ```mermaid `; rules below |
 
 ## Fixed behaviours (do not reimplement)
 
 - **RobotViewer** (`theme/components/RobotViewer.vue`): reads generated `three-robots.json`; exposes `data-state`, `data-robot-count`, `data-root-frame`, `data-visualization-reference-arm`, `data-mesh-count`, `data-animated`; joint panel (`.joint-panel`, `.joint-arms`, `.joint-row`, `.joint-auto`) collapsed by default at ≤640px. Import it, never fork it. Robot data comes from `config/ros/three_robots.yaml` via `npm run sync-assets`.
+- **TfExplorer** (`theme/components/TfExplorer.vue`): tree of frames (`.tf-explorer-tree [data-frame]`) + 3D view; tabs `L/M/R` choose the arm, other arms fade. Hover/focus a node or hover a link mesh to highlight child (accent) / parent (brand) and show the info card. Never fork it.
 - **Mermaid zoom** (`theme/mermaid-zoom.ts`): click opens lightbox; `-`/`+`/`0`/`Esc`. Registered in `theme/index.ts`; automatic for every ` ```mermaid ` fence.
 - **Tables** span the content column (`table-layout: fixed`); keep cells short, no wide unbroken strings.
 

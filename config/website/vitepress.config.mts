@@ -112,6 +112,7 @@ export default withMermaid(defineConfig({
           { text: "三臂 ChArUco 手眼标定", link: "/development/camera-calibration" },
           { text: "三臂配置驱动可视化", link: "/development/three-arm-visualization" },
           { text: "VLA 策略桥接节点", link: "/development/policy-bridge" },
+          { text: "独立数据录制平台", link: "/development/recording-platform" },
         ],
       },
       {

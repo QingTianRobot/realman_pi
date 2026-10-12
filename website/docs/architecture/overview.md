@@ -7,11 +7,18 @@ description: realman_pi 的运行拓扑、控制权所有权、数据流和各�
 
 realman_pi 是一套面向**三台 RealMan RM65 机械臂**（左 `l`、中 `m`、右 `r`）的 ROS 2 Humble 控制平台。它把硬件驱动、坐标与安全、多种人机输入（Web、键盘、Pika 手持设备、VLA 策略）、夹爪、相机与标定，以及行为树编排，放进同一个可复现的 Docker 运行环境。机器人描述（URDF、TF、RViz）是它的底座，不是它的主题。
 
+<Glance :items="[{ label: '机械臂', value: 'l / m / r' }, { label: '运行环境', value: 'ROS 2 Humble · Docker' }, { label: '生产入口', value: './rm65 up' }, { label: '默认安全态', value: 'dry-run' }]" />
+
+## 系统一览
+
+<ArchitectureMap />
+
 ## 运行拓扑
 
 ```mermaid
 flowchart TB
   BROW(["浏览器"]) <-->|WebSocket| WEB["realman_web_control :8765"]
+  REC["realman_recording :8770<br/>只订阅 → MCAP / LeRobot"]
   PIKA(["Pika 主机"]) -->|"/pika/*"| BT
   VLA(["OpenPI 策略服务"]) <-->|WebSocket| POL["policy_bridge（可选）"]
   WEB -->|"键盘 ingress"| BT
@@ -29,6 +36,8 @@ flowchart TB
   DRV -->|"RealMan SDK"| ARM[("三台控制器 192.168.30.x:8080")]
   GM -->|"Modbus RTU"| GRIP[("Changingtek 夹爪")]
   DRV -->|"joint_states"| TF
+  DRV -.->|"只读订阅"| REC
+  CAM -.->|"图像"| REC
 ```
 
 生产入口只有一个：`./rm65 up`（宿主机相机 → Docker 服务），行为树按需另行 `./rm65 bt control`。详见 [CLI 与环境变量](../reference/cli-and-env)。
@@ -104,6 +113,7 @@ sequenceDiagram
 | `src/behavior/realman_bt` | 行为树执行器、输入模式、键盘/Pika router | [行为树控制权](../development/behavior-tree-control)、[Pika](../development/pika-teleop)、[行为树 Demo](../development/behavior-tree-motion) |
 | `src/behavior/realman_bt_mock` | 无硬件 mock 图，用于测试行为树 | [测试与验证](../development/testing) |
 | `src/gripper/gripper_ros2` `gripper_ros2_msgs` | Changingtek 夹爪（Modbus RTU / RS-485） | [夹爪控制](../development/gripper-control) |
+| `src/recording/realman_recording`、`realman_recording_msgs` | **只订阅**驱动与夹爪输出的数据录制：MCAP/JPEG 录制、预检、LeRobot v3 导出、Web 回放与整理 | [独立数据录制平台](../development/recording-platform) |
 | `src/policy_bridge` | VLA 策略 WebSocket ⇄ ROS 2 纯协议桥 | [策略桥接](../development/policy-bridge) |
 | `src/sensor/realman_camera_calibration` | ChArUco 手眼标定节点 | [手眼标定](../development/camera-calibration) |
 | `src/sensor_bringup`、`src/sensor/{OrbbecSDK_ROS2,realsense}` | 相机 launch 与厂商驱动（vendor） | [相机指南](../guide/cameras) |

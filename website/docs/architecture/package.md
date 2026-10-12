@@ -23,6 +23,7 @@ realman_pi/
 │   ├── driver/               realman_robot_driver、realman_msgs、realman_web_control、xbox_controller_driver
 │   ├── gripper/              gripper_ros2、gripper_ros2_msgs（Changingtek 夹爪）
 │   ├── policy_bridge/        VLA 策略 WebSocket ⇄ ROS 2 协议桥
+│   ├── recording/            数据录制与回放：realman_recording、realman_recording_msgs
 │   ├── realman_bringup/      系统 launch 编排
 │   ├── rm65_description/     URDF、mesh、TF、RViz launch
 │   ├── sensor/               realman_camera_calibration + Orbbec / RealSense 厂商驱动（vendor）
@@ -51,6 +52,7 @@ realman_pi/
 | `realman_bt` | C++ / Python | 行为树执行器、输入模式、`keyboard_control_router`、`pika_control_router` | `control_router.launch.py`、`arm_move.launch.py` |
 | `realman_bt_mock` | Python | 无硬件 mock 图 | `behavior_tree_mock.launch.py` |
 | `gripper_ros2`、`gripper_ros2_msgs` | Python / IDL | 夹爪 manager：串口独占、service/topic | `gripper_manager` |
+| `realman_recording`、`realman_recording_msgs` | Python / IDL | 只订阅的数据录制：recorder、预检、LeRobot v3 导出、Web 实时与回放页 | `recording.launch.py`、`recording_runtime_probe` |
 | `policy_bridge` | Python | 策略 WebSocket 桥与 mock 策略服务 | `policy_bridge_node`、`mock_policy_server` |
 | `realman_camera_calibration` | Python | ChArUco 采样与手眼求解 | `camera_calibration_node` |
 | `sensor_bringup` | launch | Orbbec ×3 + D435 的 ROS 2 出图 | `cameras_ros2.launch.py` |

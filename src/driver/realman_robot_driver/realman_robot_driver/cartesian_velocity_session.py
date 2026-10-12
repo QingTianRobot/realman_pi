@@ -15,6 +15,7 @@ import threading
 import time
 from typing import Any, Callable, Mapping, Sequence
 
+from .validation import positive_float, positive_int
 from .motion_types import MotionSettings, ReferenceType, limit_vector_delta
 
 
@@ -974,12 +975,12 @@ class CartesianVelocitySession:
             raise ValueError(
                 f"reference_name must equal active verified frame {controller_name!r}"
             )
-        period = _positive_int(_field(goal, "control_period_ms"), "control_period_ms")
+        period = positive_int(_field(goal, "control_period_ms"), "control_period_ms")
         if period != self.settings.velocity_control_period_ms:
             raise ValueError(
                 "control_period_ms must equal the configured control period"
             )
-        watchdog = _positive_int(_field(goal, "watchdog_ms"), "watchdog_ms")
+        watchdog = positive_int(_field(goal, "watchdog_ms"), "watchdog_ms")
         if watchdog > self.settings.velocity_watchdog_ms:
             raise ValueError("watchdog_ms exceeds the configured watchdog")
         linear_speed = _session_speed_limit(
@@ -994,14 +995,14 @@ class CartesianVelocitySession:
             self.settings.angular_speed_hard_limit_radps,
             "angular",
         )
-        linear_accel = _positive_float(
+        linear_accel = positive_float(
             _field(goal, "max_linear_accel_mps2"), "max_linear_accel_mps2"
         )
         if linear_accel > self.settings.linear_accel_hard_limit_mps2:
             raise ValueError(
                 "max_linear_accel_mps2 exceeds configured linear acceleration"
             )
-        angular_accel = _positive_float(
+        angular_accel = positive_float(
             _field(goal, "max_angular_accel_radps2"), "max_angular_accel_radps2"
         )
         if angular_accel > self.settings.angular_accel_hard_limit_radps2:
@@ -1694,7 +1695,7 @@ def _session_speed_limit(
 ) -> float:
     if value is None or value == 0:
         return standard
-    requested = _positive_float(value, f"max_{axis}_speed")
+    requested = positive_float(value, f"max_{axis}_speed")
     if requested > hard_limit + 1.0e-12:
         raise ValueError(f"max_{axis}_speed exceeds hard {axis} speed limit")
     return requested
@@ -1721,21 +1722,6 @@ def _enum_value(value: Any, enum_type: type[IntEnum], field: str) -> IntEnum:
         return enum_type(int(value))
     except (TypeError, ValueError):
         raise ValueError(f"{field} must be BASE, WORK, or TOOL") from None
-
-
-def _positive_float(value: Any, field: str) -> float:
-    if isinstance(value, bool) or not isinstance(value, (int, float)):
-        raise ValueError(f"{field} must be positive")
-    value = float(value)
-    if not math.isfinite(value) or value <= 0.0:
-        raise ValueError(f"{field} must be positive")
-    return value
-
-
-def _positive_int(value: Any, field: str) -> int:
-    if isinstance(value, bool) or not isinstance(value, int) or value <= 0:
-        raise ValueError(f"{field} must be a positive integer")
-    return value
 
 
 def _integer(value: Any, field: str) -> int:

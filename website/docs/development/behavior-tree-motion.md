@@ -214,7 +214,7 @@ Pika router 不直接按 ingress 到达时刻透传。它保存最新有效速�
 速度以吸收 DDS 抖动，超过后改发零速度但保留 session；`pika_velocity.input_timeout_ms=3000` 以上才取消 session。
 driver 的 `100 ms` watchdog 保持不变，继续防护 router 进程停止或 command topic 中断。
 
-Replay 的 Pika 会话上限为 `1.0 m/s` 线速度和 `2.0 rad/s` 角速度。角速度超限时按三轴向量模长
+Replay 的 Pika 会话上限就是 `pika_velocity` 的当前值：`0.25 m/s` 线速度和 `0.6 rad/s` 角速度（取自 SDK 文档的 `rm_movev_canfd` 限值，超过会让手臂卡住）。超限时按三轴向量模长
 等比例缩放并保留方向；生产 Pika Goal 使用 `4.0 rad/s²` 的专用角加速度斜坡，普通速度会话仍为
 `0.5 rad/s²`。桥接器按 bag 顺序发布新时间戳，
 执行尝试选择 WORK 之后，结束或任何运行时安全条件失败时先向左右速度 ingress 发送零向量，等待超过

@@ -1,0 +1,29 @@
+# Lint rules for project-owned Python (run from the repository root):
+#   ruff check --config config/python/ruff.toml src tools scripts docker
+# CI runs the same command (.github/workflows/ci.yml). Vendored trees are excluded: do not
+# fix them here, update the vendor snapshot instead.
+target-version = "py310"   # ROS 2 Humble image runs Python 3.10
+line-length = 120          # only used by formatters/E501, which is not enabled
+
+extend-exclude = [
+  "src/sensor/OrbbecSDK_ROS2",
+  "src/sensor/realsense",
+  "third_party",
+  "website/node_modules",
+]
+
+[lint]
+# F  pyflakes: undefined names, unused imports/variables (an undefined-name bug shipped in
+#    ik_solver.py for weeks before this rule set existed)
+# E9 syntax/IO errors
+# B  a few bugbear checks that catch real bugs: unused loop variable, assert False,
+#    closures over loop variables, static dict-comprehension keys, empty abstract methods
+select = ["F", "E9", "B007", "B011", "B023", "B027", "B035"]
+
+[lint.per-file-ignores]
+# The vendored OpenPI client's base class has an intentionally empty hook method.
+"src/policy_bridge/policy_bridge/inference/openpi_client/*" = ["B027"]
+# The camera include actions are commented out on purpose (image nodes moved to camera_stream).
+"src/sensor_bringup/launch/cameras.launch.py" = ["F841"]
+# These helper closures are defined and called inside the same loop iteration, so late binding is safe.
+"tools/velocity_follow/velocity_follow/metrics.py" = ["B023"]

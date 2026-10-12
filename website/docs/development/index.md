@@ -27,26 +27,31 @@ description: realman_pi 开发者入口：按任务找到对应页面，了解�
 | 写新的行为树节点或任务树 | [行为树机械臂移动 Demo](./behavior-tree-motion) | `config/behavior-trees/` |
 | 改浏览器控制台、URDF 影子、WebSocket 协议 | [WebSocket 浏览器控制](./realman-web-control) | `config/ros/realman_web_control.yaml` |
 | 改夹爪、串口、流式控制 | [Changingtek 夹爪控制](./gripper-control) | `config/ros/gripper.yaml` |
+| 录制示教数据、导出 LeRobot、在网页回放与整理 episode | [独立数据录制平台](./recording-platform) | `config/ros/recording.yaml`、`config/python/recording-requirements.txt` |
 | 接入 VLA 策略服务 | [VLA 策略桥接节点](./policy-bridge) | `config/ros/policy_bridge.yaml` |
 | 相机配置、手眼标定 | [相机指南](../guide/cameras)、[三臂 ChArUco 手眼标定](./camera-calibration) | `config/ros/{cameras_ros2,camera_calibration}.yaml` |
 | 测量速度跟随（增益、滞后、串轴） | [笛卡尔速度跟随测试](./velocity-follow-test) | `config/ros/{keyboard_control,realman_motion}.yaml` |
 | 三臂布局、TF、RViz | [三臂配置驱动可视化](./three-arm-visualization)、[TF 树](../architecture/tf-tree) | `config/ros/three_robots.yaml` |
 | Xbox 手柄输入 | [Xbox 手柄输入](./xbox-controller) | `config/ros/xbox_controller.yaml` |
 
-## 模块与页面
+## 按模块进入
 
-| 模块 | 页面 | 关键内容 |
-| --- | --- | --- |
-| 运行与部署 | [启动入口索引](./startup-entries)、[系统 Bringup](./system-bringup)、[生产运维手册](./production-operations) | `functions.zsh` 每个入口的用途；launch 开关组合；镜像源；生产同步；日志 |
-| 驱动 | [驱动与运动控制](./realman-driver-scaffold)、[Action 开发与测试](./realman-action-development)、[Python 驱动查询](./realman-python-driver) | 三臂 ROS 图；ownership / generation / lockout 状态机；速度与位姿 session；坐标 motion gate；`controller_info`；IK 回退 |
-| 控制与输入 | [行为树控制权](./behavior-tree-control)、[行为树 Demo](./behavior-tree-motion)、[Pika 遥操作](./pika-teleop)、[Web 控制](./realman-web-control)、[Xbox](./xbox-controller)、[速度跟随测试](./velocity-follow-test) | 输入模式目录；键盘 lease；Pika 三种模式；one-shot 退出与 UNKNOWN 排查 |
-| 末端与感知 | [夹爪](./gripper-control)、[手眼标定](./camera-calibration)、[三臂可视化](./three-arm-visualization) | 串口独占与 4 Hz 流式限速；原子采样；TF 与 3D 预览 |
-| 策略 | [VLA 策略桥接](./policy-bridge) | OpenPI WebSocket 协议；滚动时域；模式门控与看门狗 |
-| 工程 | [测试与验证](./testing)、[功能文档同步](./documentation-workflow) | 测试矩阵；文档完成标准 |
+<Cards>
+<Card kicker="Run" title="运行与部署" href="/development/production-operations">启动入口、Bringup 开关、镜像源、生产机运维与回滚。</Card>
+<Card kicker="Driver" title="驱动与运动" href="/development/realman-driver-scaffold">三臂 ROS 图、运动 owner、速度与位姿 session、坐标 gate。</Card>
+<Card kicker="Control" title="控制与输入" href="/development/behavior-tree-control">输入模式、键盘 lease、行为树；Pika 与 Web 控制。</Card>
+<Card kicker="Pika" title="Pika 遥操作" href="/development/pika-teleop">位置 / 速度 / Mixed 三种模式，链路与已知问题。</Card>
+<Card kicker="Tool" title="夹爪" href="/development/gripper-control">AG2F90-C 模型、串口独占、行程设置、4 Hz 流式限速。</Card>
+<Card kicker="Sense" title="相机与标定" href="/development/camera-calibration">ChArUco 手眼标定、原子采样与相对位姿求解。</Card>
+<Card kicker="Data" title="数据录制平台" href="/development/recording-platform">只订阅录制、LeRobot 导出、网页回放与整理。</Card>
+<Card kicker="Policy" title="VLA 策略桥" href="/development/policy-bridge">OpenPI WebSocket 与 ROS 2 的纯协议转换。</Card>
+<Card kicker="Quality" title="测试与验证" href="/development/testing">测试矩阵、CI 范围、提交前检查清单。</Card>
+</Cards>
 
 ## 开发约定
 
 - **配置只有一份**：权威配置在根目录 `config/`，带注释说明用途、单位、取值范围（`project-config-layout` skill）。
+- **Lint**：`ruff check --config config/python/ruff.toml src tools scripts docker` 必须通过（CI 会跑）；规则和 vendor 排除项见该配置的注释。
 - **日志**：只用 `rclpy` / `rclcpp` 官方日志接口，保留彩色 rcutils 输出和 `logs/YYYYMMDD_HHMMSS/` 时间目录（`ros2-logging-conventions` skill）。
 - **安全默认值**：行为树 router 默认 dry-run；限值分"普通会话"与"Pika 硬上限"两层；坐标失配会关闭 motion gate。
 - **vendor 目录不改**：`src/sensor/OrbbecSDK_ROS2`、`src/sensor/realsense`、`third_party/behavior_tree_cpp` 是快照，差异通过配置与自己的包表达。

@@ -307,6 +307,10 @@ ROS 接口的 `ReferenceType` 与厂商速度初始化枚举不是同一个数�
 没有“到达终点后自然成功”的路径：调用方主动结束返回 `CANCELED`，命令断流返回
 `WATCHDOG_STOP`，初始化/SDK/停止失败返回 `ABORTED`。`WATCHDOG_STOP` 不是成功到位。
 
+### 普通运动前重新锚定透传目标
+
+控制器内部保存着 CANFD 透传（`rm_movev_canfd`）的目标，它会在 MoveJ、速度初始化、模式切换乃至 driver 重启之后保留，导致下一个低跟随速度 session 启动时被拉向上一个 session 的结束位姿（零命令也会动）。因此 `MotionCoordinator` 在每次普通运动提交前调用 `before_motion` 钩子，driver 把它接到 `CartesianVelocitySession.prepare_for_ordinary_motion`：只有此前运行过速度 session 才会执行，方式由 `passthrough_reanchor_mode` 决定，默认 `canfd_current`（用 `movej_canfd` 重发当前关节角）。真机 A/B 对比中，只有这一种方式能消除拉动。参数、其它取值和诊断开关见[Pika 遥操作：速度 session 启动拉动](./pika-teleop#每次速度-session-启动时手臂被拉动-已在-driver-中修复)。
+
 ### CartesianVelocityState 遥测
 
 驱动同时发布 `/<arm>/cartesian_velocity/state`（`realman_msgs/msg/CartesianVelocityState`）作为
@@ -472,7 +476,7 @@ Pika router 的权威引用是
 [`config/ros/pika_config.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/pika_config.yaml) 中的
 `pika_velocity.work_reference: work/pikabase`；单位 WORK 的配置来自
 [`config/ros/realman_coordinates.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/realman_coordinates.yaml)。Replay 使用
-`1.0 m/s` 线速度和 `2.0 rad/s` 角速度向量模长上限。Pika Goal 可显式请求 `4.0 rad/s²` 角加速度，
+`pika_velocity` 的当前上限：`0.25 m/s` 线速度和 `0.6 rad/s` 角速度（SDK 文档的 `rm_movev_canfd` 限值）。Pika Goal 可显式请求 `4.0 rad/s²` 角加速度，
 普通速度客户端继续受 `0.5 rad/s²` 标准上限约束；超过 Pika 角速度上限的 ingress 按向量模长等比例缩放，
 不会整条丢弃。键盘保留 `cell` WORK，其它客户端保留各自的
 引用；键盘、Web 手动速度和普通行为树速度客户端仍使用普通会话上限（l/r `0.15 m/s`）。

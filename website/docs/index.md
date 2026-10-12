@@ -11,6 +11,7 @@ description: 三台 RealMan RM65 机械臂的 ROS 2 Humble 控制平台：驱动
 <script setup>
 import { withBase } from 'vitepress'
 import RobotViewer from './.vitepress/theme/components/RobotViewer.vue'
+import TfExplorer from './.vitepress/theme/components/TfExplorer.vue'
 </script>
 
 <div class="rm-home">
@@ -85,13 +86,9 @@ import RobotViewer from './.vitepress/theme/components/RobotViewer.vue'
         </div>
         <p>布局来自标定结果 <code>config/ros/three_robots.yaml</code>；静态变换把三台机械臂接入同一个 <code>world</code>，每条分支再由六个旋转关节延伸到对应的 <code>link_6</code>。</p>
       </div>
-      <div class="tf-network" aria-label="三台 RM65 的 TF 树">
-        <div class="tf-branch"><span class="tf-node root">world</span><span class="tf-arrow"></span><span class="tf-node arm-l">l/world</span><span class="tf-arrow"></span><span class="tf-node">l/base_link</span><span class="tf-arrow"></span><span class="tf-node">l/link_1 ... l/link_6</span></div>
-        <div class="tf-branch"><span class="tf-node root">world</span><span class="tf-arrow"></span><span class="tf-node arm-m">m/world</span><span class="tf-arrow"></span><span class="tf-node">m/base_link</span><span class="tf-arrow"></span><span class="tf-node">m/link_1 ... m/link_6</span></div>
-        <div class="tf-branch"><span class="tf-node root">world</span><span class="tf-arrow"></span><span class="tf-node arm-r">r/world</span><span class="tf-arrow"></span><span class="tf-node">r/base_link</span><span class="tf-arrow"></span><span class="tf-node">r/link_1 ... r/link_6</span></div>
-      </div>
+      <TfExplorer />
       <a class="section-link" :href="withBase('/architecture/tf-tree')">查看 TF 细节 →</a>
-      <a class="section-link" style="margin-left:1.5rem" :href="withBase('/models/')">支持的 RM65 型号 →</a>
+      <a class="section-link" :href="withBase('/models/')">支持的 RM65 型号 →</a>
     </div>
   </section>
 

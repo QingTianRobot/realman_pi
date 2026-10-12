@@ -8,14 +8,8 @@ from typing import Any
 import yaml
 
 
-def load_config(path: str | Path) -> dict[str, Any]:
-    """Load and validate the small, project-owned calibration YAML contract."""
-
-    config_path = Path(path)
-    with config_path.open(encoding="utf-8") as stream:
-        config = yaml.safe_load(stream) or {}
-    if not isinstance(config, dict):
-        raise ValueError("camera calibration config must contain a YAML mapping")
+def _validate_cameras(config: dict[str, Any]) -> dict[str, Any]:
+    """Validate the camera inputs and return them (exactly one per arm)."""
 
     cameras = config.get("cameras")
     if not isinstance(cameras, dict) or not cameras:
@@ -34,6 +28,12 @@ def load_config(path: str | Path) -> dict[str, Any]:
     if len(cameras) != 3 or set(camera_arm_ids) != {"l", "m", "r"}:
         raise ValueError("cameras must map exactly one input to each of l, m and r")
 
+    return cameras
+
+
+def _validate_board(config: dict[str, Any]) -> None:
+    """Validate the ChArUco board geometry."""
+
     board = config.get("board", {})
     if not isinstance(board, dict):
         raise ValueError("board must be a mapping")
@@ -50,6 +50,10 @@ def load_config(path: str | Path) -> dict[str, Any]:
     if float(board["marker_length_m"]) >= float(board["square_length_m"]):
         raise ValueError("board.marker_length_m must be smaller than square_length_m")
 
+
+def _validate_robots(config: dict[str, Any], cameras: dict[str, Any]) -> None:
+    """Validate per-arm frames and that each arm names a configured camera."""
+
     robots = config.get("robots")
     if not isinstance(robots, dict) or set(robots) != {"l", "m", "r"}:
         raise ValueError("robots must define exactly l, m and r")
@@ -61,6 +65,10 @@ def load_config(path: str | Path) -> dict[str, Any]:
                 raise ValueError(f"robots.{arm} requires a non-empty {key}")
         if robot["camera_id"] not in cameras:
             raise ValueError(f"robots.{arm}.camera_id must name a configured camera")
+
+
+def _validate_sampling(config: dict[str, Any]) -> None:
+    """Validate capture timing and sample-count limits."""
 
     sampling = config.get("sampling", {})
     if not isinstance(sampling, dict):
@@ -79,6 +87,10 @@ def load_config(path: str | Path) -> dict[str, Any]:
     if int(sampling.get("minimum_samples_per_arm", 0)) < 3:
         raise ValueError("sampling.minimum_samples_per_arm must be at least 3")
 
+
+def _validate_solver(config: dict[str, Any]) -> None:
+    """Validate the hand-eye solver method and residual limits."""
+
     solver = config.get("solver", {})
     if not isinstance(solver, dict):
         raise ValueError("solver must be a mapping")
@@ -88,4 +100,19 @@ def load_config(path: str | Path) -> dict[str, Any]:
         if float(solver.get(key, 0.0)) <= 0.0:
             raise ValueError(f"solver.{key} must be positive")
 
+
+def load_config(path: str | Path) -> dict[str, Any]:
+    """Load and validate the small, project-owned calibration YAML contract."""
+
+    config_path = Path(path)
+    with config_path.open(encoding="utf-8") as stream:
+        config = yaml.safe_load(stream) or {}
+    if not isinstance(config, dict):
+        raise ValueError("camera calibration config must contain a YAML mapping")
+
+    cameras = _validate_cameras(config)
+    _validate_board(config)
+    _validate_robots(config, cameras)
+    _validate_sampling(config)
+    _validate_solver(config)
     return config

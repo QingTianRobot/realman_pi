@@ -151,7 +151,7 @@ class KeyboardControlRouter(Node):
             list(self.declare_parameter("coordinate_references", Parameter.Type.STRING_ARRAY).value),
             list(self.declare_parameter("cartesian_velocity_profiles", Parameter.Type.STRING_ARRAY).value),
         )
-        for arm, profile in profiles.items():
+        for profile in profiles.values():
             # Refuse at startup rather than raise inside the timer on the first
             # session request, which used to take the whole router down.
             self._goal(profile)

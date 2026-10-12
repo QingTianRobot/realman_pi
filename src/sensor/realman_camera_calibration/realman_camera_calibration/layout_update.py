@@ -77,6 +77,7 @@ def update_layout_file(
     lines = source.splitlines(keepends=True)
     arm_ranges: dict[str, tuple[int, int]] = {}
     robot_start: int | None = None
+    current_arm = ""
     robot_indent = ""
     for index, line in enumerate(lines):
         match = re.match(r"^(\s*)([lmr]):\s*(?:#.*)?$", line.rstrip("\n"))

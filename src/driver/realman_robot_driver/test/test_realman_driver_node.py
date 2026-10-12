@@ -1532,6 +1532,7 @@ def test_node_fails_closed_for_unknown_namespace_and_nontriple_thread_mode():
         _destroy_ros_nodes_and_shutdown(*nodes)
 
 
+@requires_ros_action_runtime
 def test_controller_info_service_returns_adapter_getters_as_json():
     info = {"rm_get_arm_software_info": {"status": 0, "value": {"plan_version": "4.3.8"}}}
     node = SimpleNamespace(
@@ -1549,6 +1550,7 @@ def test_controller_info_service_returns_adapter_getters_as_json():
     assert payload == {"arm": "r", "robot_ip": "192.0.2.124", "info": info}
 
 
+@requires_ros_action_runtime
 def test_controller_info_service_reports_adapter_errors_without_raising():
     def boom():
         raise RuntimeError("sdk exploded")

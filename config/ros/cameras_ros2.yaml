@@ -73,8 +73,8 @@ global_camera:
   namespace: camera_global
   camera_name: d435
   color:
-    width: 1920
-    height: 1080
+    width: 640
+    height: 480
     fps: 30
   depth:
     enable: false              # D435 深度当前关闭

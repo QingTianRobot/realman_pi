@@ -122,8 +122,9 @@ const pikaConfig = YAML.parse(await readFile(join(rosConfigDirectory, "pika_conf
 const keyboardConfig = YAML.parse(await readFile(join(rosConfigDirectory, "keyboard_control.yaml"), "utf8"));
 const gripperConfig = YAML.parse(await readFile(join(rosConfigDirectory, "gripper.yaml"), "utf8"));
 const controlTree = await readFile(join(repositoryDirectory, "config", "behavior-trees", "control.xml"), "utf8");
+const calibrationConfig = YAML.parse(await readFile(join(rosConfigDirectory, "camera_calibration.yaml"), "utf8"));
 const docsData = {
-  source: ["realman_motion.yaml", "pika_config.yaml", "keyboard_control.yaml", "gripper.yaml", "control.xml"],
+  source: ["realman_motion.yaml", "pika_config.yaml", "keyboard_control.yaml", "gripper.yaml", "control.xml", "camera_calibration.yaml"],
   motion: motionConfig.robots,
   pika: { velocity: pikaConfig.pika_velocity, mixed: pikaConfig.pika_mixed },
   keyboard: {
@@ -141,6 +142,30 @@ const docsData = {
       },
     ]),
   ),
+  // Hand-eye calibration contract shown by the calibration explainer: board, frames, sample gate and solver limits.
+  calibration: {
+    board: {
+      dictionary: calibrationConfig.board.dictionary,
+      squaresX: calibrationConfig.board.squares_x,
+      squaresY: calibrationConfig.board.squares_y,
+      squareLengthM: calibrationConfig.board.square_length_m,
+      markerLengthM: calibrationConfig.board.marker_length_m,
+      outerWidthM: calibrationConfig.board.outer_width_m,
+      outerHeightM: calibrationConfig.board.outer_height_m,
+      minimumCorners: calibrationConfig.board.minimum_corners,
+    },
+    arms: Object.entries(calibrationConfig.robots).map(([id, robot]) => ({
+      id,
+      baseFrame: robot.base_frame,
+      endEffectorFrame: robot.end_effector_frame,
+      opticalFrame: calibrationConfig.cameras[robot.camera_id].optical_frame,
+    })),
+    minimumSamplesPerArm: calibrationConfig.sampling.minimum_samples_per_arm,
+    handEyeMethod: calibrationConfig.solver.hand_eye_method,
+    maximumHandEyeResidual: calibrationConfig.solver.maximum_hand_eye_residual,
+    maximumRelativeTranslationSpreadM: calibrationConfig.solver.maximum_relative_translation_spread_m,
+    maximumRelativeRotationSpreadRad: calibrationConfig.solver.maximum_relative_rotation_spread_rad,
+  },
   // Input-mode catalog in XML order: the same source the executor uses.
   modes: [...controlTree.matchAll(/<InputModeGuard\s+mode="([a-z]+)"\s+label="([^"]*)"\s+selectable="(true|false)"/g)].map(
     (match) => ({ id: match[1], label: match[2], selectable: match[3] === "true" }),

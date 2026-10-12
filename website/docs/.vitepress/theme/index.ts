@@ -12,6 +12,7 @@ import Cards from "./components/Cards.vue";
 import DocFigure from "./components/DocFigure.vue";
 import Glance from "./components/Glance.vue";
 import Steps from "./components/Steps.vue";
+import HandEyeExplainer from "./components/HandEyeExplainer.vue";
 import TfExplorer from "./components/TfExplorer.vue";
 import UrdfFigure from "./components/UrdfFigure.vue";
 
@@ -31,6 +32,7 @@ export default {
     app.component("DocFigure", DocFigure);
     app.component("Glance", Glance);
     app.component("Steps", Steps);
+    app.component("HandEyeExplainer", HandEyeExplainer);
     app.component("TfExplorer", TfExplorer);
     app.component("UrdfFigure", UrdfFigure);
   },

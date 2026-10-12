@@ -23,6 +23,7 @@ Compose pages only from these blocks. Copy the template verbatim, change text/li
 | Steps | `templates/doc-blocks.md` | procedures | `<Steps>` around a Markdown ordered list |
 | Figure | `templates/doc-blocks.md` | screenshots | `<DocFigure src alt caption :marks>`; images live in `website/docs-assets/screenshots/` (regenerate with `scripts/capture-screenshots.mjs`) |
 | URDF figure | `templates/doc-blocks.md` | any page about arms/grippers | `<UrdfFigure model="arm\|gripper\|arm-gripper" controls frames animate focus caption />` |
+| Hand-eye explainer | `templates/doc-blocks.md` | camera-calibration page | `<HandEyeExplainer />` only: scripted, scrubbable player (6 chapters, `theme/handeye/{timeline,scene,kinematics}.ts`) over the real URDF; exposes `data-state` (`ready`), `data-chapter`, `window.__handEye.{seek,events,duration,setFull,setRender,setArm}` used by the offline video export; samples are illustrative, only the last chapter shows production layout numbers |
 | Interactive explainers | `templates/doc-blocks.md` | architecture / Pika / driver pages | `<ArchitectureMap />`, `<ModeExplorer />`, `<LimitExplorer />`, `<TfExplorer />` (data from `docs-data.json` / the URDF; never hard-code numbers) |
 | Mermaid | `templates/doc-page.md` | doc pages | ` ```mermaid `; rules below |
 

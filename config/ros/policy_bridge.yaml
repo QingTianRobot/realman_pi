@@ -84,9 +84,9 @@ downlink:
     twist_scale:                    # 归一化 -> SI 单位
       linear: 0.25                  # m/s；与训练动作归一化一致（右臂命令上限 0.25）
       angular: 0.6                  # rad/s
-    frame_ids:                      # 各臂基座坐标系，须与 TF 树一致
-      left: l_base_link
-      right: r_base_link
+    frame_ids:                      # 速度命令的参考系：各臂的单位变换 WORK 系（与基座同向），
+      left: l/work/pikabase         # 须与 policy_control_router 校验的 frame_id 以及训练数据的
+      right: r/work/pikabase        # 命令坐标系（recording.yaml cartesian_command_frames）一致
   position:                         # 一期不启用（mode.position_modes 为空）
     pose_format: xyz_euler          # xyz_euler / xyz_quat_xyzw
     position_unit: m                # m / mm

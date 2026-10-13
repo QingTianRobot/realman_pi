@@ -53,7 +53,7 @@ realman_bt_executor ── /realman_bt_executor/input_mode_state ──▶ ModeW
 | `downlink` | `publish_rate_hz` | `>0`；当前 `30.0` | 必须快于驱动 `velocity_watchdog_ms`（100ms），且等于训练数据帧率（30 fps），因为每个周期取一步动作 |
 | `downlink` | `smoothing_alpha` | `(0,1]`；当前 `0.6` | 一阶低通 `a=α·new+(1-α)·last` |
 | `downlink.velocity` | `twist_scale` | `linear 0.25 m/s`、`angular 0.6 rad/s`（与训练动作归一化同一组） | 归一化 → SI 单位 |
-| `downlink.velocity` | `frame_ids` | `l_base_link` / `r_base_link` | 各臂基座坐标系，须与 TF 树一致 |
+| `downlink.velocity` | `frame_ids` | `l/work/pikabase` / `r/work/pikabase` | 各臂单位变换 WORK 系（方向与基座一致），须与路由校验的 `frame_id` 和训练数据的命令坐标系一致 |
 | `downlink.gripper` | `clamp` | `[0,1]`；`0=闭合,1=张开` | 与 `gripper_manager` 语义一致 |
 | `mode.mapping` | `velocity_modes` | 当前 `[policy]` | 映射为内部 `velocity` |
 | `mode.mapping` | `inactive_modes` | `[web,pika,none]` | 映射为内部 `inactive` |
@@ -114,6 +114,19 @@ obs 字段名固定，值为 NumPy 数组 / 字符串：
 连接建立时服务端先发一帧 metadata，客户端 `recv` 后才进入请求-响应；每次 `infer` 发一帧 obs、收一帧 actions。响应经 `validators.check`：形状必须精确为 `(action_horizon, action_dim)`、全部有限，否则整块拒绝（绝不下发到机械臂）；合法值 clip 到 `action_clip`。只取前 `steps_per_inference` 步入队。
 
 > `action_horizon` 必须与服务端实际返回的行数一致（如 pi0 常见 50 行），否则整块被 `validators.check` 按 shape 拒绝。上线前用 `mock_policy_server` 或 `get_server_metadata()` 核对。
+
+## 路由：policy_control_router
+
+bridge 发布的 `/pi05_policy/{l,r}/*` 由 `policy_control_router`（`src/behavior/realman_bt/scripts/`）消费，与 Pika、键盘路由并列，随 `control_router.launch.py` 启动。设计见 `docs/superpowers/specs/2026-10-13-policy-input-router-design.md`，配置见 `config/ros/policy_router.yaml`。
+
+- 只在行为树 `active_mode == policy` 且 `phase == ACTIVE` 时工作；离开模式立即发零速并取消会话。
+- 两只臂都路由；某只臂没有策略流就不会开会话。每只臂一个 `CartesianVelocity` 会话（WORK 系 `work/pikabase`，低跟随）。
+- 每条命令校验：`frame_id`、分量有限、`header.stamp` 不超过 `stale_ms`（默认 100 ms）；再按路由自己的限速（默认 0.10 m/s、0.25 rad/s）限幅，独立于 bridge 的 `twist_scale`。
+- 流停了先置零，`input_timeout_ms`（默认 500 ms）后释放会话；绝不为过期命令开会话。
+- **会话开始的漂移保护**：会话开始后 2 s 内，只要发出的命令都是零，任一关节偏移超过 1° 就取消会话并锁定，需要先停掉 bridge（`/policy/deactivate`）再重新激活才能重试。
+- 夹爪：转发到 `/gripper_{left,right}/percentage/command`，值必须在 `[0,1]`，限 10 Hz。
+- 急停：服务 `/policy_router/emergency_stop`（`Trigger`）立即置零并取消会话；切换到其他模式、停掉 bridge、驱动 100 ms 看门狗是另外三条停止路径。
+- 运动的唯一开关是 bridge 的 `/policy/activate`；路由不再设第二道开关。`dry_run` 沿用整个 launch 的约定（默认 `true`，上机时显式关闭）。
 
 ## 安全与看门狗约定
 

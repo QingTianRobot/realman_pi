@@ -257,6 +257,21 @@ def generate_launch_description():
         }],
     )
 
+    policy_router = Node(
+        package="realman_bt",
+        executable="policy_control_router",
+        name="policy_control_router",
+        output="screen",
+        parameters=[
+            str(_config_root() / "ros" / "policy_router.yaml"),
+            {
+                "dry_run": LaunchConfiguration("dry_run"),
+                "coordinate_references": coordinate_references,
+                "cartesian_velocity_profiles": velocity_profiles,
+            },
+        ],
+    )
+
     keyboard_router = Node(
         package="realman_bt",
         executable="keyboard_control_router",
@@ -283,6 +298,7 @@ def generate_launch_description():
             runtime_snapshot_file,
             executor,
             pika_router,
+            policy_router,
             keyboard_router,
         ]
     )

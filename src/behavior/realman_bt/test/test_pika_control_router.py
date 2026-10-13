@@ -47,7 +47,7 @@ def test_pika_velocity_uses_configured_work_and_per_session_speed_limits():
     source = ROUTER.read_text(encoding="utf-8")
 
     assert "parse_arm_profiles" in source
-    assert 'logical_name == work_reference' in source
+    assert 'logical_name == work_reference' in (ROUTER.parent / "router_common.py").read_text(encoding="utf-8")
     assert "CartesianVelocity.Goal.WORK" in source
     assert "goal.max_linear_speed_mps = profile.max_linear_speed_mps" in source
     assert "goal.max_angular_speed_radps = profile.max_angular_speed_radps" in source

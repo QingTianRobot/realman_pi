@@ -54,6 +54,33 @@ def _frame_order_key(name: str) -> int:
         return 0
 
 
+def _parse_thumbnail_width(value: str | None) -> int | None:
+    """Parse an optional ``?w=`` preview width, rejecting absurd values."""
+    if not value:
+        return None
+    try:
+        width = int(value)
+    except ValueError:
+        return None
+    return width if 0 < width <= 1280 else None
+
+
+def _thumbnail_jpeg(path: Path, width: int) -> bytes:
+    """Decode and downscale one raw camera JPEG for a fast low-bandwidth preview."""
+    import io
+
+    from PIL import Image
+
+    with Image.open(path) as image:
+        image = image.convert("RGB")
+        if image.width > width:
+            height = max(1, round(image.height * width / image.width))
+            image = image.resize((width, height), Image.LANCZOS)
+        buffer = io.BytesIO()
+        image.save(buffer, format="JPEG", quality=70)
+        return buffer.getvalue()
+
+
 class RecordingWebServer:
     def __init__(
         self,
@@ -362,6 +389,17 @@ class RecordingWebServer:
         candidate = (directory / "videos" / camera_id / filename).resolve()
         if directory not in candidate.parents or not candidate.is_file():
             raise web.HTTPNotFound(text="frame does not exist")
+        width = _parse_thumbnail_width(request.query.get("w"))
+        if width is not None:
+            try:
+                body = await asyncio.to_thread(_thumbnail_jpeg, candidate, width)
+                return web.Response(
+                    body=body,
+                    content_type="image/jpeg",
+                    headers={"Cache-Control": "no-store"},
+                )
+            except Exception as error:  # noqa: BLE001 - decode failure falls back to the original
+                self._logger.warning(f"raw thumbnail failed, serving original: {error}")
         return web.FileResponse(candidate, headers={"Cache-Control": "no-store"})
 
     async def _lerobot_export_all(self, _request: Any) -> Any:

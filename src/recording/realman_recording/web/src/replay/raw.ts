@@ -24,20 +24,33 @@ export function initRawViewer(deps: { notify: (message: string, error?: boolean)
   const emptyEl = $<HTMLElement>("#raw-empty");
   const counterEl = $<HTMLElement>("#raw-counter");
   const playBtn = $<HTMLButtonElement>("#raw-play");
+  const speedEl = $<HTMLSelectElement>("#raw-speed");
+
+  // Preview thumbnails are downscaled server-side (?w=…) so a whole session can
+  // be scanned quickly over the tunnel; detail is not needed to spot a bad run.
+  const THUMB_WIDTH = 320;
+  const MIN_FRAME_MS = 80;
 
   let sessionId = "";
   let cameras: string[] = [];
   let frames: Record<string, string[]> = {};
   let activeCamera = "";
   let index = 0;
+  let speed = Number(speedEl.value) || 1;
   let playing = false;
   let timer: number | undefined;
+  let shown = 0;
+  let totalSteps = 0;
 
   function stopPlay(): void {
     playing = false;
-    if (timer !== undefined) window.clearInterval(timer);
+    if (timer !== undefined) window.clearTimeout(timer);
     timer = undefined;
     playBtn.textContent = "▶ 播放";
+  }
+
+  function stride(): number {
+    return Math.max(1, Math.round(speed));
   }
 
   function frameCount(): number {
@@ -65,7 +78,7 @@ export function initRawViewer(deps: { notify: (message: string, error?: boolean)
     emptyEl.style.display = "none";
     stageImg.style.display = "block";
     const filename = list[index];
-    stageImg.src = `/api/lerobot/${encodeURIComponent(sessionId)}/raw/image/${encodeURIComponent(activeCamera)}/${encodeURIComponent(filename)}`;
+    stageImg.src = `/api/lerobot/${encodeURIComponent(sessionId)}/raw/image/${encodeURIComponent(activeCamera)}/${encodeURIComponent(filename)}?w=${THUMB_WIDTH}`;
     counterEl.textContent = `${index + 1} / ${list.length}`;
   }
 
@@ -84,19 +97,25 @@ export function initRawViewer(deps: { notify: (message: string, error?: boolean)
     renderFrame();
   }
 
+  function playTick(): void {
+    if (!playing) return;
+    step(stride());
+    shown += 1;
+    if (shown >= totalSteps) stopPlay();
+  }
+
   function togglePlay(): void {
-    if (!frameCount()) return;
+    const count = frameCount();
+    if (!count) return;
     if (playing) {
       stopPlay();
       return;
     }
     playing = true;
     playBtn.textContent = "⏸ 暂停";
-    const fps = 10; // light cadence for the raw JPEG preview over the tunnel
-    timer = window.setInterval(() => {
-      step(1);
-      if (index === 0) stopPlay(); // wrap around once, then stop
-    }, 1000 / fps);
+    shown = 0;
+    totalSteps = Math.ceil(count / stride());
+    playTick(); // the image's onload schedules the next strided frame
   }
 
   function close(): void {
@@ -153,6 +172,16 @@ export function initRawViewer(deps: { notify: (message: string, error?: boolean)
   $<HTMLButtonElement>("#raw-prev").addEventListener("click", () => step(-1));
   $<HTMLButtonElement>("#raw-next").addEventListener("click", () => step(1));
   playBtn.addEventListener("click", togglePlay);
+  speedEl.addEventListener("change", () => {
+    speed = Number(speedEl.value) || 1;
+    stopPlay();
+  });
+  // Load-driven playback: advance to the next strided frame only after the
+  // current thumbnail has loaded, so a slow tunnel never piles up requests.
+  stageImg.onload = () => {
+    if (!playing) return;
+    timer = window.setTimeout(playTick, MIN_FRAME_MS);
+  };
 
   return { open, close };
 }

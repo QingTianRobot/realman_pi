@@ -57,9 +57,11 @@
     .raw-empty{display:none;color:var(--muted);font-size:12px}
     .raw-modal-controls{display:flex;align-items:center;gap:12px;padding:14px 20px;border-top:1px solid var(--line)}
     .raw-modal-controls button{background:#2a3a55;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:8px 14px;cursor:pointer;font:13px inherit}
+    .raw-modal-controls .raw-speed{display:flex;align-items:center;gap:7px;color:var(--muted);font:12px inherit}
+    .raw-modal-controls .raw-speed select{background:#0b0f17;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:12px inherit}
     .raw-modal-controls .frame-label{min-width:88px;text-align:right;color:var(--muted);font:11px ui-monospace,Menlo,monospace}
   </style>
-  <script type="module" crossorigin src="/assets/recording-6OCzm8Tf.js"></script>
+  <script type="module" crossorigin src="/assets/recording-C0DOKR_o.js"></script>
   <link rel="stylesheet" crossorigin href="/assets/recording-Dmd_k1W9.css">
 </head>
 <body>
@@ -179,6 +181,14 @@
         <button id="raw-prev" type="button" title="上一帧">‹</button>
         <button id="raw-play" type="button" title="播放 / 暂停">▶ 播放</button>
         <button id="raw-next" type="button" title="下一帧">›</button>
+        <label class="raw-speed">速度
+          <select id="raw-speed" aria-label="预览速度">
+            <option value="1">1×</option>
+            <option value="2">2×</option>
+            <option value="4" selected>4×</option>
+            <option value="8">8×</option>
+          </select>
+        </label>
         <span id="raw-counter" class="frame-label">— / —</span>
       </div>
     </div>

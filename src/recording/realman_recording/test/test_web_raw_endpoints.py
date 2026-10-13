@@ -135,6 +135,47 @@ def test_raw_image_endpoint_rejects_traversal_and_bad_extension(tmp_path):
     asyncio.run(run())
 
 
+def test_raw_image_endpoint_downscales_thumbnail(tmp_path):
+    pytest.importorskip("aiohttp")
+    pytest.importorskip("PIL")
+    import asyncio
+    import io
+
+    from PIL import Image
+    from aiohttp import web
+    from aiohttp.test_utils import TestClient, TestServer
+
+    root = tmp_path / "rec"
+    root.mkdir()
+    directory = root / "s1"
+    (directory / "videos" / "d435").mkdir(parents=True)
+    Image.new("RGB", (640, 480), (10, 20, 30)).save(directory / "videos" / "d435" / "1.jpg")
+    (directory / "manifest.json").write_text(json.dumps({
+        "state": "READY", "decision": "PENDING", "metadata": {"session_number": 1},
+    }))
+
+    server = _build_server(root)
+    app = web.Application()
+    app.router.add_get(
+        "/api/lerobot/{session_id}/raw/image/{camera_id}/{filename}",
+        server._lerobot_raw_image,
+    )
+
+    async def run():
+        client = TestClient(TestServer(app))
+        await client.start_server()
+        try:
+            response = await client.get("/api/lerobot/s1/raw/image/d435/1.jpg?w=320")
+            assert response.status == 200
+            assert response.content_type == "image/jpeg"
+            decoded = Image.open(io.BytesIO(await response.read()))
+            assert decoded.size == (320, 240)
+        finally:
+            await client.close()
+
+    asyncio.run(run())
+
+
 def test_raw_endpoint_rejects_unknown_session_with_404(tmp_path):
     pytest.importorskip("aiohttp")
     import asyncio

@@ -355,4 +355,4 @@ services:
       - policy_bridge
       - policy_bridge.launch.py
       - config_file:=${POLICY_BRIDGE_CONFIG_FILE:-/opt/rm65_ws/config/ros/policy_bridge.yaml}
-      - active_side:=${POLICY_BRIDGE_ACTIVE_SIDE:-left}
+      - active_side:=${POLICY_BRIDGE_ACTIVE_SIDE:-right}

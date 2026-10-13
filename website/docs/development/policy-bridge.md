@@ -50,16 +50,16 @@ realman_bt_executor ── /realman_bt_executor/input_mode_state ──▶ ModeW
 | `action` | `inference_lead_steps` | `>=0`；当前 `2` | 队列剩余 `<=` 此值时提前触发推理 |
 | `action` | `action_clip` | `[min,max]`；当前 `[-1,1]` | 归一化动作限幅 |
 | `downlink` | `command_namespace` | 以 `/` 开头；`/pi05_policy` | 下行命名空间，与 `/pika` 平级 |
-| `downlink` | `publish_rate_hz` | `>0`；当前 `50.0` | 必须快于驱动 `velocity_watchdog_ms`（100ms） |
+| `downlink` | `publish_rate_hz` | `>0`；当前 `30.0` | 必须快于驱动 `velocity_watchdog_ms`（100ms），且等于训练数据帧率（30 fps），因为每个周期取一步动作 |
 | `downlink` | `smoothing_alpha` | `(0,1]`；当前 `0.6` | 一阶低通 `a=α·new+(1-α)·last` |
-| `downlink.velocity` | `twist_scale` | `linear 0.2 m/s`、`angular 0.6 rad/s` | 归一化 → SI 单位 |
+| `downlink.velocity` | `twist_scale` | `linear 0.25 m/s`、`angular 0.6 rad/s`（与训练动作归一化同一组） | 归一化 → SI 单位 |
 | `downlink.velocity` | `frame_ids` | `l_base_link` / `r_base_link` | 各臂基座坐标系，须与 TF 树一致 |
 | `downlink.gripper` | `clamp` | `[0,1]`；`0=闭合,1=张开` | 与 `gripper_manager` 语义一致 |
 | `mode.mapping` | `velocity_modes` | 当前 `[policy]` | 映射为内部 `velocity` |
 | `mode.mapping` | `inactive_modes` | `[web,pika,none]` | 映射为内部 `inactive` |
 | `stats` | `failure_pause_threshold` | 当前 `5` | 连续失败 `>=N` 暂停，需显式 activate 恢复 |
 
-一期 `arm_names` 固定 `[l, r]`，节点以单个 `active_side`（默认 `left`）驱动单臂动作流；双臂独立流为二期扩展。上行 `state[0:6]` 一期取每臂 `joint_states` 前 6 个关节位置占位，`state[6]` 由夹爪 `Float64` 设备单位经 `open/close_position` 换算为 `0..1`。
+一期 `arm_names` 固定 `[l, r]`，节点以单个 `active_side`（launch 默认 `left`，Docker `policy` 服务默认 `right`）驱动单臂动作流；双臂独立流为二期扩展。上行 `state[0:6]` 一期取每臂 `joint_states` 前 6 个关节位置占位，`state[6]` 由夹爪 `Float64` 设备单位经 `open/close_position` 换算为 `0..1`。
 
 ## ROS 接口
 
@@ -67,7 +67,7 @@ realman_bt_executor ── /realman_bt_executor/input_mode_state ──▶ ModeW
 
 | 用途 | 默认 topic | 类型 |
 | --- | --- | --- |
-| 腕部图像 | `/camera_left/color/image_raw` | `sensor_msgs/Image` |
+| 腕部图像 | `/camera_right/color/image_raw` | `sensor_msgs/Image` |
 | 全局图像 | `/camera_global/d435/color/image_raw` | `sensor_msgs/Image`（独立 RealSense D435，区别于三路 Orbbec 臂相机） |
 | 关节状态 | `/l/joint_states`、`/r/joint_states` | `sensor_msgs/JointState` |
 | 夹爪位置 | `/gripper_left/position`、`/gripper_right/position` | `std_msgs/Float64` |

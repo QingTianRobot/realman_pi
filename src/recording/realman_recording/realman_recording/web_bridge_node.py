@@ -197,7 +197,16 @@ class RecordingWebBridgeNode(Node):
         request.command = ManageRecording.Request.ADOPT_ALL
         future = self._recording_client.call_async(request)
         try:
-            response = future.result(timeout=30.0)
+            # rclpy's Future.result() takes no ``timeout`` kwarg (unlike
+            # concurrent.futures), so wait for completion with a bounded poll and
+            # then read the result with no arguments.
+            deadline = time.monotonic() + 30.0
+            while not future.done() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if not future.done():
+                future.cancel()
+                raise RuntimeError("batch export timed out")
+            response = future.result()
         except Exception as error:  # noqa: BLE001 - surface a stable web error
             raise RuntimeError(f"batch export failed: {error}") from error
         return {"ok": bool(response.success), "message": response.message, "state": response.state}

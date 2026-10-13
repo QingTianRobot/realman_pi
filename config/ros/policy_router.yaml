@@ -1,0 +1,31 @@
+# policy_control_router: forwards policy_bridge's /pi05_policy/{l,r} streams to the drivers while the behavior tree
+# is in policy mode. Design: docs/superpowers/specs/2026-10-13-policy-input-router-design.md
+# `dry_run`, `coordinate_references` and `cartesian_velocity_profiles` come from the launch file.
+policy_control_router:
+  ros__parameters:
+    # Both arms are routed; an arm with no policy stream simply never opens a session.
+    arms: ["l", "r"]
+    # Must match policy_bridge's downlink.command_namespace.
+    command_namespace: /pi05_policy
+    # Same per-arm identity WORK frame the Pika router uses and the training data was recorded in
+    # (recording.yaml cartesian_command_frames), so a velocity here means the same thing as in the dataset.
+    work_reference: work/pikabase
+    # Session limits, deliberately below the bridge's twist_scale (0.25 m/s, 0.6 rad/s): a second safeguard that is
+    # independent of the policy. Raise them step by step once the pipeline is proven on the arm.
+    max_linear_speed_mps: 0.10
+    max_angular_speed_radps: 0.25
+    max_linear_accel_mps2: 0.10
+    max_angular_accel_radps2: 0.50
+    # The bridge publishes at 30 Hz (33 ms). A command whose header.stamp is older than stale_ms is dropped; a stream
+    # that stops is zeroed after stale_ms and the session is released after input_timeout_ms. The driver's own
+    # watchdog (100 ms) stays the last line of defence.
+    stale_ms: 100
+    input_timeout_ms: 500
+    # false = low-follow, as for Pika (high-follow oscillated on the arm).
+    follow: false
+    # Uncommanded-motion guard after a session starts: the controller can pull the arm toward a stale target even
+    # with a zero command. Any joint moving more than this within the window cancels the session.
+    drift_limit_deg: 1.0
+    drift_window_sec: 2.0
+    # gripper_manager has its own dead band and minimum command interval; do not flood it.
+    gripper_max_hz: 10.0

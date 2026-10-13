@@ -31,7 +31,8 @@ observation:
   # 上行图像源。至少一路 enabled=true，否则启动校验失败。
   image_topics:
     - name: wrist_image
-      topic: /camera_left/color/image_raw
+      # 右臂腕部相机（训练数据的 orbbec-right）；换臂时同步改 active_side。
+      topic: /camera_right/color/image_raw
       encoding: rgb8
       resize: [480, 640]        # [H, W]；留空表示不缩放
       enabled: true
@@ -61,7 +62,8 @@ observation:
   state_expected_dim: 7
 
 prompt:
-  initial: "pick the red block"
+  # 必须与训练数据视图里的任务文本逐字一致（make_realman_view.py 的 --prompt）。
+  initial: "pick up the power adapter and put it in the blue bin"
   topic: /policy/prompt          # std_msgs/String，运行时更新入口
   on_change_clear_queue: true    # prompt 变更时清空动作队列，防旧任务污染
 
@@ -74,15 +76,17 @@ action:
 
 downlink:
   command_namespace: /pi05_policy   # 必须以 / 开头；与 /pika 平级
-  publish_rate_hz: 50.0             # 必须快于驱动 velocity_watchdog_ms(100ms)
+  # 训练数据为 30 fps，节点每个发布周期取一步动作，必须等于数据帧率，否则速度会按比例放大；
+  # 周期 33ms，仍快于驱动 velocity_watchdog_ms(100ms)。
+  publish_rate_hz: 30.0
   smoothing_alpha: 0.6              # 一阶低通 a=α*new+(1-α)*last，∈(0,1]
   velocity:
     twist_scale:                    # 归一化 -> SI 单位
-      linear: 0.2                   # m/s
+      linear: 0.25                  # m/s；与训练动作归一化一致（右臂命令上限 0.25）
       angular: 0.6                  # rad/s
-    frame_ids:                      # 各臂基座坐标系，须与 TF 树一致
-      left: l_base_link
-      right: r_base_link
+    frame_ids:                      # 速度命令的参考系：各臂的单位变换 WORK 系（与基座同向），
+      left: l/work/pikabase         # 须与 policy_control_router 校验的 frame_id 以及训练数据的
+      right: r/work/pikabase        # 命令坐标系（recording.yaml cartesian_command_frames）一致
   position:                         # 一期不启用（mode.position_modes 为空）
     pose_format: xyz_euler          # xyz_euler / xyz_quat_xyzw
     position_unit: m                # m / mm

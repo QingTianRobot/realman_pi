@@ -10,9 +10,10 @@ import asyncio
 import json
 import threading
 from pathlib import Path
-from typing import Any
+from typing import Any, Callable
 
 from .lerobot_web_replay import LeRobotReplayCatalog, queue_from_manifests
+from .lerobot_reindex import reindex_dataset
 from .session_store import SessionStore
 
 
@@ -44,6 +45,15 @@ def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
     return start, min(end, size - 1)
 
 
+def _frame_order_key(name: str) -> int:
+    """Order raw camera frames by their nanosecond-timestamp filename stem."""
+    stem = name.rsplit(".", 1)[0]
+    try:
+        return int(stem)
+    except ValueError:
+        return 0
+
+
 class RecordingWebServer:
     def __init__(
         self,
@@ -56,6 +66,7 @@ class RecordingWebServer:
         recording_root: str | Path,
         lerobot_export_dir: str | Path,
         logger: Any,
+        export_all: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self._bind_host = bind_host
         self._port = port
@@ -63,7 +74,9 @@ class RecordingWebServer:
         self._manifest = manifest
         self._description_root = Path(description_root).resolve()
         self._recording_root = Path(recording_root).resolve()
+        self._lerobot_export_dir = Path(lerobot_export_dir).resolve()
         self._replay = LeRobotReplayCatalog(recording_root, lerobot_export_dir)
+        self._export_all = export_all
         self._logger = logger
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -158,13 +171,24 @@ class RecordingWebServer:
             from aiohttp import web
         except ImportError as error:
             raise RuntimeError("python3-aiohttp is required for recording Web display") from error
-        app = web.Application(client_max_size=16_384)
+
+        @web.middleware
+        async def _no_cache(request, handler):
+            response = await handler(request)
+            if request.path.startswith("/api/"):
+                response.headers["Cache-Control"] = "no-store"
+            return response
+
+        app = web.Application(client_max_size=16_384, middlewares=[_no_cache])
         app.router.add_get("/healthz", self._health)
         app.router.add_get("/api/layout", self._layout)
         app.router.add_get("/ws", self._websocket)
         app.router.add_get("/preview/{camera_id}.jpg", self._preview)
         app.router.add_get("/api/lerobot", self._lerobot_list)
         app.router.add_get("/api/lerobot/queue", self._lerobot_queue)
+        app.router.add_get("/api/lerobot/pending", self._lerobot_pending)
+        app.router.add_post("/api/lerobot/export-all", self._lerobot_export_all)
+        app.router.add_post("/api/lerobot/reindex", self._lerobot_reindex)
         app.router.add_get("/api/lerobot/{session_id}/summary", self._lerobot_summary)
         app.router.add_get("/api/lerobot/{session_id}/frames", self._lerobot_frames)
         app.router.add_get(
@@ -174,9 +198,17 @@ class RecordingWebServer:
         app.router.add_get(
             "/api/lerobot/{session_id}/video/{camera_id}", self._lerobot_video
         )
+        app.router.add_get("/api/lerobot/{session_id}/raw", self._lerobot_raw)
+        app.router.add_get(
+            "/api/lerobot/{session_id}/raw/image/{camera_id}/{filename}",
+            self._lerobot_raw_image,
+        )
         app.router.add_post("/api/lerobot/{session_id}/delete", self._lerobot_delete)
         app.router.add_post("/api/lerobot/{session_id}/restore", self._lerobot_restore)
+        app.router.add_post("/api/lerobot/{session_id}/remove", self._lerobot_remove)
+        app.router.add_post("/api/lerobot/{session_id}/discard", self._lerobot_discard)
         app.router.add_get("/api/lerobot/trash", self._lerobot_trash)
+        app.router.add_post("/api/lerobot/trash/remove-all", self._lerobot_remove_all_hidden)
         app.router.add_post("/api/lerobot/{session_id}/task", self._lerobot_task)
         app.router.add_get("/api/lerobot/{session_id}/subtasks", self._lerobot_subtasks)
         app.router.add_post("/api/lerobot/{session_id}/subtasks", self._lerobot_subtasks_update)
@@ -249,6 +281,129 @@ class RecordingWebServer:
             # be visible to the UI as 503 without taking down live WebSocket data.
             raise web.HTTPServiceUnavailable(text="LeRobot replay is unavailable") from error
 
+    async def _lerobot_pending(self, _request: Any) -> Any:
+        """List finalized sessions still awaiting adopt/export (decision=PENDING)."""
+        from aiohttp import web
+        try:
+            sessions = await asyncio.to_thread(self._replay.list_pending)
+            return web.json_response({"sessions": sessions})
+        except Exception as error:  # noqa: BLE001 - read-only endpoint must stay available
+            self._logger.warning(f"LeRobot pending listing failed: {error}")
+            raise web.HTTPServiceUnavailable(text="LeRobot pending is unavailable") from error
+
+    @staticmethod
+    def _read_raw_session(directory: Path) -> dict[str, Any]:
+        """Summarize an un-exported session for the raw-preview viewer."""
+        manifest_path = directory / "manifest.json"
+        if not manifest_path.is_file():
+            raise ValueError("recording session has no finalized manifest.json")
+        payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("recording manifest must be a JSON object")
+        metadata = payload.get("metadata") or {}
+        summary = payload.get("summary") or {}
+        cameras: dict[str, list[str]] = {}
+        videos_dir = directory / "videos"
+        if videos_dir.is_dir():
+            for camera_dir in sorted(videos_dir.iterdir()):
+                if not camera_dir.is_dir() or camera_dir.name.startswith("."):
+                    continue
+                frames = sorted(
+                    (path.name for path in camera_dir.glob("*.jpg")),
+                    key=_frame_order_key,
+                )
+                if frames:
+                    cameras[camera_dir.name] = frames
+        started = payload.get("started_realtime_ns")
+        ended = payload.get("ended_realtime_ns")
+        duration_s: float | None = None
+        if isinstance(started, int) and isinstance(ended, int) and ended >= started:
+            duration_s = (ended - started) / 1e9
+        number = metadata.get("session_number")
+        return {
+            "session_id": directory.name,
+            "session_number": number if isinstance(number, int) else 0,
+            "task": metadata.get("task", ""),
+            "state": payload.get("state", ""),
+            "duration_s": duration_s,
+            "summary": summary,
+            "cameras": cameras,
+        }
+
+    async def _lerobot_raw(self, request: Any) -> Any:
+        """Return raw-preview metadata (cameras + sorted frame names) for one session."""
+        from aiohttp import web
+        session_id = request.match_info["session_id"]
+        try:
+            directory = self._session_directory(session_id)
+            payload = await asyncio.to_thread(self._read_raw_session, directory)
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        return web.json_response(payload)
+
+    async def _lerobot_raw_image(self, request: Any) -> Any:
+        """Serve one raw JPEG frame from an un-exported session's videos tree."""
+        from aiohttp import web
+        session_id = request.match_info["session_id"]
+        camera_id = request.match_info["camera_id"]
+        filename = request.match_info["filename"]
+        if not camera_id or Path(camera_id).name != camera_id:
+            raise web.HTTPNotFound(text="invalid camera id")
+        if (
+            not filename
+            or Path(filename).name != filename
+            or not filename.lower().endswith(".jpg")
+        ):
+            raise web.HTTPNotFound(text="invalid frame")
+        try:
+            directory = self._session_directory(session_id)
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        candidate = (directory / "videos" / camera_id / filename).resolve()
+        if directory not in candidate.parents or not candidate.is_file():
+            raise web.HTTPNotFound(text="frame does not exist")
+        return web.FileResponse(candidate, headers={"Cache-Control": "no-store"})
+
+    async def _lerobot_export_all(self, _request: Any) -> Any:
+        """Adopt and queue every pending session for LeRobot conversion at once."""
+        from aiohttp import web
+        if self._export_all is None:
+            raise web.HTTPNotImplemented(text="batch export is not wired to the recorder")
+        try:
+            result = await asyncio.to_thread(self._export_all)
+        except Exception as error:  # noqa: BLE001 - the recorder owns the failure reason
+            self._logger.warning(f"batch export failed: {error}")
+            raise web.HTTPServiceUnavailable(text=str(error)) from error
+        if not isinstance(result, dict) or not result.get("ok"):
+            message = (result or {}).get("message", "batch export failed") if isinstance(result, dict) else "batch export failed"
+            raise web.HTTPConflict(text=message)
+        return web.json_response(result)
+
+    async def _lerobot_reindex(self, _request: Any) -> Any:
+        """Re-index episode_index across the dataset (removes orphans, makes contiguous)."""
+        from aiohttp import web
+        try:
+            result = await asyncio.to_thread(
+                reindex_dataset, self._recording_root, self._lerobot_export_dir
+            )
+            return web.json_response(result)
+        except Exception as error:  # noqa: BLE001 - surface the reindex failure reason
+            self._logger.warning(f"LeRobot reindex failed: {error}")
+            raise web.HTTPConflict(text=str(error)) from error
+
+    async def _lerobot_discard(self, request: Any) -> Any:
+        """Discard one pending session so it is excluded from batch export."""
+        from aiohttp import web
+        session_id = request.match_info["session_id"]
+        try:
+            directory = self._session_directory(session_id)
+            await asyncio.to_thread(SessionStore.discard_final_session, directory)
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        except RuntimeError as error:
+            raise web.HTTPConflict(text=str(error)) from error
+        return web.json_response({"ok": True})
+
     async def _lerobot_queue(self, _request: Any) -> Any:
         """Return the per-session conversion queue without exposing filesystem paths."""
         from aiohttp import web
@@ -298,6 +453,22 @@ class RecordingWebServer:
             raise web.HTTPConflict(text=str(error)) from error
         return web.json_response({"ok": True})
 
+    async def _lerobot_remove(self, request: Any) -> Any:
+        """Permanently delete one exported episode's raw session files.
+
+        This is a hard delete (unlike ``/delete``, which soft-hides the session).
+        """
+        from aiohttp import web
+        session_id = request.match_info["session_id"]
+        try:
+            directory = self._session_directory(session_id)
+            await asyncio.to_thread(SessionStore.remove_final_session, directory)
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        except RuntimeError as error:
+            raise web.HTTPConflict(text=str(error)) from error
+        return web.json_response({"ok": True})
+
     async def _lerobot_trash(self, _request: Any) -> Any:
         """List soft-deleted exported episodes without exposing filesystem paths."""
         from aiohttp import web
@@ -307,6 +478,27 @@ class RecordingWebServer:
         except Exception as error:  # noqa: BLE001 - read-only endpoint must stay available
             self._logger.warning(f"LeRobot trash listing failed: {error}")
             raise web.HTTPServiceUnavailable(text="LeRobot trash is unavailable") from error
+
+    async def _lerobot_remove_all_hidden(self, _request: Any) -> Any:
+        """Permanently delete every soft-hidden episode's raw session files."""
+        from aiohttp import web
+        try:
+            hidden = await asyncio.to_thread(self._replay.list_hidden)
+            removed = 0
+            for item in hidden:
+                session_id = item.get("session_id")
+                if not session_id:
+                    continue
+                try:
+                    directory = self._session_directory(session_id)
+                    await asyncio.to_thread(SessionStore.remove_final_session, directory)
+                    removed += 1
+                except (ValueError, RuntimeError):
+                    continue
+            return web.json_response({"ok": True, "removed": removed})
+        except Exception as error:  # noqa: BLE001 - destructive endpoint must stay available
+            self._logger.warning(f"remove-all-hidden failed: {error}")
+            raise web.HTTPServiceUnavailable(text="remove-all-hidden failed") from error
 
     async def _lerobot_task(self, request: Any) -> Any:
         """Set the user-facing task label on one exported episode."""

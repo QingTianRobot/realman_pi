@@ -5,6 +5,7 @@ import { GridStack } from "gridstack";
 import "gridstack/dist/gridstack.min.css";
 import "./styles.css";
 import { initSidebar } from "./replay/sidebar";
+import { initRawViewer } from "./replay/raw";
 import { renderAnalysis } from "./replay/analysis";
 import { initVideo, type VideoContext } from "./replay/video";
 import { initCharts, renderHealth } from "./replay/charts";
@@ -40,15 +41,6 @@ type Snapshot = {
 };
 
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector(selector) as T;
-function escapeHtml(value: string): string {
-  return value.replace(/[&<>\"']/g, (character) => ({
-    "&": "&amp;",
-    "<": "&lt;",
-    ">": "&gt;",
-    "\"": "&quot;",
-    "'": "&#39;",
-  })[character] ?? character);
-}
 const statusEl = $("#recording");
 const connection = $("#connection");
 const armsEl = $("#arms");
@@ -105,13 +97,9 @@ let latestLiveSnapshot: Snapshot | null = null;
 const MOTION_MAX_POINTS = 80;
 const MOTION_CHART_POINTS = 60;
 const grippersEl = $("#grippers");
-const exportPanel = $("#export-panel");
-const exportState = $("#export-state");
-const exportProgressEl = $("#export-progress");
-const exportDirEl = $("#export-dir");
-const queuePanel = $("#queue-panel");
-const queueCount = $("#queue-count");
-const queueList = $("#lerobot-queue");
+const exportProgressLabel = $("#export-progress-label");
+const exportProgress = $("#export-progress");
+const exportDir = $("#export-dir");
 const replayExit = $<HTMLButtonElement>("#replay-exit");
 const replayFrameLabel = $("#replay-frame-label");
 const replayTask = $("#replay-task");
@@ -451,112 +439,12 @@ function render(payload: Snapshot) {
   $("#dropped").textContent = recording.dropped_samples || 0;
   $("#status-pulse").style.background = recording.state === 2 ? "var(--green)" : recording.state === 7 ? "var(--red)" : "var(--amber)";
 
-  const exportProgress = Number(recording.export_progress ?? 0);
-  const exportDir = String(recording.export_dir ?? "");
-  const exportError = String(recording.export_error ?? "");
-  if (exportError) {
-    exportPanel.style.display = "";
-    exportState.textContent = "转换失败";
-    exportState.style.color = "var(--red)";
-    exportProgressEl.style.width = "100%";
-    exportDirEl.textContent = `错误: ${exportError}`;
-  } else if (exportProgress > 0 && exportProgress < 1) {
-    exportPanel.style.display = "";
-    exportState.textContent = `转换中 ${Math.round(exportProgress * 100)}%`;
-    exportState.style.color = "";
-    exportProgressEl.style.width = `${Math.round(exportProgress * 100)}%`;
-    exportDirEl.textContent = "";
-    syncQueueProgress(exportProgress);
-  } else if (exportProgress >= 1 && exportDir) {
-    exportPanel.style.display = "";
-    exportState.textContent = "转换完成";
-    exportState.style.color = "";
-    exportProgressEl.style.width = "100%";
-    exportDirEl.textContent = `数据目录: ${exportDir}`;
-  }
-
   // In replay mode the 3D viewer, arm grid and gripper grid show the selected frame,
-  // not the live subscription. The status hero and export panel stay live above.
+  // not the live subscription.
   if (replay) return;
 
   latestLiveSnapshot = payload;
   renderLiveRobot(payload);
-}
-
-type QueueJob = {
-  session_id: string;
-  decision: string | null;
-  export_state: string | null;
-  requested_realtime_ns: number;
-  error: string;
-};
-
-const QUEUE_GROUPS = [
-  { state: "RUNNING", label: "转换中" },
-  { state: "QUEUED", label: "排队中" },
-  { state: "SUCCEEDED", label: "已完成" },
-  { state: "FAILED", label: "失败" },
-] as const;
-
-let queueJobs: QueueJob[] = [];
-let latestExportProgress = 0;
-let lastRenderedProgress = -1;
-
-function queueRow(job: QueueJob, label: string): string {
-  const progress = job.export_state === "RUNNING" ? ` · ${Math.round(latestExportProgress * 100)}%` : "";
-  const error = job.error ? ` · ${escapeHtml(job.error)}` : "";
-  return `<div class="queue-row"><span class="queue-session">${escapeHtml(job.session_id)}</span><span class="queue-state">${label}${progress}${error}</span></div>`;
-}
-
-function renderQueue() {
-  const active = queueJobs.filter((job) => job.decision === "ADOPTED" && job.export_state);
-  if (!active.length) {
-    queuePanel.style.display = "none";
-    queueList.innerHTML = '<div class="empty">暂无待转换会话</div>';
-    queueCount.textContent = "0 个会话";
-    return;
-  }
-  queuePanel.style.display = "";
-  queueCount.textContent = `${active.length} 个会话`;
-
-  const parts: string[] = [];
-  // Running/queued jobs stay expanded; the rest collapse into a history fold.
-  for (const state of ["RUNNING", "QUEUED"] as const) {
-    const members = active.filter((job) => job.export_state === state);
-    if (!members.length) continue;
-    const label = QUEUE_GROUPS.find((group) => group.state === state)?.label ?? state;
-    parts.push(`<div class="queue-group"><span class="queue-group-label">${label}</span>${members.map((job) => queueRow(job, label)).join("")}</div>`);
-  }
-  const succeeded = active.filter((job) => job.export_state === "SUCCEEDED");
-  const failed = active.filter((job) => job.export_state === "FAILED");
-  if (succeeded.length || failed.length) {
-    const summary = `${succeeded.length} 完成${failed.length ? ` · ${failed.length} 失败` : ""}`;
-    const body =
-      (succeeded.length ? `<div class="queue-group"><span class="queue-group-label">已完成</span>${succeeded.map((job) => queueRow(job, "已完成")).join("")}</div>` : "") +
-      (failed.length ? `<div class="queue-group"><span class="queue-group-label">失败</span>${failed.map((job) => queueRow(job, "失败")).join("")}</div>` : "");
-    parts.push(`<details class="queue-done"><summary>历史记录 · ${summary}</summary>${body}</details>`);
-  }
-  queueList.innerHTML = parts.join("");
-}
-
-function refreshQueue() {
-  fetch("/api/lerobot/queue")
-    .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
-    .then((payload) => {
-      queueJobs = (payload.jobs ?? []) as QueueJob[];
-      renderQueue();
-    })
-    .catch(() => {
-      /* keep the last rendered queue on transient failure */
-    });
-}
-
-function syncQueueProgress(progress: number) {
-  latestExportProgress = progress;
-  const pct = Math.round(progress * 100);
-  if (pct === lastRenderedProgress) return;
-  lastRenderedProgress = pct;
-  renderQueue();
 }
 
 function renderLiveRobot(payload: Snapshot) {
@@ -665,6 +553,7 @@ async function selectReplaySession(sessionId: string) {
     void annotation.load(sessionId);
     renderReplayFrame(0);
   } catch (error) {
+    console.error("selectReplaySession failed:", error);
     notify(`回放加载失败: ${String(error)}`, true);
   }
 }
@@ -720,6 +609,28 @@ function renderReplayFrame(frameIndex: number) {
   annotation.onFrameChange(frameIndex);
 }
 
+function refreshProgress(): void {
+  fetch("/api/lerobot/queue")
+    .then((response) => (response.ok ? response.json() : Promise.reject(new Error(String(response.status)))))
+    .then((payload) => {
+      const jobs = (payload.jobs ?? []) as { decision: string | null; export_state: string | null; error: string }[];
+      const adopted = jobs.filter((job) => job.decision === "ADOPTED" && job.export_state);
+      const succeeded = adopted.filter((job) => job.export_state === "SUCCEEDED").length;
+      const failed = adopted.filter((job) => job.export_state === "FAILED").length;
+      const running = adopted.filter((job) => job.export_state === "RUNNING").length;
+      const queued = adopted.filter((job) => job.export_state === "QUEUED").length;
+      const total = adopted.length;
+      const done = succeeded + failed;
+      exportProgressLabel.textContent = total ? `${done} / ${total}${running ? ` · ${running} 转换中` : queued ? ` · ${queued} 排队` : ""}` : "0 / 0";
+      exportProgress.style.width = total ? `${Math.round((done / total) * 100)}%` : "0%";
+      const failedJob = adopted.find((job) => job.export_state === "FAILED");
+      exportDir.textContent = failedJob ? `最近失败: ${failedJob.error}` : "";
+    })
+    .catch(() => {
+      /* keep the last progress on transient failure */
+    });
+}
+
 function connect() {
   socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   socket.onopen = () => {
@@ -750,8 +661,8 @@ fetch("/api/layout")
     viewerState.textContent = `布局加载失败: ${String(error)}`;
   });
 connect();
-refreshQueue();
-setInterval(refreshQueue, 5000);
+refreshProgress();
+setInterval(refreshProgress, 2000);
 replayExit.addEventListener("click", exitReplay);
 
 function getReplayVideoContext(): VideoContext | null {
@@ -766,10 +677,15 @@ const annotation = initAnnotation({
   getCurrentFrame: () => replay?.index ?? 0,
   notify,
 });
+const rawViewer = initRawViewer({ notify });
 const sidebar = initSidebar({
   onSelect: (sessionId) => {
+    rawViewer.close();
     sidebar.setActive(sessionId);
     selectReplaySession(sessionId);
+  },
+  onSelectPending: (sessionId) => {
+    void rawViewer.open(sessionId);
   },
   onChanged: () => {
     // handleAction already refreshed the sidebar; only check whether the
@@ -778,6 +694,9 @@ const sidebar = initSidebar({
   },
   onRefreshed: (episodes) => renderAnalysis(episodes),
 });
+// Keep the conversion lists live: the serial worker moves sessions from
+// 待转换 → 已转换 over time, so poll the catalog like the old record-tab queue.
+setInterval(() => { void sidebar.refresh(); }, 5000);
 // The feature dropdown re-renders the chart on change; playback/frame steps also
 // drive the same render path. The chart keeps its own selection state.
 for (const selector of ["#replay-feature-select"]) {
@@ -825,7 +744,7 @@ grid.on("change", () => {
   localStorage.setItem(LAYOUT_KEY, JSON.stringify(grid.save(false)));
 });
 
-// 标签页：录制 / 回放。回放只显示 LeRobot Studio 回放工作区；录制页（3D/相机/机械臂/夹爪）整体隐藏。
+// 标签页：录制 / 转换。转换页显示 LeRobot 转换工作区；录制页（3D/相机/机械臂/夹爪）整体隐藏。
 function switchTab(tab: "record" | "replay") {
   document.querySelectorAll(".tab").forEach((button) => {
     button.classList.toggle("active", button.getAttribute("data-tab") === tab);

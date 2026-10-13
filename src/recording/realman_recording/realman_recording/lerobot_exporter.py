@@ -189,8 +189,11 @@ class LeRobotExporter:
             # validate_frame with "Extra features: {'subtask_index'}".  Only
             # annotate frames when the dataset actually declares the feature.
             annotate_subtasks = "subtask_index" in (getattr(dataset, "features", None) or {})
+            annotate_session_number = "session_number" in (getattr(dataset, "features", None) or {})
             try:
                 task = str(manifest.get("metadata", {}).get("task") or "recording")
+                raw_session_number = manifest.get("metadata", {}).get("session_number")
+                session_number = raw_session_number if isinstance(raw_session_number, int) else 0
                 for index, frame in enumerate(canonical):
                     ee_position, ee_rotation = _split_ee_pose(frame.ee_pose_base, schema.arm_count)
                     ee_linear, ee_angular = _split_ee_velocity(frame.ee_velocity_base, schema.arm_count)
@@ -210,6 +213,8 @@ class LeRobotExporter:
                     }
                     if annotate_subtasks:
                         payload["subtask_index"] = np.asarray([subtask_index[index]], dtype=np.int64)
+                    if annotate_session_number:
+                        payload["session_number"] = np.asarray([session_number], dtype=np.int64)
                     if frame.command_gripper is not None:
                         payload["action.command.gripper"] = np.asarray(frame.command_gripper, dtype=np.float32)
                     for camera_id, selected in images.items():

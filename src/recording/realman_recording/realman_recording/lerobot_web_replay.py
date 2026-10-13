@@ -70,6 +70,7 @@ class ReplayDatasetRef:
     first_walltime_ns: int
     fps: float
     task: str = ""
+    session_number: int = 0
     schema_fingerprint: str = ""
     sync_source_ids: tuple[str, ...] | None = None
 
@@ -148,6 +149,7 @@ class LeRobotReplayCatalog:
                     "frames": frame_count,
                     "fps": reference.fps,
                     "task": reference.task,
+                    "session_number": reference.session_number,
                     "quality": quality,
                 }
             )
@@ -198,6 +200,41 @@ class LeRobotReplayCatalog:
                     "fps": reference.fps,
                 }
             )
+        return result
+
+    def list_pending(self) -> list[dict[str, Any]]:
+        """Return finalized sessions still awaiting adopt/export (``decision=PENDING``).
+
+        These have no export receipt yet, so each row carries only manifest-level
+        identity (``session_id``, ``session_number``, ``task``, ``state``).  They are
+        ordered by ``session_number`` so the review list reads as the recording order.
+        """
+        result: list[dict[str, Any]] = []
+        if not self._recording_root.is_dir():
+            return result
+        for directory in sorted(self._recording_root.iterdir()):
+            if not directory.is_dir() or directory.name.startswith("."):
+                continue
+            manifest_path = directory / "manifest.json"
+            if not manifest_path.is_file():
+                continue
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                continue
+            if not isinstance(payload, dict) or payload.get("decision") != "PENDING":
+                continue
+            metadata = payload.get("metadata") or {}
+            number = metadata.get("session_number")
+            result.append(
+                {
+                    "session_id": directory.name,
+                    "session_number": number if isinstance(number, int) else 0,
+                    "task": metadata.get("task", ""),
+                    "state": payload.get("state", ""),
+                }
+            )
+        result.sort(key=lambda row: row["session_number"])
         return result
 
     def summary(self, session_id: str) -> dict[str, Any]:
@@ -257,6 +294,7 @@ class LeRobotReplayCatalog:
             "fps": reference.fps,
             "frames": len(dataset),
             "task": reference.task,
+            "session_number": reference.session_number,
             "schema_fingerprint": reference.schema_fingerprint,
             "features": features,
             "quality": quality,
@@ -382,6 +420,8 @@ class LeRobotReplayCatalog:
             raise ValueError("LeRobot receipt timeline is invalid") from error
         metadata = manifest.get("metadata", {})
         task = str(metadata.get("task", "")) if isinstance(metadata, dict) else ""
+        raw_session_number = metadata.get("session_number") if isinstance(metadata, dict) else None
+        session_number = raw_session_number if isinstance(raw_session_number, int) else 0
         canonical = receipt.get("canonical", {})
         raw_source_ids = canonical.get("quality_sync_source_ids") if isinstance(canonical, dict) else None
         source_ids: tuple[str, ...] | None = None
@@ -401,6 +441,7 @@ class LeRobotReplayCatalog:
             first_walltime_ns=first_walltime_ns,
             fps=fps,
             task=task,
+            session_number=session_number,
             schema_fingerprint=str(receipt.get("schema_fingerprint", "")),
             sync_source_ids=source_ids,
         )

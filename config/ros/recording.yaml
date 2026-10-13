@@ -70,8 +70,13 @@
     # Auto-adopt a cleanly finalized session on STOP and enqueue its LeRobot
     # conversion (run one-at-a-time by a single serialized worker).  A FAILED
     # session (MCAP/camera write errors) is never auto-exported; set false to
-    # restore the manual ADOPT-only flow.
-    auto_export_on_stop: true
+    # restore the manual ADOPT-only flow.  Manual export (option A) keeps new
+    # sessions PENDING so the operator can review/hide them before batch-exporting
+    # the survivors together via the ADOPT_ALL service command.
+    auto_export_on_stop: false
+    # Concurrent LeRobot conversion workers.  Read/align phases overlap; the dataset's
+    # own process-wide append lock still serializes the final parquet/video write.
+    export_workers: 3
     # PREPARE requires each required ROS input to have a receipt no older than this.
     preflight_max_age_sec: 2.0
     # Fresh sensors exceeding this receipt-time span remain recordable, but PREPARE

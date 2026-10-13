@@ -93,6 +93,19 @@ def _catalog(tmp_path, *, decision="ADOPTED", export_state="SUCCEEDED"):
     )
 
 
+def _add_pending_session(recording_root, session_id, *, number=1, task="pick_and_place", state="READY"):
+    session = recording_root / session_id
+    session.mkdir(parents=True, exist_ok=True)
+    (session / "manifest.json").write_text(
+        json.dumps({
+            "state": state,
+            "decision": "PENDING",
+            "metadata": {"session_number": number, "task": task},
+        }),
+        encoding="utf-8",
+    )
+
+
 def _add_valid_session(recording_root, export_root, session_id):
     session = recording_root / session_id
     dataset_root = export_root / session_id
@@ -126,6 +139,7 @@ def test_catalog_lists_only_successfully_adopted_exports(tmp_path):
             "frames": 2,
             "fps": 10.0,
             "task": "",
+            "session_number": 0,
             "quality": {"valid_frames": 1, "invalid_frames": 1, "max_sync_error_ns": 7},
         }
     ]
@@ -324,3 +338,25 @@ def test_catalog_does_not_evict_a_dataset_while_its_reader_is_active(tmp_path):
 def test_catalog_rejects_non_positive_dataset_cache_limit(tmp_path):
     with pytest.raises(ValueError, match="max_cached_datasets must be positive"):
         LeRobotReplayCatalog(tmp_path / "recordings", tmp_path / "exports", max_cached_datasets=0)
+
+
+def test_catalog_lists_only_pending_sessions_sorted_by_number(tmp_path):
+    recording_root = tmp_path / "recordings"
+    export_root = recording_root / "lerobot"
+    catalog = LeRobotReplayCatalog(
+        recording_root, export_root, dataset_factory=lambda _reference: _FakeDataset()
+    )
+    _add_pending_session(recording_root, "session-b", number=2)
+    _add_pending_session(recording_root, "session-a", number=1)
+    _add_valid_session(recording_root, export_root, "session-exported")
+    (recording_root / "no-manifest").mkdir()
+
+    assert catalog.list_pending() == [
+        {"session_id": "session-a", "session_number": 1, "task": "pick_and_place", "state": "READY"},
+        {"session_id": "session-b", "session_number": 2, "task": "pick_and_place", "state": "READY"},
+    ]
+
+
+def test_catalog_list_pending_returns_empty_for_missing_root(tmp_path):
+    catalog = LeRobotReplayCatalog(tmp_path / "nope", tmp_path / "exports")
+    assert catalog.list_pending() == []

@@ -3,7 +3,7 @@
 /* Position is browser-side URDF FK from joint_states. Commanded and actual speeds
    are direct CartesianVelocityState fields and never participate in recording I/O. */
 .motion-grid{display:grid;grid-template-columns:repeat(3,minmax(0,1fr));gap:10px;padding:12px}.motion-card{background:var(--surface2);border:1px solid var(--line);border-radius:10px;padding:13px}.motion-card h4{display:flex;justify-content:space-between;margin:0 0 11px;font-size:13px}.motion-card h4 span{font:10px ui-monospace,Menlo,monospace;color:var(--muted)}.motion-values{display:grid;gap:7px;font:11px ui-monospace,Menlo,monospace;color:var(--muted)}.motion-values span{display:flex;justify-content:space-between;gap:8px}.motion-values b{color:var(--text);font-weight:500;text-align:right}.motion-values .speed{color:#67d391}.motion-values .unavailable{color:#8793a8}.motion-values .motion-source{justify-content:flex-start;color:var(--muted)}.motion-charts{display:grid;gap:8px;margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}.motion-charts small{display:block;margin-bottom:3px;color:var(--muted);font:10px ui-monospace,Menlo,monospace}.motion-charts svg{display:block;width:100%;height:62px;background:#0b0f17;border:1px solid #202c40;border-radius:5px}.motion-charts text{fill:#718096;font:8px ui-monospace,Menlo,monospace}.motion-gridline{stroke:#263246;stroke-width:1}.motion-command{fill:none;stroke:#55a6ff;stroke-width:1.7;stroke-dasharray:4 3}.motion-measured{fill:none;stroke:#67d391;stroke-width:1.9}.replay-layout .live-motion-panel{display:none}@media(max-width:560px){.motion-grid{grid-template-columns:1fr}}
-.replay-studio{display:grid;grid-template-columns:minmax(0,1fr);gap:12px;margin-bottom:18px}.studio-sidebar,.studio-inspector{min-height:0}.studio-sidebar-body,.studio-inspector-body{padding:12px}.studio-select{width:100%;background:#0b0f17;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:8px;font:11px inherit}.episode-list{display:grid;gap:6px;margin-top:12px;max-height:215px;overflow:auto}.episode-item{display:grid;gap:2px;text-align:left;background:#0d1420;color:var(--text);border:1px solid #202c40;border-radius:7px;padding:9px;cursor:pointer;font:10px inherit}.episode-item:hover,.episode-item.active{border-color:var(--blue);background:#14253b}.episode-item small{color:var(--muted)}.studio-meta{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}.studio-meta strong{color:var(--text);font-size:11px;word-break:break-word}.studio-center{display:grid;gap:12px;align-content:start}.studio-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;font-size:11px;color:var(--muted)}.studio-toolbar-group{display:flex;gap:6px}.studio-toolbar button{background:#1c2d45;color:var(--text);border:1px solid #2b4665;border-radius:6px;padding:6px 10px;cursor:pointer}.studio-toolbar button:hover{background:#294463}.studio-toolbar select{background:#0b0f17;color:var(--text);border:1px solid var(--line);border-radius:5px;padding:5px}.replay-timeline{padding:13px 16px}.replay-timeline input{width:100%;accent-color:var(--blue)}.replay-timeline .timeline-meta{display:flex;justify-content:space-between;color:var(--muted);font:10px ui-monospace,Menlo,monospace;margin-top:5px}
+.replay-studio{display:grid;grid-template-columns:320px minmax(0,1fr) 360px;gap:14px;margin-bottom:18px;align-items:stretch}.record-studio{display:grid;grid-template-columns:340px minmax(0,1fr);gap:14px;align-items:stretch}.record-sidebar{display:flex;flex-direction:column;gap:14px;min-width:0}.record-sidebar .status-hero{flex-direction:column;align-items:flex-start;gap:14px;margin-bottom:0;padding:18px 20px}.record-sidebar .status-hero .hero-meta{text-align:left;width:100%;justify-content:space-between;gap:16px}.record-studio .layout.grid-stack{min-width:0}.studio-sidebar,.studio-inspector{min-height:0}.studio-sidebar-body,.studio-inspector-body{padding:12px}.studio-select{width:100%;background:#0b0f17;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:8px;font:11px inherit}.episode-list{display:grid;gap:6px;margin-top:12px;max-height:480px;overflow:auto}.episode-item{display:grid;gap:2px;text-align:left;background:#0d1420;color:var(--text);border:1px solid #202c40;border-radius:7px;padding:9px;cursor:pointer;font:10px inherit}.episode-item:hover,.episode-item.active{border-color:var(--blue);background:#14253b}.episode-item small{color:var(--muted)}.studio-meta{display:flex;flex-wrap:wrap;justify-content:center;align-items:center;gap:8px;margin-top:14px;padding-top:12px;border-top:1px solid var(--line);font-size:11px;color:var(--muted)}.studio-meta strong{color:var(--text);font-size:11px;word-break:break-word}.studio-center{display:grid;gap:12px;align-content:start;min-height:0}.studio-toolbar{display:flex;align-items:center;justify-content:space-between;gap:10px;padding:10px 12px;font-size:11px;color:var(--muted)}.studio-toolbar-group{display:flex;gap:6px}.studio-toolbar button{background:#1c2d45;color:var(--text);border:1px solid #2b4665;border-radius:6px;padding:6px 10px;cursor:pointer}.studio-toolbar button:hover{background:#294463}.studio-toolbar select{background:#0b0f17;color:var(--text);border:1px solid var(--line);border-radius:5px;padding:5px}.replay-timeline{padding:13px 16px}.replay-timeline input{width:100%;accent-color:var(--blue)}.replay-timeline .timeline-meta{display:flex;justify-content:space-between;color:var(--muted);font:10px ui-monospace,Menlo,monospace;margin-top:5px}
 /* Subtask annotation mode: Q start / R end + text label, segment list + save. */
 .replay-timeline .annotation-bar{display:flex;align-items:center;gap:10px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line)}
 #annotation-toggle{background:#1c2d45;color:var(--text);border:1px solid #2b4665;border-radius:6px;padding:5px 12px;cursor:pointer;font:11px inherit}
@@ -35,14 +35,22 @@
 .episode-item{display:grid;gap:6px}
 .episode-main{display:grid;gap:2px;min-width:0}
 .episode-main strong{word-break:break-all}
-.episode-action{background:#1c2d45;color:var(--text);border:1px solid #2b4665;border-radius:5px;padding:4px 8px;cursor:pointer;font:10px inherit;white-space:nowrap}
+.episode-action{background:#1c2d45;color:var(--text);border:1px solid #2b4665;border-radius:6px;padding:6px 11px;cursor:pointer;font:11px inherit;white-space:nowrap}
 .episode-action:hover{background:#294463}
+.episode-action.remove-all{margin:2px 0 8px;color:#ff9aa4;border-color:#78414c;background:#2a1a20}
+.episode-action.remove-all:hover{background:#3a2228}
 .episode-actions{display:flex;gap:4px;justify-content:flex-end;margin-top:2px}
 .hidden-heading{margin:12px 0 6px;padding-top:10px;border-top:1px solid var(--line);color:var(--muted);font:11px ui-monospace,Menlo,monospace;letter-spacing:.06em}
 .hidden-fold{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
 .hidden-fold summary{cursor:pointer;color:var(--muted);font:11px ui-monospace,Menlo,monospace;letter-spacing:.06em;user-select:none;padding:2px 0}
 .hidden-fold summary:hover{color:var(--text)}
 .hidden-fold[open] summary{margin-bottom:6px}
+.pending-fold{margin-top:12px;padding-top:10px;border-top:1px solid var(--line)}
+.pending-fold summary{cursor:pointer;color:var(--muted);font:11px ui-monospace,Menlo,monospace;letter-spacing:.06em;user-select:none;padding:2px 0}
+.pending-fold summary:hover{color:var(--text)}
+.pending-fold[open] summary{margin-bottom:6px}
+.episode-action.export-all{margin:2px 0 8px;color:#7fe0b6;border-color:#2e5c4a;background:#14261f}
+.episode-action.export-all:hover{background:#1d3a2e}
 /* Synchronized replay video tiles. */
 .replay-camera-grid .camera-card video{display:block;width:100%;height:100%;object-fit:contain;background:#080b12}
 /* Action-vs-state chart + health strip. */
@@ -101,5 +109,80 @@
 .episode-duration-filter input{flex:1;min-width:0;background:#0b0f17;color:var(--text);border:1px solid var(--line);border-radius:7px;padding:6px 8px;font:11px inherit}
 .episode-duration-filter span{color:var(--muted);font:10px inherit}
 .studio-toolbar button.active{background:#2a4a6b;border-color:var(--blue)}
+@media(max-width:1100px){.replay-studio{grid-template-columns:1fr}.record-studio{grid-template-columns:1fr}.episode-list{max-height:240px}}
 
 
+
+/* Conversion workspace: left column stacks the converted sidebar + pending panel,
+   center column holds the media/timeline, inspector stretches.  The pending panel
+   carries the conversion progress bar at its bottom. */
+.replay-left,.replay-center{display:flex;flex-direction:column;gap:14px;min-width:0;min-height:0}
+.pending-panel .episode-list{margin-top:0;max-height:320px}
+.pending-panel .panel-head{gap:10px}
+.pending-progress{padding:10px 12px;border-top:1px solid var(--line)}
+.pending-progress .export-bar{padding:0}
+.pending-progress .pending-progress-meta{display:flex;align-items:center;gap:10px;margin-top:8px;font:11px ui-monospace,Menlo,monospace;color:var(--muted)}
+#export-progress-label{flex:none;white-space:nowrap}
+.pending-progress .pending-progress-meta .dir{flex:1;min-width:0;white-space:nowrap;overflow:hidden;text-overflow:ellipsis;text-align:right}
+.studio-inspector{display:flex;flex-direction:column;min-height:0}
+.studio-inspector-body{flex:1;display:flex;flex-direction:column;min-height:0}
+.studio-inspector-body pre{flex:1;min-height:0;max-height:none}
+
+/* Keep the conversion workspace stable: each column owns its scrolling area
+   instead of allowing a long list or raw payload to stretch the whole page. */
+#tab-replay{--workspace-height:clamp(620px,calc(100vh - 190px),900px)}
+.replay-studio{height:var(--workspace-height);min-height:0;align-items:stretch}
+.replay-left{display:grid;grid-template-rows:minmax(0,1fr) auto;height:100%}
+.studio-sidebar,.pending-panel,.studio-center,.studio-media{min-width:0;min-height:0}
+.studio-sidebar{display:flex;flex-direction:column}
+.studio-sidebar-body{min-width:0;min-height:0;overflow:auto}
+#sidebar-episodes{display:flex;flex-direction:column}
+#sidebar-episodes .episode-list{max-height:none}
+#replay-episodes{flex:1;min-height:104px}
+.studio-meta{flex:none}
+.pending-panel{display:flex;flex-direction:column;min-height:170px;max-height:300px}
+.pending-panel .episode-list{flex:1;min-height:0;max-height:none;overflow:auto}
+.pending-progress{flex:none}
+.studio-center{height:100%;grid-template-rows:minmax(300px,1fr) auto auto;align-content:stretch}
+.studio-media{display:flex;flex-direction:column;overflow:hidden;resize:none}
+.replay-camera-grid{flex:1;min-height:0;grid-template-columns:repeat(auto-fit,minmax(240px,1fr));grid-auto-rows:minmax(120px,1fr);align-content:stretch;overflow:auto}
+.replay-camera-grid .camera-card{aspect-ratio:auto;min-height:120px}
+.studio-inspector{height:100%;overflow:hidden}
+.studio-inspector-body{overflow:hidden}
+#replay-feature-chart{height:clamp(180px,30vh,260px);flex:none}
+.studio-inspector-body pre{overflow:auto}
+
+/* Three columns remain usable on compact desktop screens before the single-column
+   fallback. The recording status card narrows first, preserving GridStack space. */
+@media(max-width:1280px) and (min-width:1101px){
+  .replay-studio{grid-template-columns:280px minmax(0,1fr) 320px}
+  .record-studio{grid-template-columns:280px minmax(0,1fr)}
+  .record-sidebar .status-hero{padding:16px}
+  .record-sidebar .status-hero .hero-meta{gap:10px}
+  .metric strong{font-size:18px}
+}
+@media(max-width:1100px){
+  #tab-replay{--workspace-height:auto}
+  .replay-studio{height:auto}
+  .replay-left,.replay-center,.studio-inspector{height:auto}
+  .replay-left{display:flex}
+  .studio-sidebar-body{overflow:visible}
+  #sidebar-episodes .episode-list,.pending-panel .episode-list{max-height:240px}
+  .pending-panel{max-height:none}
+  .studio-center{grid-template-rows:auto;height:auto}
+  .studio-media{min-height:300px}
+  .studio-inspector{overflow:visible}
+  .studio-inspector-body{overflow:visible}
+  .studio-inspector-body pre{min-height:160px}
+}
+@media(max-width:700px){
+  .replay-camera-grid{grid-template-columns:1fr;grid-auto-rows:180px}
+  .replay-timeline .timeline-meta{gap:8px;flex-wrap:wrap}
+  .replay-timeline .annotation-bar{align-items:flex-start;flex-wrap:wrap}
+  .replay-timeline .annotation-status{flex-basis:100%}
+}
+
+.panel-title{display:flex;align-items:center;gap:8px}
+.panel-title h3{margin:0}
+#reindex-button{padding:4px 9px;font:10px inherit;color:#ffd58a;border-color:#6b5630;background:#262019}
+#reindex-button:hover{background:#332a1d}

@@ -55,9 +55,15 @@ control.xml(policy 分支) ──/realman_bt_executor/input_mode_state──▶ 
 
 建议默认值（待实测）：`stale_ms=100`（策略流 30 Hz，周期 33 ms，比 Pika 的 200 ms 更严）、`input_timeout_ms=500`、线速度上限 0.10 m/s、角速度上限 0.25 rad/s、线加速度 0.10 m/s²。联调通过后再逐步放开到 bridge 的 0.25 / 0.6。
 
+## 入场回位（2026-10-14 补充）
+
+最初的设计让 `policy` 分支和键盘一样没有入场动作，只靠操作员事先把手臂摆好。上机前核对数据发现这不够：训练数据 130 个 episode 的第 0 帧关节角几乎完全一致，均值 `[-9.89, 18.04, 79.08, 15.51, 79.60, -6.20]°`，各关节最大离散度 0.2–1.0°，而且正好等于 `pika_config.yaml` 的 `pika_default_pose.right`。联调时手臂停在 `[-2.6, 18.05, 79.07, 35.51, 79.66, -6.19]°`，J1 差 7.3°、J4 差 20°，是策略从没见过的起点。
+
+所以 `policy` 分支现在和 Pika 分支同构：有状态 `policy_entry` → `ThreeArmMoveJ`（`policy_start_pose`，10%）→ `ActivateInputMode` → `PolicyInputStub`，位姿沿用 `pika_default_pose`，不另存一份。它同时让速度会话开始前的重新锚定（风险 1）生效。三条臂都回位，与 Pika 一致。回位成功才 `ACTIVE`；策略的开始仍由 bridge 的 `/policy/activate` 单独触发，所以回位和开始之间有一个人为的停顿。`dry_run=true` 只校验、手臂不动。
+
 ## 需要先解决的风险
 
-1. **会话开始时的拉动**。已测量：低跟随模式下，每次速度会话开始，手臂会向上一次会话的末端位姿漂移，即使命令为零；目前靠驱动的 `passthrough_reanchor_mode: canfd_current` 压住，而它挂在 MoveJ 之前。Pika 入场有 `ThreeArmMoveJ`，policy 入场没有，所以这个保护**不一定生效**。已做：路由内置漂移保护（见上）。待做：上机先用零速会话量漂移；确有漂移再给驱动加"速度会话开始前重新锚定"，而不是给 policy 加 MoveJ。
+1. **会话开始时的拉动**。已测量：低跟随模式下，每次速度会话开始，手臂会向上一次会话的末端位姿漂移，即使命令为零；目前靠驱动的 `passthrough_reanchor_mode: canfd_current` 压住，而它挂在 MoveJ 之前。Pika 入场有 `ThreeArmMoveJ`，policy 入场原先没有，所以这个保护**不一定生效**；**已解决（2026-10-14）**：policy 入场加了同样的 `ThreeArmMoveJ`，见上面的「入场回位」。已做：路由内置漂移保护（见上）。待做：上机先用零速会话量漂移；确有漂移再给驱动加"速度会话开始前重新锚定"，而不是给 policy 加 MoveJ。
 2. **坐标系**。训练数据的命令坐标系是 `r/work/pikabase`（`recording.yaml` 的 `cartesian_command_frames`），而 Pika 的 WORK 参考是单位变换，方向与基座一致，所以两者几何等价。bridge 现在发 `r_base_link`，路由会因 frame_id 不符丢弃。**已把 `policy_bridge.yaml` 的 `downlink.velocity.frame_ids` 改成 `l/work/pikabase`、`r/work/pikabase`**，契约里"坐标系是否等价"这一未决项就此关闭。
 3. **两个路由共用 `/r/cartesian_velocity/command`**。Pika 路由和 policy 路由都会向它发布，QoS 深度 1。靠模式互斥保证同一时刻只有一个在发；测试要覆盖 pikavelocity ↔ policy 来回切换时没有残留会话。
 4. **夹爪告警**。gripper_manager 在 `alarm != 0` 时拒绝命令，且告警可能一直锁存；路由应把拒绝记入日志并在统计里暴露，不要静默吞掉。

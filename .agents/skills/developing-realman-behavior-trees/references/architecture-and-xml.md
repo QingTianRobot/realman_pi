@@ -31,7 +31,7 @@ Do not use upstream `Fallback`, `Parallel`, `Retry`, `SubTree`, `SetBlackboard`,
 Use stateful `Sequence` for a finite workflow whose completed children must not rerun while a later child is `RUNNING`. This is why:
 
 - `three.xml` can complete `all_zero` once, then advance to `requested_pose`;
-- each Pika entry sequence performs `ThreeArmMoveJ` once, activates the mode, then remains in its streaming input leaf.
+- each Pika entry sequence, and the policy entry sequence, performs `ThreeArmMoveJ` once, activates the mode, then remains in its streaming input leaf.
 
 Use `ReactiveSequence` when an earlier condition/selection must be reevaluated every tick and must halt later running work as soon as it changes.
 
@@ -47,13 +47,14 @@ Keep these invariants:
 - `web` is first, sticky/high priority, and `selectable="false"`;
 - `none` exists, is selectable, and is the configured safe fallback;
 - `InputModeGuard` metadata is literal; only `selected_mode` is remapped;
-- ordinary branch order is guard -> activate -> input leaf;
+- ordinary branch order (`web`, `none`) is guard -> activate -> input leaf;
 - a Pika branch is guard -> stateful entry `Sequence` -> three-arm entry pose -> activate -> Pika leaf;
+- the `policy` branch has the same shape (`policy_entry`, node `policy_start_pose`, 10% instead of 30%): the policy was trained from the Pika default pose, so it starts there;
 - the root remains persistent (`realman_stop_on_terminal="false"`, `realman_exit_on_terminal="false"`).
 
 Changing modes deliberately takes a neutral handoff: select/activate `none` for one tick, then select/activate the requested mode on the next tick. This ensures the reactive parent halts the old branch before the new one emits commands. Re-requesting the active mode does not add a neutral tick or increment the epoch. A failed transition schedules the configured safe fallback.
 
-Pika activation must occur only after the l/m/r entry `ThreeArmMoveJ` succeeds. The entry joint values are loaded once at launch from `config/ros/pika_config.yaml` and injected as `pika_l_joint_degrees`, `pika_m_joint_degrees`, and `pika_r_joint_degrees`; do not copy those values into `control.xml`.
+Pika (and policy) activation must occur only after the l/m/r entry `ThreeArmMoveJ` succeeds. The entry joint values are loaded once at launch from `config/ros/pika_config.yaml` and injected as `pika_l_joint_degrees`, `pika_m_joint_degrees`, and `pika_r_joint_degrees`; do not copy those values into `control.xml`.
 
 ## XML Startup Metadata
 

@@ -169,7 +169,7 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt control      # 真实运动
 1. 启动 `./rm65 bt control`（真实运动加上 `REALMAN_BT_DRY_RUN=false`），等待终端打印监视器地址 `http://<host>:8080/`。
 2. 浏览器打开 Web 控制台 `http://<工控机地址>:8765/`，在 **"GLOBAL INPUT / 输入模式"** 卡片的下拉框里选择：
    `keyboard`（Web 键盘速度控制）、`pikaposition` / `pikavelocity` / `pikamixed`（Pika 三种模式）、`policy`（策略桥）或 `none`（不控制）。
-3. 选择键盘或 Pika 后，行为树会先做准备（键盘校验默认 WORK 坐标；Pika 先把三臂移到 `pika_default_pose`），成功后状态变为 `ACTIVE`，此时对应输入才会生效。
+3. 选择键盘、Pika 或 `policy` 后，行为树会先做准备（键盘校验默认 WORK 坐标；Pika 和 `policy` 先把三臂移到 `pika_default_pose`，`policy` 用更慢的 10%），成功后状态变为 `ACTIVE`，此时对应输入才会生效。`policy` 还要再调用 bridge 的 `/policy/activate` 才会开始运动。
 4. 没有正在运行的路由器时，输入模式卡片是隐藏的；这是正常现象，说明 `./rm65 bt control` 还没启动。
 
 键位、安全限值和 Pika 各模式的行为见[行为树控制权](../development/behavior-tree-control)和[Pika 遥操作](../development/pika-teleop)。

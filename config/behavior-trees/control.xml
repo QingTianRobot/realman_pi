@@ -27,8 +27,19 @@
         <ReactiveSequence name="policy_branch">
           <InputModeGuard mode="policy" label="Policy" selectable="true"
                           selected_mode="{selected_mode}"/>
-          <ActivateInputMode mode="policy"/>
-          <PolicyInputStub/>
+          <!-- The policy was trained on episodes that all start from the Pika default pose (130/130, within
+               1 deg), so it starts from there too: same joint values and the same stateful entry as the Pika
+               branches, slower (10%). The pose also gives the velocity session the passthrough re-anchor that
+               only runs ahead of a MoveJ. Activation, and therefore the policy, only starts after it succeeds. -->
+          <Sequence name="policy_entry">
+            <ThreeArmMoveJ name="policy_start_pose" dry_run="{dry_run}"
+                           l_joint_degrees="{pika_l_joint_degrees}"
+                           m_joint_degrees="{pika_m_joint_degrees}"
+                           r_joint_degrees="{pika_r_joint_degrees}"
+                           velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+            <ActivateInputMode mode="policy"/>
+            <PolicyInputStub/>
+          </Sequence>
         </ReactiveSequence>
         <ReactiveSequence name="pikaposition_branch">
           <InputModeGuard mode="pikaposition" label="Pika / 位置控制" selectable="true"

@@ -30,7 +30,7 @@ l/r，绝不订阅或发送 m 的夹爪信号。
 `InputModeGuard` 的 `mode`、`label`、`selectable` 字面量在 XML 构造时注册目录，
 因此新增模式只改 XML 和相应叶注册，不能在 Web 或 Python 写静态枚举。路由根节点必须保留
 `ReactiveSequence` 和 `ReactiveFallback`，使 guard 每个 10 Hz tick 都重算并 halt 离开的
-RUNNING 分支。普通分支是 `InputModeGuard` → `ActivateInputMode` → 输入叶；keyboard 分支在激活前
+RUNNING 分支。普通分支（`web`、`none`）是 `InputModeGuard` → `ActivateInputMode` → 输入叶；keyboard 分支在激活前
 调用 `/l/coordinates/select_work` 和 `/r/coordinates/select_work`，请求名称来自坐标注册表中的
 `l|default_work`、`r|default_work`，而不是在行为树中硬编码 `cell`。两个响应都必须返回
 `success=true` 且 `active_name` 与各自的配置名称一致，随后才发布 `ACTIVE/keyboard`。
@@ -40,6 +40,8 @@ RUNNING 分支。普通分支是 `InputModeGuard` → `ActivateInputMode` → �
 额外运行一次有状态 `Sequence` 中的 `ThreeArmMoveJ` 准备动作，准备成功后才发布 Pika `ACTIVE`。
 准备动作成功后，后续 tick 会从该 `Sequence` 的 Pika 输入叶继续，不会重新进入准备动作；只有离开
 Pika 分支后再次进入，才会重新执行准备动作。
+
+`policy` 分支用同样的结构：有状态 `policy_entry` → `ThreeArmMoveJ`（节点名 `policy_start_pose`，速度 `10%`，比 Pika 的 `30%` 慢）→ `ActivateInputMode` → `PolicyInputStub`。目标位姿沿用 `pika_default_pose`（launch 从 `pika_config.yaml` 注入 `pika_{l,m,r}_joint_degrees`，不在 XML 里复制），原因有二：训练数据的 130 个 episode 都从这个位姿起步（各关节离散度不超过 1°），策略必须从它见过的状态开始；速度会话开始前的 `passthrough_reanchor_mode: canfd_current` 重新锚定只挂在 MoveJ 之前，没有这一步就得不到该保护。回位成功才发布 `ACTIVE/policy`，`dry_run=true` 时只校验、不发动作。回位完成后策略**不会**自动开始，运动的唯一开关仍是 bridge 的 `/policy/activate`。三条臂都会回位，与 Pika 一致，也与数据采集时的布局一致。
 
 键盘 Web ingress 是 `/keyboard/l/cartesian_velocity` 和 `/keyboard/r/cartesian_velocity`
 （`geometry_msgs/msg/TwistStamped`）。`keyboard_control_router` 为左右臂分别拥有

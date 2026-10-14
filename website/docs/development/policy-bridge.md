@@ -145,6 +145,7 @@ obs 字段名固定，值为 NumPy 数组 / 字符串：
 
 bridge 发布的 `/pi05_policy/{l,r}/*` 由 `policy_control_router`（`src/behavior/realman_bt/scripts/`）消费，与 Pika、键盘路由并列，随 `control_router.launch.py` 启动。设计见 `docs/superpowers/specs/2026-10-13-policy-input-router-design.md`，配置见 `config/ros/policy_router.yaml`。
 
+- **入场回位**：切入 `policy` 时行为树先用 `ThreeArmMoveJ`（10%）把三臂移到 `pika_default_pose`，成功后才 `ACTIVE`（见[行为树控制权](./behavior-tree-control)）。训练数据的 130 个 episode 全部从这个位姿起步，策略必须从它见过的状态开始。回位完成后策略不会自动开始，要再调 `/policy/activate`。
 - 只在行为树 `active_mode == policy` 且 `phase == ACTIVE` 时工作；离开模式立即发零速并取消会话。
 - 两只臂都路由；某只臂没有策略流就不会开会话。每只臂一个 `CartesianVelocity` 会话（WORK 系 `work/pikabase`，低跟随）。
 - 每条命令校验：`frame_id`、分量有限、`header.stamp` 不超过 `stale_ms`（默认 100 ms）；再按路由自己的限速（默认 0.10 m/s、0.25 rad/s）限幅，独立于 bridge 的 `twist_scale`。

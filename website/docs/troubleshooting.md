@@ -64,6 +64,12 @@ ros2 service call /l/coordinates/select_work realman_msgs/srv/SelectFrame "{name
 - 确认发送端在发布：`ros2 topic hz /pika/l/cartesian_velocity`（标称 20 Hz）。输入晚于 `stale_ms`（`200 ms`）机械臂会被指令为零速；晚于 `3000 ms` 才释放 session。
 - 日志出现 `restart #N` 表示 session 被重开；`pose command watchdog expired` 表示位姿命令间隔超过 driver 的 `100 ms`。
 - Mixed 模式必须**同时**收到 `cartesian_velocity` 和 `cartesian_pose`。
+
+### Policy 不动，或一直停在 SWITCHING
+
+- 模式必须是 `policy` 且 `ACTIVE`；切入时先运行 `ThreeArmMoveJ`（10%）把三臂移到 `pika_default_pose`，失败或被取消则不会进入 `ACTIVE`。
+- 进入 `ACTIVE` 后策略也不会自动开始：还要调用 bridge 的 `/policy/activate`（见[策略桥](./development/policy-bridge)）。
+- 默认 dry-run：真实运动需 `REALMAN_BT_DRY_RUN=false`。dry-run 下回位只校验、手臂不会动，但策略仍会照常推理和发布，所以干跑里的动作不代表从训练起点出发的表现。
 - 日志里的 `Custom CasADi IK unavailable, falling back to the RealMan SDK IK` 是已知状态（生产镜像没有 `pinocchio.casadi`），不是故障。
 - **手臂一顿一顿**：先在两端量 `/pika/*` 到达率。Pika 流走 Wi‑Fi，实测入站丢包可达约 25%（`ping` 看不出来），间隔超过 `stale_ms` 会被指令为零速，见[链路与已知问题](./development/pika-teleop#链路与已知问题)。
 - **每次进入速度控制手臂先动一下**：控制器残留的 CANFD 透传目标导致，driver 已在每次普通运动前重新锚定来修复（`passthrough_reanchor_mode: canfd_current`）。如果仍然出现，确认运行的镜像包含该修复，并开 `velocity_start_trace` 诊断，见同一节。

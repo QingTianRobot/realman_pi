@@ -69,7 +69,11 @@ struct Fixture {
         {"tree_file", tree_file.string()},
         {"runtime_snapshot_file", (path / "runtime.json").string()},
         {"autostart", false}, {"exit_on_terminal", false},
-        {"stop_on_terminal", false}, {"tick_rate_hz", 20.0}};
+        {"stop_on_terminal", false}, {"tick_rate_hz", 20.0},
+        // Every non-idle branch starts by moving the arms to a start pose read from these.
+        {"pika_l_joint_degrees", "0,0,0,0,0,0"},
+        {"pika_m_joint_degrees", "0,0,0,0,0,0"},
+        {"pika_r_joint_degrees", "0,0,0,0,0,0"}};
     parameters.insert(parameters.end(), extra.begin(), extra.end());
     node = std::make_shared<realman_bt::RealmanBtExecutorNode>(
         rclcpp::NodeOptions().parameter_overrides(parameters));
@@ -293,6 +297,32 @@ void testTimeoutPublishesFailedDetail() {
   require(f.states.back().detail == "input mode switch timed out",
           "timeout detail changed in ROS mapping");
 }
+
+// The policy task tree is built from the vendored Repeat/Retry/Fallback plus RetryUnlessFault.
+// An unregistered tag makes the executor refuse to construct, so loading and running this tree is
+// the registration check; the dry-run MoveJ leaves make it finish on its own.
+void testTaskControlNodesAreRegistered() {
+  Fixture f;
+  f.load(R"(<?xml version="1.0"?>
+<root main_tree_to_execute="MainTree" realman_arm_id="r" realman_required_arms="r"
+      realman_launch="arm_move" realman_stop_on_terminal="true" realman_exit_on_terminal="true">
+  <BehaviorTree ID="MainTree">
+    <Repeat num_cycles="2">
+      <RetryUnlessFault num_attempts="3">
+        <Fallback name="task_or_stop">
+          <Retry num_attempts="2">
+            <MoveJ name="task_move" arm_id="{arm_id}" dry_run="{dry_run}" joint_degrees="0,0,0,0,0,0" velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+          </Retry>
+          <MoveJ name="never_reached" arm_id="{arm_id}" dry_run="{dry_run}" joint_degrees="0,0,0,0,0,0" velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+        </Fallback>
+      </RetryUnlessFault>
+    </Repeat>
+  </BehaviorTree>
+</root>)");
+  f.start();
+  require(f.until([&] { return f.snapshot().find("\"success\":1") != std::string::npos; }),
+          "Repeat/RetryUnlessFault/Fallback/Retry tree did not run to success");
+}
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -304,6 +334,7 @@ int main(int argc, char** argv) {
     testInvalidConfigurationFailsConstruction();
     testBranchExceptionPublishesFailureAndRecovers();
     testTimeoutPublishesFailedDetail();
+    testTaskControlNodesAreRegistered();
   } catch (const std::exception& error) {
     RCLCPP_ERROR(rclcpp::get_logger("test_input_mode_executor"), "%s", error.what());
     rclcpp::shutdown();

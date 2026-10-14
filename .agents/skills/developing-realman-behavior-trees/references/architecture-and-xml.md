@@ -19,12 +19,13 @@ Do not let a BT leaf call the SDK directly or let Web/Pika bypass the driver Act
 
 `RealmanBtExecutorNode` explicitly registers the only XML tags the runtime understands. At the current revision these are:
 
-- controls: `Sequence`, `ReactiveSequence`, `ReactiveFallback`;
+- controls: `Sequence`, `ReactiveSequence`, `ReactiveFallback`, `Fallback`;
+- decorators: `Repeat` (`num_cycles`), `Retry` (`num_attempts`), `RetryUnlessFault` (`num_attempts`);
 - routing: `SelectInputMode`, `InputModeGuard`, `ActivateInputMode`;
 - input leaves: `WebInputStub`, `PolicyInputStub`, `PikaInputStub`, `PikaPositionInput`, `PikaVelocityInput`, `PikaMixedInput`, `IdleInput`;
 - motion: `MoveJ`, `ThreeArmMoveJ`, `CartesianVelocityForDuration`.
 
-Do not use upstream `Fallback`, `Parallel`, `Retry`, `SubTree`, `SetBlackboard`, or task-specific tags merely because examples exist in the repository or upstream library. Implement and register them first. `approach_and_grasp.xml` and `pick_task.xml` are templates, not current production runtime trees.
+Do not use upstream `Parallel`, `SubTree`, `SetBlackboard`, `Inverter`, `ForceSuccess`, or task-specific tags merely because examples exist in the repository or upstream library. Implement and register them first. `approach_and_grasp.xml` and `pick_task.xml` are templates, not current production runtime trees.
 
 ## Choosing Control Nodes
 
@@ -34,6 +35,8 @@ Use stateful `Sequence` for a finite workflow whose completed children must not 
 - each Pika entry sequence, and the policy entry sequence, performs `ThreeArmMoveJ` once, activates the mode, then remains in its streaming input leaf.
 
 Use `ReactiveSequence` when an earlier condition/selection must be reevaluated every tick and must halt later running work as soon as it changes.
+
+Use `Repeat` for a fixed number of successful cycles and `Retry` for a bounded number of failed attempts; `-1` means no limit. Both halt the child between rounds, so everything under them must tolerate `onHalted()` between a failure and the next start. Prefer `RetryUnlessFault` when a leaf can fail for a reason that retrying cannot fix: the leaf sets the blackboard key `policy_fault` to `true` before it returns `FAILURE`, and the decorator then returns `FAILURE` at once instead of spending the remaining attempts. The flag is cleared when a run starts and on `halt()`, and it is left set after a run that ended on it.
 
 Use `ReactiveFallback` for an ordered set of guarded branches whose priority and selection are reevaluated every tick. The input router combines an outer `ReactiveSequence` with an inner `ReactiveFallback` so a new selected mode halts the previous `RUNNING` branch before the replacement leaf controls anything.
 

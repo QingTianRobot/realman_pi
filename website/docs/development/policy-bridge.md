@@ -44,10 +44,11 @@ realman_bt_executor ── /realman_bt_executor/input_mode_state ──▶ ModeW
 | `network` | `infer_timeout_s` | 秒；当前 `1.5` | 单次推理超时，超时丢弃本次不覆盖旧队列 |
 | `network` | `reconnect_backoff` | `initial_s/max_s/factor` | 断开后指数退避重连 |
 | `network` | `inference_threads` | `>=1`；当前 `2` | 推理线程池大小，避免阻塞发布定时器 |
+| `observation.image_topics[]` | `resize` | `[H, W]`；当前 `[224, 224]`，留空 = 原样发送 | 上行前按 openpi 的 `resize_with_pad` 缩放（保持长宽比、居中、补黑边，PIL 双线性），与服务端 `ResizeImages(224, 224)` 同一算法，见下文「上行带宽与延迟」 |
 | `action` | `action_horizon` | 当前 `16` | 服务端返回 chunk 的步数 |
 | `action` | `action_dim` | 必须 `7` | 6 维笛卡尔 + 1 维夹爪 |
-| `action` | `steps_per_inference` | `<= horizon`；当前 `4` | 每块只取前 N 步入队（滚动时域） |
-| `action` | `inference_lead_steps` | `>=0`；当前 `2` | 队列剩余 `<=` 此值时提前触发推理 |
+| `action` | `steps_per_inference` | `<= horizon`；当前 `5` | 每块只取前 N 步入队（滚动时域） |
+| `action` | `inference_lead_steps` | `>=0`；当前 `4` | 队列剩余 `<=` 此值时提前触发推理 |
 | `action` | `action_clip` | `[min,max]`；当前 `[-1,1]` | 归一化动作限幅 |
 | `downlink` | `command_namespace` | 以 `/` 开头；`/pi05_policy` | 下行命名空间，与 `/pika` 平级 |
 | `downlink` | `publish_rate_hz` | `>0`；当前 `30.0` | 必须快于驱动 `velocity_watchdog_ms`（100ms），且等于训练数据帧率（30 fps），因为每个周期取一步动作 |
@@ -103,7 +104,7 @@ obs 字段名固定，值为 NumPy 数组 / 字符串：
 ```python
 # 请求（上行 obs）—— 由 ObservationBuilder 组装
 {"state": np.float32[7],              # 6 维笛卡尔/关节 + 1 维夹爪
- "wrist_image": np.uint8[H, W, 3],    # key = observation.image_topics[].name
+ "wrist_image": np.uint8[H, W, 3],    # key = observation.image_topics[].name；H, W = 该项的 resize
  "global_image": np.uint8[H, W, 3],
  "prompt": "pick the red block"}
 
@@ -115,10 +116,36 @@ obs 字段名固定，值为 NumPy 数组 / 字符串：
 
 > `action_horizon` 必须与服务端实际返回的行数一致（如 pi0 常见 50 行），否则整块被 `validators.check` 按 shape 拒绝。上线前用 `mock_policy_server` 或 `get_server_metadata()` 核对。
 
+## 上行带宽与延迟
+
+每次推理上传两路图像。模型只吃 224×224（训练和推理时服务端都对每张图做 `ResizeImages(224, 224)` = openpi 的 `resize_with_pad`），所以桥接**在上行前先做同一个缩放**：`observation.image_topics[].resize` 配成 `[224, 224]`，服务端那一步因输入已是 224×224 而原样返回，模型看到的像素与服务端自己缩放完全一致（`test_image_aggregator.py` 逐字节比对 openpi 的实现），上传量约缩小 6 倍。
+
+不能直接把 480×640 拉伸成 224×224：训练用的是保持长宽比的 `resize_with_pad`，拉伸会改变画面几何，模型没见过。
+
+实测（2026-10-14，机械臂主机经 Wi-Fi 局域网到 GPU 服务器，RTX 5090，pi0.5 动作专家微调检查点，`steps_per_inference: 4`、30 Hz 发布需要 ≥ 7.5 次/秒，即单次往返 ≤ 133 ms）：
+
+| 上行图像 | 往返均值 | p95 | 可持续频率 | 结论 |
+| --- | --- | --- | --- | --- |
+| 480×640 ×2（约 1.8 MB） | 309–341 ms | 约 400–465 ms | 约 3 次/秒 | 队列会被抽干，动作断续 |
+| 224×224 ×2（约 0.3 MB） | 102–109 ms | 约 140 ms | 约 9–10 次/秒 | 满足 |
+
+其中模型本身约 60 ms，480×640 时其余约 250–280 ms 是 Wi-Fi 上行与序列化。
+
+**调度参数要和有效耗时匹配。** 桥接一次只跑一个推理，队列是追加式 FIFO，每个发布节拍（30 Hz）取一步；只有在节拍上才会检查是否触发。一次推理的有效耗时（上表往返加桥接内部处理，约 140 ms）里队列必须还有动作，否则那个节拍什么也发不出去。仿真并与实测对齐（`steps_per_inference: 4`、`inference_lead_steps: 2` 时实测只有 21 Hz，空节拍约 30%）：
+
+| `steps_per_inference` / `inference_lead_steps` | 空节拍 | 发布频率 | 动作从观测到执行的延迟（均值 / p95） |
+| --- | --- | --- | --- |
+| 4 / 2（旧） | 约 30% | 约 21 Hz | 约 206 / 267 ms |
+| 5 / 4（当前） | 约 1% | 约 29.8 Hz | 约 235 / 300 ms |
+| 6 / 5 | 0% | 30 Hz | 约 283 / 367 ms |
+
+网络再慢 40 ms 时，5 / 4 的空节拍升到约 15%，6 / 5 仍只有约 3%，更慢就继续加大 lead。路由对短于 100 ms 的空档会重复上一条命令，所以空节拍只让动作变慢、变拖，不会让手臂停住，但执行的轨迹会偏离训练时的时间尺度。策略服务和机械臂主机不在同一台机器时，上线前用同样的方式量一次往返：用桥接容器里的 `policy_bridge.inference.openpi_client` 连服务端，发相同尺寸的 obs，看 `server_timing.infer_ms` 与总往返之差。
+
 ## 路由：policy_control_router
 
 bridge 发布的 `/pi05_policy/{l,r}/*` 由 `policy_control_router`（`src/behavior/realman_bt/scripts/`）消费，与 Pika、键盘路由并列，随 `control_router.launch.py` 启动。设计见 `docs/superpowers/specs/2026-10-13-policy-input-router-design.md`，配置见 `config/ros/policy_router.yaml`。
 
+- **入场回位**：切入 `policy` 时行为树先用 `ThreeArmMoveJ`（10%）把三臂移到 `pika_default_pose`，成功后才 `ACTIVE`（见[行为树控制权](./behavior-tree-control)）。训练数据的 130 个 episode 全部从这个位姿起步，策略必须从它见过的状态开始。回位完成后策略不会自动开始，要再调 `/policy/activate`。
 - 只在行为树 `active_mode == policy` 且 `phase == ACTIVE` 时工作；离开模式立即发零速并取消会话。
 - 两只臂都路由；某只臂没有策略流就不会开会话。每只臂一个 `CartesianVelocity` 会话（WORK 系 `work/pikabase`，低跟随）。
 - 每条命令校验：`frame_id`、分量有限、`header.stamp` 不超过 `stale_ms`（默认 100 ms）；再按路由自己的限速（默认 0.10 m/s、0.25 rad/s）限幅，独立于 bridge 的 `twist_scale`。

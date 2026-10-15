@@ -27,7 +27,7 @@ Treat `src/behavior/realman_bt/` and `config/behavior-trees/` as a robot-motion 
 
 ## Current Runtime Shape
 
-The executor currently registers `Sequence`, `ReactiveSequence`, `ReactiveFallback`, input-mode nodes, `MoveJ`, `ThreeArmMoveJ`, and `CartesianVelocityForDuration`. The production trees are:
+The executor currently registers `Sequence`, `ReactiveSequence`, `ReactiveFallback`, `Fallback`, `Repeat`, `Retry`, `RetryUnlessFault`, input-mode nodes, `MoveJ`, `ThreeArmMoveJ`, and `CartesianVelocityForDuration`. The production trees are:
 
 | XML | Purpose | Lifecycle |
 | --- | --- | --- |

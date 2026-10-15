@@ -10,8 +10,9 @@ manually for the common 8-bit encodings so the package does not depend on
 from __future__ import annotations
 
 import numpy as np
+from PIL import Image as PilImage
 
-from ..config_loader import ObservationConfig
+from ..config_loader import ImageTopic, ObservationConfig
 
 
 _CHANNELS = {"rgb8": 3, "bgr8": 3, "mono8": 1}
@@ -29,6 +30,29 @@ def image_msg_to_array(msg, encoding: str) -> np.ndarray | None:
     if data.size < expected:
         return None
     return data[:expected].reshape(height, width, channels)
+
+
+def resize_with_pad(image: np.ndarray, height: int, width: int) -> np.ndarray:
+    """Fit ``uint8[H, W, C]`` into ``[height, width]`` without distortion, centred, padded with black.
+
+    Same algorithm as openpi's ``image_tools.resize_with_pad`` (PIL bilinear, zero padding), which the policy server
+    applies to every image (``ResizeImages(224, 224)``) before the model sees it, in training and at serving time. A
+    frame that already has the target size is returned untouched, so doing the resize here makes the server-side one a
+    no-op: the model input is identical, only the uplink is smaller (224x224 instead of 480x640 is ~6x fewer bytes).
+    """
+    current_height, current_width = image.shape[:2]
+    if (current_height, current_width) == (height, width):
+        return image
+    ratio = max(current_width / width, current_height / height)
+    resized_height = int(current_height / ratio)
+    resized_width = int(current_width / ratio)
+    single_channel = image.ndim == 3 and image.shape[2] == 1
+    source = PilImage.fromarray(image[..., 0] if single_channel else image)
+    resized = source.resize((resized_width, resized_height), resample=PilImage.BILINEAR)
+    canvas = PilImage.new(resized.mode, (width, height), 0)
+    canvas.paste(resized, (max(0, int((width - resized_width) / 2)), max(0, int((height - resized_height) / 2))))
+    out = np.asarray(canvas)
+    return out[..., None] if single_channel else out
 
 
 class ImageAggregator:
@@ -83,8 +107,15 @@ class ImageAggregator:
     def ready(self) -> bool:
         return all(img.name in self._latest for img in self._enabled)
 
+    @staticmethod
+    def _prepare(img: ImageTopic, array: np.ndarray) -> np.ndarray:
+        """Apply the source's configured ``resize`` ([H, W], letterboxed); no ``resize`` means send as received."""
+        if img.resize is None:
+            return array
+        return resize_with_pad(array, img.resize[0], img.resize[1])
+
     def snapshot(self) -> dict[str, np.ndarray] | None:
         """Return ``{name: array}`` for all enabled sources, or ``None`` if incomplete."""
         if not self.ready():
             return None
-        return {img.name: self._latest[img.name] for img in self._enabled}
+        return {img.name: self._prepare(img, self._latest[img.name]) for img in self._enabled}

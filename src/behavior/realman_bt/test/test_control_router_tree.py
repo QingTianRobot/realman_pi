@@ -6,6 +6,14 @@ ROOT = Path(__file__).parents[4]
 ROUTER = ROOT / "config/behavior-trees/control.xml"
 CMAKE = ROOT / "src/behavior/realman_bt/CMakeLists.txt"
 
+# mode -> (entry ThreeArmMoveJ node name, velocity_percent)
+ENTRY_MOVE = {
+    "policy": ("policy_start_pose", "10"),
+    "pikaposition": ("pika_default_pose", "30"),
+    "pikavelocity": ("pika_default_pose", "30"),
+    "pikamixed": ("pika_default_pose", "30"),
+}
+
 
 def test_control_router_is_the_literal_authoritative_mode_catalog():
     document = ET.parse(ROUTER).getroot()
@@ -43,7 +51,7 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
             None,
             False,
         ),
-        ("policy", "Policy", "true", "PolicyInputStub", None, False),
+        ("policy", "Policy", "true", "PolicyInputStub", "policy_entry", True),
         (
             "pikaposition",
             "Pika / 位置控制",
@@ -88,13 +96,16 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
             assert entry_sequence.attrib == {"name": entry_sequence_name}
             entry_move, activation, leaf = list(entry_sequence)
             assert entry_move.tag == "ThreeArmMoveJ"
+            # Pika and policy share the entry pose (config/ros/pika_config.yaml, injected at launch); only the node
+            # name and the speed differ: the policy starts slower.
+            entry_name, entry_speed = ENTRY_MOVE[mode]
             assert entry_move.attrib == {
-                "name": "pika_default_pose",
+                "name": entry_name,
                 "dry_run": "{dry_run}",
                 "l_joint_degrees": "{pika_l_joint_degrees}",
                 "m_joint_degrees": "{pika_m_joint_degrees}",
                 "r_joint_degrees": "{pika_r_joint_degrees}",
-                "velocity_percent": "30",
+                "velocity_percent": entry_speed,
                 "blend_radius_percent": "0",
                 "timeout_sec": "120",
             }

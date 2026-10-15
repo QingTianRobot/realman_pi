@@ -34,14 +34,18 @@ observation:
       # 右臂腕部相机（训练数据的 orbbec-right）；换臂时同步改 active_side。
       topic: /camera_right/color/image_raw
       encoding: rgb8
-      resize: [480, 640]        # [H, W]；留空表示不缩放
+      # [H, W]；留空 = 原样发送。按 openpi 的 resize_with_pad 缩放（保持长宽比、居中、补黑边，PIL 双线性），
+      # 与服务端训练/推理时的 ResizeImages(224, 224) 同一算法，服务端那一步因此变成空操作，模型输入不变。
+      # 目的是上行：480x640 每次推理约 1.8 MB，经机械臂主机的 Wi-Fi 往返约 310-340 ms，跟不上 7.5 次/秒；
+      # 缩到 224x224 后约 100-110 ms（实测，模型本身 ~60 ms）。
+      resize: [224, 224]
       enabled: true
     - name: global_image
       # 全局相机是独立的 RealSense D435（namespace=camera_global, name=d435），
       # 与三路 Orbbec 臂相机 /camera_left|middle|right 区分。
       topic: /camera_global/d435/color/image_raw
       encoding: rgb8
-      resize: [480, 640]
+      resize: [224, 224]
       enabled: true
   image_sync:
     mode: approximate           # approximate / latest / exact
@@ -70,8 +74,12 @@ prompt:
 action:
   action_horizon: 16            # 服务端返回 chunk 的步数
   action_dim: 7                 # 6 维笛卡尔 + 1 维夹爪
-  steps_per_inference: 4        # 每块只取前 N 步入队（滚动时域）
-  inference_lead_steps: 2       # 队列剩余 <= 此值时提前触发推理
+  # 取舍：一次推理的有效耗时约 140 ms（往返约 100 ms，加桥接内部处理与只在发布节拍上触发的量化），
+  # 期间队列里必须还有动作可发，否则发布节拍落空：要求 inference_lead_steps / 30 Hz 接近或大于该耗时，
+  # 且 steps_per_inference / 耗时 > 30 步/秒。4/2 时约 30% 的节拍落空（实测只有 21 Hz）；5/4 时 <1%，
+  # 动作从观测到执行的延迟只多约 30 ms。网络更慢时再加大 lead（见开发手册「上行带宽与延迟」）。
+  steps_per_inference: 5        # 每块只取前 N 步入队（滚动时域）
+  inference_lead_steps: 4       # 队列剩余 <= 此值时提前触发推理
   action_clip: [-1.0, 1.0]      # 归一化动作限幅范围
 
 downlink:

@@ -7,13 +7,17 @@
 #include <utility>
 
 #include "bt_core/xml_parser.hpp"
+#include "bt_nodes/control/fallback_node.hpp"
 #include "bt_nodes/control/reactive_fallback_node.hpp"
 #include "bt_nodes/control/reactive_sequence_node.hpp"
 #include "bt_nodes/control/sequence_node.hpp"
+#include "bt_nodes/decorator/repeat_node.hpp"
+#include "bt_nodes/decorator/retry_node.hpp"
 #include "realman_bt/cartesian_velocity_for_duration_node.hpp"
 #include "realman_bt/input_mode_nodes.hpp"
 #include "realman_bt/move_j_node.hpp"
 #include "realman_bt/prepare_keyboard_work_node.hpp"
+#include "realman_bt/retry_unless_fault_node.hpp"
 #include "realman_bt/three_arm_move_j_node.hpp"
 
 namespace realman_bt {
@@ -103,6 +107,10 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   factory_.registerNodeType<bt_nodes::SequenceNode>("Sequence");
   factory_.registerNodeType<bt_nodes::ReactiveSequenceNode>("ReactiveSequence");
   factory_.registerNodeType<bt_nodes::ReactiveFallbackNode>("ReactiveFallback");
+  factory_.registerNodeType<bt_nodes::FallbackNode>("Fallback");
+  factory_.registerNodeType<bt_nodes::RepeatNode>("Repeat");
+  factory_.registerNodeType<bt_nodes::RetryNode>("Retry");
+  factory_.registerNodeType<RetryUnlessFaultNode>("RetryUnlessFault");
   factory_.registerNodeType<SelectInputModeNode>("SelectInputMode");
   factory_.registerNodeType<InputModeGuardNode>("InputModeGuard");
   factory_.registerNodeType<ActivateInputModeNode>("ActivateInputMode");

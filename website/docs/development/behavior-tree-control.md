@@ -30,7 +30,7 @@ l/r，绝不订阅或发送 m 的夹爪信号。
 `InputModeGuard` 的 `mode`、`label`、`selectable` 字面量在 XML 构造时注册目录，
 因此新增模式只改 XML 和相应叶注册，不能在 Web 或 Python 写静态枚举。路由根节点必须保留
 `ReactiveSequence` 和 `ReactiveFallback`，使 guard 每个 10 Hz tick 都重算并 halt 离开的
-RUNNING 分支。普通分支是 `InputModeGuard` → `ActivateInputMode` → 输入叶；keyboard 分支在激活前
+RUNNING 分支。普通分支（`web`、`none`）是 `InputModeGuard` → `ActivateInputMode` → 输入叶；keyboard 分支在激活前
 调用 `/l/coordinates/select_work` 和 `/r/coordinates/select_work`，请求名称来自坐标注册表中的
 `l|default_work`、`r|default_work`，而不是在行为树中硬编码 `cell`。两个响应都必须返回
 `success=true` 且 `active_name` 与各自的配置名称一致，随后才发布 `ACTIVE/keyboard`。
@@ -40,6 +40,8 @@ RUNNING 分支。普通分支是 `InputModeGuard` → `ActivateInputMode` → �
 额外运行一次有状态 `Sequence` 中的 `ThreeArmMoveJ` 准备动作，准备成功后才发布 Pika `ACTIVE`。
 准备动作成功后，后续 tick 会从该 `Sequence` 的 Pika 输入叶继续，不会重新进入准备动作；只有离开
 Pika 分支后再次进入，才会重新执行准备动作。
+
+`policy` 分支用同样的结构：有状态 `policy_entry` → `ThreeArmMoveJ`（节点名 `policy_start_pose`，速度 `10%`，比 Pika 的 `30%` 慢）→ `ActivateInputMode` → `PolicyInputStub`。目标位姿沿用 `pika_default_pose`（launch 从 `pika_config.yaml` 注入 `pika_{l,m,r}_joint_degrees`，不在 XML 里复制），原因有二：训练数据的 130 个 episode 都从这个位姿起步（各关节离散度不超过 1°），策略必须从它见过的状态开始；速度会话开始前的 `passthrough_reanchor_mode: canfd_current` 重新锚定只挂在 MoveJ 之前，没有这一步就得不到该保护。回位成功才发布 `ACTIVE/policy`，`dry_run=true` 时只校验、不发动作。回位完成后策略**不会**自动开始，运动的唯一开关仍是 bridge 的 `/policy/activate`。三条臂都会回位，与 Pika 一致，也与数据采集时的布局一致。
 
 键盘 Web ingress 是 `/keyboard/l/cartesian_velocity` 和 `/keyboard/r/cartesian_velocity`
 （`geometry_msgs/msg/TwistStamped`）。`keyboard_control_router` 为左右臂分别拥有
@@ -158,6 +160,26 @@ Web bridge 检查 lease/sequence 并识别新按下边沿，发布 `/keyboard/l|
 Action 或夹爪 command，需要真实 Pika 运动必须显式设置 `REALMAN_BT_DRY_RUN=false`，并完成低速、急停和
 工作区检查；切入任一 Pika 模式前，行为树先运行一次 `ThreeArmMoveJ` 准备动作到
 `config/ros/pika_config.yaml` 的 `pika_default_pose`，准备失败或被取消时不会进入 Pika `ACTIVE`。
+
+## 任务控制节点
+
+除了输入路由用到的 `Sequence`、`ReactiveSequence` 和 `ReactiveFallback`，执行器还注册了
+一组控制"重复和重试"的节点，供一个分支里的有限任务使用：
+
+| 标签 | 端口 | 语义 |
+| --- | --- | --- |
+| `Fallback` | 无 | 有状态的优先级列表：依次尝试子节点，第一个 `SUCCESS` 即成功，全部失败才失败；与 `ReactiveFallback` 不同，已在 `RUNNING` 的子节点不会被重新评估 |
+| `Repeat` | `num_cycles`（默认 1，`-1` 无限） | 子节点每成功一次计一轮，达到轮数返回 `SUCCESS`；子节点失败则整体失败。每一轮之间会 `halt()` 子节点 |
+| `Retry` | `num_attempts`（默认 1，`-1` 无限） | 子节点失败时 `halt()` 后重跑，次数含首次；`RUNNING` 不消耗次数 |
+| `RetryUnlessFault` | `num_attempts`（默认 1，`-1` 无限） | 同 `Retry`，但失败的叶节点若已把黑板键 `policy_fault` 置为 `true`，立即返回 `FAILURE`，不再消耗剩余次数 |
+
+`policy_fault` 用来区分"值得再试一次"和"再试也没用"：抓空、超时属于前者，叶节点什么都不用写；
+关节越界、必需服务缺失属于后者，叶节点在返回 `FAILURE` 之前把它置为 `true`。这个标志属于
+`RetryUnlessFault` 的一次运行：运行开始时和 `halt()` 时清除，所以上一次留下的故障不会挡住新的
+第一次尝试；某次运行以故障结束后，标志保持置位，上层仍能读到。
+
+因为 `Repeat` 和 `Retry` 在每次重来之前都会 `halt()` 子树，子树里的叶节点必须在 `onHalted()` 里
+把自己停干净，并允许被重复 `halt()`。
 
 ## 生命周期和无硬件验证
 

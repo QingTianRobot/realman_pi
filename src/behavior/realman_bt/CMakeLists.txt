@@ -181,6 +181,15 @@ if(BUILD_TESTING)
   target_link_libraries(test_reactive_control_nodes PRIVATE bt::core)
   add_test(NAME test_reactive_control_nodes COMMAND test_reactive_control_nodes)
 
+  add_executable(test_retry_unless_fault_node test/test_retry_unless_fault_node.cpp)
+  target_include_directories(test_retry_unless_fault_node PRIVATE
+    "${CMAKE_CURRENT_SOURCE_DIR}/include"
+    "${BT_VENDOR_ROOT}"
+    "${BT_VENDOR_ROOT}/bt_nodes")
+  target_compile_features(test_retry_unless_fault_node PRIVATE cxx_std_17)
+  target_link_libraries(test_retry_unless_fault_node PRIVATE bt::core)
+  add_test(NAME test_retry_unless_fault_node COMMAND test_retry_unless_fault_node)
+
   ament_add_pytest_test(test_tree_contract test/test_tree_contract.py)
   ament_add_pytest_test(test_control_router_tree test/test_control_router_tree.py)
   ament_add_pytest_test(test_pika_control_router test/test_pika_control_router.py)

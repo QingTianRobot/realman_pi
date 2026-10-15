@@ -16,7 +16,8 @@ description: 三路 Orbbec 腕部相机与全局 RealSense D435 的 ROS 2 出图
 
 相机出图主线使用官方 Orbbec ROS2 驱动加 RealSense ROS2 驱动。`rm65_camera_ros2` 会先停止
 已弃用的 SDK 推流以释放 USB，source ROS2 Humble、Orbbec、RealSense 和本仓库工作区，然后从
-`config/ros/cameras_ros2.yaml` 按串号启动三路 Gemini 305，并在 24s 错峰后启动全局 RealSense
+`config/ros/cameras_ros2.yaml` 按串号启动其中已启用的腕部 Gemini 305（基线为左、右两路，
+`middle` 是 `enabled: false`，见下），并在 24s 错峰后启动全局 RealSense
 D435；宿主机缺少 `realsense2_camera` 驱动时 `rm65_camera_ros2` / `start_sensors.sh` / `./rm65 up`
 直接失败，禁止降级为仅三路 Orbbec。默认使用 USB2 兼容的
 `640x480@10 YUYV` 彩色；YUYV 用于规避右侧
@@ -26,15 +27,19 @@ D435；宿主机缺少 `realsense2_camera` 驱动时 `rm65_camera_ros2` / `start
 软件触发；启用 wrapper 默认同步参数会导致后启动的 USB2 设备只有 publisher 而没有图像帧。
 三台 Orbbec 与 D435 共用 USB2 root hub 时，还需将生产机 `usbfs_memory_mb` 调到至少 `256`；
 启动函数会检查该值并在过小时打印临时和持久化修复命令。
-右侧相机在 30 Hz 下使用固定彩色曝光 `43`（单位 0.1 ms，即 4.3 ms）并关闭自动曝光：实测同一台相机在自动曝光下
-约 77% 像素饱和、画面接近全白，固定后亮度约 115、无饱和，同配置的左相机不受影响。该值由
-`wrist_cameras.devices.right.streams.color` 管理。驱动在启动阶段写入的"关闭自动曝光"在这批设备上不生效
+左右腕部相机在 30 Hz 下都关闭自动曝光、使用固定彩色曝光：自动曝光下画面接近全白
+（实测右位约 77% 像素饱和），固定后亮度正常。两侧取值**各自独立标定、可以不同**，分别由
+`wrist_cameras.devices.<side>.streams.color` 的 `exposure` 管理（单位 0.1 ms）：当前基线为左位 `60`
+（6.0 ms）、右位 `100`（10.0 ms），因为两侧进光条件不同，沿用同一个值会让其中一侧偏暗或偏亮。
+腕位未装相机时把该 side 的 `enabled` 设为 `false`（默认 `true`）：启动器据此把 `use_<side>` 的默认值置为
+`false`，健康检查 `check_cameras.py` 也跳过它，不再对着一台不存在的设备空转重试；`global_camera.enabled: false`
+同理跳过 D435。当前基线里 `middle` 就是 `enabled: false`——现场只装了左、右两台 Gemini 305，`middle` 的串号
+没有对应硬件。驱动在启动阶段写入的"关闭自动曝光"在这批设备上不生效
 （日志显示已关闭、画面仍在自动曝光），所以配置了 `auto_exposure: false` 的相机，启动器会在其彩色流出帧后由
 `apply_color_exposure.py` 再下发一次（先关自动曝光、再设曝光），其日志在该次启动的 `logs/<timestamp>/` 中，进程名
 `apply_color_exposure_<side>`。固定曝光不随光照自适应，换光源或相机位置后应在运行中先用
-`/camera_right/set_color_auto_exposure` 与 `set_color_exposure` 扫描验证，再写回配置并重启相机。左侧相机目前使用自动曝光；
-早期为反光标定板写入的固定 3 ms 曝光（`auto_exposure: false`、`exposure: 30`）已在配置重构中移除，如需恢复请写入
-`devices.left.streams.color`，而不是降低 ChArUco 的最小角点数。现场串号等差异可写进被 `.gitignore` 忽略的
+`/camera_<side>/set_color_auto_exposure` 与 `set_color_exposure` 扫描验证，再写回该侧配置并重启相机；
+两侧要分别扫，不要用一个值套两边。现场串号等差异可写进被 `.gitignore` 忽略的
 `config/ros/cameras_ros2.local.yaml`（与 base 深合并、优先级 `local > base`，详见
 [开发者手册](../development/startup-entries.md#ros2-图像节点与-rviz2)）。
 生产机的 Orbbec 工作区与 Docker 镜像可能使用不同的 Fast DDS 补丁版本；项目默认从 `.env`
@@ -52,9 +57,10 @@ ros2 topic list | grep camera
 rm65_camera_ros2_status
 ```
 
-默认会看到 `/camera_left`、`/camera_middle`、`/camera_right` 下的 `color/image_raw` 和
+默认会看到已启用腕位（基线是 `/camera_left`、`/camera_right`）下的 `color/image_raw` 和
 对应 `camera_info`，以及全局
-`/camera_global/d435/color/image_raw`。需要深度时使用互斥的深度模式：
+`/camera_global/d435/color/image_raw`；`/camera_middle` 因为没有装设备、配置里 `enabled: false`
+而不会出现，这是预期结果，不是启动失败。需要深度时使用互斥的深度模式：
 
 ```zsh
 rm65_camera_ros2 depth

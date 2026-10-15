@@ -52,3 +52,31 @@ def test_missing_script_skips_the_step_instead_of_breaking_the_launch(mod, monke
     monkeypatch.setattr(mod, "_exposure_apply_script", lambda: None)
     assert mod._exposure_apply_action("right", _streams("false", "43")) is None
     assert "apply_color_exposure.py" in capsys.readouterr().err
+
+
+# A minimal config whose middle wrist camera is disabled, to exercise the
+# per-device ``enabled`` flag without touching the real cameras_ros2.yaml.
+_DISABLED_MIDDLE_CONFIG = {
+    "wrist_cameras": {
+        "mode": "color",
+        "devices": {
+            "left": {"serial": "L"},
+            "middle": {"serial": "M", "enabled": False},
+            "right": {"serial": "R"},
+        },
+    },
+    "global_camera": {},
+}
+
+
+def test_load_defaults_marks_disabled_side(mod, monkeypatch):
+    monkeypatch.setattr(mod, "_load_config", lambda: _DISABLED_MIDDLE_CONFIG)
+    defaults = mod._load_defaults()
+    assert defaults["sides"]["left"]["enabled"] is True
+    assert defaults["sides"]["middle"]["enabled"] is False
+    assert defaults["sides"]["right"]["enabled"] is True
+
+
+def test_use_flag_default_maps_enabled(mod):
+    assert mod._use_flag_default(True) == "true"
+    assert mod._use_flag_default(False) == "false"

@@ -43,6 +43,7 @@ if(BUILD_TESTING)
   find_package(ament_cmake_pytest REQUIRED)
   ament_add_pytest_test(test_apply_color_exposure test/test_apply_color_exposure.py)
   ament_add_pytest_test(test_cameras_ros2_launch test/test_cameras_ros2_launch.py)
+  ament_add_pytest_test(test_check_cameras test/test_check_cameras.py)
 endif()
 
 ament_package()

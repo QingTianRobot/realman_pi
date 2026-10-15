@@ -136,6 +136,11 @@ def _resolve_side_streams(global_streams, device_cfg, side):
     }
 
 
+def _use_flag_default(enabled):
+    """Map a device's ``enabled`` flag to the ``use_<side>`` launch-argument default."""
+    return "true" if enabled else "false"
+
+
 def _load_defaults():
     config = _load_config()
     wrist = config.get("wrist_cameras", {}) or {}
@@ -153,6 +158,7 @@ def _load_defaults():
         device_cfg = devices.get(side, {}) or {}
         sides[side] = {
             "serial": str(device_cfg.get("serial", "")),
+            "enabled": bool(device_cfg.get("enabled", True)),
             "streams": _resolve_side_streams(global_streams, device_cfg, side),
         }
 
@@ -347,9 +353,9 @@ def generate_launch_description():
         DeclareLaunchArgument("left_serial", default_value=sides["left"]["serial"]),
         DeclareLaunchArgument("middle_serial", default_value=sides["middle"]["serial"]),
         DeclareLaunchArgument("right_serial", default_value=sides["right"]["serial"]),
-        DeclareLaunchArgument("use_left", default_value="true"),
-        DeclareLaunchArgument("use_middle", default_value="true"),
-        DeclareLaunchArgument("use_right", default_value="true"),
+        DeclareLaunchArgument("use_left", default_value=_use_flag_default(sides["left"]["enabled"])),
+        DeclareLaunchArgument("use_middle", default_value=_use_flag_default(sides["middle"]["enabled"])),
+        DeclareLaunchArgument("use_right", default_value=_use_flag_default(sides["right"]["enabled"])),
         DeclareLaunchArgument("use_rviz", default_value="false"),
         DeclareLaunchArgument(
             "left_delay",

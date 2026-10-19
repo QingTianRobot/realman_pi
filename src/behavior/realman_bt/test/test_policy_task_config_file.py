@@ -31,6 +31,10 @@ def _loader_keys():
     # The per-arm gripper names are declared in a loop over l, m and r.
     keys.discard("gripper_for_arm.")
     keys |= {f"gripper_for_arm.{arm}" for arm in "lmr"}
+    # Each task named in task_names gets tasks.<name>.prompt and tasks.<name>.completion.
+    keys.discard("tasks.")
+    assert 'p + "tasks." + name + ".prompt"' in source and 'p + "tasks." + name + ".completion"' in source
+    keys |= {f"tasks.{name}.{field}" for name in _parameters()["task_names"] for field in ("prompt", "completion")}
     return keys
 
 
@@ -77,6 +81,41 @@ def test_every_attempt_leaves_a_trace_in_the_host_log_directory():
 def test_the_command_namespace_matches_the_policy_bridge():
     bridge = yaml.safe_load((ROOT / "config/ros/policy_bridge.yaml").read_text(encoding="utf-8"))
     assert _parameters()["command_namespace"] == bridge["downlink"]["command_namespace"]
+
+
+def test_the_tasks_are_the_two_prompts_of_the_multitask_model():
+    parameters = _parameters()
+    assert parameters["task_names"] == ["place", "pick"]
+    assert set(parameters["tasks"]) == set(parameters["task_names"])  # a task not named is ignored by ROS
+    # Verbatim the training view's tasks (m_multitask_b16_2gpu, 2026-10-16); the model has no other names for them.
+    assert parameters["tasks"]["place"] == {
+        "prompt": "pick up the power adapter and put it in the blue bin",
+        "completion": "release_over_bin",
+    }
+    assert parameters["tasks"]["pick"] == {"prompt": "pick up the power adapter", "completion": "lift_and_hold"}
+
+
+def test_the_lift_thresholds_are_the_reviewed_values():
+    lift = _parameters()["lift"]
+    assert lift == {
+        "min_closed_sec": 3.0,
+        "joint_index": 1,
+        "joint_delta_deg": -10.0,
+        "hold_sec": 2.0,
+        "wrong_side_joint_index": 0,
+        "wrong_side_below_deg": -25.0,
+    }
+
+
+def test_the_prompt_topic_matches_the_policy_bridge():
+    bridge = yaml.safe_load((ROOT / "config/ros/policy_bridge.yaml").read_text(encoding="utf-8"))
+    assert _parameters()["prompt_topic"] == bridge["prompt"]["topic"]
+
+
+def test_the_bridge_starts_with_the_place_prompt():
+    # Until the tree switches it, the bridge serves place; the BT's policy branch runs task="place".
+    bridge = yaml.safe_load((ROOT / "config/ros/policy_bridge.yaml").read_text(encoding="utf-8"))
+    assert bridge["prompt"]["initial"] == _parameters()["tasks"]["place"]["prompt"]
 
 
 def test_the_launch_file_hands_the_file_to_the_executor():

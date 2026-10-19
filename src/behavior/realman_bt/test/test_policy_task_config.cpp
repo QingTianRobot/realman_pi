@@ -134,6 +134,65 @@ void testTheTraceNeedsASamplePeriodAndWhenOnADirectory() {
   off.validate();
 }
 
+void testTheDefaultTasksAreTheTwoPromptsOfTheMultitaskModel() {
+  const PolicyTaskConfig config;
+  assert(config.tasks.size() == 2);
+  assert(config.task("place").prompt == "pick up the power adapter and put it in the blue bin");
+  assert(config.task("place").completion == PolicyTaskConfig::Completion::kReleaseOverBin);
+  assert(config.task("pick").prompt == "pick up the power adapter");
+  assert(config.task("pick").completion == PolicyTaskConfig::Completion::kLiftAndHold);
+  assert(config.prompt_topic == "/policy/prompt");
+  assert(config.lift.joint_index == 1 && config.lift.joint_delta_deg == -10.0);
+  assert(config.lift.hold_sec == 2.0 && config.lift.min_closed_sec == 3.0);
+  assert(config.lift.wrong_side_joint_index == 0 && config.lift.wrong_side_below_deg == -25.0);
+}
+
+void testAnUnknownTaskNamesTheKnownOnes() {
+  const PolicyTaskConfig config;
+  try {
+    config.task("stack");
+    assert(false);
+  } catch (const std::invalid_argument& error) {
+    const std::string message = error.what();
+    assert(message.find("stack") != std::string::npos);
+    assert(message.find("pick") != std::string::npos && message.find("place") != std::string::npos);
+  }
+}
+
+void testCompletionNamesRoundTrip() {
+  using realman_bt::completionName;
+  using realman_bt::parseCompletion;
+  for (auto completion : {PolicyTaskConfig::Completion::kReleaseOverBin, PolicyTaskConfig::Completion::kLiftAndHold}) {
+    assert(parseCompletion(completionName(completion)) == completion);
+  }
+  assert(std::string(completionName(PolicyTaskConfig::Completion::kLiftAndHold)) == "lift_and_hold");
+  try {
+    parseCompletion("release");
+    assert(false);
+  } catch (const std::invalid_argument& error) {
+    assert(std::string(error.what()).find("release_over_bin or lift_and_hold") != std::string::npos);
+  }
+}
+
+void testTasksNeedDistinctNonEmptyPrompts() {
+  assertRejected([](PolicyTaskConfig& c) { c.tasks.clear(); }, "policy_task.tasks");
+  assertRejected([](PolicyTaskConfig& c) { c.tasks["pick"].prompt = ""; }, "tasks.pick.prompt");
+  // Two tasks with one prompt would run the same policy behaviour under two completions.
+  assertRejected([](PolicyTaskConfig& c) { c.tasks["pick"].prompt = c.tasks["place"].prompt; }, "is the same as");
+  assertRejected([](PolicyTaskConfig& c) { c.prompt_topic = "policy/prompt"; }, "prompt_topic");
+}
+
+void testLiftThresholdsMustBeUsable() {
+  assertRejected([](PolicyTaskConfig& c) { c.lift.joint_index = 6; }, "lift.joint_index");
+  assertRejected([](PolicyTaskConfig& c) { c.lift.joint_delta_deg = 0.0; }, "lift.joint_delta_deg");
+  assertRejected([](PolicyTaskConfig& c) { c.lift.hold_sec = -1.0; }, "lift.hold_sec");
+  assertRejected([](PolicyTaskConfig& c) { c.lift.min_closed_sec = -1.0; }, "lift.min_closed_sec");
+  assertRejected([](PolicyTaskConfig& c) { c.lift.wrong_side_joint_index = -1; }, "lift.wrong_side_joint_index");
+  PolicyTaskConfig upward;
+  upward.lift.joint_delta_deg = 10.0;  // a joint that increases while lifting is fine
+  upward.validate();
+}
+
 void testRouterReleaseMayBeZeroButNotNegative() {
   PolicyTaskConfig config;
   config.router_release_sec = 0.0;
@@ -158,5 +217,10 @@ int main() {
   testTheTraceIsOnByDefaultAndGoesToTheLogDirectory();
   testTheTraceNeedsASamplePeriodAndWhenOnADirectory();
   testRouterReleaseMayBeZeroButNotNegative();
+  testTheDefaultTasksAreTheTwoPromptsOfTheMultitaskModel();
+  testAnUnknownTaskNamesTheKnownOnes();
+  testCompletionNamesRoundTrip();
+  testTasksNeedDistinctNonEmptyPrompts();
+  testLiftThresholdsMustBeUsable();
   return 0;
 }

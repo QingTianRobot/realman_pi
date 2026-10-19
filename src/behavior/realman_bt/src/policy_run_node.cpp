@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <stdexcept>
 #include <utility>
 
 #include "realman_bt/policy_task_blackboard.hpp"
@@ -12,14 +13,30 @@ namespace realman_bt {
 namespace {
 
 constexpr double kRadToDeg = 57.29577951308232;
+// While waiting for the bridge to take the prompt, publish it again this often (a subscriber that
+// matched late would otherwise never see it; a repeated identical prompt changes nothing).
+constexpr double kPromptRepublishSec = 0.5;
 
 }  // namespace
 
 bt_core::PortsList PolicyRunNode::providedPorts() {
   return bt_core::makePorts(
       bt_core::InputPort<std::string>("arm_id", "r", "Arm the policy drives"),
+      bt_core::InputPort<std::string>("task", "place",
+                                      "Policy task from policy_task.tasks: its prompt and completion"),
       bt_core::InputPort<bool>("dry_run", "true",
                                "Validate and record only; no topics, no service calls"));
+}
+
+void PolicyRunNode::publishPrompt(Clock::time_point now) {
+  if (prompt_sent_at_ != Clock::time_point{} &&
+      std::chrono::duration<double>(now - prompt_sent_at_).count() < kPromptRepublishSec) {
+    return;
+  }
+  std_msgs::msg::String message;
+  message.data = task_.prompt;
+  prompt_pub_->publish(message);
+  prompt_sent_at_ = now;
 }
 
 double PolicyRunNode::nowSec() const {
@@ -35,6 +52,12 @@ void PolicyRunNode::initialize() {
     throw std::runtime_error("policy_task.gripper_for_arm has no gripper for arm " + arm_);
   }
   gripper_ = gripper->second;
+  task_name_ = getInput<std::string>("task").value_or("place");
+  try {
+    task_ = config_->task(task_name_);
+  } catch (const std::invalid_argument& error) {
+    throw std::runtime_error(error.what());
+  }
   ros_node_ = &requireRosNode(blackboard());
 
   PolicyTaskConfig supervised = *config_;
@@ -66,13 +89,22 @@ void PolicyRunNode::initialize() {
           [this](diagnostic_msgs::msg::DiagnosticArray::ConstSharedPtr message) {
             if (message->status.empty()) return;
             BridgeStats stats;
+            bool prompt_valid = false;
+            std::string prompt;
             for (const auto& value : message->status.front().values) {
+              if (value.key == "prompt") {
+                prompt_valid = true;
+                prompt = value.value;
+                continue;
+              }
               const bool on = std::atof(value.value.c_str()) != 0.0;
               if (value.key == "allow_publish") stats.allow_publish = on;
               if (value.key == "mode_active") stats.mode_active = on;
               if (value.key == "paused") stats.paused = on;
             }
             std::lock_guard<std::mutex> lock(mutex_);
+            bridge_prompt_valid_ = prompt_valid;
+            bridge_prompt_ = prompt;
             stats_ = stats;
             stats_valid_ = true;
             stats_at_ = Clock::now();
@@ -114,6 +146,7 @@ void PolicyRunNode::initialize() {
   deactivate_ = ros_node_->create_client<SetBool>("/policy/deactivate");
   bridge_estop_ = ros_node_->create_client<Trigger>("/policy/emergency_stop");
   router_estop_ = ros_node_->create_client<Trigger>("/policy_router/emergency_stop");
+  prompt_pub_ = ros_node_->create_publisher<std_msgs::msg::String>(config_->prompt_topic, 10);
 }
 
 void PolicyRunNode::resetAttempt() {
@@ -124,6 +157,7 @@ void PolicyRunNode::resetAttempt() {
   stop_step_ = 0;
   pending_ = Verdict();
   dry_run_logged_ = false;
+  prompt_sent_at_ = Clock::time_point{};
   blackboard()->set<bool>(kPolicyArmedKey, false);
 }
 
@@ -151,6 +185,11 @@ std::string PolicyRunNode::missingForStart(Clock::time_point now) const {
       missing.push_back("policy bridge is not in policy mode (mode_active=0)");
     } else if (stats_.paused) {
       missing.push_back("policy bridge is paused");
+    } else if (!bridge_prompt_valid_) {
+      missing.push_back("policy bridge does not report its prompt in /policy/stats (too old a bridge)");
+    } else if (bridge_prompt_ != task_.prompt) {
+      missing.push_back("policy bridge prompt is '" + bridge_prompt_ + "', waiting for '" + task_.prompt +
+                        "' (task " + task_name_ + ")");
     }
   }
   std::string joined;
@@ -169,6 +208,8 @@ void PolicyRunNode::openTrace() {
                 config_->joint_hi[2], config_->joint_hi[3], config_->joint_hi[4], config_->joint_hi[5],
                 config_->max_joint_speed_dps, config_->max_attempt_sec);
   const std::vector<std::string> notes{
+      "task=" + task_name_ + " completion=" + completionName(task_.completion) + " prompt='" +
+          task_.prompt + "'",
       "activation=" + config_->activation + " cycles=" + std::to_string(config_->cycles) +
           " attempts=" + std::to_string(config_->attempts),
       envelope};
@@ -196,9 +237,11 @@ void PolicyRunNode::writeTraceRow(const char* phase, Clock::time_point now, bool
 bt_core::NodeStatus PolicyRunNode::tick() {
   if (getInput<bool>("dry_run").value_or(true)) {
     if (!dry_run_logged_) {
+      const std::string task = getInput<std::string>("task").value_or("place");
       recordPolicyEvent(blackboard(), "INFO", name(), "dry_run",
-                        "would activate the bridge and supervise the attempt: joint range, speed, "
-                        "other arms, bridge health, timeout, stall, release over the bin");
+                        "would set the prompt of task " + task +
+                            ", activate the bridge and supervise the attempt: joint range, speed, "
+                            "other arms, bridge health, timeout, stall, the task's completion");
       blackboard()->set<std::string>(kPolicyAttemptResultKey, "dry_run");
       dry_run_logged_ = true;
     }
@@ -234,6 +277,9 @@ bt_core::NodeStatus PolicyRunNode::tick() {
 }
 
 bt_core::NodeStatus PolicyRunNode::tickPreflight(Clock::time_point now) {
+  // The bridge is not publishing yet, so switching its prompt is safe; it also clears its action
+  // queue on a change, so nothing of the previous task can be sent once it is activated.
+  publishPrompt(now);
   const std::string missing = missingForStart(now);
   if (missing.empty()) {
     phase_ = Phase::kArming;
@@ -296,7 +342,7 @@ bt_core::NodeStatus PolicyRunNode::tickArming(Clock::time_point now) {
 void PolicyRunNode::arm(Clock::time_point now) {
   {
     std::lock_guard<std::mutex> lock(mutex_);
-    supervisor_->start(nowSec());
+    supervisor_->start(nowSec(), task_name_);
   }
   phase_ = Phase::kRunning;
   phase_started_ = now;
@@ -410,11 +456,11 @@ bt_core::NodeStatus PolicyRunNode::finalize() {
   blackboard()->set<double>(kPolicyAttemptSecKey, verdict.attempt_sec);
   trace_.close(outcomeName(verdict.outcome), verdict.grasp_verdict, verdict.attempt_sec, verdict.reason);
   recordPolicyEvent(blackboard(), verdict.fault ? "ERROR" : "INFO", name(), "attempt_end",
-                    std::string("result=") + outcomeName(verdict.outcome) +
+                    "task=" + task_name_ + " result=" + outcomeName(verdict.outcome) +
                         " grasp=" + (verdict.grasp_verdict.empty() ? "n/a" : verdict.grasp_verdict) +
                         " seconds=" + std::to_string(verdict.attempt_sec));
   resetAttempt();
-  if (verdict.outcome == AttemptOutcome::kReleasedHeld) {
+  if (verdict.succeeded) {
     setFailureReason("");
     return bt_core::NodeStatus::SUCCESS;
   }

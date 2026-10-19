@@ -35,6 +35,12 @@ const char* outcomeName(AttemptOutcome outcome) {
       return "released_held";
     case AttemptOutcome::kReleasedEmpty:
       return "released_empty";
+    case AttemptOutcome::kLiftedHeld:
+      return "lifted_held";
+    case AttemptOutcome::kDropped:
+      return "dropped";
+    case AttemptOutcome::kWrongTask:
+      return "wrong_task";
     case AttemptOutcome::kTimeout:
       return "timeout";
     case AttemptOutcome::kStall:
@@ -45,7 +51,22 @@ const char* outcomeName(AttemptOutcome outcome) {
   return "fault";
 }
 
-PolicySupervisor::PolicySupervisor(PolicyTaskConfig config) : config_(std::move(config)) {}
+bool isSuccess(AttemptOutcome outcome) {
+  return outcome == AttemptOutcome::kReleasedHeld || outcome == AttemptOutcome::kLiftedHeld;
+}
+
+bool isFault(AttemptOutcome outcome) {
+  return outcome == AttemptOutcome::kFault || outcome == AttemptOutcome::kWrongTask;
+}
+
+PolicySupervisor::PolicySupervisor(PolicyTaskConfig config) : config_(std::move(config)) {
+  // Until start() names a task: "place" if there is one, else the first.
+  if (config_.tasks.count("place") != 0) {
+    task_ = config_.tasks.at("place");
+  } else if (!config_.tasks.empty()) {
+    task_ = config_.tasks.begin()->second;
+  }
+}
 
 void PolicySupervisor::reset() {
   started_ = false;
@@ -54,6 +75,9 @@ void PolicySupervisor::reset() {
   closed_total_ = 0.0;
   last_closed_time_ = -1.0;
   release_time_.reset();
+  lift_reference_deg_.reset();
+  lifted_since_.reset();
+  held_once_ = false;
   stall_since_.reset();
   latched_fault_.reset();
   release_grasp_.clear();
@@ -153,8 +177,10 @@ void PolicySupervisor::onGripperReading(double position, bool torque_reached, do
   }
 }
 
-void PolicySupervisor::start(double now) {
+void PolicySupervisor::start(double now, const std::string& task_name) {
+  const PolicyTaskConfig::Task task = config_.task(task_name);  // throws before anything changes
   reset();
+  task_ = task;
   started_ = true;
   start_time_ = now;
   last_eval_time_ = now;
@@ -173,7 +199,8 @@ void PolicySupervisor::finish(double now, AttemptOutcome outcome, std::string re
                               std::string grasp) {
   verdict_.finished = true;
   verdict_.outcome = outcome;
-  verdict_.fault = outcome == AttemptOutcome::kFault;
+  verdict_.succeeded = isSuccess(outcome);
+  verdict_.fault = isFault(outcome);
   verdict_.reason = std::move(reason);
   verdict_.grasp_verdict = std::move(grasp);
   verdict_.attempt_sec = now - start_time_;
@@ -270,33 +297,19 @@ const Verdict& PolicySupervisor::evaluate(double now) {
     last_closed_time_ = now;
   }
 
-  const auto supervised = arms_.find(config_.arm);
-  if (!release_time_ && policy_gripper_valid_ && policy_gripper_ > config_.release.open_above &&
-      closed_total_ >= config_.release.min_closed_sec && supervised != arms_.end() &&
-      supervised->second.degrees[config_.release.joint_index] < config_.release.joint_below_deg) {
-    release_time_ = now;
-    release_grasp_ = judgeGrasp();
-  }
-
-  if (release_time_) {
-    if (now - *release_time_ >= config_.release.settle_sec) {
-      if (release_grasp_ == "held") {
-        finish(now, AttemptOutcome::kReleasedHeld, "", release_grasp_);
-      } else if (release_grasp_ == "empty") {
-        finish(now, AttemptOutcome::kReleasedEmpty,
-               "released over the bin but the jaws closed on nothing", release_grasp_);
-      } else {
-        finish(now, AttemptOutcome::kReleasedEmpty,
-               "released over the bin but there were no gripper readings to judge the grasp",
-               release_grasp_);
-      }
-    }
-    return verdict_;
+  if (task_.completion == PolicyTaskConfig::Completion::kReleaseOverBin) {
+    if (evaluateRelease(now)) return verdict_;
+  } else {
+    evaluateLift(now, closed);
+    if (verdict_.finished) return verdict_;
   }
 
   if (now - start_time_ > config_.max_attempt_sec) {
+    const bool release = task_.completion == PolicyTaskConfig::Completion::kReleaseOverBin;
     finish(now, AttemptOutcome::kTimeout,
-           "no release within " + number(config_.max_attempt_sec, 0) + " s", "");
+           std::string(release ? "no release" : "no lift-and-hold") + " within " +
+               number(config_.max_attempt_sec, 0) + " s",
+           "");
     return verdict_;
   }
 
@@ -315,6 +328,72 @@ const Verdict& PolicySupervisor::evaluate(double now) {
     stall_since_.reset();
   }
   return verdict_;
+}
+
+bool PolicySupervisor::evaluateRelease(double now) {
+  const auto supervised = arms_.find(config_.arm);
+  if (!release_time_ && policy_gripper_valid_ && policy_gripper_ > config_.release.open_above &&
+      closed_total_ >= config_.release.min_closed_sec && supervised != arms_.end() &&
+      supervised->second.degrees[config_.release.joint_index] < config_.release.joint_below_deg) {
+    release_time_ = now;
+    release_grasp_ = judgeGrasp();
+  }
+  if (!release_time_) return false;
+
+  if (now - *release_time_ >= config_.release.settle_sec) {
+    if (release_grasp_ == "held") {
+      finish(now, AttemptOutcome::kReleasedHeld, "", release_grasp_);
+    } else if (release_grasp_ == "empty") {
+      finish(now, AttemptOutcome::kReleasedEmpty, "released over the bin but the jaws closed on nothing",
+             release_grasp_);
+    } else {
+      finish(now, AttemptOutcome::kReleasedEmpty,
+             "released over the bin but there were no gripper readings to judge the grasp", release_grasp_);
+    }
+  }
+  return true;
+}
+
+void PolicySupervisor::evaluateLift(double now, bool closed) {
+  const auto supervised = arms_.find(config_.arm);
+  if (supervised == arms_.end() || !supervised->second.valid) return;
+  const Joints& arm = supervised->second.degrees;
+  const auto& lift = config_.lift;
+
+  if (closed && !lift_reference_deg_) lift_reference_deg_ = arm[lift.joint_index];
+  if (!lift_reference_deg_) return;  // the policy has not tried to grasp yet
+
+  if (arm[lift.wrong_side_joint_index] < lift.wrong_side_below_deg) {
+    finish(now, AttemptOutcome::kWrongTask,
+           "the arm turned to the bin side (J" + std::to_string(lift.wrong_side_joint_index + 1) + " = " +
+               number(arm[lift.wrong_side_joint_index], 1) + " deg, limit " +
+               number(lift.wrong_side_below_deg, 1) +
+               ") although the task is lift-and-hold: the policy is not following the prompt",
+           "");
+    return;
+  }
+
+  // The jaws hold something when they stopped short of meeting; torque says they are pressing on it.
+  const bool holding = std::isfinite(last_gripper_position_) &&
+                       last_gripper_position_ < config_.verdict.empty_position_min;
+  if (closed && holding && last_torque_reached_) held_once_ = true;
+  if (held_once_ && closed && !holding) {
+    finish(now, AttemptOutcome::kDropped,
+           "the object slipped out of the closed jaws (gripper position " +
+               number(last_gripper_position_, 0) + ", J" + std::to_string(lift.joint_index + 1) + " = " +
+               number(arm[lift.joint_index], 1) + " deg)",
+           "empty");
+    return;
+  }
+
+  const double moved = arm[lift.joint_index] - *lift_reference_deg_;
+  const bool lifted = (lift.joint_delta_deg < 0.0 ? -moved : moved) >= std::fabs(lift.joint_delta_deg);
+  if (held_once_ && holding && closed_total_ >= lift.min_closed_sec && lifted) {
+    if (!lifted_since_) lifted_since_ = now;
+    if (now - *lifted_since_ >= lift.hold_sec) finish(now, AttemptOutcome::kLiftedHeld, "", "held");
+  } else {
+    lifted_since_.reset();
+  }
 }
 
 }  // namespace realman_bt

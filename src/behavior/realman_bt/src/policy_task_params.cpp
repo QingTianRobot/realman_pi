@@ -53,6 +53,14 @@ class Reader {
     return value.get<std::string>();
   }
 
+  std::vector<std::string> textList(const std::string& key, const std::vector<std::string>& fallback) {
+    const auto value = declare(key, rclcpp::ParameterValue(fallback));
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_STRING_ARRAY) {
+      throw std::invalid_argument(key + " must be a list of strings");
+    }
+    return value.get<std::vector<std::string>>();
+  }
+
   std::array<double, 6> sixNumbers(const std::string& key, const std::array<double, 6>& fallback) {
     const auto value = declare(key, rclcpp::ParameterValue(std::vector<double>(fallback.begin(), fallback.end())));
     std::vector<double> numbers;
@@ -117,6 +125,30 @@ PolicyTaskConfig declareAndLoadPolicyTaskConfig(rclcpp::Node& node) {
   config.release.joint_below_deg =
       read.number(p + "release.joint_below_deg", defaults.release.joint_below_deg);
   config.release.settle_sec = read.number(p + "release.settle_sec", defaults.release.settle_sec);
+  config.lift.min_closed_sec = read.number(p + "lift.min_closed_sec", defaults.lift.min_closed_sec);
+  config.lift.joint_index = read.integer(p + "lift.joint_index", defaults.lift.joint_index);
+  config.lift.joint_delta_deg = read.number(p + "lift.joint_delta_deg", defaults.lift.joint_delta_deg);
+  config.lift.hold_sec = read.number(p + "lift.hold_sec", defaults.lift.hold_sec);
+  config.lift.wrong_side_joint_index =
+      read.integer(p + "lift.wrong_side_joint_index", defaults.lift.wrong_side_joint_index);
+  config.lift.wrong_side_below_deg =
+      read.number(p + "lift.wrong_side_below_deg", defaults.lift.wrong_side_below_deg);
+  config.prompt_topic = read.text(p + "prompt_topic", defaults.prompt_topic);
+  // ROS parameters cannot list the keys under tasks., so the names come first; each name then has
+  // tasks.<name>.prompt and tasks.<name>.completion. A name without a default entry needs both.
+  std::vector<std::string> default_names;
+  for (const auto& [name, _] : defaults.tasks) default_names.push_back(name);
+  config.tasks.clear();
+  for (const auto& name : read.textList(p + "task_names", default_names)) {
+    const auto fallback = defaults.tasks.find(name);
+    const PolicyTaskConfig::Task base =
+        fallback != defaults.tasks.end() ? fallback->second : PolicyTaskConfig::Task{};
+    PolicyTaskConfig::Task task;
+    task.prompt = read.text(p + "tasks." + name + ".prompt", base.prompt);
+    task.completion =
+        parseCompletion(read.text(p + "tasks." + name + ".completion", completionName(base.completion)));
+    config.tasks[name] = task;
+  }
   config.verdict.window_sec = read.number(p + "verdict.window_sec", defaults.verdict.window_sec);
   config.verdict.empty_position_min =
       read.number(p + "verdict.empty_position_min", defaults.verdict.empty_position_min);

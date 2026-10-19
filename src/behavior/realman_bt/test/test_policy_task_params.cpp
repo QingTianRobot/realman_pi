@@ -135,6 +135,52 @@ void testTheShippedYamlLoadsThroughRosAsALaunchFileWouldPassIt() {
   assert(loaded.max_joint_speed_dps == 50.0);
   assert(loaded.release.joint_below_deg == -35.0);
   assert(loaded.gripper_for_arm.at("r") == "gripper_right");
+  assert(loaded.tasks.size() == 2);
+  assert(loaded.task("pick").prompt == "pick up the power adapter");
+  assert(loaded.task("pick").completion == PolicyTaskConfig::Completion::kLiftAndHold);
+  assert(loaded.task("place").completion == PolicyTaskConfig::Completion::kReleaseOverBin);
+  assert(loaded.lift.joint_delta_deg == -10.0 && loaded.lift.hold_sec == 2.0);
+  assert(loaded.prompt_topic == "/policy/prompt");
+}
+
+void testWithoutOverridesBothDefaultTasksExist() {
+  const PolicyTaskConfig loaded = load();
+  assert(loaded.tasks.size() == PolicyTaskConfig().tasks.size());
+  assert(loaded.task("place").prompt == PolicyTaskConfig().task("place").prompt);
+  assert(loaded.task("pick").completion == PolicyTaskConfig::Completion::kLiftAndHold);
+}
+
+void testANewTaskIsDeclaredThroughTaskNames() {
+  const PolicyTaskConfig loaded = load({
+      {"policy_task.task_names", std::vector<std::string>{"place", "lift_only"}},
+      {"policy_task.tasks.lift_only.prompt", "lift the power adapter"},
+      {"policy_task.tasks.lift_only.completion", "lift_and_hold"},
+      {"policy_task.lift.joint_delta_deg", -15.0},
+  });
+  assert(loaded.tasks.size() == 2);  // pick is gone: only what task_names lists exists
+  assert(loaded.tasks.count("pick") == 0);
+  assert(loaded.task("lift_only").prompt == "lift the power adapter");
+  assert(loaded.task("lift_only").completion == PolicyTaskConfig::Completion::kLiftAndHold);
+  assert(loaded.task("place").prompt == "pick up the power adapter and put it in the blue bin");
+  assert(loaded.lift.joint_delta_deg == -15.0);
+}
+
+void testANewTaskWithoutAPromptIsRejected() {
+  try {
+    load({{"policy_task.task_names", std::vector<std::string>{"place", "stack"}}});
+    assert(false);
+  } catch (const std::invalid_argument& error) {
+    assert(std::string(error.what()).find("tasks.stack.prompt") != std::string::npos);
+  }
+}
+
+void testAnUnknownCompletionIsRejected() {
+  try {
+    load({{"policy_task.tasks.pick.completion", "hold"}});
+    assert(false);
+  } catch (const std::invalid_argument& error) {
+    assert(std::string(error.what()).find("lift_and_hold") != std::string::npos);
+  }
 }
 
 }  // namespace
@@ -150,6 +196,10 @@ int main(int argc, char** argv) {
   testTraceSettingsAreLoaded();
   testTraceEnabledMustBeABoolean();
   testTheShippedYamlLoadsThroughRosAsALaunchFileWouldPassIt();
+  testWithoutOverridesBothDefaultTasksExist();
+  testANewTaskIsDeclaredThroughTaskNames();
+  testANewTaskWithoutAPromptIsRejected();
+  testAnUnknownCompletionIsRejected();
   rclcpp::shutdown();
   return 0;
 }

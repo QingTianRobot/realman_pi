@@ -28,6 +28,7 @@
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32.hpp"
 #include "std_msgs/msg/float64.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
@@ -65,8 +66,13 @@ PolicyTaskConfig fastConfig() {
   c.stats_stale_sec = 1.0;
   c.gripper_ready.position_stale_sec = 0.5;
   c.max_joint_speed_dps = 400.0;
+  c.lift.min_closed_sec = 0.3;
+  c.lift.hold_sec = 0.2;
   return c;
 }
+
+constexpr char kPlacePrompt[] = "pick up the power adapter and put it in the blue bin";
+constexpr char kPickPrompt[] = "pick up the power adapter";
 
 struct Call {
   std::string name;
@@ -90,6 +96,12 @@ struct FakeStack {
     velocity_pub =
         node->create_publisher<geometry_msgs::msg::TwistStamped>("/r/cartesian_velocity/command", 10);
     stats_pub = node->create_publisher<diagnostic_msgs::msg::DiagnosticArray>("/policy/stats", 10);
+    // Like the real bridge: takes a prompt from the topic (unless told to ignore it) and reports it.
+    prompt_sub = node->create_subscription<std_msgs::msg::String>(
+        "/policy/prompt", 10, [this](std_msgs::msg::String::ConstSharedPtr message) {
+          prompts_received.push_back({message->data, Clock::now()});
+          if (follow_prompt) bridge_prompt = message->data;
+        });
   }
 
   void serve(bool activate = true, bool deactivate = true, bool bridge_estop = true,
@@ -200,6 +212,12 @@ struct FakeStack {
       value("allow_publish", stats_allow_publish);
       value("mode_active", stats_mode_active);
       value("paused", stats_paused);
+      if (report_prompt) {
+        diagnostic_msgs::msg::KeyValue kv;
+        kv.key = "prompt";
+        kv.value = bridge_prompt;
+        status.values.push_back(kv);
+      }
       stats.status.push_back(status);
       stats_pub->publish(stats);
     }
@@ -213,11 +231,20 @@ struct FakeStack {
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr policy_gripper_pub;
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr velocity_pub;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr stats_pub;
+  rclcpp::Subscription<std_msgs::msg::String>::SharedPtr prompt_sub;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr activate_service, deactivate_service;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr bridge_estop_service, router_estop_service;
 
   std::vector<Call> calls;
   bool activate_succeeds{true};
+  std::string bridge_prompt{kPlacePrompt};  // the bridge starts with policy_bridge.yaml prompt.initial
+  bool follow_prompt{true};
+  bool report_prompt{true};
+  struct PromptMessage {
+    std::string text;
+    Clock::time_point at;
+  };
+  std::vector<PromptMessage> prompts_received;
 
   std::array<double, 6> l{12.17, 25.22, 73.05, -16.7, 80.3, 14.45};
   std::array<double, 6> m{0.0, 18.0, 70.0, 0.0, 90.0, 9.0};
@@ -234,14 +261,14 @@ struct FakeStack {
 };
 
 struct Fixture {
-  explicit Fixture(bool dry_run = false, PolicyTaskConfig cfg = fastConfig())
+  explicit Fixture(bool dry_run = false, PolicyTaskConfig cfg = fastConfig(), const std::string& task = "place")
       : config(std::move(cfg)) {
     bt_core::NodeConfig node_config;
     node_config.blackboard = bt_core::Blackboard::create();
     blackboard = node_config.blackboard;
     blackboard->set<const PolicyTaskConfig*>(realman_bt::kPolicyTaskConfigBlackboardKey, &config);
     blackboard->set<rclcpp::Node*>(realman_bt::kRosNodeBlackboardKey, stack.node.get());
-    node_config.port_values = {{"arm_id", "r"}, {"dry_run", dry_run ? "true" : "false"}};
+    node_config.port_values = {{"arm_id", "r"}, {"task", task}, {"dry_run", dry_run ? "true" : "false"}};
     node = std::make_unique<PolicyRunNode>("policy_run", node_config);
   }
 
@@ -811,6 +838,129 @@ void testEachAttemptGetsItsOwnTraceFile() {
 
 // ---- wiring -------------------------------------------------------------------------------------
 
+// ---- tasks and prompts -------------------------------------------------------------------------
+
+// The pick-only demonstration once the bridge is active: reach down, close on the adapter, lift.
+struct PickScenario {
+  explicit PickScenario(bool turn_to_bin = false) : to_bin(turn_to_bin) {}
+
+  void operator()(FakeStack& s, double now) {
+    if (armed_at < 0.0) {
+      if (s.activated()) armed_at = now;
+      return;
+    }
+    const double t = now - armed_at;
+    if (t > 0.05) s.r_target[1] = 40.0;  // reach down
+    if (t > 0.35 && !closed) {
+      closed = true;
+      s.policy_gripper = 0.0;
+      s.gripper_position = 5700.0;
+      s.torque_reached = true;
+    }
+    if (t > 0.8) {
+      if (to_bin) {
+        s.r_target[0] = -45.0;  // what the place task does next
+      } else {
+        s.r_target[1] = 25.0;  // lift 15 deg, keep holding
+      }
+    }
+  }
+
+  bool to_bin;
+  double armed_at{-1.0};
+  bool closed{false};
+};
+
+void testThePickTaskSwitchesTheBridgePromptBeforeActivating() {
+  Fixture f(false, fastConfig(), "pick");
+  f.stack.serve();
+  PickScenario scenario;
+
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::SUCCESS);
+
+  assert(!f.faultRaised());
+  expectStopsInOrder(f.stack);
+  assert(f.text(realman_bt::kPolicyAttemptResultKey) == "lifted_held");
+  assert(f.text(realman_bt::kPolicyGraspVerdictKey) == "held");
+  assert(f.stack.bridge_prompt == kPickPrompt);
+  assert(!f.stack.prompts_received.empty());
+  assert(f.stack.prompts_received.front().text == kPickPrompt);
+  // The prompt went out, and was taken, before the bridge was allowed to publish anything.
+  assert(f.stack.prompts_received.front().at < f.stack.calls.front().at);
+}
+
+void testThePlaceTaskKeepsThePlacePrompt() {
+  Fixture f;
+  f.stack.serve();
+  GraspScenario scenario(true);
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::SUCCESS);
+  for (const auto& message : f.stack.prompts_received) assert(message.text == kPlacePrompt);
+  assert(f.stack.bridge_prompt == kPlacePrompt);
+}
+
+void testABridgeThatKeepsTheWrongPromptIsAFaultAndNothingIsActivated() {
+  Fixture f(false, fastConfig(), "pick");
+  f.stack.serve();
+  f.stack.follow_prompt = false;  // still on the place prompt
+
+  assert(f.run(5s) == NodeStatus::FAILURE);
+
+  assert(f.faultRaised());
+  assert(f.stack.count("activate") == 0);
+  const std::string reason = f.text(realman_bt::kPolicyFailureReasonKey);
+  assert(reason.find("waiting for 'pick up the power adapter'") != std::string::npos);
+  assert(reason.find("task pick") != std::string::npos);
+}
+
+void testABridgeThatDoesNotReportItsPromptIsAFault() {
+  Fixture f;
+  f.stack.serve();
+  f.stack.report_prompt = false;  // a bridge from before the prompt was in /policy/stats
+
+  assert(f.run(5s) == NodeStatus::FAILURE);
+
+  assert(f.faultRaised());
+  assert(f.stack.count("activate") == 0);
+  assert(f.text(realman_bt::kPolicyFailureReasonKey).find("does not report its prompt") != std::string::npos);
+}
+
+void testThePickTaskTurningToTheBinIsAFaultAndStopsTheBridge() {
+  Fixture f(false, fastConfig(), "pick");
+  f.stack.serve();
+  PickScenario scenario(true);
+
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::FAILURE);
+
+  assert(f.faultRaised());  // not retried: the policy does not follow the prompt
+  expectStopsInOrder(f.stack);
+  assert(f.text(realman_bt::kPolicyAttemptResultKey) == "wrong_task");
+}
+
+void testAnUnknownTaskStopsBeforeTouchingAnything() {
+  Fixture f(false, fastConfig(), "stack");
+  f.stack.serve();
+  try {
+    f.node->executeTick();
+    assert(false);
+  } catch (const std::runtime_error& error) {
+    assert(std::string(error.what()).find("stack") != std::string::npos);
+  }
+  assert(f.stack.calls.empty() && f.stack.prompts_received.empty());
+}
+
+void testTheTraceNamesTheTaskAndItsPrompt() {
+  Fixture f(false, fastConfig(), "pick");
+  f.stack.serve();
+  PickScenario scenario;
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::SUCCESS);
+  const auto files = traceFiles(f.config);
+  assert(files.size() == 1);
+  const auto lines = readLines(files[0]);
+  assert(hasLine(lines, "# task=pick completion=lift_and_hold prompt='pick up the power adapter'"));
+  assert(hasLine(lines, "# result=lifted_held"));
+  removeTraceDir(f.config);
+}
+
 void testItNeedsTheConfigurationToRun() {
   Fixture f;
   f.blackboard->remove(realman_bt::kPolicyTaskConfigBlackboardKey);
@@ -825,6 +975,7 @@ void testItNeedsTheConfigurationToRun() {
 void testPortsAreDeclared() {
   const auto ports = PolicyRunNode::providedPorts();
   assert(ports.count("arm_id") == 1);
+  assert(ports.count("task") == 1);
   assert(ports.count("dry_run") == 1);
 }
 
@@ -859,6 +1010,13 @@ int main(int argc, char** argv) {
   testAnUnwritableTraceDirectoryDoesNotStopTheAttempt();
   testAHaltedAttemptSaysSoInItsTrace();
   testEachAttemptGetsItsOwnTraceFile();
+  testThePickTaskSwitchesTheBridgePromptBeforeActivating();
+  testThePlaceTaskKeepsThePlacePrompt();
+  testABridgeThatKeepsTheWrongPromptIsAFaultAndNothingIsActivated();
+  testABridgeThatDoesNotReportItsPromptIsAFault();
+  testThePickTaskTurningToTheBinIsAFaultAndStopsTheBridge();
+  testAnUnknownTaskStopsBeforeTouchingAnything();
+  testTheTraceNamesTheTaskAndItsPrompt();
   testItNeedsTheConfigurationToRun();
   testPortsAreDeclared();
   rclcpp::shutdown();

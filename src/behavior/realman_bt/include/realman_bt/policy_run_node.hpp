@@ -19,20 +19,24 @@
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32.hpp"
 #include "std_msgs/msg/float64.hpp"
+#include "std_msgs/msg/string.hpp"
 #include "std_srvs/srv/set_bool.hpp"
 #include "std_srvs/srv/trigger.hpp"
 
 namespace realman_bt {
 
-// Runs and supervises one attempt of the policy: checks that everything it needs is there, starts
-// the bridge (activation: auto) or waits for an operator to (activation: operator), judges the
-// attempt with PolicySupervisor, and always stops the bridge in the same order before it returns:
-// /policy/deactivate, /policy/emergency_stop, /policy_router/emergency_stop, then it waits for the
-// router to release the velocity session so the next step cannot fight it.
+// Runs and supervises one attempt of one policy task: checks that everything it needs is there,
+// switches the bridge to the task's prompt and waits until /policy/stats reports it, starts the
+// bridge (activation: auto) or waits for an operator to (activation: operator), judges the attempt
+// with PolicySupervisor using the task's completion, and always stops the bridge in the same order
+// before it returns: /policy/deactivate, /policy/emergency_stop, /policy_router/emergency_stop,
+// then it waits for the router to release the velocity session so the next step cannot fight it.
+// `task` names an entry of policy_task.tasks (config/ros/policy_task.yaml).
 //
-//   SUCCESS  the object was released over the bin.
-//   FAILURE  with policy_fault unset: a retryable failure (empty grasp, timeout, stall).
-//   FAILURE  with policy_fault set: nothing should retry (unsafe or broken).
+//   SUCCESS  release_over_bin: the object was released over the bin; lift_and_hold: it was lifted
+//            and is still held (the gripper stays closed on it).
+//   FAILURE  with policy_fault unset: a retryable failure (empty grasp, dropped, timeout, stall).
+//   FAILURE  with policy_fault set: nothing should retry (unsafe, broken, or the wrong task).
 //
 // It writes policy_attempt_result, policy_grasp_verdict, policy_attempt_sec, policy_armed and, on
 // FAILURE, policy_failure_reason. halt() sends the stop calls without waiting, so nothing keeps
@@ -77,9 +81,12 @@ class PolicyRunNode final : public bt_core::ActionNode {
       const rclcpp::Client<SetBool>::SharedPtr& client, bool data);
   std::shared_ptr<CallState> sendTrigger(const rclcpp::Client<Trigger>::SharedPtr& client);
   void sendStopsWithoutWaiting();
+  void publishPrompt(Clock::time_point now);
 
   const PolicyTaskConfig* config_{nullptr};
   std::string arm_;
+  std::string task_name_;
+  PolicyTaskConfig::Task task_;
   std::string gripper_;
   rclcpp::Node* ros_node_{nullptr};
 
@@ -88,11 +95,15 @@ class PolicyRunNode final : public bt_core::ActionNode {
   rclcpp::Client<SetBool>::SharedPtr deactivate_;
   rclcpp::Client<Trigger>::SharedPtr bridge_estop_;
   rclcpp::Client<Trigger>::SharedPtr router_estop_;
+  rclcpp::Publisher<std_msgs::msg::String>::SharedPtr prompt_pub_;
+  Clock::time_point prompt_sent_at_{};
 
-  mutable std::mutex mutex_;  // supervisor_, stats_, torque_ and the arrival times
+  mutable std::mutex mutex_;  // supervisor_, stats_, bridge_prompt_, torque_ and the arrival times
   std::unique_ptr<PolicySupervisor> supervisor_;
   BridgeStats stats_;
   bool stats_valid_{false};
+  bool bridge_prompt_valid_{false};  // the bridge's stats carry a "prompt" value
+  std::string bridge_prompt_;
   Clock::time_point stats_at_{};
   std::map<std::string, Clock::time_point> joints_at_;
   Clock::time_point gripper_at_{};

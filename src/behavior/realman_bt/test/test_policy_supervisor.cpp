@@ -6,6 +6,7 @@
 #include <algorithm>
 #include <cassert>
 #include <cmath>
+#include <stdexcept>
 #include <string>
 
 #include "realman_bt/policy_supervisor.hpp"
@@ -22,9 +23,9 @@ using realman_bt::PolicyTaskConfig;
 struct Rig {
   explicit Rig(PolicyTaskConfig cfg = PolicyTaskConfig()) : config(std::move(cfg)), sup(config) {}
 
-  void start() {
+  void start(const std::string& task = "place") {
     feed();
-    sup.start(t);
+    sup.start(t, task);
   }
 
   // Advances `dt` seconds, delivers every sensor reading and evaluates.
@@ -520,9 +521,232 @@ void testOutcomeNamesAreStable() {
   // These strings go to the blackboard and the runtime snapshot.
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kReleasedHeld)) == "released_held");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kReleasedEmpty)) == "released_empty");
+  assert(std::string(realman_bt::outcomeName(AttemptOutcome::kLiftedHeld)) == "lifted_held");
+  assert(std::string(realman_bt::outcomeName(AttemptOutcome::kDropped)) == "dropped");
+  assert(std::string(realman_bt::outcomeName(AttemptOutcome::kWrongTask)) == "wrong_task");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kTimeout)) == "timeout");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kStall)) == "stall");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kFault)) == "fault");
+}
+
+void testOnlyTheTwoHeldOutcomesAreSuccessesAndOnlyFaultAndWrongTaskEndTheTask() {
+  using realman_bt::isFault;
+  using realman_bt::isSuccess;
+  for (auto outcome : {AttemptOutcome::kReleasedHeld, AttemptOutcome::kLiftedHeld}) {
+    assert(isSuccess(outcome) && !isFault(outcome));
+  }
+  for (auto outcome : {AttemptOutcome::kReleasedEmpty, AttemptOutcome::kDropped, AttemptOutcome::kTimeout,
+                       AttemptOutcome::kStall}) {
+    assert(!isSuccess(outcome) && !isFault(outcome));
+  }
+  for (auto outcome : {AttemptOutcome::kFault, AttemptOutcome::kWrongTask}) {
+    assert(!isSuccess(outcome) && isFault(outcome));
+  }
+}
+
+// ---- tasks: lift_and_hold (pick) --------------------------------------------------------------
+
+// Moves one joint of the supervised arm to `target` at 20 deg/s (well under the 50 deg/s limit).
+void moveJoint(Rig& rig, int joint, double target) {
+  while (std::fabs(rig.arm[joint] - target) > 1e-9 && !rig.verdict.finished) {
+    const double step = std::clamp(target - rig.arm[joint], -2.0, 2.0);
+    rig.arm[joint] += step;
+    rig.step();
+  }
+}
+
+// The pick demonstration: reach down (J2 18 -> 65), close on the adapter, then lift J2 by `lift_deg`.
+void reachAndGrasp(Rig& rig, double plateau, bool torque, double closed_sec = 3.5) {
+  moveJoint(rig, 1, 65.0);
+  closeFor(rig, closed_sec, plateau, torque);
+}
+
+void testPickLiftedAndStillHeldIsASuccess() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 5700.0, true);
+  assert(!rig.verdict.finished);
+  moveJoint(rig, 1, 52.0);  // lifted 13 deg
+  rig.run(3.0);
+  assert(rig.verdict.finished);
+  assert(rig.verdict.outcome == AttemptOutcome::kLiftedHeld);
+  assert(rig.verdict.succeeded && !rig.verdict.fault);
+  assert(rig.verdict.grasp_verdict == "held");
+  assert(rig.verdict.reason.empty());
+}
+
+void testPickWaitsForTheHoldTimeAfterTheLift() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 5700.0, true);
+  moveJoint(rig, 1, 54.0);  // exactly past -10 deg
+  const double lifted_at = rig.t;
+  rig.run(1.5);
+  assert(!rig.verdict.finished);  // hold_sec is 2 s
+  rig.run(1.0);
+  assert(rig.verdict.outcome == AttemptOutcome::kLiftedHeld);
+  assert(rig.t - lifted_at >= 1.9 && rig.t - lifted_at <= 2.3);
+}
+
+void testPickTooSmallALiftIsNotYetASuccess() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 5700.0, true);
+  moveJoint(rig, 1, 58.0);  // only 7 deg
+  rig.run(4.0);
+  assert(!rig.verdict.finished);
+}
+
+void testPickTheLiftCountsFromWhereTheGripperClosed() {
+  PolicyTaskConfig config;
+  Rig rig(config);
+  rig.start("pick");
+  moveJoint(rig, 1, 65.0);
+  rig.policy_gripper = 0.0;  // closes at J2 = 65; the reference is taken now
+  rig.step();
+  moveJoint(rig, 1, 70.0);  // keeps pushing down while closing
+  closeFor(rig, 3.5, 5700.0, true);
+  moveJoint(rig, 1, 56.0);  // 14 below the push-down, but only 9 below the close
+  rig.run(3.0);
+  assert(!rig.verdict.finished);
+  moveJoint(rig, 1, 54.0);
+  rig.run(2.5);
+  assert(rig.verdict.outcome == AttemptOutcome::kLiftedHeld);
+}
+
+void testPickClosingOnNothingAndLiftingIsNoSuccess() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 8450.0, false);
+  moveJoint(rig, 1, 40.0);
+  rig.run(50.0);
+  assert(rig.verdict.finished);
+  assert(rig.verdict.outcome == AttemptOutcome::kTimeout);
+  assert(rig.verdict.reason.find("lift-and-hold") != std::string::npos);
+}
+
+void testPickAPartialCloseWithoutTorqueIsNotHeld() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 5700.0, false);
+  moveJoint(rig, 1, 45.0);
+  rig.run(5.0);
+  assert(!rig.verdict.finished || rig.verdict.outcome != AttemptOutcome::kLiftedHeld);
+}
+
+void testPickNeedsTheMinimumClosedTime() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 5700.0, true, 0.5);
+  moveJoint(rig, 1, 52.0);  // ~0.7 s more closed: 1.2 s in total, below 3 s
+  rig.run(1.0);
+  assert(!rig.verdict.finished);  // 2.2 s closed
+  rig.run(1.5);
+  assert(!rig.verdict.finished);  // 3 s reached at ~3.0, the 2 s hold only starts then
+  rig.run(2.0);
+  assert(rig.verdict.outcome == AttemptOutcome::kLiftedHeld);
+}
+
+void testPickTheObjectSlippingOutIsARetryableDrop() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 5450.0, true);
+  moveJoint(rig, 1, 58.0);
+  rig.gripper_position = 8745.0;  // 2026-10-19 pick attempt 1: lost it during the lift
+  rig.torque_reached = true;      // the jaws pressing on each other also reach torque
+  rig.step();
+  assert(rig.verdict.finished);
+  assert(rig.verdict.outcome == AttemptOutcome::kDropped);
+  assert(!rig.verdict.succeeded && !rig.verdict.fault);
+  assert(rig.verdict.grasp_verdict == "empty");
+  assert(rig.verdict.reason.find("8745") != std::string::npos);
+}
+
+void testPickOpeningOnPurposeAfterAHoldIsNotADrop() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 5700.0, true);
+  rig.policy_gripper = 1.0;  // the policy opens again (a re-grasp)
+  rig.gripper_position = 50.0;
+  rig.torque_reached = false;
+  rig.run(1.0);
+  assert(!rig.verdict.finished);
+}
+
+void testPickTurningToTheBinIsAWrongTaskFault() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 5700.0, true);
+  driveJ1To(rig, -30.0);
+  assert(rig.verdict.finished);
+  assert(rig.verdict.outcome == AttemptOutcome::kWrongTask);
+  assert(rig.verdict.fault && !rig.verdict.succeeded);
+  assert(rig.verdict.reason.find("bin side") != std::string::npos);
+  assert(rig.arm[0] < -25.0 && rig.arm[0] > -28.0);  // caught at the first sample past the limit
+}
+
+void testPickJ1OnTheBinSideBeforeAnyGraspIsNotAWrongTask() {
+  Rig rig;
+  rig.start("pick");
+  driveJ1To(rig, -30.0);  // reaching, gripper still open
+  rig.run(1.0);
+  assert(!rig.verdict.finished);
+}
+
+void testPlaceIgnoresTheLiftAndStillNeedsTheRelease() {
+  Rig rig;
+  rig.start("place");
+  reachAndGrasp(rig, 5700.0, true);
+  moveJoint(rig, 1, 40.0);
+  rig.run(4.0);
+  assert(!rig.verdict.finished);
+  driveJ1To(rig, -50.0);  // the bin side is where place should go: no wrong_task for place
+  assert(!rig.verdict.finished);
+}
+
+void testTheDefaultTaskIsPlace() {
+  Rig rig;
+  rig.feed();
+  rig.sup.start(rig.t);
+  reachAndGrasp(rig, 5700.0, true);
+  moveJoint(rig, 1, 40.0);
+  rig.run(4.0);
+  assert(!rig.verdict.finished);
+}
+
+void testAnUnknownTaskIsRejectedAndChangesNothing() {
+  Rig rig;
+  rig.start("pick");
+  try {
+    rig.sup.start(rig.t, "stack");
+    assert(false);
+  } catch (const std::invalid_argument& error) {
+    assert(std::string(error.what()).find("stack") != std::string::npos);
+    assert(std::string(error.what()).find("pick") != std::string::npos);
+  }
+  assert(rig.sup.snapshot(rig.t).started);  // the running attempt was not reset
+}
+
+void testPickFaultsStillWin() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 5700.0, true);
+  rig.arm[4] = 15.0;  // below the J5 floor
+  rig.step();
+  assert(rig.verdict.outcome == AttemptOutcome::kFault);
+}
+
+void testRestartingWithAnotherTaskForgetsTheLiftState() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 5700.0, true);
+  rig.policy_gripper = 1.0;  // GripperReady opened it before the next attempt
+  rig.gripper_position = 50.0;
+  rig.torque_reached = false;
+  rig.start("pick");  // a new attempt
+  moveJoint(rig, 1, 50.0);  // no close in this attempt yet: no reference, no success
+  rig.run(3.0);
+  assert(!rig.verdict.finished);
 }
 
 }  // namespace
@@ -566,5 +790,22 @@ int main() {
   testSnapshotMarksAFinishedAttempt();
   testSnapshotLeavesMissingReadingsAsNaN();
   testOutcomeNamesAreStable();
+  testOnlyTheTwoHeldOutcomesAreSuccessesAndOnlyFaultAndWrongTaskEndTheTask();
+  testPickLiftedAndStillHeldIsASuccess();
+  testPickWaitsForTheHoldTimeAfterTheLift();
+  testPickTooSmallALiftIsNotYetASuccess();
+  testPickTheLiftCountsFromWhereTheGripperClosed();
+  testPickClosingOnNothingAndLiftingIsNoSuccess();
+  testPickAPartialCloseWithoutTorqueIsNotHeld();
+  testPickNeedsTheMinimumClosedTime();
+  testPickTheObjectSlippingOutIsARetryableDrop();
+  testPickOpeningOnPurposeAfterAHoldIsNotADrop();
+  testPickTurningToTheBinIsAWrongTaskFault();
+  testPickJ1OnTheBinSideBeforeAnyGraspIsNotAWrongTask();
+  testPlaceIgnoresTheLiftAndStillNeedsTheRelease();
+  testTheDefaultTaskIsPlace();
+  testAnUnknownTaskIsRejectedAndChangesNothing();
+  testPickFaultsStillWin();
+  testRestartingWithAnotherTaskForgetsTheLiftState();
   return 0;
 }

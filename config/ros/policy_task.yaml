@@ -18,6 +18,23 @@ realman_bt_executor:
       activation: auto
       # Must match policy_bridge.yaml downlink.command_namespace (checked by a test).
       command_namespace: /pi05_policy
+      # Must match policy_bridge.yaml prompt.topic (checked by a test). PolicyRun publishes its task's prompt here and
+      # starts only once /policy/stats reports that the bridge uses it.
+      prompt_topic: /policy/prompt
+
+      # The tasks the served policy was trained on; the BT's PolicyRun picks one with its `task` port. A prompt must be
+      # the training view's task text VERBATIM (meta/tasks.parquet; for m_multitask_b16_2gpu also contract.json
+      # `prompts`): one character off and the model is out of distribution without any error. completion is how a
+      # successful attempt ends: release_over_bin (the `release` block below) or lift_and_hold (the `lift` block).
+      # ROS parameters cannot list keys, so every task is named in task_names first.
+      task_names: [place, pick]
+      tasks:
+        place:
+          prompt: "pick up the power adapter and put it in the blue bin"
+          completion: release_over_bin
+        pick:
+          prompt: "pick up the power adapter"
+          completion: lift_and_hold
       gripper_for_arm:
         l: gripper_left
         m: gripper_mid
@@ -40,7 +57,8 @@ realman_bt_executor:
       service_wait_sec: 10.0
       # Reply timeout for one service call; the stop sequence continues without the reply after this.
       service_call_timeout_sec: 2.0
-      # No release over the bin within this long is a retryable timeout. Demonstrations last 11 to 27 s (median 18 s).
+      # No success (release over the bin, or lift-and-hold) within this long is a retryable timeout. Demonstrations last
+      # 11 to 27 s (median 18 s) for place; the 2026-10-19 pick runs lifted within 11-14 s.
       max_attempt_sec: 45.0
       # Retryable stall: the gripper is closed and the commanded velocity stays below both limits for sec.
       # 2026-10-14 cycle 2 held an adapter and then commanded ~0.001 m/s for 30 s.
@@ -60,6 +78,21 @@ realman_bt_executor:
         joint_below_deg: -35.0
         # The attempt is supervised for this long after the release command so the gripper really opens.
         settle_sec: 1.0
+      # lift_and_hold tasks. After the policy first closes the gripper (command below release.closed_below), the
+      # attempt succeeds once the jaws hold the object (position below verdict.empty_position_min with torque), the
+      # gripper has been commanded closed for min_closed_sec, joint joint_index has moved joint_delta_deg from its value
+      # at the close (negative = decreasing; J2 decreases as the arm lifts), and that lasts hold_sec. The gripper stays
+      # closed on the object. Dropped (retryable): held, then the position reached empty_position_min while still
+      # commanded closed. Wrong task (a fault, not retried): joint wrong_side_joint_index below wrong_side_below_deg
+      # after the close, i.e. the arm heads for the bin under the pick prompt. Measured 2026-10-19: pick runs lifted J2
+      # by 11-40 deg and kept J1 near +8; place runs turn J1 to about -60.
+      lift:
+        min_closed_sec: 3.0
+        joint_index: 1
+        joint_delta_deg: -10.0
+        hold_sec: 2.0
+        wrong_side_joint_index: 0
+        wrong_side_below_deg: -25.0
       # Grasp verdict: the median gripper position over the last window_sec of the closed phase, with torque_reached
       # seen, means the object was held. Measured 2026-10-14: held ~5700-5800 with torque, empty 8380-8480 without.
       verdict:

@@ -298,3 +298,17 @@ policy_task:
 5. `control.xml`、`policy_task.yaml`、launch 注入、合同测试。（完成）
 6. 文档。（完成：`policy-task.md`、`behavior-tree-control.md`、`policy-bridge.md`、`ModeExplorer`、技能参考）
 7. 主机上 `REALMAN_BT_DRY_RUN=true` 验证，然后真机阶梯。（待做）
+
+## 多任务：一个叶节点，按 prompt 区分任务（2026-10-19）
+
+背景：2026-10-16 训练的 `m_multitask_b16_2gpu` 是一个模型、两个任务，靠 prompt 区分：`pick up the power adapter and put it in the blue bin`（pick and place）和 `pick up the power adapter`（只抓起并保持）。10-19 真机验证：place prompt 3 次里 2 次成功；pick prompt 下机械臂抓起后抬高、不转向蓝箱（J1 结束在 +3～+8°，place 是约 −60°），2 次里 1 次成功、1 次在抬起时滑落。
+
+决定：不为每个 prompt 复制一个叶节点，而是让 `PolicyRun` 带一个 `task` 端口。两个任务只有两处不同：prompt，以及"成功怎么结束"；预检、安全包络、速度、另外两臂漂移、数据新鲜度、停止顺序、轨迹全部共用。
+
+- **配置**（`policy_task.yaml`）：`task_names: [place, pick]`，`tasks.<name>.prompt`、`tasks.<name>.completion`（`release_over_bin` 或 `lift_and_hold`）。ROS 参数无法列出键名，所以先列 `task_names`。完成条件的阈值放在共用的块里：原有的 `release`，新增的 `lift`。prompt 必须和训练视图的任务文本逐字一致；两个任务的 prompt 不能相同（校验拒绝）。
+- **切换 prompt**：`PolicyRun` 在预检阶段向 `prompt_topic`（`/policy/prompt`）发布任务的 prompt（等待期间每 0.5 秒重发），只有当桥接的 `/policy/stats` 报告的 `prompt` 等于它才继续。桥接此时还没被激活，而且 prompt 变化时会清空动作队列，所以切换不会把上一个任务的动作发出去。桥接的 stats 里没有 `prompt`（旧版本桥接）或在 `service_wait_sec` 内没切过去，都是故障，不激活。桥接在 prompt 变化时立即发布一次 stats，不用等 1 秒周期。
+- **`lift_and_hold` 判定**（`PolicySupervisor::evaluateLift`）：以策略第一次指令闭合时 `lift.joint_index`（J2）的值为参考。夹住 = 位置低于 `verdict.empty_position_min`（7800）且有力矩。夹住、累计闭合 ≥ `lift.min_closed_sec`、J2 相对参考变化达到 `lift.joint_delta_deg`（−10°，RM65 抬起时 J2 减小），并持续 `lift.hold_sec`（2 s）→ `lifted_held`（成功，夹爪保持闭合）。夹住过之后在仍指令闭合时位置回到 ≥ 7800 → `dropped`（可重试；对应 10-19 pick 第 1 次）。闭合之后 J1 低于 `lift.wrong_side_below_deg`（−25°）→ `wrong_task`，属于故障、不重试：策略没有按 prompt 执行，重试也没用。策略自己张开（重新抓）不算滑落。
+- **结果**：新增 `lifted_held`、`dropped`、`wrong_task`。`Verdict.succeeded`（`isSuccess`：`released_held`、`lifted_held`）决定 `PolicyRun` 返回 `SUCCESS`；`isFault`（`fault`、`wrong_task`）决定是否置 `policy_fault`。轨迹头部多一行 `task=<name> completion=<...> prompt='...'`，`attempt_end` 事件以 `task=<name>` 开头。
+- **树**：`control.xml` 的 policy 分支写明 `task="place"`，行为不变。pick 任务成功后夹爪还夹着物体，下一次尝试的 `GripperReady` 会失败，所以 pick 需要自己的树（放下或在垫子上方张开），不在这次改动里。
+
+测试：`test_policy_supervisor`（pick 成功、保持时间、抬起幅度不足、参考点取闭合时刻、闭合到底抬起不算成功、无力矩不算夹住、最短闭合时间、滑落、主动张开不算滑落、转向蓝箱为故障、抓取前 J1 在蓝箱侧不算、place 忽略抬起、默认任务、未知任务、故障优先、重新开始清状态），`test_policy_task_config`、`test_policy_task_params`（`task_names` 声明新任务、缺 prompt、未知 completion），`test_policy_run_node`（pick 在激活前切换 prompt 并成功、place 保持 place prompt、桥接不切换 prompt 为故障且不激活、旧桥接为故障、pick 转向蓝箱为故障并按顺序停止、未知任务什么都不碰、轨迹写明任务），`test_policy_task_config_file.py`（任务与 lift 阈值、`prompt_topic` 与桥接一致、桥接初始 prompt 等于 place），`test_control_router_tree.py`（`PolicyRun` 的 `task` 必须在 `task_names` 里），桥接 `test_node_smoke.py`（stats 原样报告 prompt、变化后立即发布）。

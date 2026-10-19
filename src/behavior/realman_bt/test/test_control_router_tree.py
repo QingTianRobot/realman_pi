@@ -2,6 +2,8 @@ import re
 from pathlib import Path
 import xml.etree.ElementTree as ET
 
+import yaml
+
 
 ROOT = Path(__file__).parents[4]
 ROUTER = ROOT / "config/behavior-trees/control.xml"
@@ -181,7 +183,15 @@ def test_policy_branch_supervises_the_task_from_inside_the_tree():
         "timeout_sec": "120",
     }
     assert run.tag == "PolicyRun"
-    assert run.attrib == {"arm_id": "r", "dry_run": "{dry_run}"}
+    # The policy mode is the pick-and-place task; its prompt and completion come from policy_task.yaml.
+    assert run.attrib == {"arm_id": "r", "task": "place", "dry_run": "{dry_run}"}
+
+
+def test_policy_run_names_a_task_from_the_policy_task_config():
+    tasks = yaml.safe_load((ROOT / "config/ros/policy_task.yaml").read_text(encoding="utf-8"))
+    names = tasks["realman_bt_executor"]["ros__parameters"]["policy_task"]["task_names"]
+    runs = [node for node in _policy_task().iter() if node.tag == "PolicyRun"]
+    assert runs and all(node.attrib.get("task") in names for node in runs)
 
 
 def test_policy_task_thresholds_live_in_config_not_in_the_tree():

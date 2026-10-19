@@ -61,10 +61,55 @@ void PolicyTaskConfig::validate() const {
   require(std::isfinite(release.settle_sec) && release.settle_sec >= 0.0,
           "policy_task.release.settle_sec must not be negative");
   require(std::isfinite(release.joint_below_deg), "policy_task.release.joint_below_deg must be finite");
+  require(std::isfinite(lift.min_closed_sec) && lift.min_closed_sec >= 0.0,
+          "policy_task.lift.min_closed_sec must not be negative");
+  require(lift.joint_index >= 0 && lift.joint_index < 6, "policy_task.lift.joint_index must be 0..5");
+  require(std::isfinite(lift.joint_delta_deg) && lift.joint_delta_deg != 0.0,
+          "policy_task.lift.joint_delta_deg must be a non-zero number");
+  require(std::isfinite(lift.hold_sec) && lift.hold_sec >= 0.0,
+          "policy_task.lift.hold_sec must not be negative");
+  require(lift.wrong_side_joint_index >= 0 && lift.wrong_side_joint_index < 6,
+          "policy_task.lift.wrong_side_joint_index must be 0..5");
+  require(std::isfinite(lift.wrong_side_below_deg), "policy_task.lift.wrong_side_below_deg must be finite");
+  require(prompt_topic.size() > 1 && prompt_topic.front() == '/',
+          "policy_task.prompt_topic must start with /");
+  require(!tasks.empty(), "policy_task.tasks must name at least one task");
+  for (const auto& [name, task] : tasks) {
+    require(!name.empty(), "policy_task.task_names must not contain an empty name");
+    require(!task.prompt.empty(), "policy_task.tasks." + name + ".prompt must not be empty");
+    for (const auto& [other_name, other] : tasks) {
+      require(other_name == name || other.prompt != task.prompt,
+              "policy_task.tasks." + name + ".prompt is the same as tasks." + other_name + ".prompt");
+    }
+  }
   require(positive(trace.period_sec), "policy_task.trace.period_sec must be positive");
   require(!trace.enabled || !trace.dir.empty(), "policy_task.trace.dir must be set when the trace is enabled");
   require(std::isfinite(router_release_sec) && router_release_sec >= 0.0,
           "policy_task.router_release_sec must not be negative");
+}
+
+const PolicyTaskConfig::Task& PolicyTaskConfig::task(const std::string& name) const {
+  const auto found = tasks.find(name);
+  if (found != tasks.end()) return found->second;
+  std::string known;
+  for (const auto& [task_name, _] : tasks) known += (known.empty() ? "" : ", ") + task_name;
+  throw std::invalid_argument("unknown policy task '" + name + "' (policy_task.task_names: " + known + ")");
+}
+
+const char* completionName(PolicyTaskConfig::Completion completion) {
+  switch (completion) {
+    case PolicyTaskConfig::Completion::kReleaseOverBin:
+      return "release_over_bin";
+    case PolicyTaskConfig::Completion::kLiftAndHold:
+      return "lift_and_hold";
+  }
+  return "release_over_bin";
+}
+
+PolicyTaskConfig::Completion parseCompletion(const std::string& text) {
+  if (text == "release_over_bin") return PolicyTaskConfig::Completion::kReleaseOverBin;
+  if (text == "lift_and_hold") return PolicyTaskConfig::Completion::kLiftAndHold;
+  throw std::invalid_argument("completion must be release_over_bin or lift_and_hold, got '" + text + "'");
 }
 
 }  // namespace realman_bt

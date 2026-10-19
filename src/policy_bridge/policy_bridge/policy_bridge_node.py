@@ -99,6 +99,8 @@ class PolicyBridgeNode(Node):
         self._stats.gauge("paused", lambda: 1.0 if self._scheduler.paused else 0.0)
         self._stats.gauge("mode_active", lambda: 1.0 if self._mode.internal_mode != "inactive" else 0.0)
         self._stats.gauge("allow_publish", lambda: 1.0 if self._allow_publish else 0.0)
+        # The behavior tree's PolicyRun starts a task only once this equals the task's prompt.
+        self._stats.text("prompt", self._prompt.current)
 
     # --- callbacks ------------------------------------------------------
     def _on_chunk(self, steps) -> None:
@@ -117,6 +119,9 @@ class PolicyBridgeNode(Node):
             with self._lock:
                 self._buffer.clear("prompt_change")
         self._stats.bump("prompt_change")
+        # Report the new prompt now instead of at the next 1 s stats tick, so whoever switched it
+        # (PolicyRun waits for the match) can start without the extra delay.
+        self._stats.publish()
 
     # --- publish loop ---------------------------------------------------
     def _publish_loop(self) -> None:

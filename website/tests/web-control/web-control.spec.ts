@@ -440,6 +440,29 @@ test("switches control tabs and remembers the last one across reloads", async ({
   await expect(page.locator("#velocity-panel")).toBeVisible();
 });
 
+test("resets the joint target to the live pose on load and when reopening the motion tab", async ({ page }) => {
+  await page.goto("/");
+  // The fake socket's initial l sample is all zero; the first real pose must still reach the sliders.
+  await emitWebSocketEvent(page, { type: "joint_state", arm: "l", positions_rad: [0.5, 0.2, -0.3, 0.1, 0.4, -0.2], stamp_ns: 100 });
+  await expect(page.locator("input[data-joint-index=\"0\"]")).toHaveValue(/^28\.6/);
+  await expect(page.locator("#joint-value-0")).toHaveText("28.65°");
+
+  await page.locator("#control-tab-velocity").click();
+  await emitWebSocketEvent(page, { type: "joint_state", arm: "l", positions_rad: [1.0, 0.2, -0.3, 0.1, 0.4, -0.2], stamp_ns: 101 });
+  await expect(page.locator("#joint-value-0")).toHaveText("28.65°");
+  await page.locator("#control-tab-motion").click();
+  await expect(page.locator("input[data-joint-index=\"0\"]")).toHaveValue(/^57\.3/);
+  await expect(page.locator("#joint-value-0")).toHaveText("57.30°");
+
+  // Clicking the already-open motion tab keeps a manual edit.
+  await page.locator("input[data-joint-index=\"0\"]").evaluate((element: HTMLInputElement) => {
+    element.value = "10";
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.locator("#control-tab-motion").click();
+  await expect(page.locator("#joint-value-0")).toHaveText(/^10\.0\d°$/);
+});
+
 test("reports a WebGL renderer failure when WebGL is unavailable", async ({ page }) => {
   await page.addInitScript(() => {
     const originalGetContext = HTMLCanvasElement.prototype.getContext;

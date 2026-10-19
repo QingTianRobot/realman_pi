@@ -294,7 +294,11 @@ function renderControlTabs() {
 }
 $("#control-tabs").addEventListener("click", (event) => {
   const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-control-tab]");
-  if (button && !button.hidden) selectControlTab(button.dataset.controlTab as ControlTab);
+  if (!button || button.hidden) return;
+  const reopenedMotion = button.dataset.controlTab === "motion" && activeControlTab !== "motion";
+  selectControlTab(button.dataset.controlTab as ControlTab);
+  // Sliders do not follow live joint_states, so opening the motion tab starts from the real pose.
+  if (reopenedMotion) resetMotionTarget();
 });
 renderControlTabs();
 const velocityTelemetryGrid = $("#velocity-telemetry-grid") as HTMLElement;
@@ -1652,6 +1656,7 @@ function handleMessage(message: Message) {
     // known-good visual state instead of making the model jump to zero.
     const allZero = positions.every((value) => value === 0);
     if (allZero && nonZeroJointStateByArm[arm]) return;
+    const firstSample = lastJointStampByArm[arm] === undefined || (!allZero && !nonZeroJointStateByArm[arm]);
     lastJointStampByArm[arm] = stamp;
     if (!allZero) nonZeroJointStateByArm[arm] = true;
     currentJointsByArm[arm] = positions;
@@ -1661,6 +1666,8 @@ function handleMessage(message: Message) {
       currentJoints = positions;
       $("#joint-stamp").textContent = `joint_states / ${stamp}`;
       jointCopyStatus.textContent = "可复制当前关节角";
+      // The first live pose after page load replaces the placeholder target.
+      if (firstSample) resetMotionTarget();
     }
     renderFleetStrip();
   } else if (message.type === "joint_records") {
@@ -1967,13 +1974,16 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) releaseKeyboardInput();
 });
 
-resetPreviewButton.addEventListener("click", () => {
+// Same as pressing 重置目标: snap the joint target and its shadow to the live pose.
+function resetMotionTarget() {
+  if (lastJointStampByArm[selectedArm] === undefined) return;
   targetJoints = [...currentJoints];
   targetJointsByArm[selectedArm] = [...targetJoints];
   targetEditedByArm[selectedArm] = true;
   setJointInputs(targetJoints, true);
   setRobotJoints(selectedRobotScene()?.shadow, targetJoints);
-});
+}
+resetPreviewButton.addEventListener("click", resetMotionTarget);
 armSelect.addEventListener("change", () => {
   selectedArm = armSelect.value as ArmId;
   activeMotionRequest = "";

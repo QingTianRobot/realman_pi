@@ -103,6 +103,25 @@ for (const name of usedGrippers) {
     expectedMeshCount: (urdf.match(/<visual\b/g) ?? []).length,
   };
 }
+// Optional shared pedestal under the three bases (visual only, world frame). See three_robots.yaml.
+let pedestal = null;
+if (layout.pedestal !== undefined) {
+  const block = layout.pedestal;
+  if (!block || typeof block !== "object" || Array.isArray(block)) fail("pedestal must be a mapping");
+  if (block.frame !== robots[0].parentFrame) fail(`pedestal.frame must be '${robots[0].parentFrame}'`);
+  const pair = (value, label) => {
+    if (!Array.isArray(value) || value.length !== 2) fail(`${label} must be a 2-element list`);
+    return value.map((entry, index) => finiteNumber(entry, `${label}[${index}]`));
+  };
+  const centerXy = pair(block.center_xy, "pedestal.center_xy");
+  const sizeXy = pair(block.size_xy, "pedestal.size_xy");
+  if (sizeXy.some((value) => value <= 0)) fail("pedestal.size_xy must be positive");
+  const topZ = finiteNumber(block.top_z, "pedestal.top_z");
+  const bottomZ = finiteNumber(block.bottom_z, "pedestal.bottom_z");
+  if (!(topZ > bottomZ)) fail("pedestal.top_z must be above pedestal.bottom_z");
+  if (typeof block.color !== "string" || !/^#[0-9a-fA-F]{6}$/.test(block.color)) fail("pedestal.color must be '#rrggbb'");
+  pedestal = { frame: block.frame, centerXy, sizeXy, topZ, bottomZ, color: block.color };
+}
 const generatedLayout = {
   source: "config/ros/three_robots.yaml",
   rootFrame: robots[0].parentFrame,
@@ -112,6 +131,7 @@ const generatedLayout = {
   robots: robots.map((robot) => ({ ...robot, expectedMeshCount: modelMeshCounts.get(robot.model) })),
   grippers,
   endEffectors,
+  pedestal,
 };
 
 

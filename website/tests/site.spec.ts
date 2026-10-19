@@ -35,6 +35,8 @@ test("homepage renders the configured three-arm scene without layout overflow", 
   await expect(viewer).toHaveAttribute("data-root-frame", "world");
   await expect(viewer).toHaveAttribute("data-visualization-reference-arm", "m");
   await expect(viewer).toHaveAttribute("data-mesh-count", /^(?:2[1-9]|[3-9][0-9]+)$/);
+  // Shared pedestal from config/ros/three_robots.yaml.
+  await expect(viewer).toHaveAttribute("data-pedestal", "1");
   const canvas = viewer.locator("canvas");
   await expect(canvas).toBeVisible();
   await page.waitForTimeout(500);

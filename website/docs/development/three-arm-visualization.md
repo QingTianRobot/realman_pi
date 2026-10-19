@@ -57,6 +57,23 @@ config/ros/three_robots.yaml + config/ros/end_effectors.yaml
 生成内容位于被 Git 忽略的 `website/docs/.vitepress/cache/public/`，不是第二份配置来源。生成的
 `three-robots.json` 明确写入 `visualizationReferenceArm: "m"`；查看器加载每台配置模型（首页场景使用放松弯曲并缓慢摆动的待机姿态，而不是零位）后，统一减去中臂的平移，把中臂基座放在显示 `(0,0,0)`，再根据三台机械臂的组合边界设置距离。三台机械臂分别使用青绿、橙色和石墨色，便于区分命名空间。运行中的 Web 控制页面也采用同一显示约定，但其 ROS/TF 运动请求仍使用未平移的配置坐标。
 
+## 共用底座（pedestal）
+
+三台机械臂装在同一个底座上。`three_robots.yaml` 的 `pedestal` 段把它描述成 `world` 下一个轴对齐的长方体，首页的 `RobotViewer` 和 `:8765` Web 控制台都按同一份数值画出来：
+
+| 键 | 当前值 | 含义 |
+|---|---|---|
+| `frame` | `world` | 必须等于三台机械臂共同的父坐标系 |
+| `center_xy` | `[-0.981, 0.195]` | 底座中心的 x、y（米） |
+| `size_xy` | `[0.36, 0.62]` | 底座在 x、y 方向的长度（米） |
+| `top_z` / `bottom_z` | `-0.019` / `-0.206` | 顶面 = 中臂 `m` 的基座平面；底面 = 工作台面 |
+| `color` | `#e9edf1` | 渲染颜色（白色） |
+
+- **只用于显示**：不进 TF、不参与运动或碰撞，`three_robots.launch.py`、录制和标定都不读它。没有 `pedestal` 段时两个查看器照旧只画地面网格；有底座时网格下移到底座底面，不再从底座中间穿过。
+- **是近似值，不是测量图纸**：底面高度由 2026-10-19 右臂真机抓取时的末端位置推出（夹爪尖在抓取瞬间的高度减 3 cm），占地面积只是刚好盖住三个基座。拿到实测尺寸后直接改这里。
+- **键名刻意避开 `x/y/z/roll/pitch/yaw`**：标定写回（`realman_camera_calibration/layout_update.py`）按行改写 `r:` 之后所有这些键名的行，底座若用这些键名会被右臂的标定结果覆盖。`test_layout_update_leaves_the_pedestal_block_untouched` 守住这一点。
+- 网站生成的 `three-robots.json` 带 `pedestal`（驼峰键名），Web 控制台的 `/api/layout` 带 `pedestal`（下划线键名）；两边都校验正尺寸、`top_z > bottom_z` 和 `#rrggbb` 颜色。查看器节点上的 `data-pedestal="1"` 供端到端测试使用。
+
 GitHub Pages 工作流监听 YAML、URDF、mesh 和网站文件。推送这些路径的变化会重新构建页面，因此线上模型会反映最新提交。
 
 ## 运行与验证

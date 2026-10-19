@@ -609,6 +609,8 @@ test("renders the server-discovered global input mode and sends selections", asy
 
 test("renders command and measured Cartesian velocity telemetry for both arms", async ({ page }) => {
   await page.goto("/");
+  // The WORK command is rotated with the arm's coordinate_state, so wait for it first.
+  await expect(page.locator("#motion-reference")).toHaveText("WORK / cell");
   await emitWebSocketEvent(page, {
     type: "cartesian_velocity_state",
     arm: "l",
@@ -652,26 +654,52 @@ test("renders command and measured Cartesian velocity telemetry for both arms", 
 
   await expect(page.locator("#velocity-telemetry-panel")).toBeVisible();
   await expect(page.locator("#velocity-telemetry-l")).toContainText("l/work/cell");
-  await expect(page.locator("#velocity-telemetry-l")).toContainText("命令线速度");
-  await expect(page.locator("#velocity-telemetry-l")).toContainText("0.400");
   await expect(page.locator("#velocity-telemetry-l")).toContainText("l/base_link");
   await expect(page.locator("#velocity-telemetry-l")).toContainText("VALID");
+  await expect(page.locator("#velocity-telemetry-l")).toContainText("命令已从 WORK / cell 旋转到实测坐标系");
   await expect(page.locator("#velocity-telemetry-r")).toContainText("r/work/cell");
   await expect(page.locator("#velocity-telemetry-r")).toContainText("r/base_link");
   await expect(page.locator("#velocity-telemetry-r")).toContainText("STALE / NO DATA");
+  // No numeric readouts any more: the card only carries frames, status and the two charts.
+  await expect(page.locator("#velocity-telemetry-l")).not.toContainText("0.400");
 
-  // Measured vectors are drawn against the arm's configured limits (0.15 m/s, 0.25 rad/s).
-  const leftLinear = page.locator("#velocity-telemetry-l [data-plot=\"linear\"]");
-  const leftAngular = page.locator("#velocity-telemetry-l [data-plot=\"angular\"]");
-  await expect(leftLinear).toHaveAttribute("data-ratio", "1.200");
-  await expect(leftLinear.locator("[data-field=\"linear-percent\"]")).toHaveText("120% 超量程");
-  await expect(leftLinear.locator("[data-field=\"linear-ticks\"]")).toHaveText(/0\.000.*0\.075.*0\.150.*m\/s/);
-  await expect(leftAngular).toHaveAttribute("data-ratio", "0.160");
-  await expect(leftAngular.locator("[data-field=\"angular-ticks\"]")).toHaveText(/0\.250.*rad\/s/);
-  await expect(leftLinear.locator(".velocity-plot-overlay")).toBeHidden();
-  await expect(page.locator("#velocity-telemetry-l")).toContainText("坐标系不同，未叠加");
-  await expect(page.locator("#velocity-telemetry-r [data-field=\"linear-overlay\"]")).toHaveText("无有效实测");
-  await expect(page.locator("#velocity-telemetry-r [data-field=\"linear-overlay\"]")).toBeVisible();
+  // y-axis autoscale: peak 0.2 m/s and 0.05 rad/s, padded and rounded up; idle arm keeps the floor.
+  const trace = (arm: string, kind: string) => page.locator(`#velocity-telemetry-${arm} [data-field="${kind}-trace"]`);
+  await expect(trace("l", "linear")).toHaveAttribute("data-y-max", "0.25");
+  await expect(trace("l", "angular")).toHaveAttribute("data-y-max", "0.1");
+  await expect(trace("r", "linear")).toHaveAttribute("data-y-max", "0.01");
+  await expect(trace("l", "linear")).toHaveAttribute("data-last-command", "[0.2,0,0]");
+});
+
+test("expresses WORK commands in the measured base frame and skips TOOL commands", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#motion-reference")).toHaveText("WORK / cell");
+  const yawQuarterTurn = [Math.SQRT1_2, 0, 0, Math.SQRT1_2];
+  await emitWebSocketEvent(page, {
+    type: "coordinate_state", arm: "l", motion_allowed: true, preferred_reference_type: 1, preferred_reference_name: "cell",
+    preferred_reference: { type: 1, name: "cell", frame_id: "l/work/cell" },
+    tool: null, work: { type: 1, name: "cell", frame_id: "l/work/cell", xyz_m: [0, 0, 0], quaternion_wxyz: yawQuarterTurn },
+    current_tool: "", current_work: "cell", expected_tool: "", expected_work: "cell", matched: true, tool_matched: true,
+    work_matched: true, api2_status: 0, message: "ok",
+  });
+  const state = (referenceType: number, name: string) => ({
+    type: "cartesian_velocity_state", arm: "l", state: {
+      session_active: true, reference_type: referenceType, reference_name: name, command_frame_id: `l/${referenceType === 2 ? "tool" : "work"}/${name}`,
+      commanded_linear_velocity_mps: [0.1, 0, 0], commanded_angular_velocity_radps: [0, 0, 0.2],
+      limited_linear_velocity_mps: [0.1, 0, 0], limited_angular_velocity_radps: [0, 0, 0.2],
+      measured_frame_id: "l/base_link", measured_linear_velocity_mps: [0, 0.09, 0], measured_angular_velocity_radps: [0, 0, 0.19],
+      measured_valid: true, command_age_ms: 10, measured_age_ms: 10,
+    },
+  });
+  const trace = (kind: string) => page.locator(`#velocity-telemetry-l [data-field="${kind}-trace"]`);
+  await emitWebSocketEvent(page, state(1, "cell"));
+  // +X in the work frame is +Y in base after a quarter turn about Z; Z rotation is unchanged.
+  await expect(trace("linear")).toHaveAttribute("data-last-command", "[0,0.1,0]");
+  await expect(trace("angular")).toHaveAttribute("data-last-command", "[0,0,0.2]");
+
+  await emitWebSocketEvent(page, state(2, "tcpgrip"));
+  await expect(page.locator("#velocity-telemetry-l")).toContainText("TOOL 坐标系命令随末端旋转，未叠加命令");
+  await expect(trace("linear")).toHaveAttribute("data-last-command", "null");
 });
 
 test("unlocks input mode selection when reconnect loses its result", async ({ page }) => {

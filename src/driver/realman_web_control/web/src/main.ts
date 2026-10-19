@@ -3,7 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import URDFLoader from "urdf-loader";
 import "./theme.css";
 import "./style.css";
-import { VelocityPlot, velocityColor, velocityColorGradient } from "./velocity_plot";
+import { AXIS_COLORS, VelocityTrace } from "./velocity_trace";
 
 type ArmId = "l" | "m" | "r";
 type KeyboardArmId = "l" | "r";
@@ -160,7 +160,7 @@ app.innerHTML = `
         <section id="coordinate-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><div class="coordinate-actions"><button id="copy-current-joints" class="button ghost" type="button" disabled>复制当前角度</button><span id="coordinate-state" class="mini-state">WAIT</span></div></div><div id="coordinate-summary" class="coordinate-summary"></div><div id="joint-copy-status" class="joint-copy-status" aria-live="polite">等待有效 joint_states</div></section>
         <section id="action-monitor-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">ACTION MONITOR</span><h2>运行反馈</h2></div><span id="action-state" class="mini-state">IDLE</span></div><div class="progress-track"><div id="progress" class="progress-bar"></div></div><div id="feedback" class="feedback">尚未发送 Action</div><pre id="result" class="result" aria-live="polite">等待结果…</pre></section>
       </div>
-      <section id="velocity-telemetry-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">VELOCITY TELEMETRY</span><h2>命令与实际末端速度</h2></div><span class="mini-state">L + R</span></div><p class="telemetry-help">命令值来自当前速度控制 session；实际值由驱动根据状态位姿差分估计。两者坐标系和数据年龄始终单独标注。</p><div id="velocity-telemetry-grid" class="velocity-telemetry-grid"></div></section>
+      <section id="velocity-telemetry-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">VELOCITY TELEMETRY</span><h2>命令与实际末端速度</h2></div><span class="mini-state">L + R</span></div><div class="telemetry-legend" id="velocity-telemetry-legend">${["X", "Y", "Z"].map((axis, index) => `<span class="legend-axis"><i style="background: ${AXIS_COLORS[index]}"></i>${axis}</span>`).join("")}<span class="legend-line solid"><i></i>实际</span><span class="legend-line dashed"><i></i>命令（限速后）</span><span class="legend-hint">最近 10 s · 纵轴按数据自动缩放</span></div><div id="velocity-telemetry-grid" class="velocity-telemetry-grid"></div></section>
     </div>
     <aside class="controls">
       <section id="input-mode-card" class="panel panel-section input-mode-card" hidden>
@@ -720,99 +720,90 @@ function renderCoordinateState() {
     <div class="coordinate-meta">${state.work?.xyz_m ? `xyz ${state.work.xyz_m.map((value) => displayNumber(value)).join(", ")}` : ""}</div>
   `;
 }
-function telemetryVector(values: number[] | undefined, digits = 3) {
-  if (!Array.isArray(values) || values.length !== 3 || !values.every(Number.isFinite)) return "--";
-  return `[${values.map((value) => displayNumber(value, digits)).join(", ")}]`;
-}
-function telemetryNorm(values: number[] | undefined, digits = 3) {
-  if (!Array.isArray(values) || values.length !== 3 || !values.every(Number.isFinite)) return "--";
-  return displayNumber(Math.hypot(...values), digits);
-}
 function telemetryReferenceLabel(state: CartesianVelocityTelemetry) {
   const kind = state.reference_type === 1 ? "WORK" : state.reference_type === 2 ? "TOOL" : "BASE";
   return `${kind} / ${state.reference_name || "unknown"}`;
 }
-type VelocityPlotKind = "linear" | "angular";
-const velocityPlotUnits: Record<VelocityPlotKind, string> = { linear: "m/s", angular: "rad/s" };
-const velocityPlots: Partial<Record<`${KeyboardArmId}-${VelocityPlotKind}`, VelocityPlot>> = {};
-function velocityPlotScale(arm: KeyboardArmId, kind: VelocityPlotKind) {
-  const motion = manifest?.robots.find((robotInfo) => robotInfo.id === arm)?.motion;
-  return Number(kind === "linear" ? motion?.max_linear_speed_mps : motion?.max_angular_speed_radps);
+function rotateByQuaternion(vector: number[], [w, x, y, z]: number[]) {
+  // v' = q v q*, written out for a unit quaternion.
+  const [vx, vy, vz] = vector;
+  const tx = 2 * (y * vz - z * vy);
+  const ty = 2 * (z * vx - x * vz);
+  const tz = 2 * (x * vy - y * vx);
+  return [vx + w * tx + (y * tz - z * ty), vy + w * ty + (z * tx - x * tz), vz + w * tz + (x * ty - y * tx)];
 }
-function velocityPlotFigure(arm: KeyboardArmId, kind: VelocityPlotKind) {
-  return `<figure class="velocity-plot" data-plot="${kind}">
-    <figcaption><span>${kind === "linear" ? "实测线速度" : "实测角速度"}</span><em data-field="${kind}-percent">--</em></figcaption>
-    <div class="velocity-plot-stage"><canvas data-field="${kind}-canvas" aria-label="${arm.toUpperCase()} ${kind === "linear" ? "实测线速度" : "实测角速度"}三维图，可拖动旋转"></canvas><div class="velocity-plot-overlay" data-field="${kind}-overlay">等待 /${arm}/cartesian_velocity/state</div></div>
-    <div class="velocity-plot-readout"><strong data-field="${kind}-vector">--</strong><span data-field="${kind}-norm">|--|</span></div>
-    <div class="velocity-scale"><div class="velocity-scale-bar" style="background: ${velocityColorGradient()}"></div><div class="velocity-scale-ticks" data-field="${kind}-ticks"></div></div>
-  </figure>`;
+// The driver reports the command in its control frame but the measurement in <arm>/base_link.
+// Express the limited command in the measured frame so both lines are directly comparable.
+function commandInMeasuredFrame(arm: KeyboardArmId, state: CartesianVelocityTelemetry):
+  { linear: number[]; angular: number[] } | { reason: string } {
+  const linear = state.limited_linear_velocity_mps;
+  const angular = state.limited_angular_velocity_radps;
+  if (state.reference_type === 0) return { linear, angular };
+  if (state.reference_type === 2) return { reason: "TOOL 坐标系命令随末端旋转，未叠加命令" };
+  const work = coordinateStates[arm]?.work;
+  const quaternion = work?.quaternion_wxyz?.map(Number);
+  if (!work || work.name !== state.reference_name || quaternion?.length !== 4 ||
+      !quaternion.every(Number.isFinite) || Math.hypot(...quaternion) < 1e-9) {
+    return { reason: `缺少 WORK / ${state.reference_name || "unknown"} 的姿态，未叠加命令` };
+  }
+  const norm = Math.hypot(...quaternion);
+  const unit = quaternion.map((value) => value / norm);
+  return { linear: rotateByQuaternion(linear, unit), angular: rotateByQuaternion(angular, unit) };
 }
+type TraceKind = "linear" | "angular";
+const velocityTraces: Partial<Record<`${KeyboardArmId}-${TraceKind}`, VelocityTrace>> = {};
 function ensureVelocityTelemetrySkeleton() {
   if (velocityTelemetryGrid.childElementCount) return;
   velocityTelemetryGrid.innerHTML = (["l", "r"] as const).map((arm) => `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}">
-      <div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-status" data-field="session">WAIT</span></div>
-      <div class="telemetry-reference"><span>命令坐标系</span><strong data-field="command-frame">--</strong><span>参考</span><strong data-field="reference">--</strong></div>
-      <div class="telemetry-row"><span>命令线速度</span><strong data-field="commanded-linear">--</strong><em data-field="command-age">age -- ms</em></div>
-      <div class="telemetry-row"><span>限速后线速度</span><strong data-field="limited-linear">--</strong><em></em></div>
-      <div class="telemetry-row"><span>命令角速度</span><strong data-field="commanded-angular">--</strong><em></em></div>
-      <div class="telemetry-row"><span>限速后角速度</span><strong data-field="limited-angular">--</strong><em></em></div>
-      <div class="telemetry-divider"></div>
-      <div class="telemetry-reference"><span>实测坐标系</span><strong data-field="measured-frame">${arm}/base_link</strong><span>状态</span><strong class="telemetry-measured" data-field="measured-status">WAIT</strong></div>
-      <div class="telemetry-reference"><span>实测数据年龄</span><strong data-field="measured-age">-- ms</strong><span>命令叠加</span><strong data-field="overlay-note">--</strong></div>
-      <div class="velocity-plots">${velocityPlotFigure(arm, "linear")}${velocityPlotFigure(arm, "angular")}</div>
-      <p class="velocity-plot-help">粗箭头为实测速度，颜色按 |v| / 固定量程着色；细灰箭头为限速后命令（仅在两者坐标系一致时叠加）。拖动旋转，双击复位视角。</p>
+      <div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-pills"><span class="telemetry-status" data-field="session">WAIT</span><span class="telemetry-status" data-field="measured-status">WAIT</span></span></div>
+      <div class="telemetry-frames"><span>实测 <strong data-field="measured-frame">${arm}/base_link</strong></span><span>命令 <strong data-field="command-frame">--</strong></span></div>
+      <div class="telemetry-note" data-field="overlay-note">等待 /${arm}/cartesian_velocity/state</div>
+      ${(["linear", "angular"] as const).map((kind) => `<figure class="velocity-trace" data-trace="${kind}"><figcaption>${kind === "linear" ? "线速度" : "角速度"}<span>${kind === "linear" ? "m/s" : "rad/s"}</span></figcaption><canvas data-field="${kind}-trace" aria-label="${arm.toUpperCase()} ${kind === "linear" ? "线速度" : "角速度"}：最近 10 秒命令（虚线）与实际（实线）"></canvas></figure>`).join("")}
     </article>`).join("");
   for (const arm of ["l", "r"] as const) {
     for (const kind of ["linear", "angular"] as const) {
-      const canvasElement = velocityTelemetryGrid.querySelector<HTMLCanvasElement>(`#velocity-telemetry-${arm} [data-field="${kind}-canvas"]`)!;
-      velocityPlots[`${arm}-${kind}`] = new VelocityPlot(canvasElement);
+      const canvasElement = velocityTelemetryGrid.querySelector<HTMLCanvasElement>(`#velocity-telemetry-${arm} [data-field="${kind}-trace"]`)!;
+      // Floors keep encoder noise around zero from filling the whole axis.
+      velocityTraces[`${arm}-${kind}`] = new VelocityTrace(canvasElement, kind === "linear" ? 0.01 : 0.02);
     }
   }
+  let lastDraw = 0;
+  const frame = (now: number) => {
+    requestAnimationFrame(frame);
+    if (document.hidden || now - lastDraw < 33) return;
+    lastDraw = now;
+    for (const trace of Object.values(velocityTraces)) trace?.draw(now);
+  };
+  requestAnimationFrame(frame);
+}
+function recordCartesianVelocitySample(arm: KeyboardArmId, state: CartesianVelocityTelemetry) {
+  ensureVelocityTelemetrySkeleton();
+  const now = performance.now();
+  const command = commandInMeasuredFrame(arm, state);
+  const hasCommand = "linear" in command;
+  velocityTraces[`${arm}-linear`]?.push(now, state.measured_valid ? state.measured_linear_velocity_mps : null, hasCommand ? command.linear : null);
+  velocityTraces[`${arm}-angular`]?.push(now, state.measured_valid ? state.measured_angular_velocity_radps : null, hasCommand ? command.angular : null);
 }
 function renderCartesianVelocityTelemetry() {
   ensureVelocityTelemetrySkeleton();
   for (const arm of ["l", "r"] as const) {
+    const state = cartesianVelocityStates[arm];
+    if (!state) continue;
     const card = $(`#velocity-telemetry-${arm}`) as HTMLElement;
     const field = (name: string) => card.querySelector<HTMLElement>(`[data-field="${name}"]`)!;
-    const state = cartesianVelocityStates[arm];
-    for (const kind of ["linear", "angular"] as const) {
-      const scale = velocityPlotScale(arm, kind);
-      const unit = velocityPlotUnits[kind];
-      field(`${kind}-ticks`).innerHTML = Number.isFinite(scale) && scale > 0
-        ? [0, 0.5, 1].map((ratio) => `<span>${displayNumber(scale * ratio, 3)}</span>`).join("") + `<span class="unit">${unit}</span>`
-        : `<span>量程未配置</span>`;
-      const measured = state?.[kind === "linear" ? "measured_linear_velocity_mps" : "measured_angular_velocity_radps"];
-      const sameFrame = Boolean(state?.command_frame_id && state.command_frame_id === state.measured_frame_id);
-      const reference = sameFrame ? state?.[kind === "linear" ? "limited_linear_velocity_mps" : "limited_angular_velocity_radps"] : undefined;
-      const plot = velocityPlots[`${arm}-${kind}`];
-      const ratio = plot?.update(state?.measured_valid ? measured : undefined, scale, reference) ?? Number.NaN;
-      const overlay = field(`${kind}-overlay`);
-      overlay.hidden = Boolean(state?.measured_valid && plot?.available);
-      overlay.textContent = !plot?.available ? "WebGL 不可用" : !state ? `等待 /${arm}/cartesian_velocity/state` : "无有效实测";
-      field(`${kind}-vector`).textContent = `${telemetryVector(measured)} ${unit}`;
-      field(`${kind}-norm`).textContent = `|${telemetryNorm(measured)}|`;
-      const percent = field(`${kind}-percent`);
-      percent.textContent = Number.isFinite(ratio) ? `${Math.round(ratio * 100)}%${ratio > 1 ? " 超量程" : ""}` : "--";
-      percent.style.color = Number.isFinite(ratio) ? velocityColor(ratio) : "";
-      card.querySelector<HTMLElement>(`[data-plot="${kind}"]`)!.dataset.ratio = Number.isFinite(ratio) ? ratio.toFixed(3) : "";
-    }
-    if (!state) continue;
     const session = field("session");
     session.textContent = state.session_active ? "ACTIVE" : "IDLE";
     session.className = `telemetry-status ${state.session_active ? "active" : ""}`;
-    field("command-frame").textContent = state.command_frame_id || telemetryReferenceLabel(state);
-    field("reference").textContent = telemetryReferenceLabel(state);
-    field("commanded-linear").textContent = `${telemetryVector(state.commanded_linear_velocity_mps)} m/s`;
-    field("command-age").textContent = `age ${Number.isFinite(state.command_age_ms) ? state.command_age_ms : "--"} ms`;
-    field("limited-linear").innerHTML = `${telemetryVector(state.limited_linear_velocity_mps)} m/s <small>|${telemetryNorm(state.limited_linear_velocity_mps)}|</small>`;
-    field("commanded-angular").textContent = `${telemetryVector(state.commanded_angular_velocity_radps)} rad/s`;
-    field("limited-angular").innerHTML = `${telemetryVector(state.limited_angular_velocity_radps)} rad/s <small>|${telemetryNorm(state.limited_angular_velocity_radps)}|</small>`;
-    field("measured-frame").textContent = state.measured_frame_id || `${arm}/base_link`;
     const measuredStatus = field("measured-status");
     measuredStatus.textContent = state.measured_valid ? "VALID" : "STALE / NO DATA";
-    measuredStatus.className = `telemetry-measured ${state.measured_valid ? "valid" : "stale"}`;
-    field("measured-age").textContent = `${Number.isFinite(state.measured_age_ms) ? state.measured_age_ms : "--"} ms`;
-    field("overlay-note").textContent = state.command_frame_id && state.command_frame_id === state.measured_frame_id ? "已叠加" : "坐标系不同，未叠加";
+    measuredStatus.className = `telemetry-status ${state.measured_valid ? "valid" : "stale"}`;
+    field("measured-frame").textContent = state.measured_frame_id || `${arm}/base_link`;
+    field("command-frame").textContent = state.command_frame_id || telemetryReferenceLabel(state);
+    const command = commandInMeasuredFrame(arm, state);
+    const note = field("overlay-note");
+    note.textContent = "reason" in command ? command.reason
+      : state.reference_type === 0 ? "命令与实测同为 base 坐标系" : `命令已从 ${telemetryReferenceLabel(state)} 旋转到实测坐标系`;
+    note.classList.toggle("warn", "reason" in command);
   }
 }
 function renderFleetStrip() {
@@ -1665,6 +1656,7 @@ function handleMessage(message: Message) {
     const state = message.state as CartesianVelocityTelemetry | undefined;
     if (!state) return;
     cartesianVelocityStates[arm] = state;
+    if (arm !== "m") recordCartesianVelocitySample(arm, state);
     renderCartesianVelocityTelemetry();
   } else if (message.type === "tf_frames") {
     const arm = message.arm as ArmId;

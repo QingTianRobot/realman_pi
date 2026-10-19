@@ -140,7 +140,7 @@ app.innerHTML = `
         <div class="viewer-layout">
           <div id="fleet-strip" class="fleet-strip"></div>
           <div class="viewer-column">
-            <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div><div id="keyboard-frame-legend" class="keyboard-frame-legend" hidden><strong>L WORK</strong><strong>R WORK</strong><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
+            <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-hover" class="viewer-hover" hidden></div><div id="viewer-state" class="viewer-state">加载 URDF…</div><div id="keyboard-frame-legend" class="keyboard-frame-legend" hidden><strong>L WORK</strong><strong>R WORK</strong><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
             <div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span id="root-frame"></span></div>
           </div>
         </div>
@@ -739,7 +739,7 @@ function ensureVelocityTelemetrySkeleton() {
       <div class="telemetry-reference"><span>实测坐标系</span><strong data-field="measured-frame">${arm}/base_link</strong><span>状态</span><strong class="telemetry-measured" data-field="measured-status">WAIT</strong></div>
       <div class="telemetry-reference"><span>实测数据年龄</span><strong data-field="measured-age">-- ms</strong><span>命令叠加</span><strong data-field="overlay-note">--</strong></div>
       <div class="velocity-plots">${velocityPlotFigure(arm, "linear")}${velocityPlotFigure(arm, "angular")}</div>
-      <p class="velocity-plot-help">粗箭头为实测速度，颜色按 |v| / 固定量程着色；细白箭头为限速后命令（仅在两者坐标系一致时叠加）。拖动旋转，双击复位视角。</p>
+      <p class="velocity-plot-help">粗箭头为实测速度，颜色按 |v| / 固定量程着色；细灰箭头为限速后命令（仅在两者坐标系一致时叠加）。拖动旋转，双击复位视角。</p>
     </article>`).join("");
   for (const arm of ["l", "r"] as const) {
     for (const kind of ["linear", "angular"] as const) {
@@ -1218,12 +1218,12 @@ async function loadFleet() {
     if (generation !== loadGeneration) return;
     if (!scene) throw new Error("WebGL scene was not initialized");
     scene.clear();
-    scene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xd3dbe5, 2.4));
     const key = new THREE.DirectionalLight(0xffffff, 4);
     key.position.set(2, -3, 4);
     key.castShadow = true;
     scene.add(key);
-    const grid = new THREE.GridHelper(3.5, 22, 0x567078, 0x263b40);
+    const grid = new THREE.GridHelper(3.5, 22, 0xb3c1d1, 0xdde4ec);
     grid.rotation.x = Math.PI / 2;
     scene.add(grid);
     const allMeshes: any[] = [];
@@ -1290,7 +1290,7 @@ function initScene() {
   viewer.dataset.renderer = "webgl";
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.setClearColor(0x091114, 1);
+  renderer.setClearColor(0xf6f8fb, 1);
   renderer.shadowMap.enabled = true;
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
@@ -1308,6 +1308,7 @@ function initScene() {
   };
   new ResizeObserver(resize).observe(viewer);
   resize();
+  initViewerHover();
   const frame = () => {
     requestAnimationFrame(frame);
     if (!renderer || !scene || !camera || !controls) return;
@@ -1315,6 +1316,83 @@ function initScene() {
     renderer.render(scene, camera);
   };
   frame();
+}
+
+// Hovering an arm tints its live links and names the link under the pointer;
+// a click (not a drag) selects that arm, like its fleet chip.
+const viewerHover = $("#viewer-hover") as HTMLElement;
+const raycaster = new THREE.Raycaster();
+let hoveredArm: ArmId | undefined;
+function setArmHighlight(arm: ArmId | undefined) {
+  if (arm === hoveredArm) return;
+  for (const [id, robotScene] of Object.entries(robotScenes) as [ArmId, RobotScene][]) {
+    robotScene.live?.traverse((object: any) => {
+      if (object instanceof THREE.Mesh && object.material instanceof THREE.MeshStandardMaterial) {
+        object.material.emissive.set(id === arm ? 0x3e63dd : 0x000000);
+        object.material.emissiveIntensity = id === arm ? 0.28 : 0;
+      }
+    });
+  }
+  hoveredArm = arm;
+  viewer.classList.toggle("hovering-arm", Boolean(arm));
+}
+function pickArm(event: PointerEvent): { arm: ArmId; link: string } | undefined {
+  if (!camera) return undefined;
+  const box = canvas.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(
+    ((event.clientX - box.left) / box.width) * 2 - 1,
+    -((event.clientY - box.top) / box.height) * 2 + 1,
+  ), camera);
+  let best: { arm: ArmId; link: string; distance: number } | undefined;
+  for (const [arm, robotScene] of Object.entries(robotScenes) as [ArmId, RobotScene][]) {
+    if (!robotScene.live) continue;
+    const hit = raycaster.intersectObject(robotScene.live, true)[0];
+    if (!hit || (best && best.distance <= hit.distance)) continue;
+    let node: any = hit.object;
+    let onGripper = false;
+    while (node && !node.isURDFLink) node = node.parent;
+    for (let parent: any = node; parent; parent = parent.parent) onGripper ||= parent === gripperModels[arm];
+    best = { arm, link: onGripper ? "夹爪" : node?.name ?? "", distance: hit.distance };
+  }
+  return best && { arm: best.arm, link: best.link };
+}
+function initViewerHover() {
+  let frameRequest = 0;
+  let pressed: { x: number; y: number } | undefined;
+  canvas.addEventListener("pointermove", (event) => {
+    if (event.buttons) {
+      viewerHover.hidden = true;
+      return;
+    }
+    if (frameRequest) return;
+    frameRequest = requestAnimationFrame(() => {
+      frameRequest = 0;
+      const picked = pickArm(event);
+      setArmHighlight(picked?.arm);
+      viewerHover.hidden = !picked;
+      if (!picked) return;
+      const label = armSelect.querySelector<HTMLOptionElement>(`option[value="${picked.arm}"]`)?.textContent ?? picked.arm.toUpperCase();
+      viewerHover.innerHTML = `${escapeHtml(label)}<span>${escapeHtml(picked.link)}${picked.arm === selectedArm ? "" : " · 点击选中"}</span>`;
+      const box = viewer.getBoundingClientRect();
+      viewerHover.style.left = `${event.clientX - box.left}px`;
+      viewerHover.style.top = `${event.clientY - box.top}px`;
+    });
+  });
+  canvas.addEventListener("pointerleave", () => {
+    setArmHighlight(undefined);
+    viewerHover.hidden = true;
+  });
+  canvas.addEventListener("pointerdown", (event) => { pressed = { x: event.clientX, y: event.clientY }; });
+  canvas.addEventListener("pointerup", (event) => {
+    const click = pressed && Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) < 4;
+    pressed = undefined;
+    if (!click) return;
+    const picked = pickArm(event);
+    if (!picked || picked.arm === selectedArm) return;
+    armSelect.value = picked.arm;
+    armSelect.dispatchEvent(new Event("change"));
+    viewerHover.hidden = true;
+  });
 }
 
 function configureVelocity() {

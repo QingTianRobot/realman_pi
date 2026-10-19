@@ -92,7 +92,7 @@ export class VelocityPlot {
   private camera = new THREE.PerspectiveCamera(32, 1, 0.1, 20);
   private controls?: OrbitControls;
   private measured = makeArrow(VELOCITY_COLOR_STOPS[0][1], 0.04);
-  private reference = makeArrow("#d9e7e4", 0.014, 0.5);
+  private reference = makeArrow("#475569", 0.014, 0.55);
   private dropLine: THREE.Line;
   private dropDot: THREE.Mesh;
   private pending = 0;
@@ -110,24 +110,24 @@ export class VelocityPlot {
 
     const box = new THREE.LineSegments(
       new THREE.EdgesGeometry(new THREE.BoxGeometry(2, 2, 2)),
-      new THREE.LineBasicMaterial({ color: 0x35525a }),
+      new THREE.LineBasicMaterial({ color: 0xc3cedb }),
     );
-    const grid = new THREE.GridHelper(2, 4, 0x3d5e66, 0x22383d);
+    const grid = new THREE.GridHelper(2, 4, 0xc3cedb, 0xe3e9f0);
     grid.rotation.x = Math.PI / 2;
     const rings = new THREE.Group();
     for (const radius of [0.5, 1]) {
       const curve = new THREE.EllipseCurve(0, 0, radius, radius, 0, Math.PI * 2);
       const ring = new THREE.LineLoop(
         new THREE.BufferGeometry().setFromPoints(curve.getPoints(64)),
-        new THREE.LineBasicMaterial({ color: radius === 1 ? 0x5a7d84 : 0x3d5e66 }),
+        new THREE.LineBasicMaterial({ color: radius === 1 ? 0x9fb0c4 : 0xc3cedb }),
       );
       rings.add(ring);
     }
     const axes = new THREE.Group();
     for (const [axis, color, label] of [
-      [new THREE.Vector3(1, 0, 0), "#ff5a5a", "X"],
-      [new THREE.Vector3(0, 1, 0), "#63dc72", "Y"],
-      [new THREE.Vector3(0, 0, 1), "#5594ff", "Z"],
+      [new THREE.Vector3(1, 0, 0), "#e5484d", "X"],
+      [new THREE.Vector3(0, 1, 0), "#30a46c", "Y"],
+      [new THREE.Vector3(0, 0, 1), "#3e63dd", "Z"],
     ] as const) {
       axes.add(new THREE.Line(
         new THREE.BufferGeometry().setFromPoints([axis.clone().multiplyScalar(-1), axis.clone()]),
@@ -139,17 +139,17 @@ export class VelocityPlot {
     }
     this.dropLine = new THREE.Line(
       new THREE.BufferGeometry().setFromPoints([new THREE.Vector3(), new THREE.Vector3()]),
-      new THREE.LineDashedMaterial({ color: 0x8fa6a9, dashSize: 0.05, gapSize: 0.04 }),
+      new THREE.LineDashedMaterial({ color: 0x8796a8, dashSize: 0.05, gapSize: 0.04 }),
     );
     this.dropLine.visible = false;
-    this.dropDot = new THREE.Mesh(new THREE.CircleGeometry(0.035, 20), new THREE.MeshBasicMaterial({ color: 0x8fa6a9 }));
+    this.dropDot = new THREE.Mesh(new THREE.CircleGeometry(0.035, 20), new THREE.MeshBasicMaterial({ color: 0x8796a8 }));
     this.dropDot.visible = false;
     this.scene.add(box, grid, rings, axes, this.reference.group, this.measured.group, this.dropLine, this.dropDot);
 
     if (!this.renderer) return;
     this.renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
     this.renderer.outputColorSpace = THREE.SRGBColorSpace;
-    this.renderer.setClearColor(0x0b1619, 1);
+    this.renderer.setClearColor(0xffffff, 1);
     this.controls = new OrbitControls(this.camera, canvas);
     this.controls.enableZoom = false;
     this.controls.enablePan = false;

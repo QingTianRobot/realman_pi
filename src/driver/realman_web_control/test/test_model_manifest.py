@@ -99,7 +99,7 @@ def test_manifest_publishes_the_shared_pedestal_from_the_layout():
     assert pedestal["center_xy"] == [-0.981, 0.195]
     assert pedestal["size_xy"] == [0.36, 0.62]
     assert pedestal["top_z"] > pedestal["bottom_z"]
-    assert pedestal["color"] == "#1f2830"
+    assert pedestal["color"] == "#e9edf1"
 
 
 def _layout_with_pedestal(tmp_path, block):
@@ -132,6 +132,6 @@ def test_manifest_has_no_pedestal_when_the_layout_has_none(tmp_path):
 )
 def test_manifest_rejects_an_invalid_pedestal(tmp_path, change, message):
     block = {"frame": "world", "center_xy": [0.0, 0.0], "size_xy": [0.3, 0.6], "top_z": 0.0,
-             "bottom_z": -0.2, "color": "#1f2830", **change}
+             "bottom_z": -0.2, "color": "#e9edf1", **change}
     with pytest.raises(ValueError, match=message):
         build_manifest(*_layout_with_pedestal(tmp_path, block))

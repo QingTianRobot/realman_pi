@@ -64,4 +64,4 @@ pedestal:
   size_xy: [0.36, 0.62]
   top_z: -0.019
   bottom_z: -0.206
-  color: "#1f2830"
+  color: "#e9edf1"

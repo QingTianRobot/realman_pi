@@ -103,6 +103,7 @@ class RecordingRecorderNode(Node):
         self.declare_parameter("export_target_fps", 10.0)
         self.declare_parameter("export_max_gap_sec", 2.0)
         self.declare_parameter("auto_export_on_stop", True)
+        self.declare_parameter("export_workers", 3)
         self.declare_parameter("preflight_max_age_sec", 2.0)
         # A larger fresh-data skew requests asynchronous post-record alignment; it
         # never masks a stale/disconnected sensor, which remains a hard PREPARE fail.
@@ -158,7 +159,11 @@ class RecordingRecorderNode(Node):
         self._export_error = ""
         # One daemon worker serializes every adopted session's export so conversions
         # never overlap and never run on the ROS executor.  START/STOP never block.
-        self._export_worker = SerialExportWorker(self._run_export_job, on_error=self._on_export_job_error)
+        self._export_worker = SerialExportWorker(
+            self._run_export_job,
+            on_error=self._on_export_job_error,
+            max_workers=int(self.get_parameter("export_workers").value),
+        )
         self._export_worker.start()
 
         self._topic_types: dict[str, str] = {}
@@ -191,6 +196,7 @@ class RecordingRecorderNode(Node):
         self, request: ManageRecordingService.Request, response: ManageRecordingService.Response
     ) -> ManageRecordingService.Response:
         """Handle bounded upstream lifecycle requests; export work remains asynchronous."""
+        adopted: int | None = None
         try:
             if request.command == ManageRecordingService.Request.PREPARE:
                 session_id = self._prepare(request)
@@ -209,6 +215,9 @@ class RecordingRecorderNode(Node):
                 session_id = self._adopt_session(request.session_id)
             elif request.command == ManageRecordingService.Request.DISCARD:
                 session_id = self._discard_session(request.session_id)
+            elif request.command == ManageRecordingService.Request.ADOPT_ALL:
+                adopted = self._adopt_all_sessions()
+                session_id = ""
             else:
                 raise ValueError("unsupported recording service command")
             response.success = not (
@@ -221,6 +230,8 @@ class RecordingRecorderNode(Node):
                 response.message = self._last_preflight.summary
             elif request.command == ManageRecordingService.Request.STOP:
                 response.message = "recording stopped; raw session is READY for ADOPT"
+            elif request.command == ManageRecordingService.Request.ADOPT_ALL:
+                response.message = f"adopted {adopted} pending session(s)"
             else:
                 response.message = "accepted"
         except Exception as error:  # noqa: BLE001 - ROS service callers need a stable error payload
@@ -628,6 +639,22 @@ class RecordingRecorderNode(Node):
             )
         self._queue_export(directory, session_id)
         return session_id
+
+    def _adopt_all_sessions(self) -> int:
+        """Adopt and queue every still-PENDING session, skipping any that cannot adopt.
+
+        Each session is adopted independently so one bad manifest (write errors, wrong
+        state) never aborts the batch: the offending session is logged and left PENDING
+        for manual handling, while the rest continue to export.
+        """
+        adopted = 0
+        for session_id in SessionStore.pending_session_ids(self._root):
+            try:
+                self._adopt_session(session_id)
+                adopted += 1
+            except Exception as error:  # noqa: BLE001 - one bad session must not stop the batch
+                self.get_logger().warning(f"adopt-all skipped {session_id}: {error}")
+        return adopted
 
     def _queue_export(self, directory: Path, session_id: str) -> None:
         """Enqueue the session for the single serialized worker after adoption."""

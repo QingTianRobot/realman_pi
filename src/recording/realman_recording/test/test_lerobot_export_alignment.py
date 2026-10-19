@@ -65,12 +65,14 @@ def test_v3_receipt_is_written_as_a_complete_json_document(tmp_path: Path):
     LeRobotExporter._write_v3_receipt(
         tmp_path, tmp_path / "dataset", {"session_id": "session-1"}, schema,
         3, [100, 200], urdf, {"state": "UNAVAILABLE"},
+        {"valid_frames": 2, "invalid_frames": 0, "max_sync_error_ns": 1234},
     )
 
     receipt = __import__("json").loads((tmp_path / "export" / "lerobot-v3.json").read_text(encoding="utf-8"))
     assert receipt["episode_index"] == 3
     assert receipt["first_walltime_ns"] == 100
     assert receipt["canonical"]["camera_archive_quality"] == {"state": "UNAVAILABLE"}
+    assert receipt["quality"] == {"valid_frames": 2, "invalid_frames": 0, "max_sync_error_ns": 1234}
 
 
 def test_dataset_root_uses_stable_repo_child_for_collection_directory(tmp_path: Path):

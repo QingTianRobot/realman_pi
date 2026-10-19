@@ -184,8 +184,16 @@ class LeRobotExporter:
         dataset_root = self._dataset_root(request.output_dir, schema)
         with dataset_lock(dataset_root):
             dataset = self._open_v3_dataset(dataset_root, schema, image_shapes)
+            # A dataset resumed from before ``subtask_index`` was added lacks the
+            # feature in its info.json; writing it would fail LeRobot's
+            # validate_frame with "Extra features: {'subtask_index'}".  Only
+            # annotate frames when the dataset actually declares the feature.
+            annotate_subtasks = "subtask_index" in (getattr(dataset, "features", None) or {})
+            annotate_session_number = "session_number" in (getattr(dataset, "features", None) or {})
             try:
                 task = str(manifest.get("metadata", {}).get("task") or "recording")
+                raw_session_number = manifest.get("metadata", {}).get("session_number")
+                session_number = raw_session_number if isinstance(raw_session_number, int) else 0
                 for index, frame in enumerate(canonical):
                     ee_position, ee_rotation = _split_ee_pose(frame.ee_pose_base, schema.arm_count)
                     ee_linear, ee_angular = _split_ee_velocity(frame.ee_velocity_base, schema.arm_count)
@@ -201,9 +209,12 @@ class LeRobotExporter:
                         "action.executed_action": np.asarray(frame.ee_velocity_base, dtype=np.float32),
                         "quality.valid": np.asarray([frame.valid], dtype=np.bool_),
                         "quality.sync_error_ns": np.asarray(frame.sync_error_ns, dtype=np.int64),
-                        "subtask_index": np.asarray([subtask_index[index]], dtype=np.int64),
                         "task": task,
                     }
+                    if annotate_subtasks:
+                        payload["subtask_index"] = np.asarray([subtask_index[index]], dtype=np.int64)
+                    if annotate_session_number:
+                        payload["session_number"] = np.asarray([session_number], dtype=np.int64)
                     if frame.command_gripper is not None:
                         payload["action.command.gripper"] = np.asarray(frame.command_gripper, dtype=np.float32)
                     for camera_id, selected in images.items():
@@ -211,7 +222,7 @@ class LeRobotExporter:
                     dataset.add_frame(payload)
                     self._report(request, index + 1, len(aligned))
                 episode_index = self._dataset_episode_count(dataset)
-                if subtasks:
+                if subtasks and annotate_subtasks:
                     # A second annotated episode would overwrite the shared
                     # per-dataset label table and silently remap the first
                     # episode's indices; reject that before any frame is written.
@@ -229,6 +240,11 @@ class LeRobotExporter:
                 # Required by the SDK: flushes metadata/parquet footers before another
                 # adopted session calls resume().
                 dataset.finalize()
+        quality = {
+            "valid_frames": sum(1 for frame in canonical if frame.valid),
+            "invalid_frames": sum(1 for frame in canonical if not frame.valid),
+            "max_sync_error_ns": max((abs(int(item)) for frame in canonical for item in frame.sync_error_ns), default=0),
+        }
         self._write_v3_receipt(
             request.session_dir,
             dataset_root,
@@ -238,6 +254,7 @@ class LeRobotExporter:
             anchors,
             urdf_path,
             camera_archive_quality,
+            quality,
         )
         self._report(request, 100, 100)
         return dataset_root
@@ -401,9 +418,11 @@ class LeRobotExporter:
         anchors: Sequence[int],
         urdf_path: Path,
         camera_archive_quality: dict[str, Any],
+        quality: dict[str, Any],
     ) -> None:
         receipt = {"dataset_root": str(root), "repo_id": schema.repo_id, "fps": schema.fps, "episode_index": episode_index,
                    "schema_fingerprint": schema.fingerprint, "frame_count": len(anchors),
+                   "quality": quality,
                    "first_walltime_ns": anchors[0], "last_walltime_ns": anchors[-1],
                    "source_session_id": manifest.get("session_id", session_dir.name),
                    "canonical": {

@@ -48,6 +48,7 @@ export function initVideo(callbacks: VideoCallbacks): VideoApi {
   let context: VideoContext | null = null;
   let currentIndex = 0;
   let playing = false;
+  let looping = false;
   let raf = 0;
 
   function clampIndex(index: number): number {
@@ -85,8 +86,17 @@ export function initVideo(callbacks: VideoCallbacks): VideoApi {
       callbacks.onFrameChange(index);
     }
     if (index >= context.frameCount - 1) {
-      pause();
-      return;
+      if (looping) {
+        currentIndex = 0;
+        slider.value = "0";
+        for (const video of videos) {
+          try { video.currentTime = 0; } catch { /* ignore */ }
+        }
+        callbacks.onFrameChange(0);
+      } else {
+        pause();
+        return;
+      }
     }
     raf = requestAnimationFrame(renderLoop);
   }
@@ -139,6 +149,7 @@ export function initVideo(callbacks: VideoCallbacks): VideoApi {
       camerasEl.innerHTML = '<div class="empty">该 Episode 无相机字段</div>';
       cameraCount.textContent = "该 Episode 无相机字段";
     } else {
+      camerasEl.innerHTML = "";
       cameraCount.textContent = `${next.cameraIds.length} 路 · 同步视频`;
       for (const cameraId of next.cameraIds) {
         const card = document.createElement("div");
@@ -181,6 +192,11 @@ export function initVideo(callbacks: VideoCallbacks): VideoApi {
     callbacks.onFrameChange(index);
   });
   speed.addEventListener("change", () => setSpeed(Number(speed.value || 1)));
+  const loopBtn = $<HTMLButtonElement>("#replay-loop");
+  loopBtn?.addEventListener("click", () => {
+    looping = !looping;
+    loopBtn.classList.toggle("active", looping);
+  });
   document.addEventListener("keydown", (event) => {
     if (!context) return;
     if ((event.target as HTMLElement | null)?.matches("input,select,textarea")) return;

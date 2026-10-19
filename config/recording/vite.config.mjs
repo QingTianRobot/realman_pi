@@ -71,6 +71,7 @@ export default defineConfig({
       three: resolve(websiteDirectory, "node_modules/three"),
       "urdf-loader": resolve(websiteDirectory, "node_modules/urdf-loader"),
       gridstack: resolve(websiteDirectory, "node_modules/gridstack"),
+      uplot: resolve(websiteDirectory, "node_modules/uplot"),
     },
   },
   build: {

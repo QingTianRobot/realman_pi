@@ -13,7 +13,7 @@ wrist_cameras:
     color:
       width: 640
       height: 480
-      fps: 15
+      fps: 30
       format: YUYV          # 非压缩,规避 Gemini 305 的 MJPEG 撕裂
     depth:
       width: 640
@@ -35,20 +35,30 @@ wrist_cameras:
   #   - 只写要改的叶子键,其余继承全局默认;
   #   - 可覆盖任意叶子(width/height/fps/format/auto_exposure/exposure ...)。
   # serial 为兜底默认;现场实际串号建议写进 cameras_ros2.local.yaml 覆盖。
+  # enabled: false 表示该腕位未装相机,launch 与健康检查都会跳过它(默认 true)。
   devices:
     left:
       serial: "CV2L36000037"     # 兜底默认;现场值见 cameras_ros2.local.yaml
       streams:
         color:
-          # 叶子覆盖示例(如需改档位,取消注释并确认传感器支持该 profile):
-          # width: 1280
-          # height: 720
+          # 左位在 30 Hz 自动曝光下过曝;改固定曝光(单位 0.1 ms,60 即 6.0 ms)。
+          # 左右各自独立标定,取值可不同(右位见 devices.right)。换光源/位置后需重新扫描该值。
           fps: 30
-          # format: MJPG
+          auto_exposure: false
+          exposure: 60
     middle:
-      serial: "CV2T661000DC"     # 无 streams 覆盖 → 完全继承全局默认
+      # 中间腕位未装相机:现场只有左/右两台 Gemini 305。serial 无对应硬件,
+      # enabled=false 让 launch 与健康检查完全跳过 middle,不再空转 4 次重试。
+      serial: "CV2L360000HS"
+      enabled: false
     right:
-      serial: "CV2L360000HS"     # 与 camera_stream/orbbec.yaml 保持一致
+      serial: "CV2T661000DC"     # 中/右相机对换:右位现在是原中位相机
+      streams:
+        color:
+          # 右位在 30 Hz 自动曝光下过曝;改固定曝光(单位 0.1 ms,100 即 10.0 ms)。
+          # 与左位(60)不同值:两侧进光条件不同,各自独立标定。换光源/位置后需重新扫描该值。
+          auto_exposure: false
+          exposure: 100
 
 # ============================================================================
 # 全局相机:单台 RealSense D435,固定俯视全场。
@@ -65,8 +75,8 @@ global_camera:
   namespace: camera_global
   camera_name: d435
   color:
-    width: 1920
-    height: 1080
+    width: 640
+    height: 480
     fps: 30
   depth:
     enable: false              # D435 深度当前关闭

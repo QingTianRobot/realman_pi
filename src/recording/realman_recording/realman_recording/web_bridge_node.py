@@ -24,6 +24,7 @@ from std_msgs.msg import Bool, Float64, Int32, String
 
 from realman_msgs.msg import CartesianVelocityState
 from realman_recording_msgs.msg import RecordingStatus
+from realman_recording_msgs.srv import ManageRecording
 from .camera_workers import LatestFramePreview, PreviewFrame, downscale_jpeg, image_to_jpeg, load_camera_sources
 from .layout_manifest import build_recording_manifest
 from .rerun_adapter import RerunVisualizationAdapter
@@ -141,6 +142,7 @@ class RecordingWebBridgeNode(Node):
             10, callback_group=self._callback_group,
         )
         self._manifest = build_recording_manifest(self.get_parameter("layout_config_file").value)
+        self._recording_client = self.create_client(ManageRecording, "/recording/manage")
         self._server = RecordingWebServer(
             bind_host=str(self.get_parameter("bind_host").value),
             port=int(self.get_parameter("port").value),
@@ -150,6 +152,7 @@ class RecordingWebBridgeNode(Node):
             recording_root=self.get_parameter("recording_root").value,
             lerobot_export_dir=self.get_parameter("lerobot_export_dir").value,
             logger=self.get_logger(),
+            export_all=self._export_all,
         )
         self._server.start()
         if self._preview_worker is not None:
@@ -177,6 +180,36 @@ class RecordingWebBridgeNode(Node):
             self._rerun.close()
         self._server.stop()
         return super().destroy_node()
+
+    def _export_all(self) -> dict[str, Any]:
+        """Adopt and queue every pending session via the recorder's ADOPT_ALL command.
+
+        Called on the web server's aiohttp thread: it blocks only that thread on
+        ``future.result`` while the main MultiThreadedExecutor completes the response,
+        so live snapshot WebSockets are unaffected by a slow recorder.
+        """
+        deadline = time.monotonic() + 3.0
+        while not self._recording_client.service_is_ready() and time.monotonic() < deadline:
+            time.sleep(0.1)
+        if not self._recording_client.service_is_ready():
+            raise RuntimeError("/recording/manage service is not available")
+        request = ManageRecording.Request()
+        request.command = ManageRecording.Request.ADOPT_ALL
+        future = self._recording_client.call_async(request)
+        try:
+            # rclpy's Future.result() takes no ``timeout`` kwarg (unlike
+            # concurrent.futures), so wait for completion with a bounded poll and
+            # then read the result with no arguments.
+            deadline = time.monotonic() + 30.0
+            while not future.done() and time.monotonic() < deadline:
+                time.sleep(0.05)
+            if not future.done():
+                future.cancel()
+                raise RuntimeError("batch export timed out")
+            response = future.result()
+        except Exception as error:  # noqa: BLE001 - surface a stable web error
+            raise RuntimeError(f"batch export failed: {error}") from error
+        return {"ok": bool(response.success), "message": response.message, "state": response.state}
 
     def _create_preview_worker(self) -> LatestFramePreview | None:
         """Build a one-slot ROS-image preview compressor when enabled."""

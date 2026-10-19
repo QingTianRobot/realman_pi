@@ -8,6 +8,11 @@ field) without touching the committed file; when it is absent the base config
 alone drives the launch. The default profile is the low-bandwidth USB2 profile
 validated on the production host. RViz is opt-in so the same launch works on a
 headless industrial PC.
+
+A wrist camera configured with ``auto_exposure: false`` additionally gets a
+post-start step (``scripts/apply_color_exposure.py``) that turns auto exposure off
+and sets the exposure once its color stream is publishing: the same settings
+written by the driver during startup do not take effect on these devices.
 """
 
 import os
@@ -15,12 +20,18 @@ import sys
 from pathlib import Path
 
 import yaml
-from ament_index_python.packages import get_package_share_directory
+from ament_index_python.packages import get_package_prefix, get_package_share_directory
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, GroupAction, IncludeLaunchDescription, TimerAction
+from launch.actions import (
+    DeclareLaunchArgument,
+    ExecuteProcess,
+    GroupAction,
+    IncludeLaunchDescription,
+    TimerAction,
+)
 from launch.conditions import IfCondition
 from launch.launch_description_sources import PythonLaunchDescriptionSource
-from launch.substitutions import LaunchConfiguration, PathJoinSubstitution
+from launch.substitutions import LaunchConfiguration, PathJoinSubstitution, PythonExpression
 from launch_ros.actions import Node
 from launch_ros.substitutions import FindPackageShare
 
@@ -125,6 +136,11 @@ def _resolve_side_streams(global_streams, device_cfg, side):
     }
 
 
+def _use_flag_default(enabled):
+    """Map a device's ``enabled`` flag to the ``use_<side>`` launch-argument default."""
+    return "true" if enabled else "false"
+
+
 def _load_defaults():
     config = _load_config()
     wrist = config.get("wrist_cameras", {}) or {}
@@ -142,6 +158,7 @@ def _load_defaults():
         device_cfg = devices.get(side, {}) or {}
         sides[side] = {
             "serial": str(device_cfg.get("serial", "")),
+            "enabled": bool(device_cfg.get("enabled", True)),
             "streams": _resolve_side_streams(global_streams, device_cfg, side),
         }
 
@@ -223,6 +240,58 @@ def _camera_include(side, serial, stream_args, condition, delay):
     )
 
 
+def _exposure_apply_script():
+    """Locate scripts/apply_color_exposure.py, or None when it is not installed.
+
+    The source tree wins: under ``colcon build --symlink-install`` this launch file
+    is a symlink into ``src/sensor_bringup/launch``, so resolving it finds the
+    script without a rebuild. Plain installs find the copy under ``lib/``.
+    """
+    candidates = [Path(__file__).resolve().parent.parent / "scripts" / "apply_color_exposure.py"]
+    try:
+        candidates.append(
+            Path(get_package_prefix("sensor_bringup")) / "lib" / "sensor_bringup" / "apply_color_exposure.py"
+        )
+    except Exception:  # package not installed (e.g. launch run straight from the source tree)
+        pass
+    for candidate in candidates:
+        if candidate.is_file():
+            return candidate
+    return None
+
+
+def _exposure_apply_action(side, stream_args):
+    """Post-start fixed-exposure step for one wrist camera, or None when not needed.
+
+    Only cameras whose config sets ``auto_exposure: false`` get one. The driver also
+    writes these values at startup, but on the production Gemini 305s the auto
+    exposure switch written then does not take effect, so it is repeated here after
+    the color stream is publishing (the script waits for the first frame).
+    """
+    if stream_args["enable_color_auto_exposure"] != "false":
+        return None
+    script = _exposure_apply_script()
+    if script is None:
+        _warn(
+            f"{side}: auto_exposure is false but apply_color_exposure.py was not found; "
+            "the camera may stay on auto exposure"
+        )
+        return None
+    return ExecuteProcess(
+        cmd=[sys.executable, str(script), "--side", side, "--exposure", stream_args["color_exposure"]],
+        name=f"apply_color_exposure_{side}",
+        output="screen",
+        condition=IfCondition(
+            PythonExpression(
+                [
+                    "'", LaunchConfiguration(f"use_{side}"), "' == 'true' and '",
+                    LaunchConfiguration("enable_color"), "' == 'true'",
+                ]
+            )
+        ),
+    )
+
+
 def _realsense_include(delay):
     realsense_launch = PathJoinSubstitution(
         [FindPackageShare("sensor_bringup"), "launch", "realsense_d435.launch.py"]
@@ -284,9 +353,9 @@ def generate_launch_description():
         DeclareLaunchArgument("left_serial", default_value=sides["left"]["serial"]),
         DeclareLaunchArgument("middle_serial", default_value=sides["middle"]["serial"]),
         DeclareLaunchArgument("right_serial", default_value=sides["right"]["serial"]),
-        DeclareLaunchArgument("use_left", default_value="true"),
-        DeclareLaunchArgument("use_middle", default_value="true"),
-        DeclareLaunchArgument("use_right", default_value="true"),
+        DeclareLaunchArgument("use_left", default_value=_use_flag_default(sides["left"]["enabled"])),
+        DeclareLaunchArgument("use_middle", default_value=_use_flag_default(sides["middle"]["enabled"])),
+        DeclareLaunchArgument("use_right", default_value=_use_flag_default(sides["right"]["enabled"])),
         DeclareLaunchArgument("use_rviz", default_value="false"),
         DeclareLaunchArgument(
             "left_delay",
@@ -385,4 +454,11 @@ def generate_launch_description():
             condition=IfCondition(LaunchConfiguration("use_rviz")),
         ),
     ]
-    return LaunchDescription(declarations + camera_actions)
+    exposure_actions = [
+        action
+        for action in (
+            _exposure_apply_action(side, sides[side]["streams"]) for side in ("left", "middle", "right")
+        )
+        if action is not None
+    ]
+    return LaunchDescription(declarations + camera_actions + exposure_actions)

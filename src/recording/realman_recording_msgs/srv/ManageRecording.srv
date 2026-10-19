@@ -1,11 +1,14 @@
 # Upstream integration service.  The recorder alone owns raw-data lifecycle;
 # ADOPT queues asynchronous LeRobot conversion and DISCARD makes a finalized
 # session ineligible for export without deleting its forensic raw artifacts.
+# ADOPT_ALL adopts and queues every still-PENDING session in one batch so the
+# operator can review (hide/delete) recordings before exporting them together.
 uint8 START=0
 uint8 STOP=1
 uint8 ADOPT=2
 uint8 DISCARD=3
 uint8 PREPARE=4
+uint8 ADOPT_ALL=5
 
 uint8 command
 string session_id

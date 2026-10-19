@@ -9,10 +9,10 @@ robots:
     max_linear_speed_mps: 0.15
     # Cartesian rotation speed in rad/s; keep below abrupt wrist motion limits.
     max_angular_speed_radps: 0.25
-    # Absolute per-session driver ceiling; Pika may request up to 2 rad/s.
-    hard_max_linear_speed_mps: 1.0
-    # Ordinary clients remain at 0.25 rad/s; Pika's explicit 2 rad/s profile uses this ceiling.
-    hard_max_angular_speed_radps: 2.0
+    # SDK rm_movev_canfd hard ceiling; a faster Pika command is rejected and freezes the arm.
+    hard_max_linear_speed_mps: 0.25
+    # Same SDK ceiling for rotation; ordinary clients stay at the 0.25 rad/s limit above.
+    hard_max_angular_speed_radps: 0.6
     # 10 ms is the fastest period RealMan high-follow accepts, and the keyboard
     # router requires it: a production A/B found 20 ms low-follow produced
     # non-commanded-axis transients at session start. The driver accepts only
@@ -78,10 +78,10 @@ robots:
     max_linear_speed_mps: 0.15
     # Cartesian rotation speed in rad/s; keep below abrupt wrist motion limits.
     max_angular_speed_radps: 0.25
-    # Absolute per-session driver ceiling; Pika may request up to 2 rad/s.
-    hard_max_linear_speed_mps: 1.0
-    # Ordinary clients remain at 0.25 rad/s; Pika's explicit 2 rad/s profile uses this ceiling.
-    hard_max_angular_speed_radps: 2.0
+    # SDK rm_movev_canfd hard ceiling; a faster Pika command is rejected and freezes the arm.
+    hard_max_linear_speed_mps: 0.25
+    # Same SDK ceiling for rotation; ordinary clients stay at the 0.25 rad/s limit above.
+    hard_max_angular_speed_radps: 0.6
     # 10 ms is the fastest period RealMan high-follow accepts, and the keyboard
     # router requires it: a production A/B found 20 ms low-follow produced
     # non-commanded-axis transients at session start. The driver accepts only

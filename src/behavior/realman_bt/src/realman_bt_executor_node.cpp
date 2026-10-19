@@ -14,8 +14,11 @@
 #include "bt_nodes/decorator/repeat_node.hpp"
 #include "bt_nodes/decorator/retry_node.hpp"
 #include "realman_bt/cartesian_velocity_for_duration_node.hpp"
+#include "realman_bt/gripper_ready_node.hpp"
 #include "realman_bt/input_mode_nodes.hpp"
 #include "realman_bt/move_j_node.hpp"
+#include "realman_bt/policy_run_node.hpp"
+#include "realman_bt/policy_task_params.hpp"
 #include "realman_bt/prepare_keyboard_work_node.hpp"
 #include "realman_bt/retry_unless_fault_node.hpp"
 #include "realman_bt/three_arm_move_j_node.hpp"
@@ -86,6 +89,12 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
     blackboard_->set<std::string>("pika_r_joint_degrees", pika_r_joint_degrees);
   }
   blackboard_->set<rclcpp::Node*>(kRosNodeBlackboardKey, this);
+  // Thresholds and counts of the policy task (config/ros/policy_task.yaml). The counts are also
+  // blackboard values so the XML can refer to them as {policy_cycles} / {policy_attempts}.
+  policy_task_config_ = declareAndLoadPolicyTaskConfig(*this);
+  blackboard_->set<const PolicyTaskConfig*>(kPolicyTaskConfigBlackboardKey, &policy_task_config_);
+  blackboard_->set<int>(kPolicyCyclesKey, policy_task_config_.cycles);
+  blackboard_->set<int>(kPolicyAttemptsKey, policy_task_config_.attempts);
   blackboard_->set<RuntimeDiagnostics*>(kRuntimeDiagnosticsBlackboardKey,
                                         &diagnostics_);
   blackboard_->set<CoordinateReferenceRegistry*>(
@@ -111,9 +120,12 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   factory_.registerNodeType<bt_nodes::RepeatNode>("Repeat");
   factory_.registerNodeType<bt_nodes::RetryNode>("Retry");
   factory_.registerNodeType<RetryUnlessFaultNode>("RetryUnlessFault");
+  factory_.registerNodeType<GripperReadyNode>("GripperReady");
+  factory_.registerNodeType<PolicyRunNode>("PolicyRun");
   factory_.registerNodeType<SelectInputModeNode>("SelectInputMode");
   factory_.registerNodeType<InputModeGuardNode>("InputModeGuard");
   factory_.registerNodeType<ActivateInputModeNode>("ActivateInputMode");
+  factory_.registerNodeType<FailInputModeNode>("FailInputMode");
   factory_.registerNodeType<PrepareKeyboardWorkNode>("PrepareKeyboardWork");
   factory_.registerNodeType<WebInputStubNode>("WebInputStub");
   factory_.registerNodeType<PolicyInputStubNode>("PolicyInputStub");

@@ -128,6 +128,23 @@ bt_core::NodeStatus ActivateInputModeNode::tick() {
   }
 }
 
+bt_core::PortsList FailInputModeNode::providedPorts() {
+  return bt_core::makePorts(bt_core::InputPort<std::string>(
+      "reason", "policy task failed", "Why the branch gave up; shown as the FAILED detail"));
+}
+
+bt_core::NodeStatus FailInputModeNode::tick() {
+  if (!reported_) {
+    std::string reason = getInput<std::string>("reason").value_or("");
+    if (reason.empty()) reason = "policy task failed";
+    coordinator(blackboard())->fail(std::move(reason), InputModeCoordinator::Clock::now());
+    reported_ = true;
+  }
+  return bt_core::NodeStatus::RUNNING;
+}
+
+void FailInputModeNode::onHalted() { reported_ = false; }
+
 bt_core::NodeStatus WebInputStubNode::tick() {
   return bt_core::NodeStatus::RUNNING;
 }

@@ -99,6 +99,7 @@ export default withMermaid(defineConfig({
         items: [
           { text: "行为树控制权与 Mock", link: "/development/behavior-tree-control" },
           { text: "行为树机械臂移动 Demo", link: "/development/behavior-tree-motion" },
+          { text: "行为树节点参考", link: "/development/behavior-tree-nodes" },
           { text: "Pika 遥操作", link: "/development/pika-teleop" },
           { text: "Web 控制与 URDF 影子", link: "/development/realman-web-control" },
           { text: "Xbox 手柄输入", link: "/development/xbox-controller" },
@@ -112,6 +113,7 @@ export default withMermaid(defineConfig({
           { text: "三臂 ChArUco 手眼标定", link: "/development/camera-calibration" },
           { text: "三臂配置驱动可视化", link: "/development/three-arm-visualization" },
           { text: "VLA 策略桥接节点", link: "/development/policy-bridge" },
+          { text: "Policy 任务（行为树监督）", link: "/development/policy-task" },
           { text: "独立数据录制平台", link: "/development/recording-platform" },
         ],
       },

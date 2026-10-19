@@ -153,7 +153,7 @@ bridge 发布的 `/pi05_policy/{l,r}/*` 由 `policy_control_router`（`src/behav
 - **会话开始的漂移保护**：会话开始后 2 s 内，只要发出的命令都是零，任一关节偏移超过 1° 就取消会话并锁定，需要先停掉 bridge（`/policy/deactivate`）再重新激活才能重试。
 - 夹爪：转发到 `/gripper_{left,right}/percentage/command`，值必须在 `[0,1]`，限 10 Hz。
 - 急停：服务 `/policy_router/emergency_stop`（`Trigger`）立即置零并取消会话；切换到其他模式、停掉 bridge、驱动 100 ms 看门狗是另外三条停止路径。
-- 运动的唯一开关是 bridge 的 `/policy/activate`；路由不再设第二道开关。`dry_run` 沿用整个 launch 的约定（默认 `true`，上机时显式关闭）。
+- 运动的开关是 bridge 的 `/policy/activate`；路由不再设第二道开关。谁来调用它由 `config/ros/policy_task.yaml` 的 `activation` 决定：`auto`（默认）由行为树的 `PolicyRun` 在预检通过后调用并全程监督，`operator` 则等待操作员手动调用，见 [Policy 任务](./policy-task)。`dry_run` 沿用整个 launch 的约定（默认 `true`，上机时显式关闭）。
 
 ## 安全与看门狗约定
 

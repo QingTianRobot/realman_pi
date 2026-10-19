@@ -158,6 +158,25 @@ def test_lifecycle_services_registered(node):
     assert len(node._lifecycle._services) == 5
 
 
+def _stats_values(node):
+    return {kv.key: kv.value for kv in node._stats.build_message().status[0].values}
+
+
+def test_stats_report_the_current_prompt_verbatim(node):
+    # PolicyRun compares this string with its task's prompt before it activates the bridge.
+    values = _stats_values(node)
+    assert values["prompt"] == node._cfg.prompt.initial
+    assert float(values["allow_publish"]) == 0.0  # the numeric values are unchanged
+
+
+def test_a_prompt_change_is_reported_at_once(node):
+    published = []
+    node._stats.publish = lambda: published.append(_stats_values(node))
+    assert node._prompt.set("pick up the power adapter")
+    assert published and published[-1]["prompt"] == "pick up the power adapter"
+    assert _stats_values(node)["prompt"] == "pick up the power adapter"
+
+
 def test_stats_snapshot_reflects_state(node):
     node.activate()
     node._mode.update("policy", 0)

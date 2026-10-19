@@ -1,8 +1,10 @@
 """Metrics collection published as ``diagnostic_msgs/DiagnosticArray``.
 
 ``Stats`` keeps simple monotonic counters (``bump``) plus optional live gauges
-registered as zero-arg callables (``gauge``). A timer republishes the whole
-snapshot to ``/policy/stats`` so operators can watch inference/publish health
+registered as zero-arg callables (``gauge`` for numbers, ``text`` for strings
+such as the current prompt). A timer republishes the whole snapshot to
+``/policy/stats`` so operators -- and the behavior tree's PolicyRun, which waits
+for the ``prompt`` value to match its task -- can watch inference/publish health
 without touching the node internals.
 """
 
@@ -22,6 +24,7 @@ class Stats:
         self._node = node
         self._counters: dict[str, int] = {}
         self._gauges: dict[str, Callable[[], float]] = {}
+        self._texts: dict[str, Callable[[], str]] = {}
         self._lock = threading.Lock()
         self._pub = None
         self._timer = None
@@ -36,6 +39,22 @@ class Stats:
     def gauge(self, name: str, provider: Callable[[], float]) -> None:
         with self._lock:
             self._gauges[name] = provider
+
+    def text(self, name: str, provider: Callable[[], str]) -> None:
+        """Register a live string value; published verbatim (no float conversion)."""
+        with self._lock:
+            self._texts[name] = provider
+
+    def text_snapshot(self) -> dict[str, str]:
+        with self._lock:
+            texts = dict(self._texts)
+        values: dict[str, str] = {}
+        for name, provider in texts.items():
+            try:
+                values[name] = str(provider())
+            except Exception:  # noqa: BLE001 - a broken provider must not kill stats
+                continue
+        return values
 
     def reset(self, name: str | None = None) -> None:
         with self._lock:
@@ -70,6 +89,9 @@ class Stats:
         status.message = "paused" if paused else "ok"
         for key in sorted(values):
             status.values.append(KeyValue(key=key, value=str(values[key])))
+        texts = self.text_snapshot()
+        for key in sorted(texts):
+            status.values.append(KeyValue(key=key, value=texts[key]))
         msg.status.append(status)
         return msg
 

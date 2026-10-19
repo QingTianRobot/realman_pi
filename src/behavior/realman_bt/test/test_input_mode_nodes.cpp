@@ -1,3 +1,8 @@
+// A Release build defines NDEBUG, which would turn every assert below into a no-op.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
 #include <cassert>
 #include <chrono>
 #include <memory>
@@ -18,6 +23,7 @@
 namespace {
 
 using realman_bt::ActivateInputModeNode;
+using realman_bt::FailInputModeNode;
 using realman_bt::IdleInputNode;
 using realman_bt::InputModeCoordinator;
 using realman_bt::InputModeGuardNode;
@@ -360,6 +366,125 @@ void testPostNeutralTickReplacesIdleWithRecoveredHigherPriorityBranch() {
 
 }  // namespace
 
+// Walks the coordinator to "policy is the ACTIVE mode" the way the router does.
+void makePolicyActive(InputModeCoordinator& coordinator) {
+  const auto now = InputModeCoordinator::Clock::now();
+  assert(coordinator.request("policy", "test", now).accepted);
+  coordinator.activate("none", now);
+  assert(coordinator.selectForTick(now) == "policy");
+  coordinator.activate("policy", now);
+  assert(coordinator.snapshot().phase == realman_bt::InputModePhase::kActive);
+}
+
+InputModeRegistry policyRegistry() {
+  InputModeRegistry registry;
+  registry.registerMode("policy", "Policy", true);
+  registry.registerMode("none", "none", true);
+  return registry;
+}
+
+bt_core::NodeConfig failConfig(const bt_core::Blackboard::Ptr& blackboard) {
+  bt_core::NodeConfig config;
+  config.blackboard = blackboard;
+  config.port_remap = {{"reason", "policy_failure_reason"}};
+  return config;
+}
+
+void testFailInputModeReportsTheReasonAndKeepsRunning() {
+  auto registry = policyRegistry();
+  std::vector<realman_bt::InputModeSnapshot> seen;
+  InputModeCoordinator coordinator(
+      registry, std::chrono::seconds(1), "none",
+      [&](const realman_bt::InputModeSnapshot& snapshot) { seen.push_back(snapshot); });
+  makePolicyActive(coordinator);
+  auto blackboard = bt_core::Blackboard::create();
+  blackboard->set<InputModeCoordinator*>(realman_bt::kInputModeCoordinatorBlackboardKey,
+                                         &coordinator);
+  blackboard->set<std::string>("policy_failure_reason", "gripper did not open");
+  FailInputModeNode fail("fail", failConfig(blackboard));
+  seen.clear();
+
+  assert(fail.executeTick() == bt_core::NodeStatus::RUNNING);
+
+  assert(coordinator.snapshot().phase == realman_bt::InputModePhase::kFailed);
+  assert(coordinator.snapshot().detail == "gripper did not open");
+  assert(seen.size() == 1);
+
+  // Further ticks of the same run report nothing new.
+  assert(fail.executeTick() == bt_core::NodeStatus::RUNNING);
+  assert(seen.size() == 1);
+}
+
+void testFailInputModeUsesADefaultReasonWhenNoneIsGiven() {
+  auto registry = policyRegistry();
+  InputModeCoordinator coordinator(registry, std::chrono::seconds(1), "none", {});
+  makePolicyActive(coordinator);
+  auto blackboard = bt_core::Blackboard::create();
+  blackboard->set<InputModeCoordinator*>(realman_bt::kInputModeCoordinatorBlackboardKey,
+                                         &coordinator);
+  FailInputModeNode fail("fail", failConfig(blackboard));
+
+  assert(fail.executeTick() == bt_core::NodeStatus::RUNNING);
+
+  assert(coordinator.snapshot().detail == "policy task failed");
+}
+
+void testFailedModeFallsBackToNoneOnTheNextSelection() {
+  auto registry = policyRegistry();
+  InputModeCoordinator coordinator(registry, std::chrono::seconds(1), "none", {});
+  makePolicyActive(coordinator);
+  auto blackboard = bt_core::Blackboard::create();
+  blackboard->set<InputModeCoordinator*>(realman_bt::kInputModeCoordinatorBlackboardKey,
+                                         &coordinator);
+  FailInputModeNode fail("fail", failConfig(blackboard));
+  assert(fail.executeTick() == bt_core::NodeStatus::RUNNING);
+
+  // The next tick's selector sees FAILED and routes to the safe mode, which is what halts the
+  // policy branch (its guard no longer matches).
+  assert(coordinator.selectForTick(InputModeCoordinator::Clock::now()) == "none");
+  assert(coordinator.snapshot().requested_mode == "none");
+}
+
+void testFailInputModeReportsAgainAfterItIsHalted() {
+  auto registry = policyRegistry();
+  std::vector<realman_bt::InputModeSnapshot> seen;
+  InputModeCoordinator coordinator(
+      registry, std::chrono::seconds(1), "none",
+      [&](const realman_bt::InputModeSnapshot& snapshot) { seen.push_back(snapshot); });
+  makePolicyActive(coordinator);
+  auto blackboard = bt_core::Blackboard::create();
+  blackboard->set<InputModeCoordinator*>(realman_bt::kInputModeCoordinatorBlackboardKey,
+                                         &coordinator);
+  blackboard->set<std::string>("policy_failure_reason", "first");
+  FailInputModeNode fail("fail", failConfig(blackboard));
+  assert(fail.executeTick() == bt_core::NodeStatus::RUNNING);
+  fail.halt();
+  blackboard->set<std::string>("policy_failure_reason", "second");
+
+  assert(fail.executeTick() == bt_core::NodeStatus::RUNNING);
+
+  assert(coordinator.snapshot().detail == "second");
+}
+
+void testFailInputModeNeedsTheCoordinatorToRun() {
+  auto blackboard = bt_core::Blackboard::create();
+  FailInputModeNode fail("fail", failConfig(blackboard));
+
+  try {
+    fail.executeTick();
+    assert(false);
+  } catch (const std::runtime_error&) {
+  }
+}
+
+void testFailInputModeIsConstructibleWithoutBusinessBlackboardEntries() {
+  bt_core::NodeFactory factory;
+  factory.registerNodeType<FailInputModeNode>("FailInputMode");
+
+  assert(factory.size() == 1);
+  assert(FailInputModeNode::providedPorts().count("reason") == 1);
+}
+
 int main() {
   testFactoryProbesDoNotRequireBusinessBlackboardEntries();
   testGuardRejectsRemappedRegistrationMetadataIndependently();
@@ -371,5 +496,11 @@ int main() {
   testActivationRequiresALiteralModeForARealInstance();
   testPlaceholderLeavesRunWithoutRosOrActionDependencies();
   testPostNeutralTickReplacesIdleWithRecoveredHigherPriorityBranch();
+  testFailInputModeReportsTheReasonAndKeepsRunning();
+  testFailInputModeUsesADefaultReasonWhenNoneIsGiven();
+  testFailedModeFallsBackToNoneOnTheNextSelection();
+  testFailInputModeReportsAgainAfterItIsHalted();
+  testFailInputModeNeedsTheCoordinatorToRun();
+  testFailInputModeIsConstructibleWithoutBusinessBlackboardEntries();
   return 0;
 }

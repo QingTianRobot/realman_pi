@@ -21,6 +21,7 @@ Do not let a BT leaf call the SDK directly or let Web/Pika bypass the driver Act
 
 - controls: `Sequence`, `ReactiveSequence`, `ReactiveFallback`, `Fallback`;
 - decorators: `Repeat` (`num_cycles`), `Retry` (`num_attempts`), `RetryUnlessFault` (`num_attempts`);
+- policy task: `GripperReady`, `PolicyRun` (supervise one attempt), `FailInputMode` (turns a task-level failure into the input mode `FAILED`);
 - routing: `SelectInputMode`, `InputModeGuard`, `ActivateInputMode`;
 - input leaves: `WebInputStub`, `PolicyInputStub`, `PikaInputStub`, `PikaPositionInput`, `PikaVelocityInput`, `PikaMixedInput`, `IdleInput`;
 - motion: `MoveJ`, `ThreeArmMoveJ`, `CartesianVelocityForDuration`.

@@ -1,5 +1,8 @@
+import re
 from pathlib import Path
 import xml.etree.ElementTree as ET
+
+import yaml
 
 
 ROOT = Path(__file__).parents[4]
@@ -51,7 +54,7 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
             None,
             False,
         ),
-        ("policy", "Policy", "true", "PolicyInputStub", "policy_entry", True),
+        ("policy", "Policy", "true", "Fallback", "policy_entry", True),
         (
             "pikaposition",
             "Pika / 位置控制",
@@ -121,7 +124,8 @@ def test_control_router_is_the_literal_authoritative_mode_catalog():
         assert activation.tag == "ActivateInputMode"
         assert activation.attrib == {"mode": mode}
         assert leaf.tag == leaf_tag
-        assert leaf.attrib == {}
+        # The policy branch ends in the task supervisor (see test_policy_branch_supervises_the_task).
+        assert leaf.attrib == ({"name": "policy_task"} if mode == "policy" else {})
 
     registration_nodes = [selector, *document.findall(".//InputModeGuard")]
     remapped = [
@@ -137,3 +141,76 @@ def test_control_router_is_installed_with_the_package():
     source = CMAKE.read_text()
     assert 'config/behavior-trees/control.xml"' in source
     assert "DESTINATION share/${PROJECT_NAME}/behavior-trees" in source
+
+
+def _policy_task():
+    document = ET.parse(ROUTER).getroot()
+    branch = next(b for b in document.iter("ReactiveSequence") if b.attrib.get("name") == "policy_branch")
+    entry = next(b for b in branch if b.attrib.get("name") == "policy_entry")
+    return list(entry)[2]
+
+
+def test_policy_branch_supervises_the_task_from_inside_the_tree():
+    task = _policy_task()
+    assert task.tag == "Fallback" and task.attrib == {"name": "policy_task"}
+    cycles_ok, give_up = list(task)
+
+    # Everything that can end the task funnels into FailInputMode, whose reason is the last failure's.
+    assert give_up.tag == "FailInputMode"
+    assert give_up.attrib == {"reason": "{policy_failure_reason}"}
+
+    assert cycles_ok.tag == "Sequence" and cycles_ok.attrib == {"name": "policy_cycles_ok"}
+    repeat, idle = list(cycles_ok)
+    assert idle.tag == "PolicyInputStub" and idle.attrib == {}
+    assert repeat.tag == "Repeat" and repeat.attrib == {"num_cycles": "{policy_cycles}"}
+    (retry,) = list(repeat)
+    assert retry.tag == "RetryUnlessFault" and retry.attrib == {"num_attempts": "{policy_attempts}"}
+    (attempt,) = list(retry)
+    assert attempt.tag == "Sequence" and attempt.attrib == {"name": "policy_attempt"}
+
+    gripper, rehome, run = list(attempt)
+    assert gripper.tag == "GripperReady"
+    assert gripper.attrib == {"arm_id": "r", "dry_run": "{dry_run}"}
+    assert rehome.tag == "ThreeArmMoveJ"
+    assert rehome.attrib == {
+        "name": "policy_rehome",
+        "dry_run": "{dry_run}",
+        "l_joint_degrees": "{pika_l_joint_degrees}",
+        "m_joint_degrees": "{pika_m_joint_degrees}",
+        "r_joint_degrees": "{pika_r_joint_degrees}",
+        "velocity_percent": "10",
+        "blend_radius_percent": "0",
+        "timeout_sec": "120",
+    }
+    assert run.tag == "PolicyRun"
+    # The policy mode is the pick-and-place task; its prompt and completion come from policy_task.yaml.
+    assert run.attrib == {"arm_id": "r", "task": "place", "dry_run": "{dry_run}"}
+
+
+def test_policy_run_names_a_task_from_the_policy_task_config():
+    tasks = yaml.safe_load((ROOT / "config/ros/policy_task.yaml").read_text(encoding="utf-8"))
+    names = tasks["realman_bt_executor"]["ros__parameters"]["policy_task"]["task_names"]
+    runs = [node for node in _policy_task().iter() if node.tag == "PolicyRun"]
+    assert runs and all(node.attrib.get("task") in names for node in runs)
+
+
+def test_policy_task_thresholds_live_in_config_not_in_the_tree():
+    task = _policy_task()
+    numeric_literals = {
+        (node.tag, key, value)
+        for node in task.iter()
+        for key, value in node.attrib.items()
+        if value.replace(".", "", 1).lstrip("-").isdigit()
+    }
+    # Only the re-home motion parameters are literals, same as every other branch's entry move.
+    assert numeric_literals == {
+        ("ThreeArmMoveJ", "velocity_percent", "10"),
+        ("ThreeArmMoveJ", "blend_radius_percent", "0"),
+        ("ThreeArmMoveJ", "timeout_sec", "120"),
+    }
+
+
+def test_every_policy_task_tag_is_registered_by_the_executor():
+    source = (ROOT / "src/behavior/realman_bt/src/realman_bt_executor_node.cpp").read_text()
+    for tag in ("Fallback", "Repeat", "RetryUnlessFault", "GripperReady", "PolicyRun", "FailInputMode"):
+        assert re.search(rf'registerNodeType<[^>]+>\("{tag}"\)', source), tag

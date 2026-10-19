@@ -1,6 +1,6 @@
 # Policy 任务监督进入行为树（重试、周期与判定由叶节点负责）
 
-> 状态：设计草案（未实现）。2026-10-14。依据：同日对真机的多次单次运行和自动循环（数据在主机 `~/deploy-backups/policy-*`）、`config/behavior-trees/control.xml`、`input_mode*.cpp`、`realman_bt_executor_node.cpp`、vendored 行为树库的 `bt_nodes/decorator/{retry,repeat}_node.hpp`，以及 `developing-realman-behavior-trees` 技能的节点规范。前置设计：[`2026-10-13-policy-input-router-design.md`](2026-10-13-policy-input-router-design.md)（路由）、PR #39（入场回位）。
+> 状态：已实现（PR #41 注册节点与 `RetryUnlessFault`；`feat/policy-task-bt-leaves` 实现其余节点、配置和树）。2026-10-14。真机阶梯尚未跑，见"实现记录"。依据：同日对真机的多次单次运行和自动循环（数据在主机 `~/deploy-backups/policy-*`）、`config/behavior-trees/control.xml`、`input_mode*.cpp`、`realman_bt_executor_node.cpp`、vendored 行为树库的 `bt_nodes/decorator/{retry,repeat}_node.hpp`，以及 `developing-realman-behavior-trees` 技能的节点规范。前置设计：[`2026-10-13-policy-input-router-design.md`](2026-10-13-policy-input-router-design.md)（路由）、PR #39（入场回位）。
 
 ## 问题
 
@@ -167,6 +167,15 @@ vendored 库已经提供 `RetryNode`（`num_attempts`，子节点失败时先 `h
 
 这样选择 policy 模式仍然不会自己开始运动；而一次人为激活可以带动整个周期序列。
 
+> **实现时的改动（2026-10-14，按用户指示）**：用户要求回位、激活、监控和停止都在行为树里完成，所以武装语义变成配置项 `policy_task.activation`：
+>
+> | 取值 | 行为 |
+> | --- | --- |
+> | `auto`（默认） | `PolicyRun` 预检通过后自己调用 `/policy/activate`。选择 policy 模式（三臂回位之后）就会开始运行 |
+> | `operator` | 保持上面的语义：等待操作员调用 `/policy/activate`，等待期间没有任何运动 |
+>
+> 取舍：`auto` 去掉了"选模式"与"开始动"之间的人为确认，所以选 policy 之前必须确认工作区已清空、手在急停上；监督、停止顺序、路由限速和驱动看门狗都不变。`operator` 模式下**每一次尝试**都重新等待操作员（不再有"同一次武装内自动续跑"），因为 `Retry` 在两次尝试之间会 `halt()` 并复位，节点无法区分"重试"和"用户切走"。`policy_armed` 现在只表示"这一次尝试正在被监督"，尝试结束即清除。
+
 ## 配置
 
 新增 `config/ros/policy_task.yaml`，由 `control_router.launch.py` 读取，作为执行器参数传入并写入黑板，方式同 Pika 入场位姿（`pika_config.yaml` → 参数 `pika_*_joint_degrees` → 黑板）。XML 通过黑板重映射引用（`{policy_cycles}` 等），不含数值。
@@ -265,12 +274,41 @@ policy_task:
 | 周期数和尝试数 | `cycles=1`、`attempts=3` |
 | "跑到垫子空为止" | 不在行为树里做 |
 
+## 实现记录
+
+与草案不同或草案没有写的地方：
+
+- 判定逻辑拆成无 ROS 的 `PolicySupervisor`（`policy_supervisor.hpp`）和 ROS 外壳 `PolicyRunNode`：前者逐条喂入传感器读数并在每个 tick 评估，故障（范围、速度、另外两臂漂移、数据丢失、桥接暂停或静默）在读数到达时就检查并锁存，所以两个 tick 之间只出现一个越界样本也能抓到。优先级：故障、放手稳定、超时、卡死。
+- 关节速度在相隔至少 0.08 秒的两个样本之间计算，避免 10 Hz 话题上两条消息挤在一起把慢动作算成快动作。
+- 抓取判定的窗口截止在"策略指令最后一次仍为闭合"的时刻，而不是放手检测时刻，这样张开动作不会把"夹住"冲成"抓空"。需要力矩出现才算夹住；没有夹爪读数时判定为 `unknown`，按可重试的 `released_empty` 处理，不当作成功。
+- 新增配置键：`activation`、`command_namespace`（须与桥接的 `downlink.command_namespace` 一致，有测试检查）、`stats_stale_sec`、`service_call_timeout_sec`、`release.closed_below`、`gripper_ready.position_stale_sec`。
+- 传感器订阅一律 best effort，能匹配 reliable 和 best-effort 两种发布方，QoS 不一致不会让安全输入悄悄消失。
+- 预检还要求桥接的 `/policy/stats` 报告 `mode_active=1` 且没有暂停：否则 `/policy/activate` 成功了也不会发布任何东西，只会白等到超时。
+- 预检失败不调用任何服务（什么都没启动，没有东西要停）。激活之后的任何结束路径都走完整的停止顺序。`halt()` 在没有启动过、或只是在等操作员时什么都不发。
+- `PolicyRun` 的 `dry_run=true` 把 `policy_attempt_result` 写成 `dry_run` 并立即 `SUCCESS`。
+- 每次尝试写一个轨迹 CSV（`policy_trace.hpp`，配置 `policy_task.trace`）：真机第一次由用户自己跑时，行为树只留下了 `FAILED` 的原因，轨迹要靠事后猜，因为事件列表只留 200 条且被 Web 轮询冲掉。轨迹写入器和监督器的只读快照都不依赖 ROS，写不了文件不影响尝试。
+- 执行器启动时校验 `policy_task.*`，值非法就拒绝启动，并把 `cycles`、`attempts` 写成黑板整数 `policy_cycles`、`policy_attempts`。
+
 ## 实施顺序
 
-1. 注册 `Repeat`、`Retry`、`Fallback`，实现 `RetryUnlessFault` 和测试。
-2. `FailInputMode`，确认 `FAILED` 通路。
-3. `GripperReady`。
-4. `PolicyRun`：先做 `dry_run` 和启动前检查，再做监督，再做放手、判定和停止顺序。
-5. `control.xml`、`policy_task.yaml`、launch 注入、合同测试。
-6. 文档。
-7. 主机上 `REALMAN_BT_DRY_RUN=true` 验证，然后真机阶梯。
+1. 注册 `Repeat`、`Retry`、`Fallback`，实现 `RetryUnlessFault` 和测试。（完成，PR #41）
+2. `FailInputMode`，确认 `FAILED` 通路。（完成：`FAILED` 带原因发布一次，路由随后回到 `none`，执行器级测试覆盖）
+3. `GripperReady`。（完成）
+4. `PolicyRun`：先做 `dry_run` 和启动前检查，再做监督，再做放手、判定和停止顺序。（完成）
+5. `control.xml`、`policy_task.yaml`、launch 注入、合同测试。（完成）
+6. 文档。（完成：`policy-task.md`、`behavior-tree-control.md`、`policy-bridge.md`、`ModeExplorer`、技能参考）
+7. 主机上 `REALMAN_BT_DRY_RUN=true` 验证，然后真机阶梯。（待做）
+
+## 多任务：一个叶节点，按 prompt 区分任务（2026-10-19）
+
+背景：2026-10-16 训练的 `m_multitask_b16_2gpu` 是一个模型、两个任务，靠 prompt 区分：`pick up the power adapter and put it in the blue bin`（pick and place）和 `pick up the power adapter`（只抓起并保持）。10-19 真机验证：place prompt 3 次里 2 次成功；pick prompt 下机械臂抓起后抬高、不转向蓝箱（J1 结束在 +3～+8°，place 是约 −60°），2 次里 1 次成功、1 次在抬起时滑落。
+
+决定：不为每个 prompt 复制一个叶节点，而是让 `PolicyRun` 带一个 `task` 端口。两个任务只有两处不同：prompt，以及"成功怎么结束"；预检、安全包络、速度、另外两臂漂移、数据新鲜度、停止顺序、轨迹全部共用。
+
+- **配置**（`policy_task.yaml`）：`task_names: [place, pick]`，`tasks.<name>.prompt`、`tasks.<name>.completion`（`release_over_bin` 或 `lift_and_hold`）。ROS 参数无法列出键名，所以先列 `task_names`。完成条件的阈值放在共用的块里：原有的 `release`，新增的 `lift`。prompt 必须和训练视图的任务文本逐字一致；两个任务的 prompt 不能相同（校验拒绝）。
+- **切换 prompt**：`PolicyRun` 在预检阶段向 `prompt_topic`（`/policy/prompt`）发布任务的 prompt（等待期间每 0.5 秒重发），只有当桥接的 `/policy/stats` 报告的 `prompt` 等于它才继续。桥接此时还没被激活，而且 prompt 变化时会清空动作队列，所以切换不会把上一个任务的动作发出去。桥接的 stats 里没有 `prompt`（旧版本桥接）或在 `service_wait_sec` 内没切过去，都是故障，不激活。桥接在 prompt 变化时立即发布一次 stats，不用等 1 秒周期。
+- **`lift_and_hold` 判定**（`PolicySupervisor::evaluateLift`）：以策略第一次指令闭合时 `lift.joint_index`（J2）的值为参考。夹住 = 位置低于 `verdict.empty_position_min`（7800）且有力矩。夹住、累计闭合 ≥ `lift.min_closed_sec`、J2 相对参考变化达到 `lift.joint_delta_deg`（−10°，RM65 抬起时 J2 减小），并持续 `lift.hold_sec`（2 s）→ `lifted_held`（成功，夹爪保持闭合）。夹住过之后在仍指令闭合时位置回到 ≥ 7800 → `dropped`（可重试；对应 10-19 pick 第 1 次）。闭合之后 J1 低于 `lift.wrong_side_below_deg`（−25°）→ `wrong_task`，属于故障、不重试：策略没有按 prompt 执行，重试也没用。策略自己张开（重新抓）不算滑落。
+- **结果**：新增 `lifted_held`、`dropped`、`wrong_task`。`Verdict.succeeded`（`isSuccess`：`released_held`、`lifted_held`）决定 `PolicyRun` 返回 `SUCCESS`；`isFault`（`fault`、`wrong_task`）决定是否置 `policy_fault`。轨迹头部多一行 `task=<name> completion=<...> prompt='...'`，`attempt_end` 事件以 `task=<name>` 开头。
+- **树**：`control.xml` 的 policy 分支写明 `task="place"`，行为不变。pick 任务成功后夹爪还夹着物体，下一次尝试的 `GripperReady` 会失败，所以 pick 需要自己的树（放下或在垫子上方张开），不在这次改动里。
+
+测试：`test_policy_supervisor`（pick 成功、保持时间、抬起幅度不足、参考点取闭合时刻、闭合到底抬起不算成功、无力矩不算夹住、最短闭合时间、滑落、主动张开不算滑落、转向蓝箱为故障、抓取前 J1 在蓝箱侧不算、place 忽略抬起、默认任务、未知任务、故障优先、重新开始清状态），`test_policy_task_config`、`test_policy_task_params`（`task_names` 声明新任务、缺 prompt、未知 completion），`test_policy_run_node`（pick 在激活前切换 prompt 并成功、place 保持 place prompt、桥接不切换 prompt 为故障且不激活、旧桥接为故障、pick 转向蓝箱为故障并按顺序停止、未知任务什么都不碰、轨迹写明任务），`test_policy_task_config_file.py`（任务与 lift 阈值、`prompt_topic` 与桥接一致、桥接初始 prompt 等于 place），`test_control_router_tree.py`（`PolicyRun` 的 `task` 必须在 `task_names` 里），桥接 `test_node_smoke.py`（stats 原样报告 prompt、变化后立即发布）。

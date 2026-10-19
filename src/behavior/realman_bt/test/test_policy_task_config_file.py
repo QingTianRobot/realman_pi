@@ -52,6 +52,7 @@ def test_the_counts_and_the_activation_mode_are_the_reviewed_defaults():
     assert parameters["arm"] == "r"
     assert parameters["activation"] == "auto"
     assert parameters["command_namespace"] == "/pi05_policy"
+    assert parameters["timeout_retry"] == {"attempts": 3, "backoff_sec": 20.0}
 
 
 def test_the_safety_thresholds_are_the_reviewed_values():

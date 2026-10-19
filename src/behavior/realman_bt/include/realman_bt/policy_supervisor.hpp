@@ -22,6 +22,7 @@ enum class AttemptOutcome {
   kWrongTask,      // lift_and_hold: turned to the bin side, i.e. ran the place task: not retryable
   kTimeout,        // no success in max_attempt_sec: retryable
   kStall,          // gripper closed and the policy stopped moving: retryable
+  kPolicyTimeout,  // the policy server or its bridge timed out: retryable on its own budget
   kFault,          // something unsafe or broken: not retryable
 };
 
@@ -29,6 +30,8 @@ const char* outcomeName(AttemptOutcome outcome);
 bool isSuccess(AttemptOutcome outcome);
 // Outcomes that end the task instead of being retried.
 bool isFault(AttemptOutcome outcome);
+// Policy-server timeouts: retried on the timeout budget (policy_task.timeout_retry), after a wait.
+bool isPolicyTimeout(AttemptOutcome outcome);
 
 struct BridgeStats {
   bool allow_publish{false};
@@ -41,6 +44,7 @@ struct Verdict {
   AttemptOutcome outcome{AttemptOutcome::kFault};
   bool succeeded{false};      // true exactly for the success outcomes (isSuccess)
   bool fault{false};          // true exactly for the outcomes nothing should retry (isFault)
+  bool policy_timeout{false}; // true exactly for kPolicyTimeout (isPolicyTimeout)
   std::string reason;         // why the attempt did not succeed; empty on success
   std::string grasp_verdict;  // "held", "empty", "unknown", or empty when there was no release
   double attempt_sec{0.0};
@@ -67,10 +71,11 @@ struct SupervisorSnapshot {
 // The decisions of PolicyRun, with no ROS in it: it is fed the sensor readings as they arrive and
 // asked for a verdict once per tick. All times are seconds on one monotonic clock.
 //
-// Faults (joint range, joint speed, the other arms drifting, lost joint states, a paused or silent
-// bridge) are checked as each reading arrives, so a reading that is bad for one sample between two
-// ticks is still caught, and the first one latches. Then, in this order of priority: fault, the
-// task's completion (release settled, or wrong side / dropped / lifted and held), timeout, stall.
+// Faults (joint range, joint speed, the other arms drifting, lost joint states) are checked as each
+// reading arrives, so a reading that is bad for one sample between two ticks is still caught, and
+// the first one latches. Then, in this order of priority: fault, a policy-server timeout (the bridge
+// paused itself after its inference requests timed out, or its stats went silent), the task's
+// completion (release settled, or wrong side / dropped / lifted and held), timeout, stall.
 class PolicySupervisor {
  public:
   explicit PolicySupervisor(PolicyTaskConfig config);

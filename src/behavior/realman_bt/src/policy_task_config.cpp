@@ -19,6 +19,10 @@ bool countOk(int count) { return count == -1 || count >= 1; }
 void PolicyTaskConfig::validate() const {
   require(countOk(cycles), "policy_task.cycles must be -1 (no limit) or at least 1");
   require(countOk(attempts), "policy_task.attempts must be -1 (no limit) or at least 1");
+  require(countOk(timeout_retry.attempts),
+          "policy_task.timeout_retry.attempts must be -1 (no limit) or at least 1");
+  require(std::isfinite(timeout_retry.backoff_sec) && timeout_retry.backoff_sec >= 0.0,
+          "policy_task.timeout_retry.backoff_sec must not be negative");
   require(arm == "l" || arm == "m" || arm == "r", "policy_task.arm must be l, m or r");
   require(activation == "auto" || activation == "operator",
           "policy_task.activation must be auto or operator");

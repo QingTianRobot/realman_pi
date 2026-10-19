@@ -97,6 +97,10 @@ PolicyTaskConfig declareAndLoadPolicyTaskConfig(rclcpp::Node& node) {
 
   config.cycles = read.integer(p + "cycles", defaults.cycles);
   config.attempts = read.integer(p + "attempts", defaults.attempts);
+  config.timeout_retry.attempts =
+      read.integer(p + "timeout_retry.attempts", defaults.timeout_retry.attempts);
+  config.timeout_retry.backoff_sec =
+      read.number(p + "timeout_retry.backoff_sec", defaults.timeout_retry.backoff_sec);
   config.arm = read.text(p + "arm", defaults.arm);
   config.activation = read.text(p + "activation", defaults.activation);
   config.command_namespace = read.text(p + "command_namespace", defaults.command_namespace);

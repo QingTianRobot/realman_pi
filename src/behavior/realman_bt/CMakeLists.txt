@@ -69,6 +69,15 @@ target_link_libraries(policy_task_nodes
 ament_target_dependencies(policy_task_nodes
   rclcpp std_msgs std_srvs sensor_msgs diagnostic_msgs geometry_msgs)
 
+add_library(motion_monitor_nodes src/motion_dwell_monitor_node.cpp)
+target_include_directories(motion_monitor_nodes PUBLIC
+  $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
+  $<INSTALL_INTERFACE:include>)
+target_compile_features(motion_monitor_nodes PUBLIC cxx_std_17)
+target_link_libraries(motion_monitor_nodes runtime_snapshot bt::core)
+ament_target_dependencies(motion_monitor_nodes
+  rclcpp rclcpp_action rcl_interfaces realman_msgs sensor_msgs)
+
 add_library(prepare_keyboard_work_node
   src/prepare_keyboard_work_node.cpp)
 target_include_directories(prepare_keyboard_work_node PUBLIC
@@ -97,6 +106,7 @@ target_link_libraries(realman_bt_executor move_j_nodes)
 target_link_libraries(realman_bt_executor input_mode_nodes)
 target_link_libraries(realman_bt_executor prepare_keyboard_work_node)
 target_link_libraries(realman_bt_executor policy_task_nodes)
+target_link_libraries(realman_bt_executor motion_monitor_nodes)
 ament_target_dependencies(realman_bt_executor
   rclcpp rclcpp_action rcl_interfaces realman_msgs std_msgs std_srvs
   sensor_msgs diagnostic_msgs geometry_msgs)
@@ -114,6 +124,7 @@ install(PROGRAMS scripts/policy_control_router.py
 install(PROGRAMS scripts/router_common.py
   DESTINATION lib/${PROJECT_NAME})
 install(TARGETS move_j_nodes prepare_keyboard_work_node policy_task_nodes policy_task_core
+  motion_monitor_nodes
   ARCHIVE DESTINATION lib
   LIBRARY DESTINATION lib
   RUNTIME DESTINATION bin)
@@ -142,7 +153,8 @@ if(BUILD_TESTING)
   target_compile_definitions(test_input_mode_executor PRIVATE
     BT_TEST_CONFIG_DIR="${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees")
   target_link_libraries(test_input_mode_executor
-    move_j_nodes input_mode_nodes prepare_keyboard_work_node policy_task_nodes)
+    move_j_nodes input_mode_nodes prepare_keyboard_work_node policy_task_nodes
+    motion_monitor_nodes)
   ament_target_dependencies(test_input_mode_executor
     rclcpp rclcpp_action rcl_interfaces realman_msgs std_msgs std_srvs
     sensor_msgs diagnostic_msgs geometry_msgs)
@@ -245,6 +257,21 @@ if(BUILD_TESTING)
   set_tests_properties(test_policy_task_params PROPERTIES
     TIMEOUT 60 ENVIRONMENT "ROS_DOMAIN_ID=220;ROS_LOCALHOST_ONLY=1")
 
+  add_executable(test_dwell_tracker test/test_dwell_tracker.cpp)
+  target_include_directories(test_dwell_tracker PRIVATE "${CMAKE_CURRENT_SOURCE_DIR}/include")
+  target_compile_features(test_dwell_tracker PRIVATE cxx_std_17)
+  add_test(NAME test_dwell_tracker COMMAND test_dwell_tracker)
+
+  add_executable(test_motion_dwell_monitor_node test/test_motion_dwell_monitor_node.cpp)
+  target_include_directories(test_motion_dwell_monitor_node PRIVATE
+    "${BT_VENDOR_ROOT}" "${BT_VENDOR_ROOT}/bt_nodes")
+  target_link_libraries(test_motion_dwell_monitor_node motion_monitor_nodes)
+  ament_target_dependencies(test_motion_dwell_monitor_node
+    rclcpp rclcpp_action realman_msgs sensor_msgs)
+  add_test(NAME test_motion_dwell_monitor_node COMMAND test_motion_dwell_monitor_node)
+  set_tests_properties(test_motion_dwell_monitor_node PROPERTIES
+    TIMEOUT 120 ENVIRONMENT "ROS_DOMAIN_ID=221;ROS_LOCALHOST_ONLY=1")
+
   add_executable(test_retry_unless_fault_node test/test_retry_unless_fault_node.cpp)
   target_include_directories(test_retry_unless_fault_node PRIVATE
     "${CMAKE_CURRENT_SOURCE_DIR}/include"
@@ -262,6 +289,7 @@ if(BUILD_TESTING)
     test/test_keyboard_control_router.py)
   ament_add_pytest_test(test_pika_config test/test_pika_config.py)
   ament_add_pytest_test(test_policy_task_config_file test/test_policy_task_config_file.py)
+  ament_add_pytest_test(test_motion_monitor_config_file test/test_motion_monitor_config_file.py)
   ament_add_pytest_test(test_coordinate_reference_registry
     test/test_coordinate_reference_registry.py)
   ament_add_pytest_test(test_cartesian_velocity_tree

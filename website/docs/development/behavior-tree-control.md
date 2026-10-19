@@ -173,15 +173,85 @@ Action 或夹爪 command，需要真实 Pika 运动必须显式设置 `REALMAN_B
 | `Fallback` | 无 | 有状态的优先级列表：依次尝试子节点，第一个 `SUCCESS` 即成功，全部失败才失败；与 `ReactiveFallback` 不同，已在 `RUNNING` 的子节点不会被重新评估 |
 | `Repeat` | `num_cycles`（默认 1，`-1` 无限） | 子节点每成功一次计一轮，达到轮数返回 `SUCCESS`；子节点失败则整体失败。每一轮之间会 `halt()` 子节点 |
 | `Retry` | `num_attempts`（默认 1，`-1` 无限） | 子节点失败时 `halt()` 后重跑，次数含首次；`RUNNING` 不消耗次数 |
-| `RetryUnlessFault` | `num_attempts`（默认 1，`-1` 无限） | 同 `Retry`，但失败的叶节点若已把黑板键 `policy_fault` 置为 `true`，立即返回 `FAILURE`，不再消耗剩余次数 |
+| `MotionDwellMonitor` | `arm_id`、`dwell_sec`、`tolerance_deg`、`on_dwell` | 子节点运行时，指定的臂在同一姿态停留超过 `dwell_sec` 就 `halt()` 子节点并返回 `on_dwell`（默认 `FAILURE`），见 [动作停留监控](#动作停留监控) |
+| `RetryUnlessFault` | `num_attempts`（默认 1，`-1` 无限）；`timeout_attempts`（默认 0，`-1` 无限）；`timeout_backoff_sec`（默认 0） | 同 `Retry`，但失败的叶节点若已把黑板键 `policy_fault` 置为 `true`，立即返回 `FAILURE`，不再消耗剩余次数；若置位的是 `policy_timeout`，且 `timeout_attempts` 不为 0，则这次失败不占 `num_attempts`，改按 `timeout_attempts` 计数，并在等待 `timeout_backoff_sec` 后重试 |
 
 `policy_fault` 用来区分"值得再试一次"和"再试也没用"：抓空、超时属于前者，叶节点什么都不用写；
 关节越界、必需服务缺失属于后者，叶节点在返回 `FAILURE` 之前把它置为 `true`。这个标志属于
 `RetryUnlessFault` 的一次运行：运行开始时和 `halt()` 时清除，所以上一次留下的故障不会挡住新的
 第一次尝试；某次运行以故障结束后，标志保持置位，上层仍能读到。
 
+`policy_timeout` 是第三类失败，表示策略服务或桥接超时（推理连续超时导致桥接自行暂停、统计中断、
+预检时桥接迟迟未就绪、激活无回应）。这类问题多为暂时性的，因此单独计数：等待期间返回 `RUNNING`，
+不 tick 子节点；计数用完后，在 `policy_failure_reason` 前加上 `policy server timed out N times; last: `，
+再返回 `FAILURE`。`timeout_attempts` 为 0（默认）时，超时按普通失败处理，不等待。这个标志和
+`policy_fault` 一样，在运行开始和 `halt()` 时清除，在每次超时重试前也会清除。生产树的计数和等待时间
+来自 `policy_task.yaml` 的 `timeout_retry`，见 [Policy 任务](./policy-task#策略服务超时重试)。
+
 因为 `Repeat` 和 `Retry` 在每次重来之前都会 `halt()` 子树，子树里的叶节点必须在 `onHalted()` 里
 把自己停干净，并允许被重复 `halt()`。
+
+## 动作停留监控
+
+`MotionDwellMonitor` 是一个装饰节点，用来处理"机械臂长时间停在同一个姿态"的情况，例如策略输出接近零、遥操作中断、某个输入卡住。它包住一棵子树，只读取一条臂的 `/<arm>/joint_states`。子树运行期间，如果这条臂的六个关节始终在 `tolerance_deg` 以内，持续达到 `dwell_sec`，它就 `halt()` 子树并返回 `on_dwell`。外层的 `Fallback` 随即转去执行下一个分支，例如回位、张开夹爪或交给另一种控制方式。它本身不发送任何运动指令。
+
+| 端口 | 默认值 | 说明 |
+| --- | --- | --- |
+| `arm_id` | `r` | 监视哪条臂：`l`、`m` 或 `r` |
+| `dwell_sec` | `motion_monitor.yaml` 中的 `dwell_sec`（30 s） | 允许停留的最长时间 |
+| `tolerance_deg` | `motion_monitor.yaml` 中的 `tolerance_deg`（0.5°） | 任一关节偏离停留姿态超过该值，就算在动，重新计时 |
+| `on_dwell` | `failure` | 触发时返回 `failure` 还是 `success` |
+
+计时规则：
+
+- 每次运行开始时（节点从空闲、被 `halt()` 或上次结束后再次被 tick）重新计时，之前的停留不计入。
+- 以第一次读到的姿态为基准。某个读数中任一关节偏离基准超过 `tolerance_deg` 时，基准移到这个读数，并重新计时。因此慢速漂移累计超过容差后同样算作在动。
+- `joint_states` 中断超过 `joint_state_stale_sec` 时，下一次读数重新计时；没有数据时永远不会触发。也就是说，没有观测到的时间不算停留。
+- 子树先结束时（`SUCCESS` 或 `FAILURE`），它原样返回子树的结果。
+- 触发时把 `motion_dwell` 置为 `true`，并写入 `motion_dwell_reason`（例如 `arm r stayed within 0.50 deg of one pose for 30.0 s (limit 30.0 s)`），同时在运行快照中记一条 `WARN` 事件。
+
+默认值位于 [`config/ros/motion_monitor.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/motion_monitor.yaml)，由 `control_router.launch.py` 作为执行器参数加载，执行器再写入黑板。XML 中写了端口，就以端口为准；修改 YAML 后需要重启 `./rm65 bt`。驱动静止时的关节读数抖动约为 0.004°，所以 0.5° 的容差足以区分"静止"和"缓慢但有意义的运动"。
+
+### 用法示例
+
+生产树 `control.xml` 目前**没有**使用这个节点。要启用它，需要把要监视的子树包起来，再在外面加一个 `Fallback`，用来指定触发后切换到哪个分支。
+
+例 1：policy 尝试中，右臂停住超过 15 s 时提前结束这次尝试（不必等到 45 s 的 `max_attempt_sec`），交给 `RetryUnlessFault` 重试，下一次尝试会先张开夹爪、再回位：
+
+```xml
+<Sequence name="policy_attempt">
+  <GripperReady arm_id="r" dry_run="{dry_run}"/>
+  <ThreeArmMoveJ name="policy_rehome" .../>
+  <MotionDwellMonitor arm_id="r" dwell_sec="15">
+    <PolicyRun arm_id="r" task="place" dry_run="{dry_run}"/>
+  </MotionDwellMonitor>
+</Sequence>
+```
+
+`PolicyRun` 被 `halt()` 时会立即发出停止调用（`deactivate` 和两个急停），因此提前结束是安全的。由于 `policy_fault` 没有置位，这次结束算作一次普通的失败尝试。
+
+例 2：在 Pika 速度控制分支里，右臂 60 s 不动就退出该模式，由协调器切换到安全模式 `none`（形态切换）：
+
+```xml
+<Sequence name="pika_velocity_entry">
+  <ThreeArmMoveJ name="pika_default_pose" .../>
+  <ActivateInputMode mode="pikavelocity"/>
+  <Fallback name="pika_or_leave">
+    <MotionDwellMonitor arm_id="r" dwell_sec="60">
+      <PikaVelocityInput/>
+    </MotionDwellMonitor>
+    <FailInputMode reason="{motion_dwell_reason}"/>
+  </Fallback>
+</Sequence>
+```
+
+输入叶节点始终返回 `RUNNING`，因此只有 `MotionDwellMonitor` 能结束第一个分支。`FailInputMode` 把输入模式标记为 `FAILED`，原因取自 `motion_dwell_reason`，协调器随后切换到 `none`，路由也随之停止转发。不要在模式仍然激活时，在同一分支里接 `ThreeArmMoveJ` 回位：这时 router 可能仍持有速度会话，两者会互相争夺控制。需要回位时，先离开该模式，再从 Web 选择下一个模式，各分支的入口都会先回位。如果只想要"停住就进入下一步"，把 `on_dwell` 设为 `success`，然后放进 `Sequence` 即可。
+
+### 试用（不部署）
+
+1. 改树：把上例写进一个新的 XML，或者写进本地副本的 `control.xml`。不要直接改 realman_ts 主机上的文件。
+2. 无硬件验证：用模拟驱动或 `REALMAN_BT_DRY_RUN=true ./scripts/bt.sh control` 加载树，确认它能解析。端口写错（`arm_id` 不是 l/m/r、`on_dwell` 不是 failure/success、`dwell_sec` ≤ 0）时，第一次 tick 就会报错。dry-run 下驱动不发布 `joint_states`，这时节点永远不会触发。
+3. 上真机前，先把 `dwell_sec` 设得短一些，例如 5 s，并有人手持急停，观察运行快照中的 `dwell` 事件和 `motion_dwell_reason`，再恢复为正式的取值。
 
 ## 生命周期和无硬件验证
 

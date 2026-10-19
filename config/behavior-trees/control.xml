@@ -43,13 +43,17 @@
                  pick-and-place prompt and its release-over-the-bin completion (policy_task.yaml tasks); the
                  pick-only task ("pick", lift_and_hold) gets its own tree later. A failure that retrying can
                  fix (empty grasp, timeout, stall) is retried; a fault (policy_fault: out of range, lost data,
-                 a gripper that will not open) is not. Counts come from config/ros/policy_task.yaml. When the
+                 a gripper that will not open) is not. A policy-server timeout (policy_timeout: the bridge's
+                 inference timed out until it paused, it went silent or never got ready) is retried on its own
+                 budget, after a wait with the bridge stopped. Counts come from config/ros/policy_task.yaml. When the
                  attempts or a fault end the task, FailInputMode reports FAILED and the router falls back to
                  none; after the last cycle the branch idles in policy mode with the bridge stopped. -->
             <Fallback name="policy_task">
               <Sequence name="policy_cycles_ok">
                 <Repeat num_cycles="{policy_cycles}">
-                  <RetryUnlessFault num_attempts="{policy_attempts}">
+                  <RetryUnlessFault num_attempts="{policy_attempts}"
+                                  timeout_attempts="{policy_timeout_attempts}"
+                                  timeout_backoff_sec="{policy_timeout_backoff_sec}">
                     <Sequence name="policy_attempt">
                       <GripperReady arm_id="r" dry_run="{dry_run}"/>
                       <ThreeArmMoveJ name="policy_rehome" dry_run="{dry_run}"

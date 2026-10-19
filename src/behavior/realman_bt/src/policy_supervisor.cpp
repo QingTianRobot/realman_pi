@@ -45,6 +45,8 @@ const char* outcomeName(AttemptOutcome outcome) {
       return "timeout";
     case AttemptOutcome::kStall:
       return "stall";
+    case AttemptOutcome::kPolicyTimeout:
+      return "policy_timeout";
     case AttemptOutcome::kFault:
       return "fault";
   }
@@ -58,6 +60,8 @@ bool isSuccess(AttemptOutcome outcome) {
 bool isFault(AttemptOutcome outcome) {
   return outcome == AttemptOutcome::kFault || outcome == AttemptOutcome::kWrongTask;
 }
+
+bool isPolicyTimeout(AttemptOutcome outcome) { return outcome == AttemptOutcome::kPolicyTimeout; }
 
 PolicySupervisor::PolicySupervisor(PolicyTaskConfig config) : config_(std::move(config)) {
   // Until start() names a task: "place" if there is one, else the first.
@@ -201,6 +205,7 @@ void PolicySupervisor::finish(double now, AttemptOutcome outcome, std::string re
   verdict_.outcome = outcome;
   verdict_.succeeded = isSuccess(outcome);
   verdict_.fault = isFault(outcome);
+  verdict_.policy_timeout = isPolicyTimeout(outcome);
   verdict_.reason = std::move(reason);
   verdict_.grasp_verdict = std::move(grasp);
   verdict_.attempt_sec = now - start_time_;
@@ -279,13 +284,17 @@ const Verdict& PolicySupervisor::evaluate(double now) {
     }
   }
 
-  if (stats_valid_ && stats_.paused) {
-    finishFault(now, "the policy bridge paused itself (inference is failing)");
+  // A pause reported before this attempt started is the one /policy/activate has just cleared.
+  if (stats_valid_ && stats_.paused && stats_received_ > start_time_) {
+    finish(now, AttemptOutcome::kPolicyTimeout,
+           "the policy bridge paused itself after repeated inference failures (policy server timeout)",
+           release_grasp_);
     return verdict_;
   }
   const double stats_age = now - std::max(stats_valid_ ? stats_received_ : start_time_, start_time_);
   if (stats_age > config_.stats_stale_sec) {
-    finishFault(now, "no policy bridge stats for " + number(stats_age, 1) + " s");
+    finish(now, AttemptOutcome::kPolicyTimeout,
+           "no policy bridge stats for " + number(stats_age, 1) + " s", release_grasp_);
     return verdict_;
   }
 

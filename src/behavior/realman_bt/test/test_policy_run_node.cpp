@@ -108,14 +108,27 @@ struct FakeStack {
              bool router_estop = true) {
     using SetBool = std_srvs::srv::SetBool;
     using Trigger = std_srvs::srv::Trigger;
-    if (activate) {
+    if (activate && !activate_answers) {
+      // Takes the request (and starts publishing) but never answers it.
+      silent_activate_service = node->create_service<SetBool>(
+          "/policy/activate",
+          [this](std::shared_ptr<rclcpp::Service<SetBool>>, std::shared_ptr<rmw_request_id_t>,
+                 const SetBool::Request::SharedPtr request) {
+            record("activate", request->data);
+            if (request->data) stats_allow_publish = true;
+          });
+    } else if (activate) {
       activate_service = node->create_service<SetBool>(
           "/policy/activate", [this](const SetBool::Request::SharedPtr request,
                                      SetBool::Response::SharedPtr response) {
             record("activate", request->data);
             response->success = activate_succeeds;
             response->message = activate_succeeds ? "ok" : "bridge refused";
-            if (activate_succeeds && request->data) stats_allow_publish = true;
+            // Like the real bridge, activating also clears a pause.
+            if (activate_succeeds && request->data) {
+              stats_allow_publish = true;
+              stats_paused = false;
+            }
           });
     }
     if (deactivate) {
@@ -232,11 +245,13 @@ struct FakeStack {
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr velocity_pub;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr stats_pub;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr prompt_sub;
-  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr activate_service, deactivate_service;
+  rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr activate_service, deactivate_service,
+      silent_activate_service;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr bridge_estop_service, router_estop_service;
 
   std::vector<Call> calls;
   bool activate_succeeds{true};
+  bool activate_answers{true};
   std::string bridge_prompt{kPlacePrompt};  // the bridge starts with policy_bridge.yaml prompt.initial
   bool follow_prompt{true};
   bool report_prompt{true};
@@ -305,6 +320,9 @@ struct Fixture {
 
   bool faultRaised() const {
     return blackboard->get<bool>(realman_bt::kPolicyFaultKey).value_or(false);
+  }
+  bool timeoutRaised() const {
+    return blackboard->get<bool>(realman_bt::kPolicyTimeoutKey).value_or(false);
   }
   std::string text(const char* key) const { return blackboard->get<std::string>(key).value_or(""); }
   bool armedFlag() const { return blackboard->get<bool>(realman_bt::kPolicyArmedKey).value_or(false); }
@@ -412,15 +430,119 @@ void testABridgeThatIsNotInPolicyModeIsAFault() {
   assert(f.stack.calls.empty());
 }
 
-void testASilentBridgeIsAFault() {
+// ---- policy-server timeouts --------------------------------------------------------------------
+
+void testASilentBridgeIsAPolicyTimeout() {
   Fixture f;
   f.stack.serve();
   f.stack.stats_alive = false;
 
   assert(f.run(3s) == NodeStatus::FAILURE);
 
-  assert(f.faultRaised());
+  assert(!f.faultRaised());
+  assert(f.timeoutRaised());
+  assert(f.text(realman_bt::kPolicyAttemptResultKey) == "policy_timeout");
+  assert(f.text(realman_bt::kPolicyFailureReasonKey).find("/policy/stats") != std::string::npos);
   assert(f.stack.calls.empty());
+}
+
+void testABridgeWhoseServicesAreMissingIsAPolicyTimeout() {
+  Fixture f;
+  f.stack.serve(/*activate=*/false);
+
+  assert(f.run(3s) == NodeStatus::FAILURE);
+
+  assert(!f.faultRaised());
+  assert(f.timeoutRaised());
+  assert(f.text(realman_bt::kPolicyFailureReasonKey).find("/policy/activate") != std::string::npos);
+  assert(f.stack.calls.empty());
+}
+
+void testMissingRobotDataBesideASilentBridgeIsStillAFault() {
+  // Waiting for the bridge would be a timeout, but the arm's own data is missing too.
+  Fixture f;
+  f.stack.serve();
+  f.stack.stats_alive = false;
+  f.stack.m_alive = false;
+
+  assert(f.run(3s) == NodeStatus::FAILURE);
+
+  assert(f.faultRaised());
+  assert(!f.timeoutRaised());
+}
+
+void testAnActivationWithoutAnswerIsAPolicyTimeoutAndStillStopsTheBridge() {
+  Fixture f;
+  f.stack.activate_answers = false;
+  f.stack.serve();
+
+  assert(f.run(3s) == NodeStatus::FAILURE);
+
+  assert(!f.faultRaised());
+  assert(f.timeoutRaised());
+  assert(f.text(realman_bt::kPolicyAttemptResultKey) == "policy_timeout");
+  assert(f.text(realman_bt::kPolicyFailureReasonKey).find("no reply from /policy/activate") !=
+         std::string::npos);
+  f.settle();
+  expectStopsInOrder(f.stack);
+}
+
+void testABridgeThatPausesWhileRunningIsAPolicyTimeoutAndStopsIt() {
+  Fixture f;
+  f.stack.serve();
+  const auto script = [](FakeStack& s, double) {
+    if (s.activated()) s.stats_paused = true;  // its inference requests keep timing out
+  };
+
+  assert(f.run(5s, script) == NodeStatus::FAILURE);
+
+  assert(!f.faultRaised());
+  assert(f.timeoutRaised());
+  assert(f.text(realman_bt::kPolicyAttemptResultKey) == "policy_timeout");
+  assert(f.text(realman_bt::kPolicyFailureReasonKey).find("paused itself") != std::string::npos);
+  f.settle();
+  expectStopsInOrder(f.stack);
+}
+
+void testABridgeThatGoesSilentWhileRunningIsAPolicyTimeoutAndStopsIt() {
+  Fixture f;
+  f.stack.serve();
+  const auto script = [](FakeStack& s, double) {
+    if (s.activated()) s.stats_alive = false;
+  };
+
+  assert(f.run(5s, script) == NodeStatus::FAILURE);
+
+  assert(!f.faultRaised());
+  assert(f.timeoutRaised());
+  assert(f.text(realman_bt::kPolicyFailureReasonKey).find("no policy bridge stats") != std::string::npos);
+  f.settle();
+  expectStopsInOrder(f.stack);
+}
+
+void testABridgePausedBeforeTheAttemptIsResumedByTheActivation() {
+  // The previous attempt ended with the bridge paused; activating clears it and the attempt runs.
+  Fixture f;
+  f.stack.serve();
+  f.stack.stats_paused = true;
+  GraspScenario scenario(true);
+
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::SUCCESS);
+
+  assert(!f.timeoutRaised());
+  assert(f.text(realman_bt::kPolicyAttemptResultKey) == "released_held");
+}
+
+void testARetryableFailureRaisesNeitherFlag() {
+  PolicyTaskConfig config = fastConfig();
+  config.max_attempt_sec = 0.8;
+  Fixture f(false, config);
+  f.stack.serve();
+
+  assert(f.run(5s) == NodeStatus::FAILURE);
+
+  assert(!f.faultRaised());
+  assert(!f.timeoutRaised());
 }
 
 void testARefusedActivationIsAFaultAndStillStopsTheBridge() {
@@ -536,10 +658,6 @@ void testAJointOutsideTheEnvelopeStopsTheBridge() {
 
 void testAnotherArmDriftingStopsTheBridge() {
   expectFaultAfterActivation([](FakeStack& s) { s.l[0] += 2.0; }, "arm l");
-}
-
-void testAPausedBridgeStopsIt() {
-  expectFaultAfterActivation([](FakeStack& s) { s.stats_paused = true; }, "paused");
 }
 
 void testLosingTheArmsJointStatesStopsTheBridge() {
@@ -988,7 +1106,14 @@ int main(int argc, char** argv) {
   testMissingJointStatesOfAnotherArmIsAFault();
   testNoGripperReadingIsAFault();
   testABridgeThatIsNotInPolicyModeIsAFault();
-  testASilentBridgeIsAFault();
+  testASilentBridgeIsAPolicyTimeout();
+  testABridgeWhoseServicesAreMissingIsAPolicyTimeout();
+  testMissingRobotDataBesideASilentBridgeIsStillAFault();
+  testAnActivationWithoutAnswerIsAPolicyTimeoutAndStillStopsTheBridge();
+  testABridgeThatPausesWhileRunningIsAPolicyTimeoutAndStopsIt();
+  testABridgeThatGoesSilentWhileRunningIsAPolicyTimeoutAndStopsIt();
+  testABridgePausedBeforeTheAttemptIsResumedByTheActivation();
+  testARetryableFailureRaisesNeitherFlag();
   testARefusedActivationIsAFaultAndStillStopsTheBridge();
   testAHeldObjectReleasedOverTheBinIsASuccess();
   testReleasingWithNothingHeldIsARetryableFailure();
@@ -996,7 +1121,6 @@ int main(int argc, char** argv) {
   testAClosedGripperThatStopsMovingIsARetryableStall();
   testAJointOutsideTheEnvelopeStopsTheBridge();
   testAnotherArmDriftingStopsTheBridge();
-  testAPausedBridgeStopsIt();
   testLosingTheArmsJointStatesStopsTheBridge();
   testOperatorModeWaitsForSomeoneElseToActivate();
   testHaltingARunningAttemptStopsTheBridgeInOrderOnce();

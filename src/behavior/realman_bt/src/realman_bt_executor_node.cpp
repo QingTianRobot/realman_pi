@@ -16,6 +16,7 @@
 #include "realman_bt/cartesian_velocity_for_duration_node.hpp"
 #include "realman_bt/gripper_ready_node.hpp"
 #include "realman_bt/input_mode_nodes.hpp"
+#include "realman_bt/motion_dwell_monitor_node.hpp"
 #include "realman_bt/move_j_node.hpp"
 #include "realman_bt/policy_run_node.hpp"
 #include "realman_bt/policy_task_params.hpp"
@@ -90,11 +91,19 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   }
   blackboard_->set<rclcpp::Node*>(kRosNodeBlackboardKey, this);
   // Thresholds and counts of the policy task (config/ros/policy_task.yaml). The counts are also
-  // blackboard values so the XML can refer to them as {policy_cycles} / {policy_attempts}.
+  // blackboard values so the XML can refer to them as {policy_cycles} / {policy_attempts} /
+  // {policy_timeout_attempts} / {policy_timeout_backoff_sec}.
   policy_task_config_ = declareAndLoadPolicyTaskConfig(*this);
   blackboard_->set<const PolicyTaskConfig*>(kPolicyTaskConfigBlackboardKey, &policy_task_config_);
   blackboard_->set<int>(kPolicyCyclesKey, policy_task_config_.cycles);
   blackboard_->set<int>(kPolicyAttemptsKey, policy_task_config_.attempts);
+  blackboard_->set<int>(kPolicyTimeoutAttemptsKey, policy_task_config_.timeout_retry.attempts);
+  blackboard_->set<double>(kPolicyTimeoutBackoffSecKey, policy_task_config_.timeout_retry.backoff_sec);
+  // MotionDwellMonitor defaults (config/ros/motion_monitor.yaml); a port in the XML wins over them.
+  const MotionMonitorConfig motion_monitor = declareAndLoadMotionMonitorConfig(*this);
+  blackboard_->set<double>(kMotionDwellSecKey, motion_monitor.dwell_sec);
+  blackboard_->set<double>(kMotionDwellToleranceDegKey, motion_monitor.tolerance_deg);
+  blackboard_->set<double>(kMotionDwellStaleSecKey, motion_monitor.joint_state_stale_sec);
   blackboard_->set<RuntimeDiagnostics*>(kRuntimeDiagnosticsBlackboardKey,
                                         &diagnostics_);
   blackboard_->set<CoordinateReferenceRegistry*>(
@@ -120,6 +129,7 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   factory_.registerNodeType<bt_nodes::RepeatNode>("Repeat");
   factory_.registerNodeType<bt_nodes::RetryNode>("Retry");
   factory_.registerNodeType<RetryUnlessFaultNode>("RetryUnlessFault");
+  factory_.registerNodeType<MotionDwellMonitorNode>("MotionDwellMonitor");
   factory_.registerNodeType<GripperReadyNode>("GripperReady");
   factory_.registerNodeType<PolicyRunNode>("PolicyRun");
   factory_.registerNodeType<SelectInputModeNode>("SelectInputMode");

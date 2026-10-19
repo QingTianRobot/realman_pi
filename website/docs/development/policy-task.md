@@ -1,6 +1,6 @@
 ---
 title: Policy 任务（行为树监督）
-description: 行为树中的 policy 任务：回位、激活、监督、判定、重试与停止，以及按 prompt 区分的任务、阈值和轨迹记录。
+description: 行为树中的 policy 任务：回位、激活、监督、判定、重试与停止，策略服务超时重试，以及按 prompt 区分的任务、阈值和轨迹记录。
 ---
 
 # Policy 任务（行为树监督）
@@ -18,7 +18,9 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
   <Fallback name="policy_task">
     <Sequence name="policy_cycles_ok">
       <Repeat num_cycles="{policy_cycles}">
-        <RetryUnlessFault num_attempts="{policy_attempts}">
+        <RetryUnlessFault num_attempts="{policy_attempts}"
+                          timeout_attempts="{policy_timeout_attempts}"
+                          timeout_backoff_sec="{policy_timeout_backoff_sec}">
           <Sequence name="policy_attempt">
             <GripperReady arm_id="r" dry_run="{dry_run}"/>
             <ThreeArmMoveJ name="policy_rehome" .../>
@@ -34,6 +36,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 ```
 
 - `Repeat` 统计成功的周期数，`RetryUnlessFault` 统计一个周期内失败的尝试次数。每次重试前都会 `halt()` 整个 `policy_attempt`，因此每次重试都从"张开夹爪、回位"重新开始。
+- 策略服务超时（`policy_timeout`）另算一份次数 `{policy_timeout_attempts}`，不占用 `{policy_attempts}`，重试前先等待 `{policy_timeout_backoff_sec}`，详见 [策略服务超时重试](#策略服务超时重试)。
 - 如需逐拍查看这棵子树的执行过程（重试、故障、周期计数），可以使用 [行为树节点参考](./behavior-tree-nodes#逐拍查看-policy-任务) 中的模拟。
 - 周期数、尝试次数和全部阈值都在 [`config/ros/policy_task.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/policy_task.yaml) 中，XML 里只有 `{policy_cycles}` 这类黑板重映射。
 
@@ -61,7 +64,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 | `GripperReady` | 读取 `/gripper_<name>/position`；夹爪未张开时调用一次 `/gripper_<name>/open`，并等待位置回到阈值以内 | 服务缺失、没有位置数据、请求被拒绝或超时：判为故障 |
 | `PolicyRun` | 预检、激活、监督一次尝试，并按固定顺序停止 | 见下表 |
 | `FailInputMode` | 把任务级失败转为输入模式 `FAILED`，原因取自 `policy_failure_reason`；协调器随后切换到 `none` | — |
-| `RetryUnlessFault` | 与 `Retry` 相同，但如果失败的叶节点已置位 `policy_fault`，会立即返回失败，不再消耗剩余次数 | — |
+| `RetryUnlessFault` | 与 `Retry` 相同，但如果失败的叶节点已置位 `policy_fault`，会立即返回失败，不再消耗剩余次数；置位 `policy_timeout` 的失败按 `timeout_attempts` 单独计数，等待 `timeout_backoff_sec` 后再重试 | 超时次数耗尽时，在 `policy_failure_reason` 前加上 `policy server timed out N times; last: ` |
 
 叶节点返回 `FAILURE` 并不会把输入模式标记为 `FAILED`，只有 `FailInputMode`（以及切换超时和 tick 异常）会这样做。因此"次数耗尽"必须经过它，否则持久路由会让失败的分支无限重来。
 
@@ -69,7 +72,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 
 `PolicyRun` 依次执行以下步骤：
 
-1. **预检**：确认 `/policy/activate`、`/policy/deactivate`、`/policy/emergency_stop`、`/policy_router/emergency_stop` 四个服务均已发现；三条臂的 `joint_states`、夹爪位置和 `/policy/stats` 都是最新数据；桥接报告自身处于 policy 模式且未暂停。与此同时，`PolicyRun` 把任务的 prompt 发布到 `prompt_topic`（`/policy/prompt`，等待期间每 0.5 s 重发一次），直到 `/policy/stats` 中的 `prompt` 值与之一致才继续。桥接切换 prompt 时会清空动作队列，并立即重新发布统计。任何一项不满足，等待 `service_wait_sec` 后即判为故障，此时不会启动任何动作。
+1. **预检**：确认 `/policy/activate`、`/policy/deactivate`、`/policy/emergency_stop`、`/policy_router/emergency_stop` 四个服务均已发现；三条臂的 `joint_states`、夹爪位置和 `/policy/stats` 都是最新数据；桥接报告自身处于 policy 模式。与此同时，`PolicyRun` 把任务的 prompt 发布到 `prompt_topic`（`/policy/prompt`，等待期间每 0.5 s 重发一次），直到 `/policy/stats` 中的 `prompt` 值与之一致才继续。桥接切换 prompt 时会清空动作队列，并立即重新发布统计。桥接处于暂停状态不会阻塞预检：下一步的 `/policy/activate` 会解除暂停。等待 `service_wait_sec` 后仍有项目不满足时，此时不会启动任何动作：如果缺的只是桥接本身（三个 `/policy/*` 服务或 `/policy/stats`），判为 `policy_timeout`；其余情况（机械臂或夹爪数据、路由服务、桥接不在 policy 模式、prompt 不一致、桥接版本过旧）判为故障。
 2. **激活**：`activation: auto` 时由 `PolicyRun` 调用 `/policy/activate`；`activation: operator` 时只等待操作员调用，等待期间不会有任何运动。
 3. **监督**：每个 tick 评估一次，判定规则见下表。
 4. **停止**：无论成败，依次调用 `/policy/deactivate`（`data: true`；`false` 反而会激活桥接）、`/policy/emergency_stop`、`/policy_router/emergency_stop`，每一步都等待回应或超时。最后再等待 `router_release_sec`，让路由释放速度会话，避免与下一步的 `ThreeArmMoveJ` 冲突。被 `halt()` 时，同样的三个调用会立即发出，但不等待回应。
@@ -82,12 +85,39 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 | `lift_and_hold`：夹住后物体掉落 | 失败，`dropped` | 是 |
 | 超过 `max_attempt_sec` 仍未完成（放手或抬起保持） | 失败，`timeout` | 是 |
 | 夹爪闭合且指令几乎为零，持续 `stall.sec` | 失败，`stall` | 是 |
-| 关节超出范围、关节速度过大、另外两臂漂移、`joint_states` 或桥接统计丢失、桥接自行暂停、服务缺失、夹爪无法张开 | 故障，`fault` | 否，经 `FailInputMode` 进入 `FAILED` |
+| 桥接因推理连续超时而自行暂停、桥接统计中断超过 `stats_stale_sec`、预检时桥接迟迟未就绪、`/policy/activate` 无回应 | 失败，`policy_timeout` | 是，按 `timeout_retry` 单独计数，先等待 `backoff_sec` |
+| 关节超出范围、关节速度过大、另外两臂漂移、`joint_states` 丢失、路由服务缺失、夹爪无法张开 | 故障，`fault` | 否，经 `FailInputMode` 进入 `FAILED` |
 | `lift_and_hold`：闭合后转向收纳盒一侧 | 故障，`wrong_task` | 否，经 `FailInputMode` 进入 `FAILED` |
 
 以下关于放手和抓取的判定适用于 `release_over_bin`，`lift_and_hold` 的判定见上一节。**放手**指策略的夹爪指令在累计闭合足够久之后升到阈值以上，同时手臂位于收纳盒一侧（`release.joint_index` 对应的关节低于 `release.joint_below_deg`）。这一位置条件可以排除策略在垫子上为重新抓取而张开夹爪的情况。**抓取判定**依据放手前最后一段闭合期的夹爪位置：停在中间且出现过 `torque_reached`，说明夹住了物体；合到底且没有力矩，则是抓空。
 
 每次尝试的结果会写入黑板键 `policy_attempt_result`、`policy_grasp_verdict`、`policy_attempt_sec`、`policy_failure_reason`，并作为事件记入运行快照，可在 Web 监视器中查看。
+
+## 策略服务超时重试
+
+真机上最常见的中断并非策略本身出错，而是策略服务暂时没有响应：serve 容器重启后，第一次推理要 JIT 编译约 26 s，这期间 WebSocket 循环被阻塞；Wi-Fi 被 Pika 定位程序挤占时，一次请求的往返时间会从 100 ms 升到数秒。桥接的单次推理在 `infer_timeout_s`（1.5 s）后超时，连续 `failure_pause_threshold`（5）次后会自行暂停，直到下一次 `/policy/activate` 才恢复。这类问题过一会儿通常会自行消失，所以不按故障处理，而是单独计数，稍等片刻后重试。
+
+**哪些算超时**（`PolicyRun` 判为 `policy_timeout`，并在黑板上置位 `policy_timeout`）：
+
+- 监督阶段，桥接报告 `paused=1`，即推理连续超时后自行暂停。尝试开始前收到的暂停状态不算，因为激活已经将其解除。
+- 监督阶段，`/policy/stats` 中断超过 `stats_stale_sec`。
+- 预检阶段，等待 `service_wait_sec` 后缺的只是桥接本身：`/policy/activate`、`/policy/deactivate`、`/policy/emergency_stop` 或 `/policy/stats`。
+- `/policy/activate` 在 `service_call_timeout_sec` 内没有回应。
+
+桥接虽然在线但与预期不一致（不在 policy 模式、prompt 不对、版本过旧），以及机械臂、夹爪或路由出现问题，仍然判为故障：这些情况重试无济于事。
+
+**两次尝试之间**：已激活的尝试照常按顺序停止（`/policy/deactivate`、两个急停、等待路由释放）。随后 `RetryUnlessFault` 等待 `timeout_retry.backoff_sec`，期间返回 `RUNNING`，不 tick 子树，桥接保持停止状态。等待结束后从 `GripperReady` 重新开始，即张开夹爪、回位，再执行 `PolicyRun`。在等待期间切换模式，会经 `halt()` 立即结束，不会残留状态。
+
+**次数与最终失败**：超时不占用 `attempts`，否则一次服务重启就可能耗尽抓取的重试次数。每个周期内允许 `timeout_retry.attempts` 次超时（首次计入，`-1` 不限），下一个周期重新计数。第 N 次超时后不再重试，`policy_failure_reason` 改为 `policy server timed out N times; last: <最后一次的原因>`，并经 `FailInputMode` 进入 `FAILED`，路由切换到 `none`。`policy_timeout` 标志保持置位，供父节点读取。
+
+```yaml
+# config/ros/policy_task.yaml
+timeout_retry:
+  attempts: 3        # 每个周期允许的超时次数，首次计入；-1 不限
+  backoff_sec: 20.0  # 每次超时重试前的等待时间
+```
+
+20 s 的取值依据：桥接要经过约 8 s 的连续超时（5 × 1.5 s）才会暂停，再加上 20 s 的等待，足以覆盖约 26 s 的 JIT 编译；短时的 Wi-Fi 拥塞也能在此期间恢复。如果是服务进程本身挂掉，三次超时后进入 `FAILED`，大约需要一分半。
 
 ## 轨迹记录
 
@@ -144,11 +174,12 @@ REALMAN_BT_DRY_RUN=false ./scripts/bt.sh control    # 然后在 Web 中选择 po
 | 现象 | 原因与处理 |
 | --- | --- |
 | 选择 policy 并回位后，长时间没有动作 | `PolicyRun` 正在预检中等待：查看运行快照事件或桥接日志，缺少的服务、数据或 `mode_active=0` 会写在原因中；如果是 `operator` 模式，则是在等待 `/policy/activate` |
-| `FAILED`，原因含 `policy is not ready to start` | 预检超时：原因中会列出缺少的项，可能是四个服务、三条臂的 `joint_states`、夹爪位置或 `/policy/stats` |
+| `FAILED`，原因含 `policy is not ready to start` | 预检超时：原因中会列出缺少的项，可能是四个服务、三条臂的 `joint_states`、夹爪位置或 `/policy/stats`。如果缺的只是桥接，会先按超时重试，原因前面会加上 `policy server timed out N times` |
 | 原因含 `policy bridge prompt is '…', waiting for '…'` | 桥接没有切换到该任务的 prompt：确认桥接订阅了 `prompt_topic`，并且没有其他进程在向 `/policy/prompt` 发布别的文本 |
 | 原因含 `does not report its prompt in /policy/stats (too old a bridge)` | 桥接容器仍是旧代码，统计中没有 `prompt`：重建桥接镜像或同步代码后重启。prompt 未确认前不会激活桥接 |
 | `wrong_task` | 执行抓起任务时转向了收纳盒，说明策略没有按 prompt 区分任务：先核对 prompt 是否与训练视图逐字一致，再查看模型在离线 prompt 交换测试中的区分度 |
-| `FAILED`，原因含 `paused itself` | 桥接连续推理失败后自行暂停，通常是 Wi-Fi 被占满（Pika 定位程序挤占链路时，往返延迟会从 100 ms 升到数秒） |
+| `FAILED`，原因以 `policy server timed out N times` 开头 | 策略服务在一个周期内超时了 `timeout_retry.attempts` 次，最后一次的原因跟在 `last:` 之后。`paused itself` 表示桥接连续推理失败后自行暂停，通常是 Wi-Fi 被占满（Pika 定位程序挤占链路时，往返延迟会从 100 ms 升到数秒），或 serve 容器刚重启、尚未预热：先在 serve 容器内做一次推理预热，再选择 policy |
+| 一次尝试结束后，约 20 s 没有动作 | `policy_timeout` 之后的 `backoff_sec` 等待：运行快照中会有一条 `WARN` 级别的 `attempt_end ... result=policy_timeout` 事件 |
 | 一轮结束后夹爪未张开就开始下一轮 | 不会发生：每次尝试的第一步都是 `GripperReady`，夹爪无法张开会判为故障 |
 | 一直是 `released_empty` | 抓空：查看相机画面和 `policy_grasp_verdict`。这是策略精度问题，不是监督问题 |
 | 想知道某次尝试为何结束 | 查看对应轨迹 CSV 末尾的四行，以及最后几行数据 |
@@ -162,4 +193,4 @@ colcon test --packages-select realman_bt
 colcon test-result --verbose
 ```
 
-相关测试包括：`test_policy_supervisor`（判定逻辑，不依赖 ROS）；`test_policy_run_node` 和 `test_gripper_ready_node`（用模拟的桥接、路由、夹爪和三臂关节状态驱动，检查调用顺序）；`test_input_mode_executor`（树的结构、从 `FAILED` 到 `none` 的通路、计数经黑板传入树）；`test_control_router_tree`（XML 契约）。这些 C++ 测试开头都加了 `#undef NDEBUG`，因此 Release 构建也不会移除其中的 `assert`。
+相关测试包括：`test_policy_supervisor`（判定逻辑，不依赖 ROS）；`test_policy_run_node` 和 `test_gripper_ready_node`（用模拟的桥接、路由、夹爪和三臂关节状态驱动，检查调用顺序，以及哪些情况判为 `policy_timeout`）；`test_retry_unless_fault_node`（故障立即停止、超时单独计数、等待、原因前缀）；`test_input_mode_executor`（树的结构、从 `FAILED` 到 `none` 的通路、计数经黑板传入树）；`test_control_router_tree`（XML 契约）。这些 C++ 测试开头都加了 `#undef NDEBUG`，因此 Release 构建也不会移除其中的 `assert`。

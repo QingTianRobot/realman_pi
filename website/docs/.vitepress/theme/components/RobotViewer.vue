@@ -30,6 +30,16 @@ type EndEffectorMount = {
   rpy: [number, number, number];
 };
 
+// Shared pedestal under the three bases (config/ros/three_robots.yaml `pedestal`), world frame, visual only.
+type PedestalConfig = {
+  frame: string;
+  centerXy: [number, number];
+  sizeXy: [number, number];
+  topZ: number;
+  bottomZ: number;
+  color: string;
+};
+
 type LayoutConfig = {
   rootFrame: string;
   visualizationReferenceArm: "m";
@@ -37,12 +47,14 @@ type LayoutConfig = {
   robots: RobotConfig[];
   grippers?: Record<string, GripperConfig>;
   endEffectors?: Partial<Record<RobotConfig["id"], EndEffectorMount>>;
+  pedestal?: PedestalConfig | null;
 };
 
 const canvas = ref<HTMLCanvasElement | null>(null);
 const viewport = ref<HTMLElement | null>(null);
 const state = ref<"loading" | "ready" | "error">("loading");
 const meshCount = ref(0);
+const hasPedestal = ref(false);
 const robotCount = ref(0);
 const modelNames = ref("");
 const rootFrame = ref("world");
@@ -233,6 +245,28 @@ onMounted(async () => {
         referenceTransform.z,
       ));
     });
+
+    // The pedestal uses the same middle-arm-relative display offset as the arms. With a pedestal the
+    // floor grid moves down to its bottom (the work-table plane) so the grid does not cut through it.
+    const pedestal = config.pedestal;
+    if (pedestal) {
+      const height = pedestal.topZ - pedestal.bottomZ;
+      const pedestalMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(pedestal.sizeXy[0], pedestal.sizeXy[1], height),
+        new THREE.MeshStandardMaterial({ color: pedestal.color, metalness: 0.1, roughness: 0.8 }),
+      );
+      pedestalMesh.name = "pedestal";
+      pedestalMesh.position.set(
+        pedestal.centerXy[0] - referenceTransform.x,
+        pedestal.centerXy[1] - referenceTransform.y,
+        (pedestal.topZ + pedestal.bottomZ) / 2 - referenceTransform.z,
+      );
+      pedestalMesh.castShadow = true;
+      pedestalMesh.receiveShadow = true;
+      scene.add(pedestalMesh);
+      hasPedestal.value = true;
+      grid.position.z = pedestal.bottomZ - referenceTransform.z - 0.002;
+    }
 
     // Grippers hang off each arm's flange link. Their meshes load asynchronously like the arms'.
     const loadedGrippers: {
@@ -434,6 +468,7 @@ onBeforeUnmount(() => dispose?.());
     class="robot-viewport"
     :data-state="state"
     :data-mesh-count="meshCount"
+    :data-pedestal="hasPedestal ? '1' : '0'"
     :data-robot-count="robotCount"
     :data-root-frame="rootFrame"
     :data-visualization-reference-arm="visualizationReferenceArm"

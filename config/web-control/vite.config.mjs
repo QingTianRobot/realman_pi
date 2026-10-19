@@ -69,6 +69,17 @@ async function devManifest() {
     root_frame: robots[0].parent_frame || layout.robots.l.parent_frame,
     default_joint_position_rad: layout.settings.default_joint_position || 0,
     robots,
+    // Same shape as model_manifest._pedestal (validation lives there).
+    pedestal: layout.pedestal
+      ? {
+          frame: layout.pedestal.frame,
+          center_xy: layout.pedestal.center_xy,
+          size_xy: layout.pedestal.size_xy,
+          top_z: layout.pedestal.top_z,
+          bottom_z: layout.pedestal.bottom_z,
+          color: layout.pedestal.color,
+        }
+      : null,
     end_effectors: endEffectors,
     keyboard_control: {
       heartbeat_period_ms: keyboard.heartbeat_period_ms,

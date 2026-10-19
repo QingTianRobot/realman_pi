@@ -229,6 +229,7 @@ def generate_launch_description():
         parameters=[
             str(config_root / "ros" / "behavior_tree.yaml"),
             str(config_root / "ros" / "policy_task.yaml"),
+            str(config_root / "ros" / "motion_monitor.yaml"),
             {
                 "tree_file": LaunchConfiguration("tree_file"),
                 "arm_id": LaunchConfiguration("arm_id"),

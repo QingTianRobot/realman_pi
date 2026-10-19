@@ -70,7 +70,7 @@ flowchart TB
 | 类别 | 节点 | 约定 |
 | --- | --- | --- |
 | 控制节点 | `Sequence`、`Fallback`、`ReactiveSequence`、`ReactiveFallback` | 只负责组合子节点，不调用 ROS |
-| 装饰节点 | `Repeat`、`Retry`、`RetryUnlessFault` | 只有一个子节点，重来前先 `halt()` 它 |
+| 装饰节点 | `Repeat`、`Retry`、`RetryUnlessFault`、`MotionDwellMonitor` | 只有一个子节点，重来或提前结束前先 `halt()` 它 |
 | 条件节点 | `InputModeGuard` | 只读不写，从不返回 `RUNNING` |
 | 动作节点 | 其余全部 | 叶节点：调用服务、Action 或话题，或表示某个输入正持有控制权 |
 

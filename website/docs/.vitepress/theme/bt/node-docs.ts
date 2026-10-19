@@ -93,6 +93,16 @@ export const nodeDocs: Record<string, NodeDoc> = {
     blackboard: "读取 policy_fault、policy_timeout；每次运行开始时和被 halt() 时清除这两个键，因此上一次的标志不会影响新一轮的首次尝试；policy_timeout 在每次超时重试前也会清除。超时次数耗尽时改写 policy_failure_reason",
     page: "./behavior-tree-control#任务控制节点",
   },
+  MotionDwellMonitor: {
+    category: "decorator",
+    summary: "监视一条臂：子节点运行期间，如果这条臂的每个关节都在 tolerance_deg 以内停留了 dwell_sec，就 halt() 子节点并返回 on_dwell（默认 FAILURE），由外层 Fallback 切换到另一个分支。只读取 /<arm>/joint_states，不发任何指令。",
+    success: "子节点成功；或 on_dwell=success 时，手臂停留达到 dwell_sec",
+    failure: "子节点失败；或 on_dwell=failure（默认）时，手臂停留达到 dwell_sec",
+    running: "子节点 RUNNING，且手臂在动，或停留尚不足 dwell_sec，或没有新鲜的 joint_states",
+    halt: "结束本次运行并 halt() 子节点；下一次运行重新计时",
+    blackboard: "dwell_sec、tolerance_deg 未写在 XML 中时，读取 motion_dwell_sec、motion_dwell_tolerance_deg（来自 config/ros/motion_monitor.yaml）；触发时写入 motion_dwell=true 和 motion_dwell_reason，每次运行开始时清除",
+    page: "./behavior-tree-control#动作停留监控",
+  },
   SelectInputMode: {
     category: "action",
     summary: "每一拍向协调器查询本拍应运行的模式，并处理 select_input_mode 请求以及经由 none 的中性切换。",

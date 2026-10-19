@@ -1,0 +1,14 @@
+# MotionDwellMonitor (behavior-tree decorator): defaults for every MotionDwellMonitor in a tree run by the executor.
+# A port written in the XML (dwell_sec="...", tolerance_deg="...") wins over these. Loaded by control_router.launch.py
+# as parameters of the executor; motion_dwell_monitor_node.cpp declares exactly these keys, and
+# test_motion_monitor_config_file.py fails if the file and the loader disagree. Edits need a restart of ./rm65 bt.
+realman_bt_executor:
+  ros__parameters:
+    motion_monitor:
+      # The arm counts as "in the same pose" while every joint stays within tolerance_deg of where it was; after
+      # dwell_sec of that the monitor ends its child (and the tree switches branch). The driver's joint readings jitter
+      # by ~0.004 deg at rest (2026-10-16), so 0.5 deg is still, and slow purposeful motion leaves it within seconds.
+      dwell_sec: 30.0
+      tolerance_deg: 0.5
+      # A gap in /<arm>/joint_states longer than this restarts the window: stillness nobody saw is never counted.
+      joint_state_stale_sec: 1.0

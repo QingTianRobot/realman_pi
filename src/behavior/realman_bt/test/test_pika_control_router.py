@@ -347,6 +347,7 @@ def _pika_router(*, mode, kind="", goal_active=False, input_ago=0.0, sends=None)
     router.max_angular_speed_radps = 0.25
     router.max_linear_accel_mps2 = 0.1
     router.max_angular_accel_radps2 = 0.5
+    router.velocity_follow = False
     router._arms = {"l": state}
     router.get_logger = lambda: SimpleNamespace(
         info=lambda _m: None, warning=lambda _m: None, error=lambda _m: None

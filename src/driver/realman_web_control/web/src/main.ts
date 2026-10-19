@@ -1,6 +1,7 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import URDFLoader from "urdf-loader";
+import "./theme.css";
 import "./style.css";
 import { VelocityPlot, velocityColor, velocityColorGradient } from "./velocity_plot";
 

@@ -1,3 +1,4 @@
+import "./theme.css";
 import "./calibration.css";
 
 type EventMessage = Record<string, any> & { type: string };

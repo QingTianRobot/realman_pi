@@ -1,4 +1,4 @@
-import"./modulepreload-polyfill-B5Qt9EMX.js";const J=document.querySelector("#app");J.innerHTML=`
+import"./theme-Cqnpw2CK.js";const J=document.querySelector("#app");J.innerHTML=`
   <header class="topbar">
     <div><span class="eyebrow">REALMAN / CALIBRATION</span><h1>ChArUco 手眼标定</h1><p>三臂原子采样 · 手眼求解 · 相对位姿</p></div>
     <div class="top-actions"><a href="/" class="button ghost">返回控制界面</a><span id="connection" class="status offline">OFFLINE</span></div>

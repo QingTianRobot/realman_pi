@@ -5,6 +5,8 @@ import { setupMermaidZoom } from "./mermaid-zoom";
 import { vReveal } from "./reveal";
 import Layout from "./Layout.vue";
 import ArchitectureMap from "./components/ArchitectureMap.vue";
+import BtTickSimulator from "./components/BtTickSimulator.vue";
+import BtTreeExplorer from "./components/BtTreeExplorer.vue";
 import LimitExplorer from "./components/LimitExplorer.vue";
 import ModeExplorer from "./components/ModeExplorer.vue";
 import Card from "./components/Card.vue";
@@ -25,6 +27,8 @@ export default {
     app.directive("reveal", vReveal);
     // Blocks usable directly from Markdown (see the realman-site-components skill).
     app.component("ArchitectureMap", ArchitectureMap);
+    app.component("BtTickSimulator", BtTickSimulator);
+    app.component("BtTreeExplorer", BtTreeExplorer);
     app.component("LimitExplorer", LimitExplorer);
     app.component("ModeExplorer", ModeExplorer);
     app.component("Card", Card);

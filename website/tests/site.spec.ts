@@ -2,6 +2,7 @@ import { readFile } from "node:fs/promises";
 import { resolve } from "node:path";
 import { expect, test, type Locator } from "@playwright/test";
 import YAML from "yaml";
+import { nodeDocs } from "../docs/.vitepress/theme/bt/node-docs";
 
 async function canvasChecksum(locator: Locator) {
   return locator.evaluate((element: HTMLCanvasElement) => {
@@ -141,6 +142,7 @@ test("documentation routes render", async ({ page }) => {
     "development/system-bringup",
     "development/behavior-tree-control",
     "development/behavior-tree-motion",
+    "development/behavior-tree-nodes",
     "development/gripper-control",
     "development/policy-bridge",
     "development/policy-task",
@@ -246,6 +248,7 @@ test("mermaid labels stay inside their boxes and the SVG", async ({ page }) => {
   for (const route of [
     "architecture/overview",
     "development/behavior-tree-control",
+    "development/behavior-tree-nodes",
     "development/pika-teleop",
     "development/realman-driver-scaffold",
     "development/production-operations",
@@ -563,4 +566,55 @@ test("hand-eye explainer plays, seeks by chapter and shows the production relati
 
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test("behavior-tree node reference: explorer reads the code, simulator follows the decorators", async ({ page }) => {
+  await page.goto("development/behavior-tree-nodes");
+  const explorer = page.locator(".bt-explorer");
+  await explorer.scrollIntoViewIfNeeded();
+  await expect(explorer).toHaveAttribute("data-state", "ready");
+  // Opens on PolicyRun; its ports come from providedPorts() in the C++ source.
+  await expect(explorer).toHaveAttribute("data-selected", "PolicyRun");
+  await expect(explorer.locator(".bt-ports")).toContainText("arm_id");
+
+  // The policy start pose reads its joints from the blackboard, as written in control.xml.
+  await explorer.locator('.bt-row[data-node="ThreeArmMoveJ"]').first().locator(".bt-row-main").click();
+  await expect(explorer.locator(".bt-ports")).toContainText("{pika_r_joint_degrees}");
+  // Collapsed branches expand on demand.
+  const keyboard = explorer.locator(".bt-row", { hasText: "keyboard_branch" });
+  await keyboard.locator(".bt-row-toggle").click();
+  await expect(explorer.locator('.bt-row[data-node="PrepareKeyboardWork"]')).toBeVisible();
+  // A registered node the production tree does not use.
+  await explorer.locator(".bt-registry").getByRole("button", { name: "MoveJ", exact: true }).click();
+  await expect(explorer.locator(".bt-card-links")).toContainText("control.xml 中未使用");
+
+  const sim = page.locator(".bt-sim");
+  await sim.scrollIntoViewIfNeeded();
+  await expect(sim).toHaveAttribute("data-state", "ready");
+  await sim.getByRole("tab", { name: "放置 · 抓空后重试成功" }).click();
+  await sim.getByRole("button", { name: "下一拍" }).click();
+  await expect(sim).toHaveAttribute("data-tick", "1");
+  await sim.getByRole("button", { name: "运行到结束" }).click();
+  await expect(sim).toHaveAttribute("data-finished", "true");
+  await expect(sim.locator(".bt-sim-log")).toContainText("第 1 次失败，可重试");
+  await expect(sim.locator(".mode-explorer-stats")).toContainText("任务完成");
+  await expect(sim.locator('.bt-row[data-node="PolicyInputStub"]')).toHaveAttribute("data-status", "running");
+
+  // A fault is not retried: the Fallback ends in FailInputMode.
+  await sim.getByRole("tab", { name: "放置 · 关节越界（故障）" }).click();
+  await sim.getByRole("button", { name: "运行到结束" }).click();
+  await expect(sim.locator(".mode-explorer-stats")).toContainText("FAILED");
+  await expect(sim.locator(".bt-sim-log")).toContainText("policy_fault 已置位，不再重试");
+  await expect(sim.locator('.bt-row[data-node="FailInputMode"]')).toHaveAttribute("data-status", "running");
+  // Fully expanded tree and a finished run are the widest states: still no horizontal page scroll.
+  const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(overflow).toBeLessThanOrEqual(1);
+});
+
+test("every registered behavior-tree node is documented", async ({ request }) => {
+  const data = await (await request.get("docs-data.json")).json();
+  const registered = Object.keys(data.bt.nodes);
+  expect(registered.length).toBeGreaterThan(10);
+  expect(registered.filter((tag) => !nodeDocs[tag])).toEqual([]);
+  expect(Object.keys(nodeDocs).filter((tag) => !registered.includes(tag))).toEqual([]);
 });

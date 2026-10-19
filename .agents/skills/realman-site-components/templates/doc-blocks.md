@@ -27,6 +27,8 @@ Blocks usable directly from Markdown (registered globally in `theme/index.ts`; s
 <LimitExplorer />
 <TfExplorer />
 <HandEyeExplainer />
+<BtTreeExplorer />
+<BtTickSimulator />
 ```
 Rules: blank lines around Markdown inside `<Steps>`; no inline colors; do not put backticks in component attribute strings (they are not parsed as Markdown); numbers shown by explorers come from `docs-data.json`, which `website/scripts/sync-three-robots.mjs` copies from the YAML configs and `control.xml` at build time. New blocks follow "Adding a genuinely new block" above (CSS in `custom.css`, template here, e2e assertion).
 

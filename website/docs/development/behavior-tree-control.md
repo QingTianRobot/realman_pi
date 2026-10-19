@@ -163,6 +163,8 @@ Action 或夹爪 command，需要真实 Pika 运动必须显式设置 `REALMAN_B
 
 ## 任务控制节点
 
+每个节点的语义、端口和可交互的树浏览器、逐拍模拟见 [行为树节点参考](./behavior-tree-nodes)。
+
 除了输入路由用到的 `Sequence`、`ReactiveSequence` 和 `ReactiveFallback`，执行器还注册了
 一组控制"重复和重试"的节点，供一个分支里的有限任务使用：
 

@@ -2,6 +2,7 @@ import { cp, mkdir, readFile, rm, writeFile } from "node:fs/promises";
 import { dirname, join, resolve } from "node:path";
 import { fileURLToPath } from "node:url";
 import YAML from "yaml";
+import { buildBtCatalog } from "./bt-catalog.mjs";
 
 const scriptDirectory = dirname(fileURLToPath(import.meta.url));
 const websiteDirectory = resolve(scriptDirectory, "..");
@@ -181,6 +182,9 @@ const docsData = {
   modes: [...controlTree.matchAll(/<InputModeGuard\s+mode="([a-z]+)"\s+label="([^"]*)"\s+selectable="(true|false)"/g)].map(
     (match) => ({ id: match[1], label: match[2], selectable: match[3] === "true" }),
   ),
+  // The production tree and every registered node's ports, read from control.xml and the C++ sources
+  // (BtTreeExplorer on the behavior-tree node reference page).
+  bt: await buildBtCatalog(repositoryDirectory),
 };
 
 await rm(generatedDirectory, { recursive: true, force: true });

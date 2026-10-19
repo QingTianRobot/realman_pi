@@ -1,5 +1,4 @@
 import json
-import pytest
 from realman_recording.session_store import SessionStore
 
 

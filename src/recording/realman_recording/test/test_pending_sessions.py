@@ -3,7 +3,6 @@ from __future__ import annotations
 
 import json
 
-import pytest
 
 from realman_recording.session_store import SessionStore
 

@@ -41,7 +41,7 @@ class _FakeClient:
 
 
 def test_export_all_polls_future_without_timeout_kwarg():
-    pytest_skip = __import__("pytest").importorskip("rclpy")
+    __import__("pytest").importorskip("rclpy")
     from realman_recording.web_bridge_node import RecordingWebBridgeNode
 
     future = _RclpyFuture(_FakeResponse())

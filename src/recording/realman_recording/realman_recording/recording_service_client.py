@@ -119,7 +119,7 @@ def main(args: list[str] | None = None) -> int:
     discard = sub.add_parser("discard", help="discard a finalized session (keeps raw data)")
     discard.add_argument("--session-id", required=True)
 
-    adopt_all = sub.add_parser("adopt-all", help="adopt and queue every PENDING session for conversion")
+    sub.add_parser("adopt-all", help="adopt and queue every PENDING session for conversion")
 
     prepare = sub.add_parser("prepare", help="run preflight only (cameras checked by default)")
     prepare.add_argument("--no-cameras", action="store_true", help="preflight a state-only recording")

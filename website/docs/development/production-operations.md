@@ -1,6 +1,6 @@
 ---
 title: 生产运维手册
-description: 生产机的容器布局、查询与部署命令、单独重启驱动或夹爪 manager、夹爪告警与行程、日志清理，以及现场踩过的坑。
+description: 生产机的容器布局、查询命令、用 rsync 或 git bundle 部署、部署后核对与回滚、只热更新 :8765 网页、单独重启驱动或夹爪 manager、夹爪告警与行程、日志清理，以及现场踩过的坑。
 ---
 
 # 生产运维手册
@@ -16,7 +16,7 @@ description: 生产机的容器布局、查询与部署命令、单独重启驱�
 ```mermaid
 flowchart TB
   subgraph HOST["生产机（宿主）"]
-    REPO["~/realman_pi（Git 工作区，已跟踪文件由 rsync 同步）"]
+    REPO["~/realman_pi（Git 工作区：rsync 同步或检出本地部署分支）"]
     UDEV["udev 规则 → /dev/realman/gripper_*"]
     LOGS["~/realman_pi/logs/"]
   end
@@ -60,7 +60,18 @@ docker exec realman_pi-realman_bringup_remote-1 cat /opt/rm65_ws/config/ros/grip
 
 ## 更新代码（部署）
 
-生产机**不能直接从 GitHub 拉代码**，所以从开发机把 Git 已跟踪文件同步过去。`./rm65 sync` 会校验当前在 `main` 且工作区干净，推送后再 rsync；它只同步已跟踪文件，且不带 `--delete`。
+生产机**不能直接从 GitHub 拉代码**（`git fetch origin` 会一直挂住，宿主上的 `origin/*` 因此是旧的），代码只能从开发机送过去。有两种方式：
+
+| 方式 | 适合 | 生产机上的结果 |
+| --- | --- | --- |
+| `./rm65 sync`（rsync） | 发布已合并的 `main` | 已跟踪文件被覆盖，分支不变 |
+| git bundle → 本地部署分支 | 部署还没合并的分支（例如待合并的 PR），或需要能一条命令切回原来的提交 | 宿主检出一个本地分支，例如 `deploy/main-<日期>` |
+
+两种方式都只更新**宿主文件**。配置类改动（YAML）重启对应进程就生效；**代码类改动要重建镜像**才会进容器，因为容器里的 `src/` 是镜像构建时拷贝的副本。
+
+### 方式一：`./rm65 sync`
+
+`./rm65 sync` 会校验当前在 `main` 且工作区干净，推送后再 rsync；它只同步已跟踪文件，且不带 `--delete`。
 
 同步前先搞清楚会覆盖什么：
 
@@ -73,9 +84,87 @@ docker exec realman_pi-realman_bringup_remote-1 cat /opt/rm65_ws/config/ros/grip
    ```
 
    如果列表里出现了你没改过的配置文件，说明生产机上有未回灌到仓库的现场修改，**先把它们合回仓库**再同步。
-3. 同步只更新宿主文件。配置类改动（YAML）重启对应进程就生效；**代码类改动要重建镜像**才会进容器，因为容器里的 `src/` 是镜像构建时拷贝的副本。
 
-只想更新 `:8765` 网页、不碰驱动时（不影响机器人运行）：
+### 方式二：git bundle 部署一个分支
+
+<Steps>
+
+1. **在生产机上备份**：把现场改过的文件、未提交的改动、当前提交和镜像都记下来，并给镜像打回滚标签。
+
+   ```bash
+   cd ~/realman_pi
+   B=~/deploy-backups/redeploy-$(date +%Y%m%d-%H%M%S); mkdir -p "$B/config/ros"
+   cp -p .env "$B/"; cp -p config/ros/<现场改过的 yaml> "$B/config/ros/"
+   git diff > "$B/tracked-changes.patch"
+   { git rev-parse HEAD; git branch --show-current; } > "$B/head.txt"
+   docker image inspect rm65-humble-rviz:local -f '{{.Id}}' > "$B/image.txt"
+   docker tag rm65-humble-rviz:local rm65-humble-rviz:pre-<日期>
+   ```
+
+2. **在开发机上打包并拷过去**。`^<基准>` 填一个生产机上已有的提交，可以让 bundle 只带增量；不确定就去掉它，打完整的分支。
+
+   ```bash
+   git bundle create deploy.bundle <分支> ^<基准>
+   git bundle verify deploy.bundle
+   scp deploy.bundle <生产机>:/tmp/
+   ```
+
+3. **在生产机上检出**：先把要保留的现场改动从备份里看清楚，再还原这些文件，然后检出本地部署分支，最后把要保留的改动重新写回去。
+
+   ```bash
+   git fetch /tmp/deploy.bundle <分支>:refs/remotes/bundle/<分支>
+   git checkout -- <会冲突的现场文件>
+   git checkout -B deploy/<分支>-<日期> refs/remotes/bundle/<分支>
+   ```
+
+   宿主上**未跟踪**的配置文件如果与新分支里的同名文件冲突，先挪进备份目录。
+
+4. **重建镜像并启动**。宿主环境里如果设置了代理变量，构建时要去掉它们。
+
+   ```bash
+   env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+     -u http_proxy -u https_proxy -u all_proxy ./rm65 build
+   ./rm65 up policy        # 不需要策略桥时用 ./rm65 up
+   ```
+
+   `./rm65 up` 会用新镜像重新创建 bringup、web、recording（以及 `policy_bridge`）容器。正在运行的 live 行为树（`scripts/bt.sh control`）**不会**跟着重启：先停掉它，`up` 之后再按[行为树控制](./behavior-tree-control)重新启动，并选回 `none` 模式。
+
+</Steps>
+
+### 部署后核对
+
+每一项都读回实际值，不要只看容器是否 `Up`：
+
+- 三臂 `/{l,m,r}/joint_states` 约 10 Hz，夹爪状态约 20 Hz，相机约 30 Hz（`ros2 topic hz`）。
+- `:8765` 和 `:8770` 返回 200，`:8765` 页面引用的 `/assets/*` 也都返回 200。
+- 用 `ros2 param dump` / `ros2 param get` 读回关键参数，例如 router 的限速和 `dry_run`、执行器的 `policy_task.task_names`。
+- 用到策略时：`/policy/stats` 有输出，并且带 `prompt` 字段（见[行为树里的 policy 任务](./policy-task)）。
+
+### 回滚
+
+1. `git checkout <head.txt 里的分支>`，再 `git apply "$B/tracked-changes.patch"`，然后把 `.env` 和备份的 YAML 拷回原处。
+2. `docker tag rm65-humble-rviz:pre-<日期> rm65-humble-rviz:local`。
+3. `./rm65 up`（或 `./rm65 up policy`），然后重新启动 live 行为树。
+
+### 只热更新 `:8765` 静态网页
+
+`:8765` 的前端是 Vite 打出来的静态文件（`src/driver/realman_web_control/realman_web_control/static/`，由 `npm run build:web-control` 生成并提交）。如果只改了前端、没改 Python，可以直接替换容器里的这些文件，不重建镜像，也不重启任何进程：
+
+```bash
+C=realman_pi-realman_web_control-1
+P=/opt/rm65_ws/src/driver/realman_web_control/realman_web_control
+# 1. 在生产机上备份当前网页
+docker exec $C tar -C $P -cf - static > ~/deploy-backups/web-static-$(date +%Y%m%d-%H%M%S).tar
+# 2. 在开发机的 src/driver/realman_web_control/realman_web_control 目录里执行
+COPYFILE_DISABLE=1 tar --no-xattrs -cf - static | \
+  ssh <生产机> "docker exec -i $C tar -xf - -C $P --no-same-owner"
+```
+
+容器里的安装空间是 `--symlink-install` 建的：`install/.../static/assets/` 里是逐个文件的符号链接。新文件名（带哈希）在那里还没有链接，所以解包后，要给 `build/realman_web_control/realman_web_control/static/assets/` 里每个新文件，在 `install/realman_web_control/share/realman_web_control/static/assets/` 下补一个同名链接。最后用 `curl` 确认页面引用的每个 `/assets/*` 都返回 200。
+
+这样替换的文件只在**当前容器**里有效。容器一旦重建，网页就回到镜像里的版本，所以改动还要合并，并按上面的方式正式部署。
+
+改了 `:8765` 的 Python、需要重建镜像，但不想碰驱动时（不影响机器人运行）：
 
 ```bash
 OLD=$(docker image inspect rm65-humble-rviz:local --format '{{.Id}}')

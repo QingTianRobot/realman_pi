@@ -149,12 +149,12 @@ const finished = computed(() => {
         <dl v-if="blackboard.length" class="bt-card-returns">
           <div v-for="[key, value] in blackboard" :key="key"><dt>{{ key }}</dt><dd>{{ value }}</dd></div>
         </dl>
-        <p v-else class="bt-port-none">还没有写入。</p>
+        <p v-else class="bt-port-none">尚未写入。</p>
         <p class="bt-panel-kicker bt-sim-heading">事件（最新在上）</p>
         <ol v-if="log.length" class="bt-sim-log">
           <li v-for="(line, index) in log" :key="index">{{ line }}</li>
         </ol>
-        <p v-else class="bt-port-none">点“下一拍”开始：每一拍从根节点走一遍子树。</p>
+        <p v-else class="bt-port-none">点击“下一拍”开始：每一拍都从根节点遍历一遍子树。</p>
       </div>
     </div>
   </div>

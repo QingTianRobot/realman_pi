@@ -35,8 +35,8 @@ export const scenarios: Scenario[] = [
   { id: "place-fault", label: "放置 · 关节越界（故障）", task: "place", cycles: 1, attempts: 3, results: ["fault"] },
   { id: "two-cycles", label: "两个周期", task: "place", cycles: 2, attempts: 3, results: ["released_held", "released_empty", "released_held"] },
   { id: "pick-lift", label: "抓起 · 掉落后重试成功", task: "pick", cycles: 1, attempts: 3, results: ["dropped", "lifted_held"] },
-  { id: "pick-wrong", label: "抓起 · 跑成了放置任务", task: "pick", cycles: 1, attempts: 3, results: ["wrong_task"] },
-  { id: "gripper-stuck", label: "夹爪张不开", task: "place", cycles: 1, attempts: 3, results: ["released_held"], gripperStuck: true },
+  { id: "pick-wrong", label: "抓起 · 执行了放置任务", task: "pick", cycles: 1, attempts: 3, results: ["wrong_task"] },
+  { id: "gripper-stuck", label: "夹爪无法张开", task: "place", cycles: 1, attempts: 3, results: ["released_held"], gripperStuck: true },
 ];
 
 // Ticks a leaf stays RUNNING before it finishes, so each phase is visible.
@@ -99,7 +99,7 @@ export class PolicyTaskSim {
       state.runActive = false;
       delete this.blackboard.policy_fault;
     }
-    if (node.tag === "PolicyRun" && state.status === "running") this.say("PolicyRun 被 halt：发出停止调用，轨迹写 result=halted");
+    if (node.tag === "PolicyRun" && state.status === "running") this.say("PolicyRun 被 halt()：发出停止调用，轨迹记为 result=halted");
     state.cursor = 0;
     state.count = 0;
     state.progress = 0;
@@ -151,7 +151,7 @@ export class PolicyTaskSim {
         if (status === "success") {
           state.count += 1;
           if (cycles < 0 || state.count < cycles) {
-            this.say(`Repeat：第 ${state.count} 轮完成，halt 子树，下一拍开始第 ${state.count + 1} 轮`);
+            this.say(`Repeat：第 ${state.count} 轮完成，halt() 子树，下一拍开始第 ${state.count + 1} 轮`);
             this.halt(node.children[0]);
             state.detail = `${state.count} / ${cycles < 0 ? "∞" : cycles} 轮`;
             return this.finish(node, "running");
@@ -177,15 +177,15 @@ export class PolicyTaskSim {
           state.count += 1;
           const fault = this.blackboard.policy_fault === "true";
           if (!fault && (attempts < 0 || state.count < attempts)) {
-            this.say(`RetryUnlessFault：第 ${state.count} 次失败，可重试，halt 子树，下一拍重来`);
+            this.say(`RetryUnlessFault：第 ${state.count} 次失败，可重试：halt() 子树，下一拍重新开始`);
             this.halt(node.children[0]);
             state.detail = `已失败 ${state.count} / ${attempts}`;
             return this.finish(node, "running");
           }
-          this.say(fault ? "RetryUnlessFault：policy_fault 已置位，不再重试" : `RetryUnlessFault：${attempts} 次都失败`);
+          this.say(fault ? "RetryUnlessFault：policy_fault 已置位，不再重试" : `RetryUnlessFault：${attempts} 次尝试均失败`);
           state.runActive = false;
           state.count = 0;
-          state.detail = fault ? "故障，停止" : "次数耗尽";
+          state.detail = fault ? "因故障停止" : "次数耗尽";
           return this.finish(node, "failure");
         }
         if (status === "success") {
@@ -209,8 +209,8 @@ export class PolicyTaskSim {
           state.detail = `三臂移动中 ${state.progress}/${MOVE_TICKS}`;
           return "running";
         }
-        state.detail = "已到 pika_default_pose";
-        this.say(`${node.attrs.name ?? "ThreeArmMoveJ"}：三臂到位`);
+        state.detail = "已到达 pika_default_pose";
+        this.say(`${node.attrs.name ?? "ThreeArmMoveJ"}：三臂已到位`);
         return "success";
       }
       case "ActivateInputMode":
@@ -222,16 +222,16 @@ export class PolicyTaskSim {
         state.progress += 1;
         if (this.scenario.gripperStuck) {
           if (state.progress <= 2) {
-            state.detail = "已调用 open，等位置回落";
+            state.detail = "已调用 open，等待位置回落";
             return "running";
           }
           this.blackboard.policy_fault = "true";
           this.blackboard.policy_failure_reason = "gripper_right did not open within 20 s";
-          this.say("GripperReady：夹爪张不开 → 置 policy_fault");
+          this.say("GripperReady：夹爪无法张开，置位 policy_fault");
           return "failure";
         }
         if (state.progress <= GRIPPER_TICKS) {
-          state.detail = "已调用 open，等位置回落";
+          state.detail = "已调用 open，等待位置回落";
           return "running";
         }
         state.detail = "夹爪已张开";
@@ -260,17 +260,17 @@ export class PolicyTaskSim {
         }
         this.blackboard.policy_failure_reason = outcome.reason;
         if (outcome.kind === "fault") this.blackboard.policy_fault = "true";
-        this.say(`PolicyRun → FAILURE（${result}${outcome.kind === "fault" ? "，置 policy_fault" : "，可重试"}）`);
+        this.say(`PolicyRun → FAILURE（${result}${outcome.kind === "fault" ? "，置位 policy_fault" : "，可重试"}）`);
         return "failure";
       }
       case "PolicyInputStub":
-        if (!state.reported) this.say("全部周期完成：停在 PolicyInputStub，桥接已停，控制权仍属 policy");
+        if (!state.reported) this.say("全部周期完成：停留在 PolicyInputStub，桥接已停止，控制权仍属于 policy");
         state.reported = true;
         this.mode = "ACTIVE/policy（任务完成）";
         this.finished = true;
         return "running";
       case "FailInputMode":
-        if (!state.reported) this.say(`FailInputMode：输入模式 FAILED（${this.blackboard.policy_failure_reason ?? "policy task failed"}），协调器接着切到 none`);
+        if (!state.reported) this.say(`FailInputMode：输入模式进入 FAILED（${this.blackboard.policy_failure_reason ?? "policy task failed"}），协调器随后切换到 none`);
         state.reported = true;
         this.mode = "FAILED → none";
         this.finished = true;

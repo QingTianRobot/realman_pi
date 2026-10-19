@@ -511,7 +511,8 @@ Action cancel。浏览器刷新不会留下仍由网页拥有的速度命令。
 
 后端启动时读取：
 
-- `config/ros/three_robots.yaml`：arm、model、world transform；
+- `config/ros/three_robots.yaml`：arm、model、world transform；可选的 `pedestal` 段是三臂共用底座，
+  只用于显示（见[三臂配置驱动可视化](./three-arm-visualization#共用底座-pedestal)），`/api/layout` 原样带出；
 - `config/ros/realman_motion.yaml`：速度、加速度、watchdog 默认值；
 - `config/ros/realman_coordinates.yaml`：BASE/WORK/TOOL 当前配置名称；
 - `rm65_description/urdf/<model>.urdf`：六个关节的 lower/upper limit 和 mesh。

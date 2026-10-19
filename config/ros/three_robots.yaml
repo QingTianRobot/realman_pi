@@ -50,3 +50,18 @@ robots:
 settings:
   default_joint_position: 0.0
   rviz_config: three_robots.rviz
+
+# Shared pedestal (底座) the three arm bases stand on. Visual only: it is drawn by the documentation
+# site's 3D viewers and the :8765 Web console, and is not part of TF. An axis-aligned box in
+# `frame` (world). The footprint covers the three bases; the top is the m base plane and the
+# bottom is the work-table plane, derived from the right arm's grasp poses on 2026-10-19
+# (gripper tip at the grasp minus 3 cm). An approximation, not a measured drawing.
+# Keys deliberately avoid x/y/z/roll/pitch/yaw: the calibration write-back
+# (realman_camera_calibration/layout_update.py) rewrites those names in every line after `r:`.
+pedestal:
+  frame: world
+  center_xy: [-0.981, 0.195]
+  size_xy: [0.36, 0.62]
+  top_z: -0.019
+  bottom_z: -0.206
+  color: "#1f2830"

@@ -88,6 +88,40 @@ def _vector3(value: Any, field: str) -> list[float]:
     return [_finite(entry, f"{field}[{index}]") for index, entry in enumerate(value)]
 
 
+def _pair(value: Any, field: str) -> list[float]:
+    if not isinstance(value, (list, tuple)) or len(value) != 2:
+        raise ValueError(f"{field} must be a 2-element list")
+    return [_finite(entry, f"{field}[{index}]") for index, entry in enumerate(value)]
+
+
+def _pedestal(layout: dict[str, Any], root_frame: str) -> dict[str, Any] | None:
+    """Shared pedestal under the three bases (three_robots.yaml `pedestal`); visual only, not TF."""
+
+    if "pedestal" not in layout:
+        return None
+    block = _child_mapping(layout["pedestal"], "layout.pedestal")
+    if block.get("frame") != root_frame:
+        raise ValueError(f"layout.pedestal.frame must be '{root_frame}'")
+    size_xy = _pair(block.get("size_xy"), "layout.pedestal.size_xy")
+    if min(size_xy) <= 0:
+        raise ValueError("layout.pedestal.size_xy must be positive")
+    top_z = _finite(block.get("top_z"), "layout.pedestal.top_z")
+    bottom_z = _finite(block.get("bottom_z"), "layout.pedestal.bottom_z")
+    if top_z <= bottom_z:
+        raise ValueError("layout.pedestal.top_z must be above layout.pedestal.bottom_z")
+    color = block.get("color")
+    if not isinstance(color, str) or not re.fullmatch(r"#[0-9a-fA-F]{6}", color):
+        raise ValueError("layout.pedestal.color must be '#rrggbb'")
+    return {
+        "frame": root_frame,
+        "center_xy": _pair(block.get("center_xy"), "layout.pedestal.center_xy"),
+        "size_xy": size_xy,
+        "top_z": top_z,
+        "bottom_z": bottom_z,
+        "color": color,
+    }
+
+
 def _end_effectors(path: Path, description_root: Path) -> dict[str, Any]:
     """Per-arm gripper mounts from end_effectors.yaml, validated against the URDF files."""
 
@@ -211,6 +245,8 @@ def build_manifest(
             settings.get("default_joint_position", 0.0), "layout.settings.default_joint_position"
         ),
         "robots": robots,
+        # None when three_robots.yaml has no pedestal: the page then draws only the floor grid.
+        "pedestal": _pedestal(layout, robots[0]["parent_frame"]),
         "keyboard_control": keyboard.public_manifest(),
         # Empty when no end_effectors.yaml is configured: the page then shows bare arms.
         "end_effectors": (

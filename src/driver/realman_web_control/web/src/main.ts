@@ -58,8 +58,18 @@ type EndEffector = {
   closed_rad: number;
   open_rad: number;
 };
+// Shared pedestal under the three bases (config/ros/three_robots.yaml `pedestal`), world frame, visual only.
+type Pedestal = {
+  frame: string;
+  center_xy: [number, number];
+  size_xy: [number, number];
+  top_z: number;
+  bottom_z: number;
+  color: string;
+};
 type Manifest = {
   end_effectors?: Partial<Record<ArmId, EndEffector>>;
+  pedestal?: Pedestal | null;
   root_frame: string;
   default_joint_position_rad: number;
   robots: Robot[];
@@ -1122,6 +1132,28 @@ async function loadFleet() {
     const allMeshes: any[] = [];
     const middleTransform = manifest!.robots.find((robot) => robot.id === "m")?.transform;
     if (!middleTransform) throw new Error("middle-arm transform is missing from the layout manifest");
+    // Same middle-arm-relative display offset as the arms. With a pedestal the floor grid moves down to
+    // its bottom (the work-table plane) so the grid does not cut through it.
+    const pedestal = manifest!.pedestal;
+    if (pedestal) {
+      const pedestalMesh = new THREE.Mesh(
+        new THREE.BoxGeometry(pedestal.size_xy[0], pedestal.size_xy[1], pedestal.top_z - pedestal.bottom_z),
+        new THREE.MeshStandardMaterial({ color: pedestal.color, metalness: 0.1, roughness: 0.8 }),
+      );
+      pedestalMesh.name = "pedestal";
+      pedestalMesh.position.set(
+        pedestal.center_xy[0] - middleTransform.x,
+        pedestal.center_xy[1] - middleTransform.y,
+        (pedestal.top_z + pedestal.bottom_z) / 2 - middleTransform.z,
+      );
+      pedestalMesh.castShadow = true;
+      pedestalMesh.receiveShadow = true;
+      scene.add(pedestalMesh);
+      grid.position.z = pedestal.bottom_z - middleTransform.z - 0.002;
+      viewer.dataset.pedestal = "1";
+    } else {
+      delete viewer.dataset.pedestal;
+    }
     snapshots.forEach(({ config, live, shadow, mount, gripper }) => {
       // Center the visualization on m without mutating calibrated TF/world coordinates.
       live.position.set(

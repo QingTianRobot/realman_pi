@@ -123,3 +123,21 @@ def test_layout_update_preserves_comments_and_composes_relative_pose(tmp_path):
     assert np.isclose(updated["robots"]["r"]["x"], -1.0)
     assert "Coordinates are expressed in metres" in path.read_text(encoding="utf-8")
     assert backup is not None and backup.is_file()
+
+
+def test_layout_update_leaves_the_pedestal_block_untouched(tmp_path):
+    # The write-back rewrites x/y/z/roll/pitch/yaw lines from `r:` to the end of the file, so the
+    # pedestal (which follows the robots section) must survive with every value intact.
+    source = Path(__file__).parents[4] / "config" / "ros" / "three_robots.yaml"
+    path = tmp_path / "three_robots.yaml"
+    path.write_text(source.read_text(encoding="utf-8"), encoding="utf-8")
+    before = yaml.safe_load(path.read_text(encoding="utf-8"))["pedestal"]
+    update_layout_file(
+        path,
+        {
+            "m": transform_matrix(np.eye(3), [2.0, 0.5, 0.1]).tolist(),
+            "r": transform_matrix(np.eye(3), [0.0, -1.0, 0.3]).tolist(),
+        },
+        create_backup=False,
+    )
+    assert yaml.safe_load(path.read_text(encoding="utf-8"))["pedestal"] == before

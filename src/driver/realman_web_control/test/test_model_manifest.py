@@ -90,3 +90,48 @@ def test_end_effector_config_rejects_a_missing_gripper_urdf(tmp_path):
     )
     with pytest.raises(ValueError, match="gripper URDF does not exist"):
         build_manifest(*paths(), bad)
+
+
+def test_manifest_publishes_the_shared_pedestal_from_the_layout():
+    pedestal = build_manifest(*paths())["pedestal"]
+
+    assert pedestal["frame"] == "world"
+    assert pedestal["center_xy"] == [-0.981, 0.195]
+    assert pedestal["size_xy"] == [0.36, 0.62]
+    assert pedestal["top_z"] > pedestal["bottom_z"]
+    assert pedestal["color"] == "#1f2830"
+
+
+def _layout_with_pedestal(tmp_path, block):
+    import yaml
+
+    layout_path, *rest = paths()
+    layout = yaml.safe_load(layout_path.read_text(encoding="utf-8"))
+    if block is None:
+        layout.pop("pedestal", None)
+    else:
+        layout["pedestal"] = block
+    out = tmp_path / "three_robots.yaml"
+    out.write_text(yaml.safe_dump(layout), encoding="utf-8")
+    return (out, *rest)
+
+
+def test_manifest_has_no_pedestal_when_the_layout_has_none(tmp_path):
+    assert build_manifest(*_layout_with_pedestal(tmp_path, None))["pedestal"] is None
+
+
+@pytest.mark.parametrize(
+    ("change", "message"),
+    [
+        ({"frame": "map"}, "frame must be 'world'"),
+        ({"size_xy": [0.36, 0.0]}, "size_xy must be positive"),
+        ({"top_z": -0.3}, "top_z must be above"),
+        ({"center_xy": [0.0]}, "center_xy must be a 2-element list"),
+        ({"color": "red"}, "color must be"),
+    ],
+)
+def test_manifest_rejects_an_invalid_pedestal(tmp_path, change, message):
+    block = {"frame": "world", "center_xy": [0.0, 0.0], "size_xy": [0.3, 0.6], "top_z": 0.0,
+             "bottom_z": -0.2, "color": "#1f2830", **change}
+    with pytest.raises(ValueError, match=message):
+        build_manifest(*_layout_with_pedestal(tmp_path, block))

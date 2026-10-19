@@ -284,6 +284,75 @@ void testBranchExceptionPublishesFailureAndRecovers() {
           "recovery unexpectedly added terminal failure ticks");
 }
 
+// A leaf reports a task-level failure through FailInputMode: the router publishes FAILED with the
+// reason, then recovers to the safe mode without anyone selecting it.
+void testFailInputModeReportsFailedThenRecoversToNone() {
+  Fixture f;
+  auto xml = routerXml();
+  replaceOnce(xml, "<PolicyInputStub/>", "<FailInputMode reason=\"task gave up\"/>");
+  f.load(xml);
+  f.subscribe();
+  require(f.until([&] { return !f.states.empty(); }), "missing initial state");
+  require(f.select("policy")->accepted, "policy request rejected");
+  f.start();
+  require(f.until([&] { return f.states.back().phase == State::FAILED; }),
+          "FailInputMode did not publish FAILED");
+  require(f.states.back().detail == "task gave up", "FAILED detail is not the node's reason");
+  require(f.until([&] { return f.states.back().phase == State::ACTIVE &&
+                              f.states.back().active_mode == "none"; }),
+          "router did not recover to none after FailInputMode");
+}
+
+std::string policyTaskTree(const std::string& body) {
+  return R"(<?xml version="1.0"?>
+<root main_tree_to_execute="MainTree" realman_arm_id="r" realman_required_arms="r"
+      realman_launch="arm_move" realman_stop_on_terminal="true" realman_exit_on_terminal="true">
+  <BehaviorTree ID="MainTree">)" + body + R"(</BehaviorTree>
+</root>)";
+}
+
+// GripperReady and PolicyRun are registered, and in dry run they finish without any gripper, bridge
+// or router being present.
+void testPolicyTaskLeavesAreRegisteredAndDryRunOnTheirOwn() {
+  Fixture f;
+  f.load(policyTaskTree(R"(
+    <Sequence name="attempt">
+      <GripperReady arm_id="r" dry_run="{dry_run}"/>
+      <PolicyRun arm_id="r" dry_run="{dry_run}"/>
+    </Sequence>)"));
+  f.start();
+  require(f.until([&] { return f.snapshot().find("\"success\":1") != std::string::npos; }),
+          "GripperReady/PolicyRun dry-run tree did not run to success");
+}
+
+// policy_task.cycles reaches the tree as the blackboard value {policy_cycles}.
+void testPolicyTaskCountsReachTheTreeThroughTheBlackboard() {
+  Fixture f;
+  f.load(policyTaskTree(R"(
+    <Repeat num_cycles="{policy_cycles}">
+      <PolicyRun arm_id="r" dry_run="{dry_run}"/>
+    </Repeat>)"),
+         {{"policy_task.cycles", 3}});
+  f.start();
+  require(f.until([&] { return f.snapshot().find("\"success\":1") != std::string::npos; }),
+          "Repeat over PolicyRun did not finish");
+  // Two RUNNING ticks between three cycles.
+  require(f.snapshot().find("\"running\":2") != std::string::npos,
+          "policy_task.cycles=3 did not become three cycles");
+}
+
+void testAnInvalidPolicyTaskValueStopsTheExecutorFromStarting() {
+  Fixture f;
+  bool rejected = false;
+  try {
+    f.load(policyTaskTree("<PolicyRun arm_id=\"r\" dry_run=\"{dry_run}\"/>"),
+           {{"policy_task.attempts", 0}});
+  } catch (const std::invalid_argument& e) {
+    rejected = std::string(e.what()).find("policy_task.attempts") != std::string::npos;
+  }
+  require(rejected, "an invalid policy_task value was accepted");
+}
+
 void testTimeoutPublishesFailedDetail() {
   Fixture f;
   f.load(routerXml(), {{"switch_timeout_ms", 1}});
@@ -334,6 +403,10 @@ int main(int argc, char** argv) {
     testInvalidConfigurationFailsConstruction();
     testBranchExceptionPublishesFailureAndRecovers();
     testTimeoutPublishesFailedDetail();
+    testFailInputModeReportsFailedThenRecoversToNone();
+    testPolicyTaskLeavesAreRegisteredAndDryRunOnTheirOwn();
+    testPolicyTaskCountsReachTheTreeThroughTheBlackboard();
+    testAnInvalidPolicyTaskValueStopsTheExecutorFromStarting();
     testTaskControlNodesAreRegistered();
   } catch (const std::exception& error) {
     RCLCPP_ERROR(rclcpp::get_logger("test_input_mode_executor"), "%s", error.what());

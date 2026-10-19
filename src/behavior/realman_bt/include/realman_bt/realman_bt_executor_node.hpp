@@ -10,6 +10,7 @@
 #include "bt_core/tree.hpp"
 #include "realman_bt/cartesian_velocity_for_duration_node.hpp"
 #include "realman_bt/input_mode.hpp"
+#include "realman_bt/policy_task_config.hpp"
 #include "realman_bt/runtime_snapshot.hpp"
 #include "realman_bt/terminal_exit_policy.hpp"
 #include "rclcpp/rclcpp.hpp"
@@ -70,6 +71,7 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
   RuntimeDiagnostics diagnostics_;
   CoordinateReferenceRegistry coordinate_reference_registry_;
   CartesianVelocityProfileRegistry cartesian_velocity_profile_registry_;
+  PolicyTaskConfig policy_task_config_;
   std::unique_ptr<RuntimeSnapshotWriter> snapshot_writer_;
   std::string tree_id_;
   std::uint64_t snapshot_sequence_{0};

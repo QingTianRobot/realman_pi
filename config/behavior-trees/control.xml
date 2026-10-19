@@ -38,7 +38,31 @@
                            r_joint_degrees="{pika_r_joint_degrees}"
                            velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
             <ActivateInputMode mode="policy"/>
-            <PolicyInputStub/>
+            <!-- The task is supervised here, not by scripts outside the tree: each attempt opens the gripper,
+                 goes back to the start pose and runs the policy under PolicyRun. A failure that retrying can
+                 fix (empty grasp, timeout, stall) is retried; a fault (policy_fault: out of range, lost data,
+                 a gripper that will not open) is not. Counts come from config/ros/policy_task.yaml. When the
+                 attempts or a fault end the task, FailInputMode reports FAILED and the router falls back to
+                 none; after the last cycle the branch idles in policy mode with the bridge stopped. -->
+            <Fallback name="policy_task">
+              <Sequence name="policy_cycles_ok">
+                <Repeat num_cycles="{policy_cycles}">
+                  <RetryUnlessFault num_attempts="{policy_attempts}">
+                    <Sequence name="policy_attempt">
+                      <GripperReady arm_id="r" dry_run="{dry_run}"/>
+                      <ThreeArmMoveJ name="policy_rehome" dry_run="{dry_run}"
+                                     l_joint_degrees="{pika_l_joint_degrees}"
+                                     m_joint_degrees="{pika_m_joint_degrees}"
+                                     r_joint_degrees="{pika_r_joint_degrees}"
+                                     velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+                      <PolicyRun arm_id="r" dry_run="{dry_run}"/>
+                    </Sequence>
+                  </RetryUnlessFault>
+                </Repeat>
+                <PolicyInputStub/>
+              </Sequence>
+              <FailInputMode reason="{policy_failure_reason}"/>
+            </Fallback>
           </Sequence>
         </ReactiveSequence>
         <ReactiveSequence name="pikaposition_branch">

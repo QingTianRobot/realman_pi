@@ -42,6 +42,22 @@ class ActivateInputModeNode final : public bt_core::ActionNode {
   std::string mode_id_;
 };
 
+// Reports a task-level failure of the running branch to the input mode coordinator, which
+// publishes FAILED with the reason and then routes to the safe mode. The next tick's selector no
+// longer matches the branch's guard, so the branch (and this node) is halted by the router; until
+// then the node stays RUNNING. This is the only way a leaf's FAILURE becomes an input mode FAILED.
+class FailInputModeNode final : public bt_core::ActionNode {
+ public:
+  using bt_core::ActionNode::ActionNode;
+
+  static bt_core::PortsList providedPorts();
+  bt_core::NodeStatus tick() override;
+  void onHalted() override;
+
+ private:
+  bool reported_{false};
+};
+
 class WebInputStubNode final : public bt_core::ActionNode {
  public:
   using bt_core::ActionNode::ActionNode;

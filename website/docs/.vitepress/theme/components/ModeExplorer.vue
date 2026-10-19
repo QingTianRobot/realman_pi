@@ -19,7 +19,7 @@ onMounted(async () => {
 const details: Record<string, Detail> = {
   web: { input: "Web 控制页的手动按钮与滑块", router: "无：粘性、最高优先级的覆盖，不出现在选择器里", session: "ExecuteMotion / 速度 Action，直连 driver", frame: "页面当前激活的参考系", note: "浏览器选择其它模式时，先取消自己持有的 Action，再切换。" },
   keyboard: { input: "浏览器按键集合 → /keyboard/<arm>/cartesian_velocity", router: "keyboard_control_router（只管 l/r）", session: "CartesianVelocity，高跟随，10 ms 周期，整个激活期只开一个 session", frame: "WORK cell（l/work/cell、r/work/cell）", note: "激活前先校验默认 WORK 坐标；按键松开只让命令归零，session 保留。" },
-  policy: { input: "策略桥 /pi05_policy/<arm>/*", router: "policy_control_router（l/r，bridge 只驱动 active_side）", session: "CartesianVelocity，低跟随（follow=false），30 Hz 流；会话开始 2 s 内零命令漂移超过 1° 即取消", frame: "WORK pikabase（r/work/pikabase）", note: "进入前先用 ThreeArmMoveJ（10%）把三臂移到 pika_default_pose，即训练数据的起点；回位成功才 ACTIVE，策略不会自动开始，要 /policy/activate。" },
+  policy: { input: "策略桥 /pi05_policy/<arm>/*", router: "policy_control_router（l/r，bridge 只驱动 active_side）", session: "CartesianVelocity，低跟随（follow=false），30 Hz 流；会话开始 2 s 内零命令漂移超过 1° 即取消", frame: "WORK pikabase（r/work/pikabase）", note: "进入前先用 ThreeArmMoveJ（10%）把三臂移到 pika_default_pose，即训练数据的起点；回位成功才 ACTIVE。之后任务由行为树自己监督：每次尝试先张开夹爪、回位，再由 PolicyRun 激活桥接并监督，失败按类型重试或停下（见「Policy 任务」页）。" },
   pikaposition: { input: "/pika/<arm>/cartesian_pose（base 帧）", router: "pika_control_router（只管 l/r）", session: "CartesianPose：IK + CANFD 关节透传", frame: "BASE（l/base_link、r/base_link）", note: "进入前先用 ThreeArmMoveJ 把三臂移到 pika_default_pose。" },
   pikavelocity: { input: "/pika/<arm>/cartesian_velocity", router: "pika_control_router", session: "CartesianVelocity，低跟随（follow=false），10 ms 周期", frame: "WORK pikabase（identity WORK）", note: "输入晚于 stale_ms 即刷新零速度，session 保留。" },
   pikamixed: { input: "速度（XYZ）+ 位姿（姿态）两路 topic", router: "pika_control_router", session: "单个 CartesianPose：XYZ 积分速度，姿态跟随相对转动", frame: "BASE", note: "发送端必须同时发布两个 topic；有位置/姿态牵引约束。" },
@@ -63,6 +63,16 @@ const stats = computed(() => {
         { name: "单关节逼近速度", value: `${l.pose_max_joint_speed_dps} °/s` },
         { name: "driver watchdog", value: `${l.velocity_watchdog_ms} ms` },
       ];
+    case "policy": {
+      const task = d.policyTask;
+      return [
+        { name: "周期 / 每周期尝试数", value: `${task.cycles} / ${task.attempts}` },
+        { name: "激活方式", value: task.activation === "auto" ? "行为树自动激活" : "等待操作员激活" },
+        { name: "单次尝试上限", value: `${task.maxAttemptSec} s` },
+        { name: "卡死判定", value: `夹爪闭合且不动 ${task.stallSec} s` },
+        { name: "关节速度上限 / J5 下限", value: `${task.maxJointSpeedDps} °/s · ${task.j5FloorDeg}°` },
+      ];
+    }
     case "web":
       return [
         { name: "普通线速度上限 (l)", value: `${l.max_linear_speed_mps} m/s` },

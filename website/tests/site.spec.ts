@@ -143,6 +143,7 @@ test("documentation routes render", async ({ page }) => {
     "development/behavior-tree-motion",
     "development/gripper-control",
     "development/policy-bridge",
+    "development/policy-task",
     "development/velocity-follow-test",
     "troubleshooting",
   ]) {
@@ -421,6 +422,17 @@ test("docs-data.json carries the numbers and modes straight from the configs", a
   expect(data.pika.velocity.max_linear_speed_mps).toBe(pika.pika_velocity.max_linear_speed_mps);
   const first = gripper.buses[0].grippers[0];
   expect(data.grippers[first.name].openPosition).toBe(first.open_position);
+  // The policy task numbers shown by the mode explorer come from policy_task.yaml.
+  const task = YAML.parse(await readFile(resolve("../config/ros/policy_task.yaml"), "utf8")).realman_bt_executor.ros__parameters.policy_task;
+  expect(data.policyTask).toEqual({
+    cycles: task.cycles,
+    attempts: task.attempts,
+    activation: task.activation,
+    maxAttemptSec: task.max_attempt_sec,
+    stallSec: task.stall.sec,
+    maxJointSpeedDps: task.max_joint_speed_dps,
+    j5FloorDeg: task.joint_envelope_deg.lo[4],
+  });
   // Same catalog order the executor reads from control.xml.
   expect(data.modes.map((mode: { id: string }) => mode.id)).toEqual(["web", "keyboard", "policy", "pikaposition", "pikavelocity", "pikamixed", "none"]);
 });

@@ -1,0 +1,84 @@
+# Policy task run by the behavior tree (config/behavior-trees/control.xml, policy branch): how many cycles and attempts,
+# and every threshold PolicyRun and GripperReady judge an attempt by. Design:
+# docs/superpowers/specs/2026-10-14-policy-task-in-bt-design.md. Loaded by control_router.launch.py as parameters of the
+# executor; policy_task_params.cpp declares exactly these keys, and test_policy_task_config_file.py fails if the file and
+# the loader disagree (ROS would otherwise ignore a mistyped key and use the default).
+#
+# Change a threshold only together with the data it came from. Edits need a restart of ./rm65 bt.
+realman_bt_executor:
+  ros__parameters:
+    policy_task:
+      # Cycles that have to succeed, and failed attempts allowed within one cycle (the first try counts). -1 = no limit.
+      cycles: 1
+      attempts: 3
+      arm: r
+      # auto: PolicyRun calls /policy/activate itself once the preflight checks pass, so selecting the policy mode is
+      #   enough to start a run (the arms first go to the start pose). operator: PolicyRun only waits until a person
+      #   has called /policy/activate and supervises from there; every attempt waits again.
+      activation: auto
+      # Must match policy_bridge.yaml downlink.command_namespace (checked by a test).
+      command_namespace: /pi05_policy
+      gripper_for_arm:
+        l: gripper_left
+        m: gripper_mid
+        r: gripper_right
+
+      # RealMan degrees. p1 and p99 of every frame of the 130 demonstration episodes, widened by 10 degrees each side
+      # (2026-10-14). The J5 floor is 20 even though the demos reach 5.6: that is too close to the wrist singularity
+      # to let the policy go there.
+      joint_envelope_deg:
+        lo: [-73.4, 5.0, -16.2, -28.4, 20.0, -125.1]
+        hi: [40.1, 107.0, 124.3, 70.8, 108.2, 49.0]
+      # Between joint_states samples at least ~0.1 s apart. The runs on 2026-10-14 never exceeded this.
+      max_joint_speed_dps: 50.0
+      # The two arms that are not driven must stay where they were when the attempt started.
+      lm_drift_limit_deg: 1.0
+      # No joint_states from an arm for this long, or no /policy/stats for stats_stale_sec (published at 1 Hz).
+      joint_state_stale_sec: 1.0
+      stats_stale_sec: 5.0
+      # How long the preflight waits for the four stop/start services and the data before it gives up (a fault).
+      service_wait_sec: 10.0
+      # Reply timeout for one service call; the stop sequence continues without the reply after this.
+      service_call_timeout_sec: 2.0
+      # No release over the bin within this long is a retryable timeout. Demonstrations last 11 to 27 s (median 18 s).
+      max_attempt_sec: 45.0
+      # Retryable stall: the gripper is closed and the commanded velocity stays below both limits for sec.
+      # 2026-10-14 cycle 2 held an adapter and then commanded ~0.001 m/s for 30 s.
+      stall:
+        cmd_lin_mps_below: 0.01
+        cmd_ang_radps_below: 0.04
+        sec: 8.0
+
+      # Release = the policy's gripper command goes above open_above after it has been below closed_below for
+      # min_closed_sec in total, while the arm is over the bin (joint_index below joint_below_deg; J1 is far negative
+      # on the bin side). The position test keeps the policy's retry-opens over the mat from ending an attempt.
+      release:
+        open_above: 0.8
+        closed_below: 0.2
+        min_closed_sec: 3.0
+        joint_index: 0
+        joint_below_deg: -35.0
+        # The attempt is supervised for this long after the release command so the gripper really opens.
+        settle_sec: 1.0
+      # Grasp verdict: the median gripper position over the last window_sec of the closed phase, with torque_reached
+      # seen, means the object was held. Measured 2026-10-14: held ~5700-5800 with torque, empty 8380-8480 without.
+      verdict:
+        window_sec: 3.0
+        empty_position_min: 7800.0
+      # GripperReady: position (device units, open ~50, closed 8500) at or below this counts as open.
+      gripper_ready:
+        open_position_max: 500.0
+        timeout_sec: 20.0
+        position_stale_sec: 2.0
+      # One CSV per attempt: the right arm's joints, the other arms' drift, the gripper and the commanded speeds, every
+      # period_sec, with result / grasp / seconds / reason at the end. It is the record of WHY an attempt ended: the
+      # behavior tree's own event list only keeps the last 200 events and the Web page's polling fills it. The directory is
+      # the host's ~/realman_pi/logs/policy-attempts (the bringup container mounts logs/ read-write). A trace that cannot
+      # be written never affects the attempt.
+      trace:
+        enabled: true
+        dir: /opt/rm65_ws/logs/policy-attempts
+        period_sec: 0.1
+      # After the stop calls, wait this long for the router to release its velocity session (its input_timeout_ms is
+      # 500) so the next ThreeArmMoveJ does not fight it.
+      router_release_sec: 1.5

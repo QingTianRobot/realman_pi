@@ -121,11 +121,22 @@ const motionConfig = YAML.parse(await readFile(join(rosConfigDirectory, "realman
 const pikaConfig = YAML.parse(await readFile(join(rosConfigDirectory, "pika_config.yaml"), "utf8"));
 const keyboardConfig = YAML.parse(await readFile(join(rosConfigDirectory, "keyboard_control.yaml"), "utf8"));
 const gripperConfig = YAML.parse(await readFile(join(rosConfigDirectory, "gripper.yaml"), "utf8"));
+const policyTaskConfig = YAML.parse(await readFile(join(rosConfigDirectory, "policy_task.yaml"), "utf8")).realman_bt_executor.ros__parameters.policy_task;
 const controlTree = await readFile(join(repositoryDirectory, "config", "behavior-trees", "control.xml"), "utf8");
 const calibrationConfig = YAML.parse(await readFile(join(rosConfigDirectory, "camera_calibration.yaml"), "utf8"));
 const docsData = {
-  source: ["realman_motion.yaml", "pika_config.yaml", "keyboard_control.yaml", "gripper.yaml", "control.xml", "camera_calibration.yaml"],
+  source: ["realman_motion.yaml", "pika_config.yaml", "keyboard_control.yaml", "gripper.yaml", "control.xml", "camera_calibration.yaml", "policy_task.yaml"],
   motion: motionConfig.robots,
+  // What the behavior tree supervises while the policy runs (config/ros/policy_task.yaml).
+  policyTask: {
+    cycles: policyTaskConfig.cycles,
+    attempts: policyTaskConfig.attempts,
+    activation: policyTaskConfig.activation,
+    maxAttemptSec: policyTaskConfig.max_attempt_sec,
+    stallSec: policyTaskConfig.stall.sec,
+    maxJointSpeedDps: policyTaskConfig.max_joint_speed_dps,
+    j5FloorDeg: policyTaskConfig.joint_envelope_deg.lo[4],
+  },
   pika: { velocity: pikaConfig.pika_velocity, mixed: pikaConfig.pika_mixed },
   keyboard: {
     linearSpeedFraction: keyboardConfig.linear_speed_fraction,

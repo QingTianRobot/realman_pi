@@ -41,7 +41,7 @@ RUNNING 分支。普通分支（`web`、`none`）是 `InputModeGuard` → `Activ
 准备动作成功后，后续 tick 会从该 `Sequence` 的 Pika 输入叶继续，不会重新进入准备动作；只有离开
 Pika 分支后再次进入，才会重新执行准备动作。
 
-`policy` 分支用同样的结构：有状态 `policy_entry` → `ThreeArmMoveJ`（节点名 `policy_start_pose`，速度 `10%`，比 Pika 的 `30%` 慢）→ `ActivateInputMode` → `PolicyInputStub`。目标位姿沿用 `pika_default_pose`（launch 从 `pika_config.yaml` 注入 `pika_{l,m,r}_joint_degrees`，不在 XML 里复制），原因有二：训练数据的 130 个 episode 都从这个位姿起步（各关节离散度不超过 1°），策略必须从它见过的状态开始；速度会话开始前的 `passthrough_reanchor_mode: canfd_current` 重新锚定只挂在 MoveJ 之前，没有这一步就得不到该保护。回位成功才发布 `ACTIVE/policy`，`dry_run=true` 时只校验、不发动作。回位完成后策略**不会**自动开始，运动的唯一开关仍是 bridge 的 `/policy/activate`。三条臂都会回位，与 Pika 一致，也与数据采集时的布局一致。
+`policy` 分支用同样的结构：有状态 `policy_entry` → `ThreeArmMoveJ`（节点名 `policy_start_pose`，速度 `10%`，比 Pika 的 `30%` 慢）→ `ActivateInputMode` → `Fallback policy_task`。目标位姿沿用 `pika_default_pose`（launch 从 `pika_config.yaml` 注入 `pika_{l,m,r}_joint_degrees`，不在 XML 里复制），原因有二：训练数据的 130 个 episode 都从这个位姿起步（各关节离散度不超过 1°），策略必须从它见过的状态开始；速度会话开始前的 `passthrough_reanchor_mode: canfd_current` 重新锚定只挂在 MoveJ 之前，没有这一步就得不到该保护。回位成功才发布 `ACTIVE/policy`，`dry_run=true` 时只校验、不发动作。回位成功、`ACTIVE/policy` 发布之后，任务由行为树自己监督：`GripperReady`、再次回位、`PolicyRun`（激活桥接、监督、停止）包在 `Repeat` 和 `RetryUnlessFault` 里，失败经 `FailInputMode` 进入 `FAILED`。细节见 [Policy 任务](./policy-task)。配置 `activation: auto`（默认）时选择 `policy` 就会开始运行，`operator` 时仍等待操作员调用 `/policy/activate`。三条臂都会回位，与 Pika 一致，也与数据采集时的布局一致。
 
 键盘 Web ingress 是 `/keyboard/l/cartesian_velocity` 和 `/keyboard/r/cartesian_velocity`
 （`geometry_msgs/msg/TwistStamped`）。`keyboard_control_router` 为左右臂分别拥有

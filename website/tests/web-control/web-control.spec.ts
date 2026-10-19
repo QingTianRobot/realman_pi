@@ -634,6 +634,19 @@ test("renders command and measured Cartesian velocity telemetry for both arms", 
   await expect(page.locator("#velocity-telemetry-r")).toContainText("r/work/cell");
   await expect(page.locator("#velocity-telemetry-r")).toContainText("r/base_link");
   await expect(page.locator("#velocity-telemetry-r")).toContainText("STALE / NO DATA");
+
+  // Measured vectors are drawn against the arm's configured limits (0.15 m/s, 0.25 rad/s).
+  const leftLinear = page.locator("#velocity-telemetry-l [data-plot=\"linear\"]");
+  const leftAngular = page.locator("#velocity-telemetry-l [data-plot=\"angular\"]");
+  await expect(leftLinear).toHaveAttribute("data-ratio", "1.200");
+  await expect(leftLinear.locator("[data-field=\"linear-percent\"]")).toHaveText("120% 超量程");
+  await expect(leftLinear.locator("[data-field=\"linear-ticks\"]")).toHaveText(/0\.000.*0\.075.*0\.150.*m\/s/);
+  await expect(leftAngular).toHaveAttribute("data-ratio", "0.160");
+  await expect(leftAngular.locator("[data-field=\"angular-ticks\"]")).toHaveText(/0\.250.*rad\/s/);
+  await expect(leftLinear.locator(".velocity-plot-overlay")).toBeHidden();
+  await expect(page.locator("#velocity-telemetry-l")).toContainText("坐标系不同，未叠加");
+  await expect(page.locator("#velocity-telemetry-r [data-field=\"linear-overlay\"]")).toHaveText("无有效实测");
+  await expect(page.locator("#velocity-telemetry-r [data-field=\"linear-overlay\"]")).toBeVisible();
 });
 
 test("unlocks input mode selection when reconnect loses its result", async ({ page }) => {

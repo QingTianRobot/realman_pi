@@ -2,6 +2,7 @@ import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import URDFLoader from "urdf-loader";
 import "./style.css";
+import { VelocityPlot, velocityColor, velocityColorGradient } from "./velocity_plot";
 
 type ArmId = "l" | "m" | "r";
 type KeyboardArmId = "l" | "r";
@@ -710,30 +711,88 @@ function telemetryReferenceLabel(state: CartesianVelocityTelemetry) {
   const kind = state.reference_type === 1 ? "WORK" : state.reference_type === 2 ? "TOOL" : "BASE";
   return `${kind} / ${state.reference_name || "unknown"}`;
 }
-function renderCartesianVelocityTelemetry() {
-  velocityTelemetryGrid.innerHTML = (["l", "r"] as const).map((arm) => {
-    const state = cartesianVelocityStates[arm];
-    if (!state) {
-      return `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}"><div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-status">WAIT</span></div><div class="telemetry-empty">等待 /${arm}/cartesian_velocity/state</div></article>`;
-    }
-    const measuredStatus = state.measured_valid ? "VALID" : "STALE / NO DATA";
-    const measuredStatusClass = state.measured_valid ? "valid" : "stale";
-    const sessionStatus = state.session_active ? "ACTIVE" : "IDLE";
-    const commandFrame = state.command_frame_id || telemetryReferenceLabel(state);
-    const measuredFrame = state.measured_frame_id || `${arm}/base_link`;
-    return `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}">
-      <div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-status ${state.session_active ? "active" : ""}">${sessionStatus}</span></div>
-      <div class="telemetry-reference"><span>命令坐标系</span><strong>${escapeHtml(commandFrame)}</strong><span>参考</span><strong>${escapeHtml(telemetryReferenceLabel(state))}</strong></div>
-      <div class="telemetry-row"><span>命令线速度</span><strong>${telemetryVector(state.commanded_linear_velocity_mps)} m/s</strong><em>age ${Number.isFinite(state.command_age_ms) ? state.command_age_ms : "--"} ms</em></div>
-      <div class="telemetry-row"><span>限速后线速度</span><strong>${telemetryVector(state.limited_linear_velocity_mps)} m/s <small>|${telemetryNorm(state.limited_linear_velocity_mps)}|</small></strong><em></em></div>
-      <div class="telemetry-row"><span>命令角速度</span><strong>${telemetryVector(state.commanded_angular_velocity_radps)} rad/s</strong><em></em></div>
-      <div class="telemetry-row"><span>限速后角速度</span><strong>${telemetryVector(state.limited_angular_velocity_radps)} rad/s <small>|${telemetryNorm(state.limited_angular_velocity_radps)}|</small></strong><em></em></div>
+type VelocityPlotKind = "linear" | "angular";
+const velocityPlotUnits: Record<VelocityPlotKind, string> = { linear: "m/s", angular: "rad/s" };
+const velocityPlots: Partial<Record<`${KeyboardArmId}-${VelocityPlotKind}`, VelocityPlot>> = {};
+function velocityPlotScale(arm: KeyboardArmId, kind: VelocityPlotKind) {
+  const motion = manifest?.robots.find((robotInfo) => robotInfo.id === arm)?.motion;
+  return Number(kind === "linear" ? motion?.max_linear_speed_mps : motion?.max_angular_speed_radps);
+}
+function velocityPlotFigure(arm: KeyboardArmId, kind: VelocityPlotKind) {
+  return `<figure class="velocity-plot" data-plot="${kind}">
+    <figcaption><span>${kind === "linear" ? "实测线速度" : "实测角速度"}</span><em data-field="${kind}-percent">--</em></figcaption>
+    <div class="velocity-plot-stage"><canvas data-field="${kind}-canvas" aria-label="${arm.toUpperCase()} ${kind === "linear" ? "实测线速度" : "实测角速度"}三维图，可拖动旋转"></canvas><div class="velocity-plot-overlay" data-field="${kind}-overlay">等待 /${arm}/cartesian_velocity/state</div></div>
+    <div class="velocity-plot-readout"><strong data-field="${kind}-vector">--</strong><span data-field="${kind}-norm">|--|</span></div>
+    <div class="velocity-scale"><div class="velocity-scale-bar" style="background: ${velocityColorGradient()}"></div><div class="velocity-scale-ticks" data-field="${kind}-ticks"></div></div>
+  </figure>`;
+}
+function ensureVelocityTelemetrySkeleton() {
+  if (velocityTelemetryGrid.childElementCount) return;
+  velocityTelemetryGrid.innerHTML = (["l", "r"] as const).map((arm) => `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}">
+      <div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-status" data-field="session">WAIT</span></div>
+      <div class="telemetry-reference"><span>命令坐标系</span><strong data-field="command-frame">--</strong><span>参考</span><strong data-field="reference">--</strong></div>
+      <div class="telemetry-row"><span>命令线速度</span><strong data-field="commanded-linear">--</strong><em data-field="command-age">age -- ms</em></div>
+      <div class="telemetry-row"><span>限速后线速度</span><strong data-field="limited-linear">--</strong><em></em></div>
+      <div class="telemetry-row"><span>命令角速度</span><strong data-field="commanded-angular">--</strong><em></em></div>
+      <div class="telemetry-row"><span>限速后角速度</span><strong data-field="limited-angular">--</strong><em></em></div>
       <div class="telemetry-divider"></div>
-      <div class="telemetry-reference"><span>实测坐标系</span><strong>${escapeHtml(measuredFrame)}</strong><span>状态</span><strong class="telemetry-measured ${measuredStatusClass}">${measuredStatus}</strong></div>
-      <div class="telemetry-row"><span>实测线速度</span><strong>${telemetryVector(state.measured_linear_velocity_mps)} m/s <small>|${telemetryNorm(state.measured_linear_velocity_mps)}|</small></strong><em>age ${Number.isFinite(state.measured_age_ms) ? state.measured_age_ms : "--"} ms</em></div>
-      <div class="telemetry-row"><span>实测角速度</span><strong>${telemetryVector(state.measured_angular_velocity_radps)} rad/s <small>|${telemetryNorm(state.measured_angular_velocity_radps)}|</small></strong><em></em></div>
-    </article>`;
-  }).join("");
+      <div class="telemetry-reference"><span>实测坐标系</span><strong data-field="measured-frame">${arm}/base_link</strong><span>状态</span><strong class="telemetry-measured" data-field="measured-status">WAIT</strong></div>
+      <div class="telemetry-reference"><span>实测数据年龄</span><strong data-field="measured-age">-- ms</strong><span>命令叠加</span><strong data-field="overlay-note">--</strong></div>
+      <div class="velocity-plots">${velocityPlotFigure(arm, "linear")}${velocityPlotFigure(arm, "angular")}</div>
+      <p class="velocity-plot-help">粗箭头为实测速度，颜色按 |v| / 固定量程着色；细白箭头为限速后命令（仅在两者坐标系一致时叠加）。拖动旋转，双击复位视角。</p>
+    </article>`).join("");
+  for (const arm of ["l", "r"] as const) {
+    for (const kind of ["linear", "angular"] as const) {
+      const canvasElement = velocityTelemetryGrid.querySelector<HTMLCanvasElement>(`#velocity-telemetry-${arm} [data-field="${kind}-canvas"]`)!;
+      velocityPlots[`${arm}-${kind}`] = new VelocityPlot(canvasElement);
+    }
+  }
+}
+function renderCartesianVelocityTelemetry() {
+  ensureVelocityTelemetrySkeleton();
+  for (const arm of ["l", "r"] as const) {
+    const card = $(`#velocity-telemetry-${arm}`) as HTMLElement;
+    const field = (name: string) => card.querySelector<HTMLElement>(`[data-field="${name}"]`)!;
+    const state = cartesianVelocityStates[arm];
+    for (const kind of ["linear", "angular"] as const) {
+      const scale = velocityPlotScale(arm, kind);
+      const unit = velocityPlotUnits[kind];
+      field(`${kind}-ticks`).innerHTML = Number.isFinite(scale) && scale > 0
+        ? [0, 0.5, 1].map((ratio) => `<span>${displayNumber(scale * ratio, 3)}</span>`).join("") + `<span class="unit">${unit}</span>`
+        : `<span>量程未配置</span>`;
+      const measured = state?.[kind === "linear" ? "measured_linear_velocity_mps" : "measured_angular_velocity_radps"];
+      const sameFrame = Boolean(state?.command_frame_id && state.command_frame_id === state.measured_frame_id);
+      const reference = sameFrame ? state?.[kind === "linear" ? "limited_linear_velocity_mps" : "limited_angular_velocity_radps"] : undefined;
+      const plot = velocityPlots[`${arm}-${kind}`];
+      const ratio = plot?.update(state?.measured_valid ? measured : undefined, scale, reference) ?? Number.NaN;
+      const overlay = field(`${kind}-overlay`);
+      overlay.hidden = Boolean(state?.measured_valid && plot?.available);
+      overlay.textContent = !plot?.available ? "WebGL 不可用" : !state ? `等待 /${arm}/cartesian_velocity/state` : "无有效实测";
+      field(`${kind}-vector`).textContent = `${telemetryVector(measured)} ${unit}`;
+      field(`${kind}-norm`).textContent = `|${telemetryNorm(measured)}|`;
+      const percent = field(`${kind}-percent`);
+      percent.textContent = Number.isFinite(ratio) ? `${Math.round(ratio * 100)}%${ratio > 1 ? " 超量程" : ""}` : "--";
+      percent.style.color = Number.isFinite(ratio) ? velocityColor(ratio) : "";
+      card.querySelector<HTMLElement>(`[data-plot="${kind}"]`)!.dataset.ratio = Number.isFinite(ratio) ? ratio.toFixed(3) : "";
+    }
+    if (!state) continue;
+    const session = field("session");
+    session.textContent = state.session_active ? "ACTIVE" : "IDLE";
+    session.className = `telemetry-status ${state.session_active ? "active" : ""}`;
+    field("command-frame").textContent = state.command_frame_id || telemetryReferenceLabel(state);
+    field("reference").textContent = telemetryReferenceLabel(state);
+    field("commanded-linear").textContent = `${telemetryVector(state.commanded_linear_velocity_mps)} m/s`;
+    field("command-age").textContent = `age ${Number.isFinite(state.command_age_ms) ? state.command_age_ms : "--"} ms`;
+    field("limited-linear").innerHTML = `${telemetryVector(state.limited_linear_velocity_mps)} m/s <small>|${telemetryNorm(state.limited_linear_velocity_mps)}|</small>`;
+    field("commanded-angular").textContent = `${telemetryVector(state.commanded_angular_velocity_radps)} rad/s`;
+    field("limited-angular").innerHTML = `${telemetryVector(state.limited_angular_velocity_radps)} rad/s <small>|${telemetryNorm(state.limited_angular_velocity_radps)}|</small>`;
+    field("measured-frame").textContent = state.measured_frame_id || `${arm}/base_link`;
+    const measuredStatus = field("measured-status");
+    measuredStatus.textContent = state.measured_valid ? "VALID" : "STALE / NO DATA";
+    measuredStatus.className = `telemetry-measured ${state.measured_valid ? "valid" : "stale"}`;
+    field("measured-age").textContent = `${Number.isFinite(state.measured_age_ms) ? state.measured_age_ms : "--"} ms`;
+    field("overlay-note").textContent = state.command_frame_id && state.command_frame_id === state.measured_frame_id ? "已叠加" : "坐标系不同，未叠加";
+  }
 }
 function renderFleetStrip() {
   if (!manifest) return;

@@ -465,6 +465,21 @@ ros2 topic echo --once /l/cartesian_velocity/state
 `l/base_link`/`r/base_link` 是独立的测量坐标约定，调用方不能把两者的分量直接相加。第一版测量频率
 由驱动状态轮询决定（默认约 10 Hz），后续可替换为 RealMan UDP 实时状态回调而不改变消息契约。
 
+#### 实测速度三维图
+
+每臂的实测线速度和实测角速度各画一个可拖动的三维图（`velocity_plot.ts`），坐标轴即
+`measured_frame_id`（X 红 / Y 绿 / Z 蓝，Z 朝上）：
+
+- **固定量程**：立方体边界为 ±满量程，取自 `config/ros/realman_motion.yaml` 中该臂的
+  `max_linear_speed_mps` / `max_angular_speed_radps`（经 `/api/layout` 的 `motion` 下发），不随数据自动缩放；
+  水平面上的内外两圈分别是 50% 和 100% 量程。需要改量程时改该 YAML，而不是改前端。
+- **颜色**：箭头颜色按 |v| / 满量程从蓝 → 青 → 绿 → 黄 → 红渐变，下方色条和刻度（0、50%、100%）使用同一色标，
+  标题旁显示百分比。超过量程时箭头截断在 100% 球面并改为品红，标注“超量程”。
+- **辅助**：虚线把箭头尖投影到水平面，便于判断 Z 分量；只有 `command_frame_id` 与 `measured_frame_id`
+  一致时，才叠加一根细白箭头表示限速后命令，否则卡片显示“坐标系不同，未叠加”，避免跨坐标系比较。
+- **交互**：拖动旋转视角，禁用缩放和平移以保持量程；双击复位视角。图只在新数据或拖动时重绘。
+  `measured_valid=false` 时隐藏箭头并显示“无有效实测”，不把零向量画成静止。
+
 ## 取消与软件停止
 
 “取消 Action”只对发起该 Action 的 WebSocket 客户端有效，调用 `cancel_goal_async()`，

@@ -104,7 +104,9 @@ transient-local 订阅 `/realman_bt_executor/input_mode_state`。同一 YAML 的
 目录完全由 XML 的字面 `InputModeGuard` 项发现，浏览器不会维护模式名单。当前 picker 显示一个
 “GLOBAL INPUT / 输入模式”卡片，带一个动态 select：`none`、`keyboard`、`policy`、`pikaposition`、
 `pikavelocity`、`pikamixed` 都可选；`web` 虽会由
-状态显示为 active，却保持隐藏且不可选。没有正在运行的路由器或 discovery 不健康时，卡片隐藏；
+状态显示为 active，却保持隐藏且不可选。状态行优先显示 `input_mode_state.detail`；行为树常发空 detail，
+此时按 phase 显示“行为树已切换到 X（epoch N）”“正在切换到 X…”或“切换到 X 失败”，不再停留在“等待输入模式状态”。
+没有正在运行的路由器或 discovery 不健康时，卡片隐藏；
 既有直接 Action 控制继续兼容，仅在两项 router service 都确认为不可用时启用。服务只短暂失联或
 catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返回 `input_mode_unavailable`，而不是绕过仲裁。
 若 service 在等待 Web override 的已排队运动期间消失，该命令失败并被永久丢弃；即使之后确认 router
@@ -164,7 +166,8 @@ Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`s
   运动（一次性 MOVEJ/MOVEL/MOVEP 与关节记录）、速度（末端速度 Action）、夹爪、键盘（仅在发现键盘模式时出现）。
   一次只显示一个操作面板，所选标签保存在该浏览器的 \`localStorage\` 中，刷新后恢复；存储不可用时默认“运动”。
   桌面端右列 sticky 跟随滚动，超出视口高度时在列内滚动。
-- 窄屏和手机端按 WebGL 展示、状态面板、速度遥测、控制卡片的顺序单列排列，状态面板在手机端也改为单列。
+- 窄屏和手机端（≤980px）按 WebGL 展示、状态面板、控制卡片（输入模式 + 标签页）、速度遥测的顺序单列排列，
+  让操作区紧跟实时状态；状态面板在手机端也改为单列。
 - 视觉风格沿用 mafumaful.github.io 的浅色主题：共享的 `theme.css` 用 `--hue: 250` 派生全部颜色令牌
   （页面底色、白色圆角卡片、浅蓝按钮、标题前的强调竖条），并提供按钮、输入框、卡片等公共样式；控制页
   （`style.css`）和标定页（`calibration.css`）都先引入它、只写各自布局，改色只需改令牌。标定页的相机状态卡用

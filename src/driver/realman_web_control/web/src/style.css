@@ -210,6 +210,12 @@ dialog input { width: 100%; margin: 8px 0 18px; }
   .brand { width: 100%; }
   .workspace { grid-template-columns: 1fr; }
   .controls { position: static; max-height: none; overflow: visible; }
+  /* Single column: put the operating controls right after the live view and status, telemetry last. */
+  .visualization-column { display: contents; }
+  .viewer-panel { order: 1; }
+  .status-row { order: 2; }
+  .controls { order: 3; }
+  #velocity-telemetry-panel { order: 4; }
   .viewer-panel { height: 560px; min-height: 560px; }
 }
 @media (max-width: 560px) {

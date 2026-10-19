@@ -602,7 +602,13 @@ function renderInputModeCard() {
   const state = inputModeState;
   inputModeActive.textContent = state ? `${inputModeLabel(state.active_mode)} / ${state.phase}` : "WAIT";
   inputModeActive.className = `mini-state ${state?.phase.toLowerCase() ?? ""}`;
-  inputModeDetail.textContent = state?.detail || inputModeResultDetail || "等待输入模式状态";
+  // The BT often reports an empty detail; describe the phase rather than looking like no state arrived.
+  const phaseDetail = !state ? "等待输入模式状态"
+    : state.phase === "ACTIVE" ? `行为树已切换到 ${inputModeLabel(state.active_mode)}（epoch ${state.epoch}）`
+    : state.phase === "SWITCHING" ? `正在切换到 ${inputModeLabel(state.requested_mode)}…`
+    : state.phase === "FAILED" ? `切换到 ${inputModeLabel(state.requested_mode)} 失败`
+    : state.phase;
+  inputModeDetail.textContent = state?.detail || inputModeResultDetail || phaseDetail;
   updateInputModeSelectionDisabled();
   reconcileKeyboardControl();
   guideToKeyboardControl();

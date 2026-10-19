@@ -57,7 +57,17 @@ canvas { display: block; width: 100%; height: 100%; }
 .keyboard-frame-legend .axis-z { color: #5594ff; }
 .viewer-footer { display: grid; grid-template-columns: minmax(0, 1fr) 100px; align-items: center; gap: 12px; padding: 10px 16px; border-top: 1px solid #263b40; }
 .viewer-footer #root-frame { min-width: 0; overflow: hidden; text-overflow: ellipsis; white-space: nowrap; text-align: right; }
-.controls { display: flex; flex-direction: column; gap: 16px; }
+.controls { display: flex; flex-direction: column; gap: 12px; position: sticky; top: 16px; max-height: calc(100vh - 32px); overflow-y: auto; overscroll-behavior: contain; }
+.controls [data-control-panel][hidden] { display: none; }
+.control-tabs { display: grid; grid-auto-columns: minmax(0, 1fr); grid-auto-flow: column; border: 1px solid #385158; background: #111e22; flex: none; }
+.control-tabs button { min-height: 38px; border: 0; border-right: 1px solid #385158; background: transparent; color: #8fa6a9; font-size: 12px; font-weight: 700; letter-spacing: .06em; }
+.control-tabs button:last-child { border-right: 0; }
+.control-tabs button[hidden] { display: none; }
+.control-tabs button:hover { color: #d5e4e1; }
+.control-tabs button.selected { background: #285b5f; color: #effbf8; box-shadow: inset 0 -2px #5dd0bf; }
+.control-tabs button:focus-visible { outline: 2px solid #5dd0bf; outline-offset: -2px; }
+.status-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
+.status-row > .panel { min-width: 0; }
 .panel-section { padding: 16px; }
 .input-mode-card[hidden] { display: none; }
 .keyboard-control-card[hidden] { display: none; }
@@ -175,6 +185,7 @@ dialog input { width: 100%; margin: 8px 0 18px; }
   .topbar { flex-wrap: wrap; }
   .brand { width: 100%; }
   .workspace { grid-template-columns: 1fr; }
+  .controls { position: static; max-height: none; overflow: visible; }
   .viewer-panel { height: 560px; min-height: 560px; }
 }
 @media (max-width: 560px) {
@@ -193,6 +204,7 @@ dialog input { width: 100%; margin: 8px 0 18px; }
   .input-mode-body label { grid-template-columns: 1fr; gap: 5px; }
   .keyboard-arm-grid { grid-template-columns: 1fr; }
   .velocity-telemetry-grid { grid-template-columns: 1fr; }
+  .status-row { grid-template-columns: 1fr; gap: 10px; }
   .velocity-telemetry-arm { min-height: 0; }
   .viewer-footer { font-size: 9px; }
   .record-save-row, .record-apply-row { grid-template-columns: 1fr; }

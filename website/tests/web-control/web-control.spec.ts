@@ -200,6 +200,12 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator(".visualization-column > .viewer-panel")).toHaveCount(1);
   await expect(page.locator(".visualization-column > #velocity-telemetry-panel")).toHaveCount(1);
   await expect(page.locator(".controls > #velocity-telemetry-panel")).toHaveCount(0);
+  await expect(page.locator(".visualization-column > .status-row > #coordinate-panel")).toHaveCount(1);
+  await expect(page.locator(".visualization-column > .status-row > #action-monitor-panel")).toHaveCount(1);
+  await expect(page.locator("#motion-panel")).toBeVisible();
+  await expect(page.locator("#velocity-panel")).toBeHidden();
+  await expect(page.locator("#gripper-panel")).toBeHidden();
+  await expect(page.locator("#control-tab-keyboard")).toBeHidden();
   const liveCanvasBeforeFeedback = await canvasChecksum(page);
   await page.evaluate(() => {
     (window as any).__webSocket.emit("message", { data: JSON.stringify({
@@ -419,6 +425,19 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator("#record-select")).toHaveValue("");
   await expect(page.locator("#record-status")).toContainText("已删除 Ready");
   await page.screenshot({ path: test.info().outputPath("web-control.png"), fullPage: true });
+});
+
+test("switches control tabs and remembers the last one across reloads", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#control-tab-motion")).toHaveAttribute("aria-selected", "true");
+  await page.locator("#control-tab-velocity").click();
+  await expect(page.locator("#velocity-panel")).toBeVisible();
+  await expect(page.locator("#motion-panel")).toBeHidden();
+  await expect(page.locator("#coordinate-panel")).toBeVisible();
+  await expect(page.locator("#action-monitor-panel")).toBeVisible();
+  await page.reload();
+  await expect(page.locator("#control-tab-velocity")).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#velocity-panel")).toBeVisible();
 });
 
 test("reports a WebGL renderer failure when WebGL is unavailable", async ({ page }) => {
@@ -799,6 +818,7 @@ test("highlights keyboard instructions without scrolling away from the work area
 
   await expect.poll(() => page.evaluate(() => (window as any).__keyboardGuideScrolls)).toBe(0);
   await expect(page.locator("#keyboard-control-card")).toHaveClass(/keyboard-guide-active/);
+  await expect(page.locator("#control-tab-keyboard")).toHaveAttribute("aria-selected", "true");
 
   await emitWebSocketEvent(page, active);
   await expect.poll(() => page.evaluate(() => (window as any).__keyboardGuideScrolls)).toBe(0);
@@ -1142,6 +1162,7 @@ test("mounts a gripper on every arm and follows live gripper position feedback",
 
 test("gripper travel limits are edited, confirmed and applied from the web panel", async ({ page }) => {
   await page.goto("/");
+  await page.locator("#control-tab-gripper").click();
   const sentCommands = () => page.evaluate(() =>
     ((window as any).__webMessages as string[])
       .map((value) => JSON.parse(value))
@@ -1223,6 +1244,7 @@ test("gripper travel limits are edited, confirmed and applied from the web panel
 
 test("gripper limits editor errors stay visible while telemetry streams", async ({ page }) => {
   await page.goto("/");
+  await page.locator("#control-tab-gripper").click();
   await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
   const sentCommands = () => page.evaluate(() =>
     ((window as any).__webMessages as string[])
@@ -1322,6 +1344,7 @@ test("gripper limits editor errors stay visible while telemetry streams", async 
 
 test("gripper travel limits are disabled without write access", async ({ page }) => {
   await page.goto("/");
+  await page.locator("#control-tab-gripper").click();
   // The fake socket sends its own read_only:false hello 20 ms after load; wait for that burst first.
   await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
   await emitWebSocketEvent(page, { type: "hello", read_only: true });
@@ -1337,6 +1360,7 @@ test("gripper travel limits are disabled without write access", async ({ page })
 
 test("gripper travel limits are disabled while the socket is closed and re-enabled on reconnect", async ({ page }) => {
   await page.goto("/");
+  await page.locator("#control-tab-gripper").click();
   await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
   await emitWebSocketEvent(page, {
     type: "gripper_list",

@@ -62,7 +62,7 @@
     camera_ids: [orbbec-left, orbbec-right, d435]
     camera_image_topics: [/camera_left/color/image_raw, /camera_right/color/image_raw, /camera_global/d435/color/image_raw]
     max_camera_image_queue: 64
-    export_target_fps: 15.0
+    export_target_fps: 30.0
     # Frames with a state/action/camera gap larger than this are rejected during export.
     # 10 Hz joint_states occasionally drop a few messages (DDS best-effort), which a 0.5 s
     # window rejects; 2.0 s still catches a genuinely stopped stream.
@@ -70,8 +70,13 @@
     # Auto-adopt a cleanly finalized session on STOP and enqueue its LeRobot
     # conversion (run one-at-a-time by a single serialized worker).  A FAILED
     # session (MCAP/camera write errors) is never auto-exported; set false to
-    # restore the manual ADOPT-only flow.
-    auto_export_on_stop: true
+    # restore the manual ADOPT-only flow.  Manual export (option A) keeps new
+    # sessions PENDING so the operator can review/hide them before batch-exporting
+    # the survivors together via the ADOPT_ALL service command.
+    auto_export_on_stop: false
+    # Concurrent LeRobot conversion workers.  Read/align phases overlap; the dataset's
+    # own process-wide append lock still serializes the final parquet/video write.
+    export_workers: 3
     # PREPARE requires each required ROS input to have a receipt no older than this.
     preflight_max_age_sec: 2.0
     # Fresh sensors exceeding this receipt-time span remain recordable, but PREPARE

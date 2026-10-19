@@ -212,6 +212,10 @@ class LeRobotV3Schema:
             # Per-frame subtask label index (-1 = unannotated).  The subtask label
             # table itself lives in ``meta/subtasks.parquet`` written by the exporter.
             "subtask_index": {"dtype": "int64", "shape": (1,)},
+            # Sequential per-episode number assigned by the recorder (1, 2, ...).
+            # Separate from ``task`` (the semantic task label) so recordings stay
+            # individually addressable even when every episode shares one task.
+            "session_number": {"dtype": "int64", "shape": (1,)},
         }
         if self.gripper_action_topics:
             result["action.command.gripper"] = {

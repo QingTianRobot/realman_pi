@@ -8,6 +8,7 @@ from __future__ import annotations
 
 import json
 import os
+import shutil
 import time
 import uuid
 from dataclasses import dataclass
@@ -92,6 +93,60 @@ class SessionStore:
         self.state = SessionState.IDLE
         self._manifest: dict[str, Any] | None = None
 
+    @staticmethod
+    def next_session_number(root: str | Path) -> int:
+        """Return the next available session number: max existing ``session_number`` + 1.
+
+        Only finalized manifests are considered; a corrupt manifest or a non-integer
+        ``session_number`` is skipped.  Returns 1 for an empty/absent root.
+        """
+        maximum = 0
+        root_path = Path(root)
+        if root_path.is_dir():
+            for directory in root_path.iterdir():
+                if not directory.is_dir():
+                    continue
+                manifest = directory / "manifest.json"
+                if not manifest.is_file():
+                    continue
+                try:
+                    payload = json.loads(manifest.read_text(encoding="utf-8"))
+                except (OSError, json.JSONDecodeError):
+                    continue
+                if not isinstance(payload, dict):
+                    continue
+                number = payload.get("metadata", {}).get("session_number")
+                if isinstance(number, int) and number > maximum:
+                    maximum = number
+        return maximum + 1
+
+    @staticmethod
+    def pending_session_ids(root: str | Path) -> list[str]:
+        """Return sorted session ids whose finalized manifest still has ``decision=PENDING``.
+
+        A directory without a manifest, a corrupt manifest, or a hidden directory is
+        skipped rather than failing the whole scan.  ``PENDING`` is the durable state a
+        finalized session holds until it is adopted (queued for export) or discarded.
+        """
+        root_path = Path(root)
+        if not root_path.is_dir():
+            return []
+        pending: list[str] = []
+        for directory in root_path.iterdir():
+            if not directory.is_dir() or directory.name.startswith("."):
+                continue
+            manifest = directory / "manifest.json"
+            if not manifest.is_file():
+                continue
+            try:
+                payload = json.loads(manifest.read_text(encoding="utf-8"))
+            except (OSError, json.JSONDecodeError):
+                continue
+            if isinstance(payload, dict) and payload.get("decision") == "PENDING":
+                pending.append(directory.name)
+        pending.sort()
+        return pending
+
     def create(
         self,
         metadata: dict[str, Any],
@@ -120,6 +175,8 @@ class SessionStore:
         (directory / "export" / "lerobot").mkdir(mode=0o750, parents=True)
         self.session = RecordingSession(session_id, directory, realtime_ns, monotonic_ns)
         self.state = SessionState.COUNTDOWN
+        if "session_number" not in metadata:
+            metadata["session_number"] = self.next_session_number(self.root)
         self._manifest = {
             "schema_version": 2,
             "session_id": session_id,
@@ -330,6 +387,23 @@ class SessionStore:
     def restore_final_session(directory: str | Path) -> dict[str, Any]:
         """Re-adopt one previously hidden exported session."""
         return SessionStore._set_decision(directory, "ADOPTED", None, None)
+
+    @staticmethod
+    def remove_final_session(directory: str | Path) -> None:
+        """Permanently delete one finalized session directory and its raw artifacts.
+
+        Unlike ``hide_final_session`` (soft delete), this removes the session
+        directory — MCAP, manifest, receipt and videos — from disk. The corresponding
+        episode in the exported LeRobot dataset is intentionally left untouched:
+        re-indexing that dataset is a separate dataset-wide operation, not a
+        per-session delete.
+        """
+        final = Path(directory).resolve()
+        if not final.is_dir():
+            raise ValueError("recording session does not exist")
+        if not (final / "manifest.json").is_file():
+            raise ValueError("recording session has no finalized manifest.json")
+        shutil.rmtree(final)
 
     @staticmethod
     def update_task(directory: str | Path, task: str) -> dict[str, Any]:

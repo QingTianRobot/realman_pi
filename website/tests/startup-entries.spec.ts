@@ -90,7 +90,7 @@ test("Pages workflow rebuilds when startup helper sources change", async () => {
 test("unified rm65 entry documents the production defaults", async () => {
   const source = await readFile(unifiedEntryPath, "utf8");
 
-  expect(source).toContain('up [desktop|model]');
+  expect(source).toContain('up [desktop|model|policy]');
   expect(source).toContain('rm65_camera_ros2 color');
   expect(source).toContain('realman_bringup_remote');
   expect(source).toContain('rm65_deploy_sync');

@@ -77,3 +77,27 @@ def test_worker_reports_a_job_error_without_stopping():
     assert len(errors) == 1
     assert errors[0][0] == "boom"
     assert isinstance(errors[0][1], RuntimeError)
+
+
+def test_worker_runs_jobs_in_parallel_when_max_workers_exceeds_one():
+    active = 0
+    max_active = 0
+    lock = threading.Lock()
+
+    def run_one(session_id: str) -> None:
+        nonlocal active, max_active
+        with lock:
+            active += 1
+            max_active = max(max_active, active)
+        time.sleep(0.05)
+        with lock:
+            active -= 1
+
+    worker = SerialExportWorker(run_one, max_workers=2)
+    worker.start()
+    for sid in ("a", "b"):
+        worker.enqueue(sid)
+    worker.drain()
+    worker.stop()
+
+    assert max_active == 2

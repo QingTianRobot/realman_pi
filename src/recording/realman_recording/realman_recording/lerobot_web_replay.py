@@ -70,6 +70,7 @@ class ReplayDatasetRef:
     first_walltime_ns: int
     fps: float
     task: str = ""
+    session_number: int = 0
     schema_fingerprint: str = ""
     sync_source_ids: tuple[str, ...] | None = None
 
@@ -108,7 +109,13 @@ class LeRobotReplayCatalog:
         self._datasets_lock = threading.Lock()
 
     def list_datasets(self) -> list[dict[str, Any]]:
-        """Return only sessions with a valid ADOPTED/SUCCEEDED receipt."""
+        """Return only sessions with a valid ADOPTED/SUCCEEDED receipt.
+
+        The export receipt already carries ``frame_count`` and a ``quality``
+        summary, so the dashboard list can be built without opening each LeRobot
+        dataset (the expensive step on the robot host).  Only sessions exported
+        before those fields existed fall back to opening the dataset.
+        """
         result: list[dict[str, Any]] = []
         if not self._recording_root.is_dir():
             return result
@@ -117,9 +124,19 @@ class LeRobotReplayCatalog:
                 continue
             try:
                 reference = self._reference(directory.name)
-                with self._dataset(reference) as dataset:
-                    frame_count = len(dataset)
-                    quality = self._summary(reference, dataset)["quality"]
+                receipt = self._read_receipt(reference.session_id)
+                if isinstance(receipt, dict) and isinstance(receipt.get("frame_count"), int):
+                    frame_count = receipt["frame_count"]
+                    # Receipts written before the quality summary existed lack it;
+                    # the /summary endpoint recomputes the real quality for the
+                    # selected episode, so the list only needs a harmless stand-in.
+                    quality = receipt["quality"] if isinstance(receipt.get("quality"), dict) else {
+                        "valid_frames": frame_count, "invalid_frames": 0, "max_sync_error_ns": 0,
+                    }
+                else:
+                    with self._dataset(reference) as dataset:
+                        frame_count = len(dataset)
+                        quality = self._summary(reference, dataset)["quality"]
             except (OSError, ValueError, TypeError, RuntimeError):
                 # A partially written/removed session must not break the dashboard
                 # list.  It remains available from the filesystem for audit.
@@ -132,10 +149,20 @@ class LeRobotReplayCatalog:
                     "frames": frame_count,
                     "fps": reference.fps,
                     "task": reference.task,
+                    "session_number": reference.session_number,
                     "quality": quality,
                 }
             )
         return result
+
+    def _read_receipt(self, session_id: str) -> dict[str, Any] | None:
+        """Read the export receipt, or ``None`` when it is missing or corrupt."""
+        receipt_path = self._recording_root / session_id / "export" / "lerobot-v3.json"
+        try:
+            payload = json.loads(receipt_path.read_text(encoding="utf-8"))
+        except (OSError, ValueError, TypeError):
+            return None
+        return payload if isinstance(payload, dict) else None
 
     def list_hidden(self) -> list[dict[str, Any]]:
         """Return only sessions with a valid DELETED/SUCCEEDED receipt.
@@ -153,11 +180,15 @@ class LeRobotReplayCatalog:
                 continue
             try:
                 reference = self._reference(directory.name, decision="DELETED")
-                try:
-                    with self._dataset(reference) as dataset:
-                        frame_count = len(dataset)
-                except Exception:  # noqa: BLE001 - any dataset-open failure only degrades frames
-                    frame_count = 0
+                receipt = self._read_receipt(reference.session_id)
+                if isinstance(receipt, dict) and isinstance(receipt.get("frame_count"), int):
+                    frame_count = receipt["frame_count"]
+                else:
+                    try:
+                        with self._dataset(reference) as dataset:
+                            frame_count = len(dataset)
+                    except Exception:  # noqa: BLE001 - any dataset-open failure only degrades frames
+                        frame_count = 0
             except (OSError, ValueError, TypeError, RuntimeError):
                 # A partially written/removed session must not break the trash list.
                 continue
@@ -169,6 +200,41 @@ class LeRobotReplayCatalog:
                     "fps": reference.fps,
                 }
             )
+        return result
+
+    def list_pending(self) -> list[dict[str, Any]]:
+        """Return finalized sessions still awaiting adopt/export (``decision=PENDING``).
+
+        These have no export receipt yet, so each row carries only manifest-level
+        identity (``session_id``, ``session_number``, ``task``, ``state``).  They are
+        ordered by ``session_number`` so the review list reads as the recording order.
+        """
+        result: list[dict[str, Any]] = []
+        if not self._recording_root.is_dir():
+            return result
+        for directory in sorted(self._recording_root.iterdir()):
+            if not directory.is_dir() or directory.name.startswith("."):
+                continue
+            manifest_path = directory / "manifest.json"
+            if not manifest_path.is_file():
+                continue
+            try:
+                payload = json.loads(manifest_path.read_text(encoding="utf-8"))
+            except (OSError, ValueError, TypeError):
+                continue
+            if not isinstance(payload, dict) or payload.get("decision") != "PENDING":
+                continue
+            metadata = payload.get("metadata") or {}
+            number = metadata.get("session_number")
+            result.append(
+                {
+                    "session_id": directory.name,
+                    "session_number": number if isinstance(number, int) else 0,
+                    "task": metadata.get("task", ""),
+                    "state": payload.get("state", ""),
+                }
+            )
+        result.sort(key=lambda row: row["session_number"])
         return result
 
     def summary(self, session_id: str) -> dict[str, Any]:
@@ -228,6 +294,7 @@ class LeRobotReplayCatalog:
             "fps": reference.fps,
             "frames": len(dataset),
             "task": reference.task,
+            "session_number": reference.session_number,
             "schema_fingerprint": reference.schema_fingerprint,
             "features": features,
             "quality": quality,
@@ -353,6 +420,8 @@ class LeRobotReplayCatalog:
             raise ValueError("LeRobot receipt timeline is invalid") from error
         metadata = manifest.get("metadata", {})
         task = str(metadata.get("task", "")) if isinstance(metadata, dict) else ""
+        raw_session_number = metadata.get("session_number") if isinstance(metadata, dict) else None
+        session_number = raw_session_number if isinstance(raw_session_number, int) else 0
         canonical = receipt.get("canonical", {})
         raw_source_ids = canonical.get("quality_sync_source_ids") if isinstance(canonical, dict) else None
         source_ids: tuple[str, ...] | None = None
@@ -372,6 +441,7 @@ class LeRobotReplayCatalog:
             first_walltime_ns=first_walltime_ns,
             fps=fps,
             task=task,
+            session_number=session_number,
             schema_fingerprint=str(receipt.get("schema_fingerprint", "")),
             sync_source_ids=source_ids,
         )

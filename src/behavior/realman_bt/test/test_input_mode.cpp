@@ -1,3 +1,6 @@
+// The assertions wrap calls with side effects (selectForTick); a Release build
+// defines NDEBUG and would drop them, so keep assert live in every build type.
+#undef NDEBUG
 #include <cassert>
 #include <chrono>
 #include <stdexcept>

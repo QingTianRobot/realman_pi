@@ -1,6 +1,6 @@
 ---
 title: 生产运维手册
-description: 生产机的容器布局、查询与部署命令、单独重启驱动或夹爪 manager、夹爪告警与行程、日志清理，以及现场踩过的坑。
+description: 生产机的容器布局、查询命令、用 rsync 或 git bundle 部署、部署后核对与回滚、只更新 :8765 网页、单独重启驱动或夹爪 manager、夹爪告警与行程、日志清理，以及现场踩过的坑。
 ---
 
 # 生产运维手册
@@ -8,7 +8,7 @@ description: 生产机的容器布局、查询与部署命令、单独重启驱�
 本页是**现场记录**，面向要登录生产机查问题、更新代码或做小范围重启的开发者。它不是产品契约：命令和数值来自实际操作，带日期的条目只代表当时的状态，用之前请先核对。页面里不放主机名、内网地址、账号或密钥；这些属于你自己的 SSH 配置。
 
 ::: warning 生产机上有真实机械臂在运行
-本页的"只重启一个组件"和"清理日志"都会影响运行中的系统。先确认机械臂静止、急停可达；能整套重启时优先用 `./rm65 down` / `./rm65 up`（见[CLI 与环境变量](../reference/cli-and-env)）。
+本页的部署、"只重启一个组件"和"清理日志"都会影响运行中的系统。先确认机械臂静止、急停可达；能整套重启时优先用 `./rm65 down` / `./rm65 up`（见[CLI 与环境变量](../reference/cli-and-env)）。
 :::
 
 ## 生产机布局
@@ -16,7 +16,7 @@ description: 生产机的容器布局、查询与部署命令、单独重启驱�
 ```mermaid
 flowchart TB
   subgraph HOST["生产机（宿主）"]
-    REPO["~/realman_pi（Git 工作区，已跟踪文件由 rsync 同步）"]
+    REPO["~/realman_pi（Git 工作区：rsync 同步或检出本地部署分支）"]
     UDEV["udev 规则 → /dev/realman/gripper_*"]
     LOGS["~/realman_pi/logs/"]
   end
@@ -60,7 +60,18 @@ docker exec realman_pi-realman_bringup_remote-1 cat /opt/rm65_ws/config/ros/grip
 
 ## 更新代码（部署）
 
-生产机**不能直接从 GitHub 拉代码**，所以从开发机把 Git 已跟踪文件同步过去。`./rm65 sync` 会校验当前在 `main` 且工作区干净，推送后再 rsync；它只同步已跟踪文件，且不带 `--delete`。
+生产机**不能直接从 GitHub 拉代码**（`git fetch origin` 会一直挂住，宿主上的 `origin/*` 因此是旧的），代码只能从开发机送过去。有两种方式：
+
+| 方式 | 适合 | 生产机上的结果 |
+| --- | --- | --- |
+| `./rm65 sync`（rsync） | 发布已合并的 `main` | 已跟踪文件被覆盖，分支不变 |
+| git bundle → 本地部署分支 | 部署还没合并的分支（例如待合并的 PR），或需要能一条命令切回原来的提交 | 宿主检出一个本地分支，例如 `deploy/main-<日期>` |
+
+两种方式都只更新**宿主文件**。配置类改动（YAML）重启对应进程就生效；**代码类改动要重建镜像**才会进容器，因为容器里的 `src/` 是镜像构建时拷贝的副本。
+
+### 方式一：`./rm65 sync`
+
+`./rm65 sync` 会校验当前在 `main` 且工作区干净，推送后再 rsync；它只同步已跟踪文件，且不带 `--delete`。
 
 同步前先搞清楚会覆盖什么：
 
@@ -73,9 +84,111 @@ docker exec realman_pi-realman_bringup_remote-1 cat /opt/rm65_ws/config/ros/grip
    ```
 
    如果列表里出现了你没改过的配置文件，说明生产机上有未回灌到仓库的现场修改，**先把它们合回仓库**再同步。
-3. 同步只更新宿主文件。配置类改动（YAML）重启对应进程就生效；**代码类改动要重建镜像**才会进容器，因为容器里的 `src/` 是镜像构建时拷贝的副本。
 
-只想更新 `:8765` 网页、不碰驱动时（不影响机器人运行）：
+### 方式二：git bundle 部署一个分支
+
+下面的命令里，`<分支>` 是要部署的分支，`<日期>` 用来给备份、镜像标签和部署分支命名。
+
+<Steps>
+
+1. **在生产机上备份**。记下当前提交、未提交的现场改动和当前镜像，再给镜像打一个回滚标签：
+
+   ```bash
+   cd ~/realman_pi
+   B=~/deploy-backups/redeploy-$(date +%Y%m%d-%H%M%S); mkdir -p "$B/config/ros"
+   cp -p .env "$B/"
+   cp -p config/ros/<现场改过的 yaml> "$B/config/ros/"
+   git diff > "$B/tracked-changes.patch"
+   { git rev-parse HEAD; git branch --show-current; } > "$B/head.txt"
+   docker image inspect rm65-humble-rviz:local -f '{{.Id}}' > "$B/image.txt"
+   docker tag rm65-humble-rviz:local rm65-humble-rviz:pre-<日期>
+   ```
+
+2. **在开发机上打包，拷到生产机**。`^<基准>` 是生产机上已有的某个提交，加上它 bundle 只带增量；不确定就去掉，打包整个分支：
+
+   ```bash
+   git bundle create deploy.bundle <分支> ^<基准>
+   git bundle verify deploy.bundle
+   scp deploy.bundle <生产机>:/tmp/
+   ```
+
+3. **在生产机上检出部署分支**：
+
+   ```bash
+   git fetch /tmp/deploy.bundle <分支>:refs/remotes/bundle/<分支>
+   git checkout -- <有现场改动的已跟踪文件>
+   git checkout -B deploy/<分支>-<日期> refs/remotes/bundle/<分支>
+   ```
+
+   - 有现场改动的已跟踪文件会挡住检出，所以先还原它们（改动已经在第 1 步的 patch 和备份里）。
+   - 未跟踪的配置文件如果和新分支里的同名文件冲突，也会挡住检出，先挪进备份目录。
+   - 检出后，对照 `"$B/tracked-changes.patch"`，把仍需要的现场改动（例如 `.env` 里的策略主机、调过的限速）逐项改回去。不要整份 `git apply`：新分支可能已经改过同一处。
+
+4. **重建镜像并启动**。宿主环境里设了代理变量时，构建要去掉它们：
+
+   ```bash
+   env -u HTTP_PROXY -u HTTPS_PROXY -u ALL_PROXY \
+     -u http_proxy -u https_proxy -u all_proxy ./rm65 build
+   ./rm65 up policy        # 不需要策略桥时用 ./rm65 up
+   ```
+
+   `./rm65 up` 会用新镜像重新创建 bringup、web、recording（以及 `policy_bridge`）容器。live 行为树（`scripts/bt.sh control`）不在这些容器里，**不会**跟着重启：`up` 之前先停掉它，之后再按[行为树控制](./behavior-tree-control)重新启动，并把输入模式选回 `none`。
+
+</Steps>
+
+### 部署后核对
+
+逐项读回实际值，不要只看容器状态是不是 `Up`：
+
+- `/{l,m,r}/joint_states` 约 10 Hz，夹爪状态约 20 Hz，相机约 30 Hz（用 `ros2 topic hz` 看）。
+- `:8765` 和 `:8770` 返回 200；`:8765` 页面引用的每个 `/assets/*` 也返回 200。
+- 用 `ros2 param dump` / `ros2 param get` 读回关键参数，例如 router 的限速和 `dry_run`、执行器的 `policy_task.task_names`。
+- 要跑策略时：`/policy/stats` 有输出，而且带 `prompt` 字段（见[行为树里的 policy 任务](./policy-task)）。
+
+### 回滚
+
+1. 回到部署前的提交并恢复现场改动：`git checkout -f <head.txt 里的分支>`，再 `git apply "$B/tracked-changes.patch"`，然后把备份的 `.env` 和 YAML 拷回原处。
+2. 恢复镜像：`docker tag rm65-humble-rviz:pre-<日期> rm65-humble-rviz:local`。
+3. `./rm65 up`（或 `./rm65 up policy`），然后重新启动 live 行为树。
+
+## 只更新 `:8765` 网页
+
+两种情况都不影响驱动和机器人运行。
+
+### 只改了前端：替换静态文件
+
+`:8765` 的前端是 Vite 生成的静态文件，位于 `src/driver/realman_web_control/realman_web_control/static/`，由 `npm run build:web-control` 生成并提交进仓库。只改了前端时，可以直接替换运行中容器里的这批文件，不用重建镜像，也不用重启进程。
+
+在生产机上备份当前网页：
+
+```bash
+C=realman_pi-realman_web_control-1
+P=/opt/rm65_ws/src/driver/realman_web_control/realman_web_control
+docker exec $C tar -C $P -cf - static > ~/deploy-backups/web-static-$(date +%Y%m%d-%H%M%S).tar
+```
+
+在开发机的 `src/driver/realman_web_control/realman_web_control/` 目录里，把整个 `static/` 送进容器：
+
+```bash
+COPYFILE_DISABLE=1 tar --no-xattrs -cf - static | ssh <生产机> \
+  'docker exec -i realman_pi-realman_web_control-1 tar -xf - --no-same-owner \
+     -C /opt/rm65_ws/src/driver/realman_web_control/realman_web_control'
+```
+
+容器里的安装空间是用 `--symlink-install` 建的，`install/.../static/assets/` 里每个文件都是单独的符号链接。新生成的文件名带新的哈希，在那里还没有链接，所以要补上。在生产机上：
+
+```bash
+docker exec realman_pi-realman_web_control-1 bash -c '
+  I=/opt/rm65_ws/install/realman_web_control/share/realman_web_control/static/assets
+  B=/opt/rm65_ws/build/realman_web_control/realman_web_control/static/assets
+  for f in $(ls $B); do [ -e $I/$f ] || ln -sfn $B/$f $I/$f; done'
+```
+
+最后用 `curl` 确认 `/` 和 `/calibration.html` 引用的每个 `/assets/*` 都返回 200。回滚就是把备份的 tar 用同样方法解回去。
+
+替换后的文件只在**当前容器**里有效，容器一旦重建，就回到镜像里的版本。所以这只是临时上线，改动仍要合并，再按上面的方式正式部署。
+
+### 改了 Python：只重建 web 容器
 
 ```bash
 OLD=$(docker image inspect rm65-humble-rviz:local --format '{{.Id}}')
@@ -88,7 +201,7 @@ curl -s http://127.0.0.1:8765/api/layout | head -c 200
 注意镜像标签 `rm65-humble-rviz:local` 是几个服务共用的：重建后，**正在运行的驱动容器仍用旧镜像**，但它下次被重启（人工、Docker 或主机重启）时会换成新镜像，把新镜像里的全部改动一并带上。回滚：把备份标签改回 `rm65-humble-rviz:local` 再重建对应容器。
 
 ::: danger 容器里的 src 可能落后于仓库
-容器内的源码是上次重建镜像时的副本，可能比仓库 `HEAD` 旧（例如还没有新的 IK 接口）。**不要用 `docker cp` 整个文件覆盖进去**，只补丁你要改的那一段，并先把原文件备份到宿主（如 `~/deploy-backups/`）。
+容器内的源码是上次重建镜像时的副本，可能比仓库 `HEAD` 旧（例如还没有新的 IK 接口）。**不要用 `docker cp` 把仓库里的整个源文件覆盖进去**，只补丁你要改的那一段，并先把原文件备份到宿主（如 `~/deploy-backups/`）。上面替换 `static/` 是例外：那是一整套生成文件，必须整体替换。
 :::
 
 ## 只重启一个组件（不整套重启）

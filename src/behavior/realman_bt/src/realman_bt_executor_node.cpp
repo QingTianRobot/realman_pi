@@ -90,11 +90,14 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   }
   blackboard_->set<rclcpp::Node*>(kRosNodeBlackboardKey, this);
   // Thresholds and counts of the policy task (config/ros/policy_task.yaml). The counts are also
-  // blackboard values so the XML can refer to them as {policy_cycles} / {policy_attempts}.
+  // blackboard values so the XML can refer to them as {policy_cycles} / {policy_attempts} /
+  // {policy_timeout_attempts} / {policy_timeout_backoff_sec}.
   policy_task_config_ = declareAndLoadPolicyTaskConfig(*this);
   blackboard_->set<const PolicyTaskConfig*>(kPolicyTaskConfigBlackboardKey, &policy_task_config_);
   blackboard_->set<int>(kPolicyCyclesKey, policy_task_config_.cycles);
   blackboard_->set<int>(kPolicyAttemptsKey, policy_task_config_.attempts);
+  blackboard_->set<int>(kPolicyTimeoutAttemptsKey, policy_task_config_.timeout_retry.attempts);
+  blackboard_->set<double>(kPolicyTimeoutBackoffSecKey, policy_task_config_.timeout_retry.backoff_sec);
   blackboard_->set<RuntimeDiagnostics*>(kRuntimeDiagnosticsBlackboardKey,
                                         &diagnostics_);
   blackboard_->set<CoordinateReferenceRegistry*>(

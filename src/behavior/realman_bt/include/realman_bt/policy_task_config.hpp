@@ -16,6 +16,8 @@ inline constexpr char kPolicyAttemptSecKey[] = "policy_attempt_sec";
 inline constexpr char kPolicyArmedKey[] = "policy_armed";
 inline constexpr char kPolicyCyclesKey[] = "policy_cycles";
 inline constexpr char kPolicyAttemptsKey[] = "policy_attempts";
+inline constexpr char kPolicyTimeoutAttemptsKey[] = "policy_timeout_attempts";
+inline constexpr char kPolicyTimeoutBackoffSecKey[] = "policy_timeout_backoff_sec";
 
 // Thresholds of the policy task. The values come from config/ros/policy_task.yaml (executor
 // parameters under `policy_task.`); the defaults below are the same numbers so a missing file
@@ -80,8 +82,19 @@ struct PolicyTaskConfig {
     double period_sec{0.1};
   };
 
+  // Policy-server timeouts (the bridge paused itself after its inference requests timed out, the
+  // bridge did not get ready or went silent, /policy/activate did not answer) are retried on their
+  // own budget, after a wait that gives a warming-up server or a congested link time to recover.
+  // They do not use up `attempts`, which counts the policy's own failures (empty grasp, timeout,
+  // stall). attempts: timeouts allowed per cycle, the first counts; -1 = no limit.
+  struct TimeoutRetry {
+    int attempts{3};
+    double backoff_sec{20.0};
+  };
+
   int cycles{1};
   int attempts{3};
+  TimeoutRetry timeout_retry;
   std::string arm{"r"};
   // "auto": PolicyRun calls /policy/activate itself once it is safe. "operator": it waits for a
   // person to call /policy/activate and only supervises.

@@ -61,6 +61,7 @@ flowchart TB
 
 - 一次尝试失败后，`RetryUnlessFault` 在当拍只 `halt()` 子树并返回 `RUNNING`，下一拍才从 `GripperReady` 重新开始，因此每次重试都会先张开夹爪、再回位。
 - 发生故障时（关节越界、执行了放置任务、夹爪无法张开），叶节点会把 `policy_fault` 置为 `true`。`RetryUnlessFault` 随即放弃剩余次数并返回失败，`Fallback` 转而执行 `FailInputMode`。
+- 策略服务超时（桥接因推理连续超时而暂停、统计中断、预检时桥接未就绪）时，`PolicyRun` 置位 `policy_timeout`。`RetryUnlessFault` 把它记入单独的 `timeout_attempts` 次数，不占用 `num_attempts`，先等待 `timeout_backoff_sec`（模拟中缩短为两拍，真机上为 20 s），再从 `GripperReady` 重新开始。超时次数用完后，失败原因前会加上 `policy server timed out N times`。
 - `FailInputMode` 不返回 `FAILURE`，而是保持 `RUNNING`，并把输入模式标记为 `FAILED`；协调器随后切换到 `none`，该分支也随之被 `halt()`。如果没有这个节点，持久路由会让失败的分支反复重来。
 - 全部周期完成后，分支停留在 `PolicyInputStub`：此时桥接已停止，但控制权仍属于 policy，直到用户切换模式。
 
@@ -77,7 +78,7 @@ flowchart TB
 
 - **输入叶节点始终返回 `RUNNING`。** `KeyboardVelocityInput`、`PikaVelocityInput` 等叶节点在树中只表示"该输入正持有控制权"，实际指令由同一 launch 中的 router 进程转发。
 - **先准备，再激活。** 需要准备动作的分支把 `ThreeArmMoveJ` 或 `PrepareKeyboardWork` 放在 `ActivateInputMode` 之前，并用有状态的 `Sequence` 包裹。这样准备失败时永远不会发布 `ACTIVE`；准备成功后也不会每拍重做，因为这些节点完成后会保持 `SUCCESS`，直到被 `halt()`。
-- **区分可重试与不可重试的失败。** 抓空、超时等"再试一次可能成功"的失败，叶节点只需返回 `FAILURE`；越界、数据丢失等"重试也无济于事"的失败，叶节点要先把 `policy_fault` 置为 `true`，再返回 `FAILURE`。
+- **区分可重试与不可重试的失败。** 抓空、超时等"再试一次可能成功"的失败，叶节点只需返回 `FAILURE`；越界、数据丢失等"重试也无济于事"的失败，叶节点要先把 `policy_fault` 置为 `true`，再返回 `FAILURE`；外部服务暂时没有响应、过一会儿可能恢复的失败，叶节点先把 `policy_timeout` 置为 `true`，由 `RetryUnlessFault` 单独计数并等待后重试。
 - **会产生动作的叶节点都有 `dry_run` 端口**，默认为 `true`，此时只做校验和记录，不发送任何指令。生产树写作 `dry_run="{dry_run}"`，启动时由 `REALMAN_BT_DRY_RUN` 决定。
 - **参数不写死在 XML 中。** 关节角、周期数等可能变化的值通过 `{key}` 从黑板读取，由 launch 从 YAML 注入，例如 `pika_default_pose` → `{pika_r_joint_degrees}`，`policy_task.yaml` → `{policy_cycles}`。
 

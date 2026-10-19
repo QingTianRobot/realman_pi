@@ -17,6 +17,11 @@ constexpr double kRadToDeg = 57.29577951308232;
 // matched late would otherwise never see it; a repeated identical prompt changes nothing).
 constexpr double kPromptRepublishSec = 0.5;
 
+const char* severity(const Verdict& verdict) {
+  if (verdict.fault) return "ERROR";
+  return verdict.policy_timeout ? "WARN" : "INFO";
+}
+
 }  // namespace
 
 bt_core::PortsList PolicyRunNode::providedPorts() {
@@ -161,40 +166,48 @@ void PolicyRunNode::resetAttempt() {
   blackboard()->set<bool>(kPolicyArmedKey, false);
 }
 
-std::string PolicyRunNode::missingForStart(Clock::time_point now) const {
-  std::vector<std::string> missing;
+PolicyRunNode::Missing PolicyRunNode::missingForStart(Clock::time_point now) const {
+  // `bridge` items are the policy bridge not being there or not answering (its services or its
+  // stats are missing): it may still be starting, so running out of time on them is a policy
+  // timeout. Anything else is a fault: the robot's own data, the router, or a bridge that answers
+  // but disagrees (not in policy mode, on another prompt, too old to report its prompt).
+  std::vector<std::string> bridge;
+  std::vector<std::string> other;
   const auto age = [&](Clock::time_point at) { return std::chrono::duration<double>(now - at).count(); };
-  if (!activate_->service_is_ready()) missing.push_back("/policy/activate");
-  if (!deactivate_->service_is_ready()) missing.push_back("/policy/deactivate");
-  if (!bridge_estop_->service_is_ready()) missing.push_back("/policy/emergency_stop");
-  if (!router_estop_->service_is_ready()) missing.push_back("/policy_router/emergency_stop");
+  if (!activate_->service_is_ready()) bridge.push_back("/policy/activate");
+  if (!deactivate_->service_is_ready()) bridge.push_back("/policy/deactivate");
+  if (!bridge_estop_->service_is_ready()) bridge.push_back("/policy/emergency_stop");
+  if (!router_estop_->service_is_ready()) other.push_back("/policy_router/emergency_stop");
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for (const char* name : {"l", "m", "r"}) {
       const auto at = joints_at_.find(name);
       if (at == joints_at_.end() || age(at->second) > config_->joint_state_stale_sec) {
-        missing.push_back(std::string(name) + " joint_states");
+        other.push_back(std::string(name) + " joint_states");
       }
     }
     if (!gripper_valid_ || age(gripper_at_) > config_->gripper_ready.position_stale_sec) {
-      missing.push_back("/" + gripper_ + "/position");
+      other.push_back("/" + gripper_ + "/position");
     }
+    // A paused bridge does not block the start: /policy/activate (ours or the operator's) clears
+    // the pause, and a server that is still timing out pauses it again under supervision.
     if (!stats_valid_ || age(stats_at_) > config_->stats_stale_sec) {
-      missing.push_back("/policy/stats");
+      bridge.push_back("/policy/stats");
     } else if (!stats_.mode_active) {
-      missing.push_back("policy bridge is not in policy mode (mode_active=0)");
-    } else if (stats_.paused) {
-      missing.push_back("policy bridge is paused");
+      other.push_back("policy bridge is not in policy mode (mode_active=0)");
     } else if (!bridge_prompt_valid_) {
-      missing.push_back("policy bridge does not report its prompt in /policy/stats (too old a bridge)");
+      other.push_back("policy bridge does not report its prompt in /policy/stats (too old a bridge)");
     } else if (bridge_prompt_ != task_.prompt) {
-      missing.push_back("policy bridge prompt is '" + bridge_prompt_ + "', waiting for '" + task_.prompt +
-                        "' (task " + task_name_ + ")");
+      other.push_back("policy bridge prompt is '" + bridge_prompt_ + "', waiting for '" + task_.prompt +
+                      "' (task " + task_name_ + ")");
     }
   }
-  std::string joined;
-  for (const auto& item : missing) joined += (joined.empty() ? "" : ", ") + item;
-  return joined;
+  Missing result;
+  result.bridge_only = other.empty();
+  for (const auto* items : {&other, &bridge}) {
+    for (const auto& item : *items) result.text += (result.text.empty() ? "" : ", ") + item;
+  }
+  return result;
 }
 
 void PolicyRunNode::openTrace() {
@@ -280,15 +293,17 @@ bt_core::NodeStatus PolicyRunNode::tickPreflight(Clock::time_point now) {
   // The bridge is not publishing yet, so switching its prompt is safe; it also clears its action
   // queue on a change, so nothing of the previous task can be sent once it is activated.
   publishPrompt(now);
-  const std::string missing = missingForStart(now);
-  if (missing.empty()) {
+  const Missing missing = missingForStart(now);
+  if (missing.text.empty()) {
     phase_ = Phase::kArming;
     phase_started_ = now;
     return tickArming(now);
   }
   if (std::chrono::duration<double>(now - phase_started_).count() > config_->service_wait_sec) {
-    return failWithoutStopping("policy is not ready to start after " +
-                               std::to_string(config_->service_wait_sec) + " s: " + missing);
+    return failWithoutStopping(
+        missing.bridge_only ? AttemptOutcome::kPolicyTimeout : AttemptOutcome::kFault,
+        "policy is not ready to start after " + std::to_string(config_->service_wait_sec) + " s: " +
+            missing.text);
   }
   return bt_core::NodeStatus::RUNNING;
 }
@@ -328,13 +343,15 @@ bt_core::NodeStatus PolicyRunNode::tickArming(Clock::time_point now) {
   }
   if (std::chrono::duration<double>(now - activate_sent_at_).count() >
       config_->service_call_timeout_sec) {
-    Verdict fault;
-    fault.finished = true;
-    fault.outcome = AttemptOutcome::kFault;
-    fault.fault = true;
-    fault.reason = "no reply from /policy/activate within " +
-                   std::to_string(config_->service_call_timeout_sec) + " s";
-    beginStopping(fault);
+    // The bridge may have taken the request without answering in time, so it is stopped like any
+    // other attempt; a bridge that cannot answer is a policy timeout, not a fault.
+    Verdict timeout;
+    timeout.finished = true;
+    timeout.outcome = AttemptOutcome::kPolicyTimeout;
+    timeout.policy_timeout = true;
+    timeout.reason = "no reply from /policy/activate within " +
+                     std::to_string(config_->service_call_timeout_sec) + " s";
+    beginStopping(timeout);
   }
   return bt_core::NodeStatus::RUNNING;
 }
@@ -371,7 +388,7 @@ void PolicyRunNode::beginStopping(const Verdict& verdict) {
   stop_step_ = 0;
   stop_call_.reset();
   writeTraceRow("stopping", Clock::now(), true);
-  recordPolicyEvent(blackboard(), verdict.fault ? "ERROR" : "INFO", name(), "stopping",
+  recordPolicyEvent(blackboard(), severity(verdict), name(), "stopping",
                     std::string("attempt ended: ") + outcomeName(verdict.outcome) +
                         (verdict.reason.empty() ? "" : " (" + verdict.reason + ")"));
 }
@@ -455,7 +472,7 @@ bt_core::NodeStatus PolicyRunNode::finalize() {
   blackboard()->set<std::string>(kPolicyGraspVerdictKey, verdict.grasp_verdict);
   blackboard()->set<double>(kPolicyAttemptSecKey, verdict.attempt_sec);
   trace_.close(outcomeName(verdict.outcome), verdict.grasp_verdict, verdict.attempt_sec, verdict.reason);
-  recordPolicyEvent(blackboard(), verdict.fault ? "ERROR" : "INFO", name(), "attempt_end",
+  recordPolicyEvent(blackboard(), severity(verdict), name(), "attempt_end",
                     "task=" + task_name_ + " result=" + outcomeName(verdict.outcome) +
                         " grasp=" + (verdict.grasp_verdict.empty() ? "n/a" : verdict.grasp_verdict) +
                         " seconds=" + std::to_string(verdict.attempt_sec));
@@ -466,6 +483,8 @@ bt_core::NodeStatus PolicyRunNode::finalize() {
   }
   if (verdict.fault) {
     raisePolicyFault(blackboard(), verdict.reason);
+  } else if (verdict.policy_timeout) {
+    raisePolicyTimeout(blackboard(), verdict.reason);
   } else {
     recordPolicyFailureReason(blackboard(), verdict.reason);
   }
@@ -473,12 +492,14 @@ bt_core::NodeStatus PolicyRunNode::finalize() {
   return bt_core::NodeStatus::FAILURE;
 }
 
-bt_core::NodeStatus PolicyRunNode::failWithoutStopping(const std::string& reason) {
+bt_core::NodeStatus PolicyRunNode::failWithoutStopping(AttemptOutcome outcome,
+                                                       const std::string& reason) {
   // Nothing was started, so there is nothing to stop.
   pending_ = Verdict();
   pending_.finished = true;
-  pending_.outcome = AttemptOutcome::kFault;
-  pending_.fault = true;
+  pending_.outcome = outcome;
+  pending_.fault = isFault(outcome);
+  pending_.policy_timeout = isPolicyTimeout(outcome);
   pending_.reason = reason;
   return finalize();
 }

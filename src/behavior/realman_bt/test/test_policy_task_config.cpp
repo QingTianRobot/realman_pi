@@ -31,6 +31,7 @@ void testDefaultsAreTheReviewedDesignValues() {
 
   assert(config.cycles == 1);
   assert(config.attempts == 3);
+  assert(config.timeout_retry.attempts == 3 && config.timeout_retry.backoff_sec == 20.0);
   assert(config.arm == "r");
   assert(config.activation == "auto");
   assert(config.gripper_for_arm.at("r") == "gripper_right");
@@ -59,12 +60,22 @@ void testUnlimitedCyclesAndAttemptsAreAllowed() {
   PolicyTaskConfig config;
   config.cycles = -1;
   config.attempts = -1;
+  config.timeout_retry.attempts = -1;
   config.validate();
 }
 
 void testCountsMustBePositiveOrMinusOne() {
   assertRejected([](PolicyTaskConfig& c) { c.cycles = 0; }, "cycles");
   assertRejected([](PolicyTaskConfig& c) { c.attempts = -2; }, "attempts");
+  assertRejected([](PolicyTaskConfig& c) { c.timeout_retry.attempts = 0; }, "timeout_retry.attempts");
+}
+
+void testTheTimeoutBackoffMustNotBeNegative() {
+  assertRejected([](PolicyTaskConfig& c) { c.timeout_retry.backoff_sec = -1.0; },
+                 "timeout_retry.backoff_sec");
+  PolicyTaskConfig config;
+  config.timeout_retry.backoff_sec = 0.0;  // retry at once
+  config.validate();
 }
 
 void testArmMustBeOneOfTheThree() {
@@ -207,6 +218,7 @@ int main() {
   testDefaultsValidate();
   testUnlimitedCyclesAndAttemptsAreAllowed();
   testCountsMustBePositiveOrMinusOne();
+  testTheTimeoutBackoffMustNotBeNegative();
   testArmMustBeOneOfTheThree();
   testActivationMustBeAutoOrOperator();
   testCommandNamespaceMustLookLikeATopicPrefix();

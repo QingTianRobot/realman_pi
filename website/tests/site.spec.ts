@@ -608,6 +608,17 @@ test("behavior-tree node reference: explorer reads the code, simulator follows t
   await expect(sim.locator(".mode-explorer-stats")).toContainText("FAILED");
   await expect(sim.locator(".bt-sim-log")).toContainText("policy_fault 已置位，不再重试");
   await expect(sim.locator('.bt-row[data-node="FailInputMode"]')).toHaveAttribute("data-status", "running");
+
+  // A policy-server timeout is retried on its own budget, after a wait, without using up num_attempts (1 here).
+  await sim.getByRole("tab", { name: "策略服务超时后重试成功" }).click();
+  await sim.getByRole("button", { name: "运行到结束" }).click();
+  await expect(sim.locator(".mode-explorer-stats")).toContainText("任务完成");
+  await expect(sim.locator(".bt-sim-log")).toContainText("策略服务超时（第 2 / 3 次，不占尝试次数）");
+
+  await sim.getByRole("tab", { name: "策略服务持续超时" }).click();
+  await sim.getByRole("button", { name: "运行到结束" }).click();
+  await expect(sim.locator(".mode-explorer-stats")).toContainText("FAILED");
+  await expect(sim.locator(".bt-sim-log")).toContainText("policy server timed out 3 times; last:");
   // Fully expanded tree and a finished run are the widest states: still no horizontal page scroll.
   const overflow = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(overflow).toBeLessThanOrEqual(1);

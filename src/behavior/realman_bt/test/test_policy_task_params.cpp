@@ -27,6 +27,7 @@ void testWithoutOverridesTheDefaultsAreUsed() {
   const PolicyTaskConfig loaded = load();
   const PolicyTaskConfig defaults;
   assert(loaded.cycles == defaults.cycles && loaded.attempts == defaults.attempts);
+  assert(loaded.timeout_retry.attempts == 3 && loaded.timeout_retry.backoff_sec == 20.0);
   assert(loaded.arm == "r" && loaded.activation == "auto");
   assert(loaded.joint_lo == defaults.joint_lo && loaded.joint_hi == defaults.joint_hi);
   assert(loaded.gripper_for_arm == defaults.gripper_for_arm);
@@ -39,6 +40,8 @@ void testOverridesReplaceTheDefaults() {
   const PolicyTaskConfig loaded = load({
       {"policy_task.cycles", 3},
       {"policy_task.attempts", 5},
+      {"policy_task.timeout_retry.attempts", -1},
+      {"policy_task.timeout_retry.backoff_sec", 5},
       {"policy_task.activation", "operator"},
       {"policy_task.max_attempt_sec", 30.0},
       {"policy_task.stall.sec", 4.5},
@@ -51,6 +54,7 @@ void testOverridesReplaceTheDefaults() {
       {"policy_task.joint_envelope_deg.hi", std::vector<double>{30, 100, 120, 60, 100, 40}},
   });
   assert(loaded.cycles == 3 && loaded.attempts == 5);
+  assert(loaded.timeout_retry.attempts == -1 && loaded.timeout_retry.backoff_sec == 5.0);
   assert(loaded.activation == "operator");
   assert(loaded.max_attempt_sec == 30.0 && loaded.stall.sec == 4.5);
   assert(loaded.release.joint_below_deg == -40.0);

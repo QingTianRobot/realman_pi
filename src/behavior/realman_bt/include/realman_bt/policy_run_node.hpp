@@ -36,6 +36,10 @@ namespace realman_bt {
 //   SUCCESS  release_over_bin: the object was released over the bin; lift_and_hold: it was lifted
 //            and is still held (the gripper stays closed on it).
 //   FAILURE  with policy_fault unset: a retryable failure (empty grasp, dropped, timeout, stall).
+//   FAILURE  with policy_timeout set: the policy server or its bridge timed out (the bridge paused
+//            itself after its inference requests timed out, went silent, did not get ready within
+//            service_wait_sec, or /policy/activate did not answer); RetryUnlessFault retries it on
+//            the timeout budget after a wait.
 //   FAILURE  with policy_fault set: nothing should retry (unsafe, broken, or the wrong task).
 //
 // It writes policy_attempt_result, policy_grasp_verdict, policy_attempt_sec, policy_armed and, on
@@ -57,6 +61,12 @@ class PolicyRunNode final : public bt_core::ActionNode {
 
   enum class Phase { kIdle, kPreflight, kArming, kRunning, kStopping };
 
+  // What the preflight still waits for; bridge_only when every item is the policy bridge itself.
+  struct Missing {
+    std::string text;
+    bool bridge_only{true};
+  };
+
   struct CallState {
     std::atomic<bool> done{false};
     std::atomic<bool> success{false};
@@ -66,7 +76,7 @@ class PolicyRunNode final : public bt_core::ActionNode {
   void initialize();
   void resetAttempt();
   double nowSec() const;
-  std::string missingForStart(Clock::time_point now) const;
+  Missing missingForStart(Clock::time_point now) const;
   bt_core::NodeStatus tickPreflight(Clock::time_point now);
   bt_core::NodeStatus tickArming(Clock::time_point now);
   bt_core::NodeStatus tickRunning(Clock::time_point now);
@@ -76,7 +86,7 @@ class PolicyRunNode final : public bt_core::ActionNode {
   bt_core::NodeStatus finalize();
   void openTrace();
   void writeTraceRow(const char* phase, Clock::time_point now, bool force);
-  bt_core::NodeStatus failWithoutStopping(const std::string& reason);
+  bt_core::NodeStatus failWithoutStopping(AttemptOutcome outcome, const std::string& reason);
   std::shared_ptr<CallState> sendSetBool(
       const rclcpp::Client<SetBool>::SharedPtr& client, bool data);
   std::shared_ptr<CallState> sendTrigger(const rclcpp::Client<Trigger>::SharedPtr& client);

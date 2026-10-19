@@ -164,7 +164,11 @@ def test_policy_branch_supervises_the_task_from_inside_the_tree():
     assert idle.tag == "PolicyInputStub" and idle.attrib == {}
     assert repeat.tag == "Repeat" and repeat.attrib == {"num_cycles": "{policy_cycles}"}
     (retry,) = list(repeat)
-    assert retry.tag == "RetryUnlessFault" and retry.attrib == {"num_attempts": "{policy_attempts}"}
+    assert retry.tag == "RetryUnlessFault" and retry.attrib == {
+        "num_attempts": "{policy_attempts}",
+        "timeout_attempts": "{policy_timeout_attempts}",
+        "timeout_backoff_sec": "{policy_timeout_backoff_sec}",
+    }
     (attempt,) = list(retry)
     assert attempt.tag == "Sequence" and attempt.attrib == {"name": "policy_attempt"}
 

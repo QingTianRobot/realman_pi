@@ -173,12 +173,19 @@ Action 或夹爪 command，需要真实 Pika 运动必须显式设置 `REALMAN_B
 | `Fallback` | 无 | 有状态的优先级列表：依次尝试子节点，第一个 `SUCCESS` 即成功，全部失败才失败；与 `ReactiveFallback` 不同，已在 `RUNNING` 的子节点不会被重新评估 |
 | `Repeat` | `num_cycles`（默认 1，`-1` 无限） | 子节点每成功一次计一轮，达到轮数返回 `SUCCESS`；子节点失败则整体失败。每一轮之间会 `halt()` 子节点 |
 | `Retry` | `num_attempts`（默认 1，`-1` 无限） | 子节点失败时 `halt()` 后重跑，次数含首次；`RUNNING` 不消耗次数 |
-| `RetryUnlessFault` | `num_attempts`（默认 1，`-1` 无限） | 同 `Retry`，但失败的叶节点若已把黑板键 `policy_fault` 置为 `true`，立即返回 `FAILURE`，不再消耗剩余次数 |
+| `RetryUnlessFault` | `num_attempts`（默认 1，`-1` 无限）；`timeout_attempts`（默认 0，`-1` 无限）；`timeout_backoff_sec`（默认 0） | 同 `Retry`，但失败的叶节点若已把黑板键 `policy_fault` 置为 `true`，立即返回 `FAILURE`，不再消耗剩余次数；若置位的是 `policy_timeout`，且 `timeout_attempts` 不为 0，则这次失败不占 `num_attempts`，改按 `timeout_attempts` 计数，并在等待 `timeout_backoff_sec` 后重试 |
 
 `policy_fault` 用来区分"值得再试一次"和"再试也没用"：抓空、超时属于前者，叶节点什么都不用写；
 关节越界、必需服务缺失属于后者，叶节点在返回 `FAILURE` 之前把它置为 `true`。这个标志属于
 `RetryUnlessFault` 的一次运行：运行开始时和 `halt()` 时清除，所以上一次留下的故障不会挡住新的
 第一次尝试；某次运行以故障结束后，标志保持置位，上层仍能读到。
+
+`policy_timeout` 是第三类失败，表示策略服务或桥接超时（推理连续超时导致桥接自行暂停、统计中断、
+预检时桥接迟迟未就绪、激活无回应）。这类问题多为暂时性的，因此单独计数：等待期间返回 `RUNNING`，
+不 tick 子节点；计数用完后，在 `policy_failure_reason` 前加上 `policy server timed out N times; last: `，
+再返回 `FAILURE`。`timeout_attempts` 为 0（默认）时，超时按普通失败处理，不等待。这个标志和
+`policy_fault` 一样，在运行开始和 `halt()` 时清除，在每次超时重试前也会清除。生产树的计数和等待时间
+来自 `policy_task.yaml` 的 `timeout_retry`，见 [Policy 任务](./policy-task#策略服务超时重试)。
 
 因为 `Repeat` 和 `Retry` 在每次重来之前都会 `halt()` 子树，子树里的叶节点必须在 `onHalted()` 里
 把自己停干净，并允许被重复 `halt()`。

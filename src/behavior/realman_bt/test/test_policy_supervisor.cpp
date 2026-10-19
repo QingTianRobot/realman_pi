@@ -218,23 +218,59 @@ void testLostJointStatesOfTheOtherArmsAreAFault() {
   assert(rig.verdict.finished && rig.verdict.fault);
 }
 
-void testAPausedBridgeIsAFault() {
+void testAPausedBridgeIsAPolicyTimeout() {
+  // The bridge pauses itself after its inference requests timed out several times in a row.
   Rig rig;
   rig.start();
   rig.run(1.0);
   rig.stats.paused = true;
   rig.step();
-  assert(rig.verdict.finished && rig.verdict.fault);
+  assert(rig.verdict.finished && rig.verdict.outcome == AttemptOutcome::kPolicyTimeout);
+  assert(rig.verdict.policy_timeout && !rig.verdict.fault && !rig.verdict.succeeded);
   assert(rig.verdict.reason.find("paused") != std::string::npos);
 }
 
-void testSilentBridgeStatsAreAFault() {
+void testAPauseReportedBeforeTheStartIsTheOneTheActivationCleared() {
+  Rig rig;
+  rig.stats.paused = true;
+  rig.start();  // the last stats before the activation still said paused
+  // The bridge publishes its stats once a second, so the next ones arrive well after the first
+  // evaluations: until then the stale "paused" is all there is.
+  rig.stats_alive = false;
+  rig.run(0.9);
+  assert(!rig.verdict.finished);
+  rig.stats_alive = true;
+  rig.stats.paused = false;
+  rig.run(2.0);
+  assert(!rig.verdict.finished);
+}
+
+void testABridgeThatIsStillPausedAfterTheStartIsAPolicyTimeout() {
+  Rig rig;
+  rig.stats.paused = true;
+  rig.start();
+  rig.step();  // the first stats after the start say paused again
+  assert(rig.verdict.finished && rig.verdict.outcome == AttemptOutcome::kPolicyTimeout);
+}
+
+void testSilentBridgeStatsAreAPolicyTimeout() {
   Rig rig;
   rig.start();
   rig.stats_alive = false;
   rig.run(6.0);  // stats_stale_sec = 5.0
-  assert(rig.verdict.finished && rig.verdict.fault);
+  assert(rig.verdict.finished && rig.verdict.outcome == AttemptOutcome::kPolicyTimeout);
+  assert(rig.verdict.policy_timeout && !rig.verdict.fault);
   assert(rig.verdict.reason.find("stats") != std::string::npos);
+}
+
+void testAFaultBeatsAPolicyTimeoutThatHappensAtTheSameTime() {
+  Rig rig;
+  rig.start();
+  rig.arm[4] = 10.0;  // J5 below the envelope
+  rig.stats.paused = true;
+  rig.step();
+  assert(rig.verdict.outcome == AttemptOutcome::kFault);
+  assert(!rig.verdict.policy_timeout);
 }
 
 void testAFaultBeatsATimeoutThatHappensAtTheSameTime() {
@@ -526,6 +562,7 @@ void testOutcomeNamesAreStable() {
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kWrongTask)) == "wrong_task");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kTimeout)) == "timeout");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kStall)) == "stall");
+  assert(std::string(realman_bt::outcomeName(AttemptOutcome::kPolicyTimeout)) == "policy_timeout");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kFault)) == "fault");
 }
 
@@ -535,13 +572,17 @@ void testOnlyTheTwoHeldOutcomesAreSuccessesAndOnlyFaultAndWrongTaskEndTheTask() 
   for (auto outcome : {AttemptOutcome::kReleasedHeld, AttemptOutcome::kLiftedHeld}) {
     assert(isSuccess(outcome) && !isFault(outcome));
   }
+  using realman_bt::isPolicyTimeout;
   for (auto outcome : {AttemptOutcome::kReleasedEmpty, AttemptOutcome::kDropped, AttemptOutcome::kTimeout,
                        AttemptOutcome::kStall}) {
-    assert(!isSuccess(outcome) && !isFault(outcome));
+    assert(!isSuccess(outcome) && !isFault(outcome) && !isPolicyTimeout(outcome));
   }
   for (auto outcome : {AttemptOutcome::kFault, AttemptOutcome::kWrongTask}) {
-    assert(!isSuccess(outcome) && isFault(outcome));
+    assert(!isSuccess(outcome) && isFault(outcome) && !isPolicyTimeout(outcome));
   }
+  // A policy-server timeout is retried, but on its own budget.
+  assert(!isSuccess(AttemptOutcome::kPolicyTimeout) && !isFault(AttemptOutcome::kPolicyTimeout) &&
+         isPolicyTimeout(AttemptOutcome::kPolicyTimeout));
 }
 
 // ---- tasks: lift_and_hold (pick) --------------------------------------------------------------
@@ -763,8 +804,11 @@ int main() {
   testSmallMovementOfTheOtherArmsIsTolerated();
   testLostJointStatesAreAFault();
   testLostJointStatesOfTheOtherArmsAreAFault();
-  testAPausedBridgeIsAFault();
-  testSilentBridgeStatsAreAFault();
+  testAPausedBridgeIsAPolicyTimeout();
+  testAPauseReportedBeforeTheStartIsTheOneTheActivationCleared();
+  testABridgeThatIsStillPausedAfterTheStartIsAPolicyTimeout();
+  testSilentBridgeStatsAreAPolicyTimeout();
+  testAFaultBeatsAPolicyTimeoutThatHappensAtTheSameTime();
   testAFaultBeatsATimeoutThatHappensAtTheSameTime();
   testNoReleaseWithinTheTimeIsARetryableTimeout();
   testClosedAndNotMovingIsAStall();

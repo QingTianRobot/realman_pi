@@ -11,6 +11,16 @@ realman_bt_executor:
       # Cycles that have to succeed, and failed attempts allowed within one cycle (the first try counts). -1 = no limit.
       cycles: 1
       attempts: 3
+      # Policy-server timeouts, retried on a budget of their own (they do not use up `attempts`): the bridge paused
+      # itself after failure_pause_threshold inference requests in a row timed out (policy_bridge.yaml
+      # infer_timeout_s), its stats went silent for stats_stale_sec, it was not ready within service_wait_sec, or
+      # /policy/activate did not answer. Each retry first waits backoff_sec with the bridge stopped, then opens the
+      # gripper and goes back to the start pose like any retry. 20 s covers the ~26 s JIT compile of the first inference
+      # after a serve restart (the bridge needs ~8 s of timeouts to pause) and a short Wi-Fi collapse (2026-10-14/16).
+      # attempts: timeouts allowed per cycle, the first counts; -1 = no limit. Reaching it ends the task (FAILED).
+      timeout_retry:
+        attempts: 3
+        backoff_sec: 20.0
       arm: r
       # auto: PolicyRun calls /policy/activate itself once the preflight checks pass, so selecting the policy mode is
       #   enough to start a run (the arms first go to the start pose). operator: PolicyRun only waits until a person

@@ -43,6 +43,13 @@ inline void raisePolicyFault(const bt_core::Blackboard::Ptr& blackboard,
   blackboard->set<bool>(kPolicyFaultKey, true);
 }
 
+// A policy-server timeout: RetryUnlessFault retries it on its own budget after a wait.
+inline void raisePolicyTimeout(const bt_core::Blackboard::Ptr& blackboard,
+                               const std::string& reason) {
+  recordPolicyFailureReason(blackboard, reason);
+  blackboard->set<bool>(kPolicyTimeoutKey, true);
+}
+
 inline void recordPolicyEvent(const bt_core::Blackboard::Ptr& blackboard,
                               const std::string& severity, const std::string& interface_name,
                               const std::string& phase, const std::string& detail) {

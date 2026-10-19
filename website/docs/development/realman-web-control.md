@@ -563,7 +563,8 @@ PYTHONPATH=src/driver/realman_web_control \
 ```
 
 前端源代码在 `src/driver/realman_web_control/web/src/`，控制页面和
-`calibration.html` 标定页面共用一个 WebSocket 服务；配置在
+`calibration.html` 标定页面共用一个 WebSocket 服务。标定页按操作顺序排列：桌面端第一行是三路相机输入状态，
+然后是“保存样本 | 执行标定”、检测预览，最后是标定板配置与实时反馈；配置在
 `config/web-control/vite.config.mjs`。普通 ROS 镜像不依赖 Node，提交的 `static/` 是可复现
 构建产物；源码变更后在仓库 `website/` 目录执行：
 

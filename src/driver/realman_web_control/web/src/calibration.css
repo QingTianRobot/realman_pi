@@ -33,6 +33,13 @@ pre:hover { border-color: var(--line-strong); }
 .log-panel { grid-column: 1 / -1; }
 .preview-panel { grid-column: 1 / -1; }
 .health-panel { grid-column: 1 / -1; }
+/* Workflow order: check cameras, capture, solve, inspect; reference config and log last. */
+.health-panel { order: 1; }
+.capture-panel { order: 2; }
+.solve-panel { order: 3; }
+.preview-panel { order: 4; }
+.config-panel { order: 5; }
+.log-panel { order: 6; }
 .camera-health { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 12px; }
 .camera-card { border: 1px solid var(--line); border-left: 4px solid var(--line-strong); border-radius: 12px; background: var(--card-sub); padding: 12px; transition: border-color .15s ease, box-shadow .15s ease, transform .15s ease; }
 .camera-card:hover { border-color: var(--accent-bar); box-shadow: var(--shadow-card); transform: translateY(-1px); }

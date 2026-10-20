@@ -44,7 +44,7 @@ jobs:
         with:
           python-version: "3.10"
       - name: Install test dependencies
-        run: python -m pip install pytest pyyaml numpy aiohttp
+        run: python -m pip install pytest pyyaml numpy aiohttp pyarrow
       - name: Run the suites that import without rclpy
         run: |
           set -e
@@ -56,6 +56,7 @@ jobs:
             src/behavior/realman_bt_mock:test \
             src/behavior/realman_bt:test/test_bt_launcher.py \
             src/sensor/realman_camera_calibration:test/test_config.py \
+            src/training/realman_training:test \
             tools/velocity_follow:tests; do
             dir="${suite%%:*}"; target="${suite#*:}"
             echo "== $dir"

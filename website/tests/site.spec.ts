@@ -148,6 +148,7 @@ test("documentation routes render", async ({ page }) => {
     "development/gripper-control",
     "development/policy-bridge",
     "development/policy-task",
+    "development/training-console",
     "development/velocity-follow-test",
     "troubleshooting",
   ]) {

@@ -137,3 +137,16 @@ def test_wrong_gripper_shape_raises_quality_unavailable(tmp_path):
     info_path.write_text(json.dumps(info))
     with pytest.raises(QualityUnavailable, match="observation.gripper_position"):
         inspect_dataset(root, CONFIG)
+
+
+def test_a_zero_length_episode_is_dropped_without_crashing():
+    findings = check_episode("pick_only", np.zeros(0), np.zeros((0, 6)), FPS, CONFIG)
+    assert [f.code for f in findings] == ["empty"]
+
+
+def test_a_one_frame_episode_is_judged():
+    assert codes("pick_only", [50.0]) == {"never_closed"}
+
+
+def test_an_all_closed_episode_starts_closed_and_never_releases():
+    assert codes("pick_and_place", gripper((5700, 90))) == {"start_closed", "no_release"}

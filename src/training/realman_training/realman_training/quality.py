@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from .config import QualityConfig
-from .lerobot_io import read_episode_columns, read_episodes, read_info
+from .lerobot_io import read_columns, read_episodes, read_info
 
 GRIPPER_COLUMN = "observation.gripper_position"
 JOINT_COLUMN = "observation.joint_position"
@@ -42,14 +42,17 @@ class QualityUnavailable(ValueError):
     """The dataset has no raw gripper readings to judge (a training view, or another robot)."""
 
 
-def _runs(mask: np.ndarray) -> list[tuple[bool, int, int]]:
+def runs(mask: np.ndarray) -> list[tuple[bool, int, int]]:
     """(value, start, end) for each run of equal values; end is exclusive."""
-    runs, start = [], 0
+    result, start = [], 0
     for i in range(1, len(mask) + 1):
         if i == len(mask) or mask[i] != mask[start]:
-            runs.append((bool(mask[start]), start, i))
+            result.append((bool(mask[start]), start, i))
             start = i
-    return runs
+    return result
+
+
+_runs = runs  # backwards compatibility
 
 
 def check_episode(
@@ -62,6 +65,9 @@ def check_episode(
 
     def warn(code: str, message: str) -> None:
         findings.append(Finding(code, "warn", message))
+
+    if len(gripper) == 0:
+        return (Finding("empty", "drop", "episode has no frames"),)
 
     threshold = config.closed_threshold_raw
     closed = gripper > threshold
@@ -78,16 +84,16 @@ def check_episode(
         rising = int(np.count_nonzero(closed[1:] & ~closed[:-1]))
         if rising >= 2:
             drop("regrasp", f"{rising} closing events (re-grasp)")
-        runs = _runs(closed)
+        run_list = runs(closed)
         gaps = [
             (start, end)
-            for k, (value, start, end) in enumerate(runs)
-            if not value and 0 < k < len(runs) - 1 and end - start <= config.glitch_max_frames
+            for k, (value, start, end) in enumerate(run_list)
+            if not value and 0 < k < len(run_list) - 1 and end - start <= config.glitch_max_frames
         ]
         if gaps:
             start, end = gaps[0]
             drop("glitch", f"closed reading interrupted for {end - start} frame(s) at frame {start}")
-        _, run_start, run_end = [run for run in runs if run[0]][-1]
+        _, run_start, run_end = [run for run in run_list if run[0]][-1]
         window = max(1, int(round(config.plateau_window_sec * fps)))
         plateau = float(np.median(gripper[max(run_start, run_end - window) : run_end]))
         if plateau >= config.empty_position_min:
@@ -129,11 +135,14 @@ def inspect_dataset(root: str | Path, config: QualityConfig) -> list[EpisodeQual
             )
     fps = float(info["fps"])
     arm = ARM_INDEX[config.arm]
+    columns = read_columns(root, [GRIPPER_COLUMN, JOINT_COLUMN])
     results = []
     for episode in read_episodes(root):
-        columns = read_episode_columns(episode, [GRIPPER_COLUMN, JOINT_COLUMN])
-        gripper = columns[GRIPPER_COLUMN][:, arm]
-        joints = np.degrees(columns[JOINT_COLUMN][:, arm * 6 : arm * 6 + 6])
+        data = columns[episode.index]
+        gripper = data[GRIPPER_COLUMN][:, arm] if len(data[GRIPPER_COLUMN]) else np.zeros(0)
+        joints = (
+            np.degrees(data[JOINT_COLUMN][:, arm * 6 : arm * 6 + 6]) if len(data[JOINT_COLUMN]) else np.zeros((0, 6))
+        )
         findings = check_episode(episode.task, gripper, joints, fps, config)
         results.append(EpisodeQuality(episode.index, episode.task, episode.length, _verdict(findings), findings))
     return results

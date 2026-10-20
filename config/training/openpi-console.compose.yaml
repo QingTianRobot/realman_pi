@@ -1,0 +1,10 @@
+# Overlay on the openpi repo's compose.yaml + compose.realman.yaml for the training console's
+# `docker compose run` containers (norm, train, eval). GPUs via the legacy nvidia runtime: the host's
+# CDI spec is stale, so `gpus:` fails for new containers. CONSOLE_GPUS is set by realman_training.
+services:
+  openpi:
+    runtime: nvidia
+    shm_size: 8gb
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "${CONSOLE_GPUS:-none}"
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility

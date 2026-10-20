@@ -115,7 +115,7 @@ export default withMermaid(defineConfig({
           { text: "VLA 策略桥接节点", link: "/development/policy-bridge" },
           { text: "Policy 任务（行为树监督）", link: "/development/policy-task" },
           { text: "独立数据录制平台", link: "/development/recording-platform" },
-          { text: "训练控制平台（数据检查）", link: "/development/training-console" },
+          { text: "训练控制平台（命令行）", link: "/development/training-console" },
         ],
       },
       {

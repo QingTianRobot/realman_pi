@@ -80,7 +80,7 @@ Web control 不做任何身份校验：`:8765` 能被访问的浏览器就能发
 
 日志：每次 launch 在 `logs/YYYYMMDD_HHMMSS/` 下写 ROS 官方节点日志（彩色 `RCUTILS_COLORIZED_OUTPUT=1`）；相机在 `logs/rm65-camera.log`，PID 在 `logs/.rm65-camera.pid`；行为树终态归档在 `logs/behavior-trees/<时间>_<PID>/`。
 
-## `realman-train`（训练数据检查）
+## `realman-train`（训练控制）
 
 从源码树运行（`PYTHONPATH=.`，或 `pip install -e` 安装后直接调用），详见[训练控制平台](../development/training-console)。
 
@@ -88,6 +88,16 @@ Web control 不做任何身份校验：`:8765` 能被访问的浏览器就能发
 # 在 src/training/realman_training 目录下：
 PYTHONPATH=. python -m realman_training list [--root DIR] [--json]
 PYTHONPATH=. python -m realman_training inspect <dir> [--json] [--no-quality]
+PYTHONPATH=. python -m realman_training pull [--name NAME] [--dataset <id>]
+PYTHONPATH=. python -m realman_training clean <src> [--dst <dst>] [--drop <ep,...>|--keep <ep,...>|--suggested]
+PYTHONPATH=. python -m realman_training view <src> [--dst <dst>] [--task-prompt task=prompt] [--dry-run]
+PYTHONPATH=. python -m realman_training norm <配置名> <视图目录> [--force] [--dry-run]
+PYTHONPATH=. python -m realman_training train <配置名> <视图目录> --exp <实验名> --gpus <列表> [--yes] [--dry-run]
+PYTHONPATH=. python -m realman_training eval <配置名> <实验名> --view <视图目录> --gpu <N> [--checkpoints <步数,...>]
+PYTHONPATH=. python -m realman_training register <配置名> <实验名> [--status <状态>] [--force]
+PYTHONPATH=. python -m realman_training jobs [--kind <种类>] [--limit N]
+PYTHONPATH=. python -m realman_training job <任务id> [--log]
+PYTHONPATH=. python -m realman_training cancel <任务id>
 ```
 
 | 环境变量 | 作用 |

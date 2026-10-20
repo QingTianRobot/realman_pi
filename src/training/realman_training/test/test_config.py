@@ -25,6 +25,8 @@ def test_the_reviewed_defaults():
     assert (q.gripper_open_raw, q.closed_threshold_raw, q.gripper_close_raw) == (50.0, 4275.0, 8500.0)
     # Recordings carry no torque: held plateaus reached 7904 on 2026-10-16, empty grasps 8414-8550.
     assert q.empty_position_min == 8300.0
+    # 2 s: raw 2026-10-16 #209 settled at 8448 only for its last ~2.5 s (3 s median 7802).
+    assert q.plateau_window_sec == 2.0
     assert q.release_tasks == ("pick_and_place",)
     assert q.start_pose_deg == (-9.89, 18.04, 79.08, 15.51, 79.60, -6.20)
 

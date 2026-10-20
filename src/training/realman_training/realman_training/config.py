@@ -24,7 +24,7 @@ class QualityConfig:
     closed_threshold_raw: float = 4275.0  # halfway between open and closed
     start_closed_sec: float = 1.0
     glitch_max_frames: int = 2
-    plateau_window_sec: float = 3.0
+    plateau_window_sec: float = 2.0  # 3 s missed raw 2026-10-16 #209 (slow creep, settled at 8448)
     empty_position_min: float = 8300.0
     start_partial_raw: float = 300.0
     release_tasks: tuple[str, ...] = ("pick_and_place",)

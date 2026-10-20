@@ -12,7 +12,9 @@ training_console:
     closed_threshold_raw: 4275    # above = closed; halfway between open and closed
     start_closed_sec: 1.0         # closed anywhere in this first span = "starts closed"
     glitch_max_frames: 2          # an open run this short inside a closed run = reading glitch
-    plateau_window_sec: 3.0       # end of the last closed run that is judged for "closed on nothing"
+    plateau_window_sec: 2.0       # end of the last closed run that is judged for "closed on nothing"
+    # 2 s, not 3: raw 2026-10-16 #209 crept 7400-7600 before settling at 8448 for its last ~2.5 s
+    # (3 s median 7802, kept by mistake); raw #21 (10-13 kept) stays below at 8244 over 2 s.
     # Recordings have no torque signal: held plateaus reached 7904 on 2026-10-16 (kept), empty grasps
     # 8414-8550 (dropped). The behaviour tree's 7800 relies on torque and does not apply here.
     empty_position_min: 8300

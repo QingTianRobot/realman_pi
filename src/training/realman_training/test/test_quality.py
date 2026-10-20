@@ -49,6 +49,11 @@ def test_closing_on_nothing():
     assert codes("pick_only", gripper((50, 60), (8450, 100))) == {"closed_on_nothing"}
 
 
+def test_closing_on_nothing_after_a_slow_creep():
+    # like raw #209: a long creep near 7500, then settled at 8448; a 3 s window would see the creep.
+    assert codes("pick_only", gripper((50, 60), (7500, 100), (8448, 40))) == {"closed_on_nothing"}
+
+
 def test_closing_on_nothing_is_judged_on_the_last_closed_run_before_the_release():
     assert "closed_on_nothing" in codes("pick_and_place", gripper((50, 60), (8450, 100), (50, 60)))
 

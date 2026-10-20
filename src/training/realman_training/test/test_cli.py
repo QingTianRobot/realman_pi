@@ -116,3 +116,78 @@ def test_nonexistent_config_path_exits_2(tmp_path, capsys):
     code = main(["--config", str(tmp_path / "nosuchfile.yaml"), "list"])
     assert code == 2
     assert "error:" in capsys.readouterr().err
+
+
+from realman_training.cli import build_params, parse_episodes
+from realman_training.config import load_config
+from realman_training.jobs import JobStore
+
+
+def test_parse_episodes():
+    assert parse_episodes("1,2,5-7") == [1, 2, 5, 6, 7]
+    assert parse_episodes(" 3 ") == [3]
+    with pytest.raises(ValueError):
+        parse_episodes("7-5")
+
+
+def cli_args(argv):
+    from realman_training.cli import make_parser
+
+    return make_parser().parse_args(argv)
+
+
+def test_build_params_for_each_step(setup, tmp_path):
+    raw, view, config_path = setup
+    config = load_config(config_path)
+    kind, params = build_params(cli_args(["pull"]), config)
+    assert kind == "pull" and params["target"].startswith(str(tmp_path / "data" / "raw_realman_ts_"))
+    assert params["config"] == str(config_path.resolve())
+    kind, params = build_params(cli_args(["clean", str(raw), "--drop", "1"]), config)
+    assert (kind, params["drop"]) == ("clean", [1]) and "_clean_" in params["dst"]
+    _, params = build_params(cli_args(["clean", str(raw), "--suggested"]), config)
+    assert params["drop"] == [1] and "closed plateau" in params["reasons"]["1"]
+    kind, params = build_params(cli_args(["view", str(raw), "--task-prompt", "pick_only=hold it", "--dry-run"]), config)
+    assert params["task_prompts"] == {"pick_only": "hold it"} and params["dry_run"] is True
+    assert params["dst"].endswith("realman__pi05-three-arm_view")
+    kind, params = build_params(cli_args(["train", "pi05_x", str(view), "--exp", "e1", "--gpus", "1,2", "--batch", "16", "--yes"]), config)
+    assert (kind, params["gpus"], params["batch"], params["exp"]) == ("train", "1,2", 16, "e1")
+    kind, params = build_params(cli_args(["eval", "pi05_x", "e1", "--view", str(view), "--gpu", "2", "--checkpoints", "1000,2000", "--no-prompt-swap"]), config)
+    assert params["checkpoints"] == [1000, 2000] and params["prompt_swap"] is False
+    kind, params = build_params(cli_args(["register", "pi05_x", "e1", "--status", "已部署"]), config)
+    assert (kind, params["status"]) == ("register", "已部署")
+
+
+def test_train_without_yes_is_refused_and_starts_nothing(setup, capsys):
+    _, view, config_path = setup
+    code = main(["--config", str(config_path), "train", "pi05_x", str(view), "--exp", "e1", "--gpus", "1"])
+    assert code == 2 and "--yes" in capsys.readouterr().err
+    assert JobStore(load_config(config_path).console_dir).list() == []
+
+
+def test_clean_runs_as_a_job_in_the_foreground_and_shows_up_in_jobs(setup, tmp_path, capsys):
+    raw, _, config_path = setup
+    dst = tmp_path / "data" / "cleaned"
+    assert main(["--config", str(config_path), "clean", str(raw), "--drop", "1", "--dst", str(dst)]) == 0
+    assert dst.is_dir()
+    capsys.readouterr()
+    assert main(["--config", str(config_path), "jobs", "--json"]) == 0
+    jobs = json.loads(capsys.readouterr().out)
+    assert jobs[0]["kind"] == "clean" and jobs[0]["state"] == "succeeded"
+    assert main(["--config", str(config_path), "job", jobs[0]["id"], "--log"]) == 0
+    assert "built" in capsys.readouterr().out
+
+
+def test_a_failed_step_exits_1_with_the_reason(setup, tmp_path, capsys):
+    raw, _, config_path = setup
+    (tmp_path / "data" / "exists").mkdir()
+    code = main(["--config", str(config_path), "clean", str(raw), "--drop", "1", "--dst", str(tmp_path / "data" / "exists")])
+    assert code == 1 and "exists" in capsys.readouterr().err
+
+
+def test_background_returns_the_job_id(setup, tmp_path, capsys):
+    raw, _, config_path = setup
+    code = main(["--config", str(config_path), "clean", str(raw), "--drop", "1", "--dst", str(tmp_path / "data" / "bg"), "--background"])
+    assert code == 0
+    job_id = capsys.readouterr().out.strip()
+    store = JobStore(load_config(config_path).console_dir)
+    assert store.wait(job_id, lambda line: None)["state"] == "succeeded"

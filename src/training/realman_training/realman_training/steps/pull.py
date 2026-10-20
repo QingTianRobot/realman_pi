@@ -104,10 +104,16 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
                 remote_sizes[rel] = int(size_str)
             except ValueError:
                 pass
+        # Only the videos the copied meta refers to: episodes recorded after the meta snapshot (or one still being
+        # recorded) may have files on the remote that are growing or were never meant to be copied.
         size_errors = []
-        for rel, expected in remote_sizes.items():
-            local = dest / "videos" / rel
-            if not local.is_file():
+        referenced = [p for files in video_files(dest).values() for p in files]
+        for local in referenced:
+            rel = local.relative_to(dest / "videos").as_posix()
+            expected = remote_sizes.get(rel)
+            if expected is None:
+                size_errors.append(f"{rel}: not on the remote")
+            elif not local.is_file():
                 size_errors.append(f"{rel}: missing")
             elif local.stat().st_size != expected:
                 size_errors.append(f"{rel}: {local.stat().st_size} != {expected}")

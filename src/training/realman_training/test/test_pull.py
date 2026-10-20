@@ -245,3 +245,13 @@ def test_default_target_name(tmp_path):
 
 def test_commandfailed_is_importable():
     assert issubclass(CommandFailed, RuntimeError)
+
+
+def test_unreferenced_remote_videos_are_ignored(recording, tmp_path):
+    """A recording in progress: the remote has videos the copied meta does not refer to (growing or newer)."""
+    runner = fake_remote(recording)
+    extra = "123 observation.images.d435/chunk-000/file-099.mp4\n456 observation.images.d435/chunk-000/file-100.mp4\n"
+    runner._rules = [r for r in runner._rules if r[0] != "find"]
+    runner.on("find", stdout=_video_sizes(recording) + "\n" + extra)
+    result = pull.run({"target": str(tmp_path / "t")}, RecordingLog(), runner=runner)
+    assert result["episodes"] == 2

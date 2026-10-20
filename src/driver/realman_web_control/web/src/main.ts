@@ -1,7 +1,10 @@
 import * as THREE from "three";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import URDFLoader from "urdf-loader";
+import "./theme.css";
 import "./style.css";
+import { AXIS_COLORS, VelocityTrace } from "./velocity_trace";
+import { activeRouterBranch, ancestors, buildBtTree, findInputRouter, renderBreadcrumb, renderBtNode, type BtRuntime } from "./bt_tree";
 
 type ArmId = "l" | "m" | "r";
 type KeyboardArmId = "l" | "r";
@@ -149,19 +152,30 @@ app.innerHTML = `
         <div class="viewer-layout">
           <div id="fleet-strip" class="fleet-strip"></div>
           <div class="viewer-column">
-            <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-state" class="viewer-state">加载 URDF…</div><div id="keyboard-frame-legend" class="keyboard-frame-legend" hidden><strong>L WORK</strong><strong>R WORK</strong><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
+            <div id="viewer" class="viewer"><canvas id="canvas" aria-label="RealMan URDF 三维模型"></canvas><div id="viewer-hover" class="viewer-hover" hidden></div><div id="viewer-state" class="viewer-state">加载 URDF…</div><div id="keyboard-frame-legend" class="keyboard-frame-legend" hidden><strong>L WORK</strong><strong>R WORK</strong><span class="axis-x">X</span><span class="axis-y">Y</span><span class="axis-z">Z</span></div><div class="legend"><span class="legend-live"></span>实体姿态 <span class="legend-shadow"></span>目标影子</div></div>
             <div class="viewer-footer"><span id="joint-stamp">等待 joint_states</span><span id="root-frame"></span></div>
           </div>
         </div>
       </section>
-      <section id="velocity-telemetry-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">VELOCITY TELEMETRY</span><h2>命令与实际末端速度</h2></div><span class="mini-state">L + R</span></div><p class="telemetry-help">命令值来自当前速度控制 session；实际值由驱动根据状态位姿差分估计。两者坐标系和数据年龄始终单独标注。</p><div id="velocity-telemetry-grid" class="velocity-telemetry-grid"></div></section>
+      <div class="status-row">
+        <section id="coordinate-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><div class="coordinate-actions"><button id="copy-current-joints" class="button ghost" type="button" disabled>复制当前角度</button><span id="coordinate-state" class="mini-state">WAIT</span></div></div><div id="coordinate-summary" class="coordinate-summary"></div><div id="joint-copy-status" class="joint-copy-status" aria-live="polite">等待有效 joint_states</div></section>
+        <section id="action-monitor-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">ACTION MONITOR</span><h2>运行反馈</h2></div><span id="action-state" class="mini-state">IDLE</span></div><div class="progress-track"><div id="progress" class="progress-bar"></div></div><div id="feedback" class="feedback">尚未发送 Action</div><pre id="result" class="result" aria-live="polite">等待结果…</pre></section>
+      </div>
+      <section id="velocity-telemetry-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">VELOCITY TELEMETRY</span><h2>命令与实际末端速度</h2></div><span class="mini-state">L + R</span></div><div class="telemetry-legend" id="velocity-telemetry-legend">${["X", "Y", "Z"].map((axis, index) => `<span class="legend-axis"><i style="background: ${AXIS_COLORS[index]}"></i>${axis}</span>`).join("")}<span class="legend-line solid"><i></i>实际</span><span class="legend-line dashed"><i></i>命令（限速后）</span><span class="legend-hint">最近 10 s · 纵轴按数据自动缩放</span></div><div id="velocity-telemetry-grid" class="velocity-telemetry-grid"></div></section>
     </div>
     <aside class="controls">
       <section id="input-mode-card" class="panel panel-section input-mode-card" hidden>
         <div class="panel-heading compact"><div><span class="eyebrow">GLOBAL INPUT</span><h2>输入模式</h2></div><span id="input-mode-active" class="mini-state">WAIT</span></div>
         <div class="input-mode-body"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div></div>
       </section>
-      <section id="keyboard-control-card" class="panel panel-section keyboard-control-card" hidden>
+      <div id="control-tabs" class="control-tabs" role="tablist" aria-label="操作面板">
+        <button type="button" role="tab" id="control-tab-motion" data-control-tab="motion" aria-controls="motion-panel">运动</button>
+        <button type="button" role="tab" id="control-tab-velocity" data-control-tab="velocity" aria-controls="velocity-panel">速度</button>
+        <button type="button" role="tab" id="control-tab-gripper" data-control-tab="gripper" aria-controls="gripper-panel">夹爪</button>
+        <button type="button" role="tab" id="control-tab-keyboard" data-control-tab="keyboard" aria-controls="keyboard-control-card" hidden>键盘</button>
+        <button type="button" role="tab" id="control-tab-bt" data-control-tab="bt" aria-controls="bt-panel" hidden>行为树<span id="bt-tab-dot" class="tab-dot"></span></button>
+      </div>
+      <section id="keyboard-control-card" class="panel panel-section keyboard-control-card" role="tabpanel" aria-labelledby="control-tab-keyboard" data-control-panel="keyboard" hidden>
         <div class="panel-heading compact"><div><span class="eyebrow">KEYBOARD / L + R</span><h2>双臂键盘速度与夹爪</h2></div><span id="keyboard-control-state" class="mini-state">RELEASED</span></div>
         <p class="keyboard-help">切换到“Web / 键盘速度控制”后：机械臂按住运动，松键、失焦或通信超时停止；夹爪按一次全开／全闭，松键不撤销已提交目标。仅在在线且无报警时接收新夹爪指令。</p>
         <div class="keyboard-arm-grid">
@@ -169,8 +183,7 @@ app.innerHTML = `
           <div id="keyboard-right" class="keyboard-arm" data-arm="r"></div>
         </div>
       </section>
-      <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">COORDINATES</span><h2>当前坐标</h2></div><div class="coordinate-actions"><button id="copy-current-joints" class="button ghost" type="button" disabled>复制当前角度</button><span id="coordinate-state" class="mini-state">WAIT</span></div></div><div id="coordinate-summary" class="coordinate-summary"></div><div id="joint-copy-status" class="joint-copy-status" aria-live="polite">等待有效 joint_states</div></section>
-      <section class="panel panel-section motion-panel">
+      <section id="motion-panel" class="panel panel-section motion-panel" role="tabpanel" aria-labelledby="control-tab-motion" data-control-panel="motion">
         <div class="panel-heading compact"><div><span class="eyebrow">MOTION TARGET</span><h2>一次性运动</h2></div><div class="panel-actions"><span id="selected-arm-label" class="mini-state">L</span><button id="reset-preview" class="text-button" type="button">重置目标</button></div></div>
         <div id="motion-mode" class="segmented-control" aria-label="运动类型">
           <button type="button" class="selected" data-motion-command="0" aria-pressed="true">MOVEJ</button>
@@ -225,9 +238,16 @@ app.innerHTML = `
         </div>
         <button id="execute-motion" class="button primary full" type="button" disabled>发送 MOVEJ</button>
       </section>
-      <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">CARTESIAN</span><h2>末端速度</h2></div><span id="velocity-state" class="mini-state">IDLE</span></div><div class="form-grid"><label>参考系<select id="velocity-frame"></select></label><label>周期 (ms)<input id="velocity-period" type="number" min="1" step="1" /></label><label>看门狗 (ms)<input id="velocity-watchdog" type="number" min="1" step="1" /></label><label>线加速度<input id="linear-accel" type="number" min="0.001" step="0.01" /></label><label>角加速度<input id="angular-accel" type="number" min="0.001" step="0.01" /></label></div><div id="velocity-inputs" class="velocity-inputs"></div><div class="inline-actions"><button id="start-velocity" class="button secondary" type="button" disabled>启动速度 Action</button><button id="cancel-velocity" class="button ghost" type="button" disabled>取消</button></div></section>
-      <section id="gripper-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">GRIPPER</span><h2>夹爪控制</h2></div><span id="gripper-state" class="mini-state">WAIT</span></div><div class="form-grid"><label>设备<select id="gripper-select"></select></label><label>开合度 (0=闭合)<input id="gripper-percentage" type="range" min="0" max="1" step="0.01" value="1" /></label></div><div class="inline-actions"><button id="gripper-open" class="button secondary" type="button">打开</button><button id="gripper-close" class="button secondary" type="button">闭合</button><button id="gripper-enable" class="button ghost" type="button">使能</button><button id="gripper-reset" class="button danger" type="button">复位</button></div><div id="gripper-feedback" class="feedback">等待夹爪状态</div><details id="gripper-limits" class="gripper-limits"><summary>行程设置</summary><div class="gripper-limits-body"><div class="form-grid"><label>开位<input id="gripper-open-position" type="number" step="1" /></label><label>闭位<input id="gripper-close-position" type="number" step="1" /></label></div><div class="inline-actions"><button id="gripper-teach-open" class="button ghost" type="button">开位=当前位置</button><button id="gripper-teach-close" class="button ghost" type="button">闭位=当前位置</button></div><label class="gripper-raw">原始位置 <output id="gripper-raw-value">0</output><input id="gripper-raw-position" type="range" min="0" max="1" step="1" value="0" /></label><button id="gripper-limits-apply" class="button primary full" type="button">应用行程</button><div id="gripper-limits-range" class="feedback"></div><div id="gripper-limits-status" class="feedback" role="status" aria-live="polite"></div></div></details></section>
-      <section class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">ACTION MONITOR</span><h2>运行反馈</h2></div><span id="action-state" class="mini-state">IDLE</span></div><div class="progress-track"><div id="progress" class="progress-bar"></div></div><div id="feedback" class="feedback">尚未发送 Action</div><pre id="result" class="result" aria-live="polite">等待结果…</pre></section>
+      <section id="velocity-panel" class="panel panel-section" role="tabpanel" aria-labelledby="control-tab-velocity" data-control-panel="velocity"><div class="panel-heading compact"><div><span class="eyebrow">CARTESIAN</span><h2>末端速度</h2></div><span id="velocity-state" class="mini-state">IDLE</span></div><div class="form-grid"><label>参考系<select id="velocity-frame"></select></label><label>周期 (ms)<input id="velocity-period" type="number" min="1" step="1" /></label><label>看门狗 (ms)<input id="velocity-watchdog" type="number" min="1" step="1" /></label><label>线加速度<input id="linear-accel" type="number" min="0.001" step="0.01" /></label><label>角加速度<input id="angular-accel" type="number" min="0.001" step="0.01" /></label></div><div id="velocity-inputs" class="velocity-inputs"></div><div class="inline-actions"><button id="start-velocity" class="button secondary" type="button" disabled>启动速度 Action</button><button id="cancel-velocity" class="button ghost" type="button" disabled>取消</button></div></section>
+      <section id="gripper-panel" class="panel panel-section" role="tabpanel" aria-labelledby="control-tab-gripper" data-control-panel="gripper"><div class="panel-heading compact"><div><span class="eyebrow">GRIPPER</span><h2>夹爪控制</h2></div><span id="gripper-state" class="mini-state">WAIT</span></div><div class="form-grid"><label>设备<select id="gripper-select"></select></label><label>开合度 (0=闭合)<input id="gripper-percentage" type="range" min="0" max="1" step="0.01" value="1" /></label></div><div class="inline-actions"><button id="gripper-open" class="button secondary" type="button">打开</button><button id="gripper-close" class="button secondary" type="button">闭合</button><button id="gripper-enable" class="button ghost" type="button">使能</button><button id="gripper-reset" class="button danger" type="button">复位</button></div><div id="gripper-feedback" class="feedback">等待夹爪状态</div><details id="gripper-limits" class="gripper-limits"><summary>行程设置</summary><div class="gripper-limits-body"><div class="form-grid"><label>开位<input id="gripper-open-position" type="number" step="1" /></label><label>闭位<input id="gripper-close-position" type="number" step="1" /></label></div><div class="inline-actions"><button id="gripper-teach-open" class="button ghost" type="button">开位=当前位置</button><button id="gripper-teach-close" class="button ghost" type="button">闭位=当前位置</button></div><label class="gripper-raw">原始位置 <output id="gripper-raw-value">0</output><input id="gripper-raw-position" type="range" min="0" max="1" step="1" value="0" /></label><button id="gripper-limits-apply" class="button primary full" type="button">应用行程</button><div id="gripper-limits-range" class="feedback"></div><div id="gripper-limits-status" class="feedback" role="status" aria-live="polite"></div></div></details></section>
+      <section id="bt-panel" class="panel panel-section bt-panel" role="tabpanel" aria-labelledby="control-tab-bt" data-control-panel="bt" hidden>
+        <div class="panel-heading compact"><div><span class="eyebrow">BEHAVIOR TREE</span><h2>行为树</h2></div><div class="panel-actions"><span id="bt-root-status" class="bt-status bt-idle">IDLE</span><button id="bt-stop" class="button danger" type="button">终止行为树</button></div></div>
+        <div id="bt-stop-status" class="bt-stop-status" role="status" aria-live="polite" hidden></div>
+        <div class="bt-meta"><span id="bt-tree-id"></span><button id="bt-scope-toggle" class="text-button" type="button" hidden>显示整棵树</button></div>
+        <div id="bt-breadcrumb" class="bt-breadcrumb" hidden></div>
+        <div id="bt-failure" class="bt-reason bt-root-reason" hidden></div>
+        <ul id="bt-tree" class="bt-tree" aria-live="off"></ul>
+      </section>
     </aside>
   </main>
 `;
@@ -262,6 +282,47 @@ const inputModeDetail = $("#input-mode-detail");
 const keyboardControlCard = $("#keyboard-control-card") as HTMLElement;
 const keyboardControlState = $("#keyboard-control-state");
 const keyboardFrameLegend = $("#keyboard-frame-legend") as HTMLElement;
+const keyboardControlTab = $("#control-tab-keyboard") as HTMLButtonElement;
+type ControlTab = "motion" | "velocity" | "gripper" | "keyboard" | "bt";
+const controlTabStorageKey = "realman-web-control.tab";
+let activeControlTab: ControlTab = "motion";
+try {
+  const stored = window.localStorage.getItem(controlTabStorageKey);
+  if (stored === "motion" || stored === "velocity" || stored === "gripper" || stored === "keyboard" || stored === "bt") activeControlTab = stored;
+} catch {
+  // Storage can be blocked; the motion tab is a safe default.
+}
+function selectControlTab(tab: ControlTab, remember = true) {
+  activeControlTab = tab;
+  if (remember) {
+    try { window.localStorage.setItem(controlTabStorageKey, tab); } catch { /* per-viewer convenience only */ }
+  }
+  renderControlTabs();
+}
+function renderControlTabs() {
+  // Keyboard and behavior-tree tabs only exist while their source is live; until then the
+  // remembered choice falls back to motion.
+  const activeButton = document.querySelector<HTMLButtonElement>(`[data-control-tab="${activeControlTab}"]`);
+  const shown = activeButton?.hidden ? "motion" : activeControlTab;
+  document.querySelectorAll<HTMLButtonElement>("[data-control-tab]").forEach((button) => {
+    const selected = button.dataset.controlTab === shown;
+    button.classList.toggle("selected", selected);
+    button.setAttribute("aria-selected", String(selected));
+    button.tabIndex = selected ? 0 : -1;
+  });
+  document.querySelectorAll<HTMLElement>("[data-control-panel]").forEach((panel) => {
+    panel.hidden = panel.dataset.controlPanel !== shown;
+  });
+}
+$("#control-tabs").addEventListener("click", (event) => {
+  const button = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-control-tab]");
+  if (!button || button.hidden) return;
+  const reopenedMotion = button.dataset.controlTab === "motion" && activeControlTab !== "motion";
+  selectControlTab(button.dataset.controlTab as ControlTab);
+  // Sliders do not follow live joint_states, so opening the motion tab starts from the real pose.
+  if (reopenedMotion) resetMotionTarget();
+});
+renderControlTabs();
 const velocityTelemetryGrid = $("#velocity-telemetry-grid") as HTMLElement;
 const motionMode = $("#motion-mode");
 const jointTarget = $("#joint-target") as HTMLElement;
@@ -458,8 +519,12 @@ function renderKeyboardArm(arm: KeyboardArmId) {
   host.querySelectorAll<HTMLElement>("kbd[data-code]").forEach((key) => key.classList.toggle("pressed", keyboardPressed[arm].has(key.dataset.code ?? "")));
 }
 function renderKeyboardControl() {
-  keyboardControlCard.hidden = !keyboardModeDiscovered() || !manifest?.keyboard_control;
-  if (keyboardControlCard.hidden) return;
+  const keyboardAvailable = keyboardModeDiscovered() && Boolean(manifest?.keyboard_control);
+  if (keyboardControlTab.hidden !== !keyboardAvailable) {
+    keyboardControlTab.hidden = !keyboardAvailable;
+    renderControlTabs();
+  }
+  if (!keyboardAvailable) return;
   renderKeyboardArm("l");
   renderKeyboardArm("r");
   const moving = (["l", "r"] as const).some((arm) => [...keyboardPressed[arm]].some((code) => keyboardVelocityCodes(arm).has(code)));
@@ -514,10 +579,11 @@ function updateKeyboardWorkFrames() {
   keyboardFrameLegend.hidden = visibleArms.length === 0;
 }
 function guideToKeyboardControl() {
-  if (!keyboardModeActive() || inputModeState?.epoch === keyboardGuideEpoch || keyboardControlCard.hidden) return;
+  if (!keyboardModeActive() || inputModeState?.epoch === keyboardGuideEpoch || keyboardControlTab.hidden) return;
   keyboardGuideEpoch = inputModeState!.epoch;
-  // Keep the 3D viewer and MoveJ controls in place; the keyboard card is
-  // already visible in the controls column and only needs an active cue.
+  // This page now owns the keyboard lease, so bring its tab forward without
+  // scrolling; the 3D viewer and status panels stay where they are.
+  selectControlTab("keyboard", false);
   keyboardControlCard.classList.add("keyboard-guide-active");
   if (keyboardGuideTimer) window.clearTimeout(keyboardGuideTimer);
   keyboardGuideTimer = window.setTimeout(() => {
@@ -558,7 +624,13 @@ function renderInputModeCard() {
   const state = inputModeState;
   inputModeActive.textContent = state ? `${inputModeLabel(state.active_mode)} / ${state.phase}` : "WAIT";
   inputModeActive.className = `mini-state ${state?.phase.toLowerCase() ?? ""}`;
-  inputModeDetail.textContent = state?.detail || inputModeResultDetail || "等待输入模式状态";
+  // The BT often reports an empty detail; describe the phase rather than looking like no state arrived.
+  const phaseDetail = !state ? "等待输入模式状态"
+    : state.phase === "ACTIVE" ? `行为树已切换到 ${inputModeLabel(state.active_mode)}（epoch ${state.epoch}）`
+    : state.phase === "SWITCHING" ? `正在切换到 ${inputModeLabel(state.requested_mode)}…`
+    : state.phase === "FAILED" ? `切换到 ${inputModeLabel(state.requested_mode)} 失败`
+    : state.phase;
+  inputModeDetail.textContent = state?.detail || inputModeResultDetail || phaseDetail;
   updateInputModeSelectionDisabled();
   reconcileKeyboardControl();
   guideToKeyboardControl();
@@ -660,42 +732,91 @@ function renderCoordinateState() {
     <div class="coordinate-meta">${state.work?.xyz_m ? `xyz ${state.work.xyz_m.map((value) => displayNumber(value)).join(", ")}` : ""}</div>
   `;
 }
-function telemetryVector(values: number[] | undefined, digits = 3) {
-  if (!Array.isArray(values) || values.length !== 3 || !values.every(Number.isFinite)) return "--";
-  return `[${values.map((value) => displayNumber(value, digits)).join(", ")}]`;
-}
-function telemetryNorm(values: number[] | undefined, digits = 3) {
-  if (!Array.isArray(values) || values.length !== 3 || !values.every(Number.isFinite)) return "--";
-  return displayNumber(Math.hypot(...values), digits);
-}
 function telemetryReferenceLabel(state: CartesianVelocityTelemetry) {
   const kind = state.reference_type === 1 ? "WORK" : state.reference_type === 2 ? "TOOL" : "BASE";
   return `${kind} / ${state.reference_name || "unknown"}`;
 }
-function renderCartesianVelocityTelemetry() {
-  velocityTelemetryGrid.innerHTML = (["l", "r"] as const).map((arm) => {
-    const state = cartesianVelocityStates[arm];
-    if (!state) {
-      return `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}"><div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-status">WAIT</span></div><div class="telemetry-empty">等待 /${arm}/cartesian_velocity/state</div></article>`;
+function rotateByQuaternion(vector: number[], [w, x, y, z]: number[]) {
+  // v' = q v q*, written out for a unit quaternion.
+  const [vx, vy, vz] = vector;
+  const tx = 2 * (y * vz - z * vy);
+  const ty = 2 * (z * vx - x * vz);
+  const tz = 2 * (x * vy - y * vx);
+  return [vx + w * tx + (y * tz - z * ty), vy + w * ty + (z * tx - x * tz), vz + w * tz + (x * ty - y * tx)];
+}
+// The driver reports the command in its control frame but the measurement in <arm>/base_link.
+// Express the limited command in the measured frame so both lines are directly comparable.
+function commandInMeasuredFrame(arm: KeyboardArmId, state: CartesianVelocityTelemetry):
+  { linear: number[]; angular: number[] } | { reason: string } {
+  const linear = state.limited_linear_velocity_mps;
+  const angular = state.limited_angular_velocity_radps;
+  if (state.reference_type === 0) return { linear, angular };
+  if (state.reference_type === 2) return { reason: "TOOL 坐标系命令随末端旋转，未叠加命令" };
+  const work = coordinateStates[arm]?.work;
+  const quaternion = work?.quaternion_wxyz?.map(Number);
+  if (!work || work.name !== state.reference_name || quaternion?.length !== 4 ||
+      !quaternion.every(Number.isFinite) || Math.hypot(...quaternion) < 1e-9) {
+    return { reason: `缺少 WORK / ${state.reference_name || "unknown"} 的姿态，未叠加命令` };
+  }
+  const norm = Math.hypot(...quaternion);
+  const unit = quaternion.map((value) => value / norm);
+  return { linear: rotateByQuaternion(linear, unit), angular: rotateByQuaternion(angular, unit) };
+}
+type TraceKind = "linear" | "angular";
+const velocityTraces: Partial<Record<`${KeyboardArmId}-${TraceKind}`, VelocityTrace>> = {};
+function ensureVelocityTelemetrySkeleton() {
+  if (velocityTelemetryGrid.childElementCount) return;
+  velocityTelemetryGrid.innerHTML = (["l", "r"] as const).map((arm) => `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}">
+      <div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-pills"><span class="telemetry-status" data-field="session">WAIT</span><span class="telemetry-status" data-field="measured-status">WAIT</span></span></div>
+      <div class="telemetry-frames"><span>实测 <strong data-field="measured-frame">${arm}/base_link</strong></span><span>命令 <strong data-field="command-frame">--</strong></span></div>
+      <div class="telemetry-note" data-field="overlay-note">等待 /${arm}/cartesian_velocity/state</div>
+      ${(["linear", "angular"] as const).map((kind) => `<figure class="velocity-trace" data-trace="${kind}"><figcaption>${kind === "linear" ? "线速度" : "角速度"}<span>${kind === "linear" ? "m/s" : "rad/s"}</span></figcaption><canvas data-field="${kind}-trace" aria-label="${arm.toUpperCase()} ${kind === "linear" ? "线速度" : "角速度"}：最近 10 秒命令（虚线）与实际（实线）"></canvas></figure>`).join("")}
+    </article>`).join("");
+  for (const arm of ["l", "r"] as const) {
+    for (const kind of ["linear", "angular"] as const) {
+      const canvasElement = velocityTelemetryGrid.querySelector<HTMLCanvasElement>(`#velocity-telemetry-${arm} [data-field="${kind}-trace"]`)!;
+      // Floors keep encoder noise around zero from filling the whole axis.
+      velocityTraces[`${arm}-${kind}`] = new VelocityTrace(canvasElement, kind === "linear" ? 0.01 : 0.02);
     }
-    const measuredStatus = state.measured_valid ? "VALID" : "STALE / NO DATA";
-    const measuredStatusClass = state.measured_valid ? "valid" : "stale";
-    const sessionStatus = state.session_active ? "ACTIVE" : "IDLE";
-    const commandFrame = state.command_frame_id || telemetryReferenceLabel(state);
-    const measuredFrame = state.measured_frame_id || `${arm}/base_link`;
-    return `<article class="velocity-telemetry-arm" id="velocity-telemetry-${arm}" data-arm="${arm}">
-      <div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-status ${state.session_active ? "active" : ""}">${sessionStatus}</span></div>
-      <div class="telemetry-reference"><span>命令坐标系</span><strong>${escapeHtml(commandFrame)}</strong><span>参考</span><strong>${escapeHtml(telemetryReferenceLabel(state))}</strong></div>
-      <div class="telemetry-row"><span>命令线速度</span><strong>${telemetryVector(state.commanded_linear_velocity_mps)} m/s</strong><em>age ${Number.isFinite(state.command_age_ms) ? state.command_age_ms : "--"} ms</em></div>
-      <div class="telemetry-row"><span>限速后线速度</span><strong>${telemetryVector(state.limited_linear_velocity_mps)} m/s <small>|${telemetryNorm(state.limited_linear_velocity_mps)}|</small></strong><em></em></div>
-      <div class="telemetry-row"><span>命令角速度</span><strong>${telemetryVector(state.commanded_angular_velocity_radps)} rad/s</strong><em></em></div>
-      <div class="telemetry-row"><span>限速后角速度</span><strong>${telemetryVector(state.limited_angular_velocity_radps)} rad/s <small>|${telemetryNorm(state.limited_angular_velocity_radps)}|</small></strong><em></em></div>
-      <div class="telemetry-divider"></div>
-      <div class="telemetry-reference"><span>实测坐标系</span><strong>${escapeHtml(measuredFrame)}</strong><span>状态</span><strong class="telemetry-measured ${measuredStatusClass}">${measuredStatus}</strong></div>
-      <div class="telemetry-row"><span>实测线速度</span><strong>${telemetryVector(state.measured_linear_velocity_mps)} m/s <small>|${telemetryNorm(state.measured_linear_velocity_mps)}|</small></strong><em>age ${Number.isFinite(state.measured_age_ms) ? state.measured_age_ms : "--"} ms</em></div>
-      <div class="telemetry-row"><span>实测角速度</span><strong>${telemetryVector(state.measured_angular_velocity_radps)} rad/s <small>|${telemetryNorm(state.measured_angular_velocity_radps)}|</small></strong><em></em></div>
-    </article>`;
-  }).join("");
+  }
+  let lastDraw = 0;
+  const frame = (now: number) => {
+    requestAnimationFrame(frame);
+    if (document.hidden || now - lastDraw < 33) return;
+    lastDraw = now;
+    for (const trace of Object.values(velocityTraces)) trace?.draw(now);
+  };
+  requestAnimationFrame(frame);
+}
+function recordCartesianVelocitySample(arm: KeyboardArmId, state: CartesianVelocityTelemetry) {
+  ensureVelocityTelemetrySkeleton();
+  const now = performance.now();
+  const command = commandInMeasuredFrame(arm, state);
+  const hasCommand = "linear" in command;
+  velocityTraces[`${arm}-linear`]?.push(now, state.measured_valid ? state.measured_linear_velocity_mps : null, hasCommand ? command.linear : null);
+  velocityTraces[`${arm}-angular`]?.push(now, state.measured_valid ? state.measured_angular_velocity_radps : null, hasCommand ? command.angular : null);
+}
+function renderCartesianVelocityTelemetry() {
+  ensureVelocityTelemetrySkeleton();
+  for (const arm of ["l", "r"] as const) {
+    const state = cartesianVelocityStates[arm];
+    if (!state) continue;
+    const card = $(`#velocity-telemetry-${arm}`) as HTMLElement;
+    const field = (name: string) => card.querySelector<HTMLElement>(`[data-field="${name}"]`)!;
+    const session = field("session");
+    session.textContent = state.session_active ? "ACTIVE" : "IDLE";
+    session.className = `telemetry-status ${state.session_active ? "active" : ""}`;
+    const measuredStatus = field("measured-status");
+    measuredStatus.textContent = state.measured_valid ? "VALID" : "STALE / NO DATA";
+    measuredStatus.className = `telemetry-status ${state.measured_valid ? "valid" : "stale"}`;
+    field("measured-frame").textContent = state.measured_frame_id || `${arm}/base_link`;
+    field("command-frame").textContent = state.command_frame_id || telemetryReferenceLabel(state);
+    const command = commandInMeasuredFrame(arm, state);
+    const note = field("overlay-note");
+    note.textContent = "reason" in command ? command.reason
+      : state.reference_type === 0 ? "命令与实测同为 base 坐标系" : `命令已从 ${telemetryReferenceLabel(state)} 旋转到实测坐标系`;
+    note.classList.toggle("warn", "reason" in command);
+  }
 }
 function renderFleetStrip() {
   if (!manifest) return;
@@ -1121,12 +1242,12 @@ async function loadFleet() {
     if (generation !== loadGeneration) return;
     if (!scene) throw new Error("WebGL scene was not initialized");
     scene.clear();
-    scene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xd3dbe5, 2.4));
     const key = new THREE.DirectionalLight(0xffffff, 4);
     key.position.set(2, -3, 4);
     key.castShadow = true;
     scene.add(key);
-    const grid = new THREE.GridHelper(3.5, 22, 0x567078, 0x263b40);
+    const grid = new THREE.GridHelper(3.5, 22, 0xb3c1d1, 0xdde4ec);
     grid.rotation.x = Math.PI / 2;
     scene.add(grid);
     const allMeshes: any[] = [];
@@ -1215,7 +1336,7 @@ function initScene() {
   viewer.dataset.renderer = "webgl";
   renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
   renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.setClearColor(0x091114, 1);
+  renderer.setClearColor(0xf6f8fb, 1);
   renderer.shadowMap.enabled = true;
   scene = new THREE.Scene();
   camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
@@ -1233,6 +1354,7 @@ function initScene() {
   };
   new ResizeObserver(resize).observe(viewer);
   resize();
+  initViewerHover();
   const frame = () => {
     requestAnimationFrame(frame);
     if (!renderer || !scene || !camera || !controls) return;
@@ -1240,6 +1362,83 @@ function initScene() {
     renderer.render(scene, camera);
   };
   frame();
+}
+
+// Hovering an arm tints its live links and names the link under the pointer;
+// a click (not a drag) selects that arm, like its fleet chip.
+const viewerHover = $("#viewer-hover") as HTMLElement;
+const raycaster = new THREE.Raycaster();
+let hoveredArm: ArmId | undefined;
+function setArmHighlight(arm: ArmId | undefined) {
+  if (arm === hoveredArm) return;
+  for (const [id, robotScene] of Object.entries(robotScenes) as [ArmId, RobotScene][]) {
+    robotScene.live?.traverse((object: any) => {
+      if (object instanceof THREE.Mesh && object.material instanceof THREE.MeshStandardMaterial) {
+        object.material.emissive.set(id === arm ? 0x3e63dd : 0x000000);
+        object.material.emissiveIntensity = id === arm ? 0.28 : 0;
+      }
+    });
+  }
+  hoveredArm = arm;
+  viewer.classList.toggle("hovering-arm", Boolean(arm));
+}
+function pickArm(event: PointerEvent): { arm: ArmId; link: string } | undefined {
+  if (!camera) return undefined;
+  const box = canvas.getBoundingClientRect();
+  raycaster.setFromCamera(new THREE.Vector2(
+    ((event.clientX - box.left) / box.width) * 2 - 1,
+    -((event.clientY - box.top) / box.height) * 2 + 1,
+  ), camera);
+  let best: { arm: ArmId; link: string; distance: number } | undefined;
+  for (const [arm, robotScene] of Object.entries(robotScenes) as [ArmId, RobotScene][]) {
+    if (!robotScene.live) continue;
+    const hit = raycaster.intersectObject(robotScene.live, true)[0];
+    if (!hit || (best && best.distance <= hit.distance)) continue;
+    let node: any = hit.object;
+    let onGripper = false;
+    while (node && !node.isURDFLink) node = node.parent;
+    for (let parent: any = node; parent; parent = parent.parent) onGripper ||= parent === gripperModels[arm];
+    best = { arm, link: onGripper ? "夹爪" : node?.name ?? "", distance: hit.distance };
+  }
+  return best && { arm: best.arm, link: best.link };
+}
+function initViewerHover() {
+  let frameRequest = 0;
+  let pressed: { x: number; y: number } | undefined;
+  canvas.addEventListener("pointermove", (event) => {
+    if (event.buttons) {
+      viewerHover.hidden = true;
+      return;
+    }
+    if (frameRequest) return;
+    frameRequest = requestAnimationFrame(() => {
+      frameRequest = 0;
+      const picked = pickArm(event);
+      setArmHighlight(picked?.arm);
+      viewerHover.hidden = !picked;
+      if (!picked) return;
+      const label = armSelect.querySelector<HTMLOptionElement>(`option[value="${picked.arm}"]`)?.textContent ?? picked.arm.toUpperCase();
+      viewerHover.innerHTML = `${escapeHtml(label)}<span>${escapeHtml(picked.link)}${picked.arm === selectedArm ? "" : " · 点击选中"}</span>`;
+      const box = viewer.getBoundingClientRect();
+      viewerHover.style.left = `${event.clientX - box.left}px`;
+      viewerHover.style.top = `${event.clientY - box.top}px`;
+    });
+  });
+  canvas.addEventListener("pointerleave", () => {
+    setArmHighlight(undefined);
+    viewerHover.hidden = true;
+  });
+  canvas.addEventListener("pointerdown", (event) => { pressed = { x: event.clientX, y: event.clientY }; });
+  canvas.addEventListener("pointerup", (event) => {
+    const click = pressed && Math.hypot(event.clientX - pressed.x, event.clientY - pressed.y) < 4;
+    pressed = undefined;
+    if (!click) return;
+    const picked = pickArm(event);
+    if (!picked || picked.arm === selectedArm) return;
+    armSelect.value = picked.arm;
+    armSelect.dispatchEvent(new Event("change"));
+    viewerHover.hidden = true;
+  });
 }
 
 function configureVelocity() {
@@ -1469,6 +1668,7 @@ function handleMessage(message: Message) {
     const state = message.state as CartesianVelocityTelemetry | undefined;
     if (!state) return;
     cartesianVelocityStates[arm] = state;
+    if (arm !== "m") recordCartesianVelocitySample(arm, state);
     renderCartesianVelocityTelemetry();
   } else if (message.type === "tf_frames") {
     const arm = message.arm as ArmId;
@@ -1498,6 +1698,7 @@ function handleMessage(message: Message) {
     // known-good visual state instead of making the model jump to zero.
     const allZero = positions.every((value) => value === 0);
     if (allZero && nonZeroJointStateByArm[arm]) return;
+    const firstSample = lastJointStampByArm[arm] === undefined || (!allZero && !nonZeroJointStateByArm[arm]);
     lastJointStampByArm[arm] = stamp;
     if (!allZero) nonZeroJointStateByArm[arm] = true;
     currentJointsByArm[arm] = positions;
@@ -1507,6 +1708,8 @@ function handleMessage(message: Message) {
       currentJoints = positions;
       $("#joint-stamp").textContent = `joint_states / ${stamp}`;
       jointCopyStatus.textContent = "可复制当前关节角";
+      // The first live pose after page load replaces the placeholder target.
+      if (firstSample) resetMotionTarget();
     }
     renderFleetStrip();
   } else if (message.type === "joint_records") {
@@ -1668,6 +1871,17 @@ function handleMessage(message: Message) {
     result.textContent = `${arm.toUpperCase()} ${status} / ${message.message || "unknown error"}`;
     if (arm === selectedArm) actionState.textContent = status.toUpperCase();
     updateButtons();
+  } else if (message.type === "behavior_tree_stop_result") {
+    if (message.request_id !== btStopRequest) return;
+    setBtStopStatus(message.success
+      ? `已请求终止（${message.message}），等待行为树取消动作并退出…`
+      : `终止失败：${message.message}`, !message.success);
+    if (!message.success) btStopRequest = "";
+    renderBtStopButton();
+  } else if (message.type === "error" && message.request_id && message.request_id === btStopRequest) {
+    btStopRequest = "";
+    setBtStopStatus(`终止失败：${message.message}`, true);
+    renderBtStopButton();
   } else if (message.type === "error") {
     if (message.code === "keyboard_lease" || message.code === "keyboard_inactive") {
       keyboardLeaseOwned = false;
@@ -1813,13 +2027,16 @@ document.addEventListener("visibilitychange", () => {
   if (document.hidden) releaseKeyboardInput();
 });
 
-resetPreviewButton.addEventListener("click", () => {
+// Same as pressing 重置目标: snap the joint target and its shadow to the live pose.
+function resetMotionTarget() {
+  if (lastJointStampByArm[selectedArm] === undefined) return;
   targetJoints = [...currentJoints];
   targetJointsByArm[selectedArm] = [...targetJoints];
   targetEditedByArm[selectedArm] = true;
   setJointInputs(targetJoints, true);
   setRobotJoints(selectedRobotScene()?.shadow, targetJoints);
-});
+}
+resetPreviewButton.addEventListener("click", resetMotionTarget);
 armSelect.addEventListener("change", () => {
   selectedArm = armSelect.value as ArmId;
   activeMotionRequest = "";
@@ -2039,3 +2256,121 @@ const gripperRaw = $("#gripper-raw-position") as HTMLInputElement;
 gripperRaw.addEventListener("input", () => { $("#gripper-raw-value").textContent = gripperRaw.value; });
 gripperRaw.addEventListener("change", () => sendGripper("move_raw", { position: Number(gripperRaw.value) }));
 connect();
+
+// Behavior tree: shown only while bt-start's monitor serves a live snapshot.
+const btTab = $("#control-tab-bt") as HTMLButtonElement;
+const btTabDot = $("#bt-tab-dot") as HTMLElement;
+const btRootStatus = $("#bt-root-status") as HTMLElement;
+const btTreeId = $("#bt-tree-id") as HTMLElement;
+const btScopeToggle = $("#bt-scope-toggle") as HTMLButtonElement;
+const btBreadcrumb = $("#bt-breadcrumb") as HTMLElement;
+const btFailure = $("#bt-failure") as HTMLElement;
+const btTreeHost = $("#bt-tree") as HTMLElement;
+const btToggled = new Map<string, boolean>();
+let btRuntime: BtRuntime = { available: false };
+let btShowWholeTree = false;
+let btLastMarkup = "";
+function renderBehaviorTree() {
+  const wasHidden = btTab.hidden;
+  btTab.hidden = !btRuntime.available;
+  if (btTab.hidden !== wasHidden) {
+    renderControlTabs();
+    // A tree that just started is announced on its tab without taking over the panel.
+    if (!btTab.hidden) {
+      btTab.classList.add("tab-attention");
+      window.setTimeout(() => btTab.classList.remove("tab-attention"), 4000);
+    }
+  }
+  if (!btRuntime.available) {
+    // The tree is gone (stopped from here, Ctrl-C or a terminal exit): forget any stop in flight.
+    if (btStopRequest) setBtStopStatus("", false);
+    btStopRequest = "";
+    btStopArmedUntil = 0;
+    renderBtStopButton();
+    return;
+  }
+  renderBtStopButton();
+  const root = buildBtTree(btRuntime.nodes);
+  btRootStatus.textContent = btRuntime.root_status;
+  btRootStatus.className = `bt-status bt-${btRuntime.root_status.toLowerCase()}`;
+  btTabDot.className = `tab-dot bt-dot-${btRuntime.root_status.toLowerCase()}`;
+  btFailure.hidden = !btRuntime.failure_reason;
+  btFailure.textContent = btRuntime.failure_reason;
+  if (!root) return;
+  const router = findInputRouter(root);
+  const branch = router && activeRouterBranch(router, inputModeState?.active_mode);
+  const focused = router && !btShowWholeTree ? branch : undefined;
+  btScopeToggle.hidden = !router;
+  btScopeToggle.textContent = btShowWholeTree ? "只看当前分支" : "显示整棵树";
+  btTreeId.textContent = router
+    ? `${btRuntime.tree_id || "tree"} · 输入路由 ${branch ? branch.name : "（无活动分支）"}`
+    : `${btRuntime.tree_id || "tree"} · 整棵树`;
+  btBreadcrumb.hidden = !focused;
+  const markup = focused ? renderBtNode(focused, btToggled) : router && !btShowWholeTree
+    ? `<li class="bt-empty">没有处于活动状态的输入分支</li>`
+    : renderBtNode(root, btToggled, new Set(router?.children.filter((child) => child !== branch).map((child) => child.path)));
+  const crumbs = focused ? renderBreadcrumb(ancestors(root, focused.path)) : "";
+  // The executor rewrites the snapshot every tick; skip DOM work when nothing visible changed.
+  if (markup + crumbs === btLastMarkup) return;
+  btLastMarkup = markup + crumbs;
+  btBreadcrumb.innerHTML = crumbs;
+  btTreeHost.innerHTML = markup;
+  btTreeHost.dataset.scope = focused ? focused.name : "tree";
+}
+btTreeHost.addEventListener("click", (event) => {
+  const toggle = (event.target as HTMLElement).closest<HTMLButtonElement>("[data-bt-toggle]");
+  if (!toggle) return;
+  btToggled.set(toggle.dataset.btToggle!, toggle.getAttribute("aria-expanded") === "true");
+  renderBehaviorTree();
+});
+// Stopping the tree is the Web equivalent of Ctrl-C on `./rm65 bt`: a first click arms the
+// button, a second click within a few seconds sends it.
+const btStopButton = $("#bt-stop") as HTMLButtonElement;
+const btStopStatus = $("#bt-stop-status") as HTMLElement;
+let btStopRequest = "";
+let btStopArmedUntil = 0;
+function setBtStopStatus(text: string, error: boolean) {
+  btStopStatus.hidden = !text;
+  btStopStatus.textContent = text;
+  btStopStatus.classList.toggle("error", error);
+}
+function renderBtStopButton() {
+  const armed = btStopArmedUntil > Date.now();
+  btStopButton.disabled = !canWrite() || Boolean(btStopRequest);
+  btStopButton.textContent = btStopRequest ? "正在终止…" : armed ? "确认终止？" : "终止行为树";
+  btStopButton.classList.toggle("armed", armed && !btStopRequest);
+}
+btStopButton.addEventListener("click", () => {
+  if (!canWrite() || btStopRequest) return;
+  if (btStopArmedUntil <= Date.now()) {
+    btStopArmedUntil = Date.now() + 4000;
+    renderBtStopButton();
+    window.setTimeout(renderBtStopButton, 4100);
+    return;
+  }
+  btStopArmedUntil = 0;
+  btStopRequest = requestId("bt-stop");
+  send({ type: "stop_behavior_tree", request_id: btStopRequest });
+  setBtStopStatus("已发送终止请求…", false);
+  renderBtStopButton();
+});
+btScopeToggle.addEventListener("click", () => {
+  btShowWholeTree = !btShowWholeTree;
+  renderBehaviorTree();
+});
+let btPollInFlight = false;
+async function pollBehaviorTree() {
+  if (btPollInFlight || document.hidden) return;
+  btPollInFlight = true;
+  try {
+    const response = await fetch("/api/bt/runtime", { cache: "no-store" });
+    btRuntime = response.ok ? await response.json() as BtRuntime : { available: false };
+  } catch {
+    btRuntime = { available: false };
+  } finally {
+    btPollInFlight = false;
+  }
+  renderBehaviorTree();
+}
+window.setInterval(pollBehaviorTree, 500);
+pollBehaviorTree();

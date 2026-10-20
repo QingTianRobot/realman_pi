@@ -56,6 +56,10 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
       "runtime_snapshot_file", "/tmp/realman-bt-workspace/runtime.json");
   tick_rate_hz_ = declare_parameter<double>("tick_rate_hz", 20.0);
   autostart_ = declare_parameter<bool>("autostart", true);
+  shutdown_drain_timeout_sec_ = declare_parameter<double>("shutdown_drain_timeout_sec", 10.0);
+  if (!(shutdown_drain_timeout_sec_ > 0.0)) {
+    throw std::invalid_argument("shutdown_drain_timeout_sec must be positive");
+  }
   stop_on_terminal_ = declare_parameter<bool>("stop_on_terminal", true);
   terminal_exit_policy_ = TerminalExitPolicy(
       declare_parameter<bool>("exit_on_terminal", true));
@@ -201,6 +205,12 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
       [this](std::shared_ptr<Trigger::Request> request,
              std::shared_ptr<Trigger::Response> response) {
         handleStop(request, response);
+      });
+  shutdown_service_ = create_service<Trigger>(
+      "~/shutdown",
+      [this](std::shared_ptr<Trigger::Request> request,
+             std::shared_ptr<Trigger::Response> response) {
+        handleShutdown(request, response);
       });
   RCLCPP_INFO(get_logger(), "loaded behavior tree %s for arm %s (dry_run=%s)", tree_file.c_str(), arm_id.c_str(), dry_run ? "true" : "false");
   if (autostart_) start();
@@ -446,6 +456,46 @@ void RealmanBtExecutorNode::drainCancellationQueue() {
     cancellation_drain_timer_.reset();
   }
   requestProcessExitIfReady();
+}
+
+// Remote equivalent of Ctrl-C on `./rm65 bt`: halt the tree, let accepted MoveJ and
+// Cartesian velocity goals finish cancelling, then exit so the launch (and with it the
+// routers and bt-start's monitor) shuts down. Exiting from a timer lets the service
+// response reach the caller first.
+void RealmanBtExecutorNode::handleShutdown(const std::shared_ptr<Trigger::Request>,
+                                           std::shared_ptr<Trigger::Response> response) {
+  recordEvent("WARN", "SERVICE", "/realman_bt_executor/shutdown", "request", "");
+  response->success = true;
+  if (shutdown_requested_) {
+    response->message = "already shutting down";
+    return;
+  }
+  shutdown_requested_ = true;
+  stop();
+  shutdown_deadline_ = std::chrono::steady_clock::now() +
+                       std::chrono::duration_cast<std::chrono::steady_clock::duration>(
+                           std::chrono::duration<double>(shutdown_drain_timeout_sec_));
+  response->message = "shutting down after " + std::to_string(pendingCancellationCount()) +
+                      " pending cancellation(s)";
+  RCLCPP_WARN(get_logger(), "behavior tree shutdown requested: %s", response->message.c_str());
+  recordEvent("WARN", "SERVICE", "/realman_bt_executor/shutdown", "response", response->message);
+  flushSnapshot();
+  shutdown_timer_ = create_wall_timer(std::chrono::milliseconds(100),
+                                      [this]() { exitAfterShutdownDrain(); });
+}
+
+void RealmanBtExecutorNode::exitAfterShutdownDrain() {
+  const std::size_t pending = pendingCancellationCount();
+  if (pending > 0 && std::chrono::steady_clock::now() < shutdown_deadline_) return;
+  if (shutdown_timer_) shutdown_timer_->cancel();
+  if (pending > 0) {
+    RCLCPP_WARN(get_logger(),
+                "exiting with %zu cancellation drain(s) still pending after %.1f s",
+                pending, shutdown_drain_timeout_sec_);
+  }
+  flushSnapshot();
+  RCLCPP_INFO(get_logger(), "behavior tree shut down by request; exiting executor");
+  get_node_base_interface()->get_context()->shutdown("behavior tree shutdown requested");
 }
 
 std::size_t RealmanBtExecutorNode::pendingCancellationCount() const {

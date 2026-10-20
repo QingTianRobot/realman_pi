@@ -181,10 +181,42 @@ def test_stale_request_state_and_pre_request_cache_cannot_release_motion(bridge)
     controller.update_state(state())
     token = controller.intercept_motion("browser-a", motion())[0].token
     assert not forwarded(controller.selection_response(token + 1, True, 41, "stale callback"))
-    assert not forwarded(controller.selection_response(token, True, 41, "already active"))
+    assert not forwarded(controller.selection_response(token, True, 42, "accepted"))
     assert not forwarded(controller.update_state(state(40)))
-    assert not forwarded(controller.update_state(state(41, phase="SWITCHING", epoch=1)))
-    assert len(forwarded(controller.update_state(state()))) == 1
+    assert not forwarded(controller.update_state(state(42, phase="SWITCHING", epoch=1)))
+    assert len(forwarded(controller.update_state(state(42)))) == 1
+
+
+@pytest.mark.parametrize("kind", ["execute_motion", "execute_trajectory", "start_cartesian_velocity"])
+def test_motion_while_web_already_active_is_forwarded_without_new_state(bridge, kind):
+    # The executor answers "already active" with its current request id and
+    # publishes no new state, so the cached ACTIVE sample is the confirmation.
+    controller, clock = bridge
+    controller.update_catalog(CATALOG)
+    controller.update_state(state())
+    message = motion(kind=kind)
+    token = controller.intercept_motion("browser-a", message)[0].token
+    released = controller.selection_response(token, True, 41, "already active")
+    assert forwarded(released) == [InputModeEffect("forward_motion", "browser-a", message)]
+    assert not errors(released)
+    assert controller.pending_token is None
+    clock.now = 16.0
+    assert controller.expire() == []
+    assert not forwarded(controller.update_state(state()))
+
+
+@pytest.mark.parametrize("cached", [
+    state(41, "keyboard"),
+    state(41, phase="SWITCHING", epoch=1),
+    state(40),
+])
+def test_already_active_reply_needs_a_matching_active_web_cache(bridge, cached):
+    controller, _ = bridge
+    controller.update_catalog(CATALOG)
+    controller.update_state(cached)
+    token = controller.intercept_motion("browser-a", motion())[0].token
+    assert not forwarded(controller.selection_response(token, True, 41, "already active"))
+    assert controller.pending_token == token
 
 
 @pytest.mark.parametrize("failure", ["timeout", "failed", "unavailable", "rejected", "superseded_state"])

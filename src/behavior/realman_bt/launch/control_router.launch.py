@@ -10,7 +10,9 @@ from pathlib import Path
 import yaml
 
 from launch import LaunchDescription
-from launch.actions import DeclareLaunchArgument, SetEnvironmentVariable
+from launch.actions import DeclareLaunchArgument, EmitEvent, RegisterEventHandler, SetEnvironmentVariable
+from launch.event_handlers import OnProcessExit
+from launch.events import Shutdown
 from launch.substitutions import LaunchConfiguration
 from launch_ros.actions import Node
 
@@ -302,5 +304,14 @@ def generate_launch_description():
             pika_router,
             policy_router,
             keyboard_router,
+            # The routers only make sense under a live tree: when the executor exits (a
+            # requested shutdown, a terminal exit or a crash) take the whole launch down so
+            # bt-start archives the run and stops its monitor.
+            RegisterEventHandler(
+                OnProcessExit(
+                    target_action=executor,
+                    on_exit=[EmitEvent(event=Shutdown(reason="behavior-tree executor exited"))],
+                )
+            ),
         ]
     )

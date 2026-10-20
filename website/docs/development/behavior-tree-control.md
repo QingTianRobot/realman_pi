@@ -258,6 +258,7 @@ Action 或夹爪 command，需要真实 Pika 运动必须显式设置 `REALMAN_B
 `./rm65 up` 只拥有长期 driver 和 :8765 Web 服务；它不启动行为树。只要 Docker 中已经有一个运行中的
 `realman_bringup_remote` 容器，就可以显式执行 `./rm65 bt control`；该命令使用
 `control_router.launch.py` 和 `exit_on_terminal=false`，连同 :8080 只读监视器持续到 Ctrl-C。
+运行期间 :8765 控制页会出现“行为树”标签，显示当前输入分支的实时状态（见 Web 控制页的“行为树视图”）。
 启动器按 Docker 的 `com.docker.compose.service=realman_bringup_remote` 标签查找唯一运行中的 driver
 容器，再通过容器 ID 执行 `bt-start`，因此不依赖 `./rm65 up` 或当前 Compose project；没有或多于一个匹配
 bringup 时会拒绝启动，避免把控制树接入错误的驱动图。Ctrl-C 不停止 driver；`./rm65 down` 才停止统一运行时。
@@ -276,6 +277,18 @@ bringup 时会拒绝启动，避免把控制树接入错误的驱动图。Ctrl-C
 timer 提交所有未完成 Action 的取消请求；快照中的 `pending_cancellations` 归零后才终止本次 ROS
 launch/executor 进程组、停止监视器、归档 runtime snapshot 并释放锁。若取消在 10 秒内未清空，wrapper
 会打印警告并强制清理；CLI 返回 130。其他 driver 和其他容器保持运行。
+
+没有终端时，可以在 :8765 控制页的“行为树”标签点“终止行为树”（两次点击确认），效果等同上面的 Ctrl-C：Web 节点
+调用 `/realman_bt_executor/shutdown`（`std_srvs/srv/Trigger`），executor 先 `stop()` halt 树并提交取消，
+等待 `pending_cancellations` 归零（最长 `behavior_tree.yaml` 的 `shutdown_drain_timeout_sec`，默认 10 s，超时告警后
+仍退出），再结束自身进程。`control_router.launch.py` 对 executor 注册了 `OnProcessExit → Shutdown`，因此
+executor 一退出（无论是请求终止、终态退出还是崩溃），三个 router 也随 launch 一起关闭，`bt-start` 随即归档
+runtime snapshot 并关闭 :8080 监视器，页面上的“行为树”标签随之消失。服务应答先于退出发出；重复请求返回
+`already shutting down`。也可以手动调用：
+
+```bash
+ros2 service call /realman_bt_executor/shutdown std_srvs/srv/Trigger '{}'
+```
 
 mock 节点不会连接 SDK/CAN，也不会发布生产控制命令。可通过 ROS 参数注入模式、owner
 和后端健康状态；命令记录器可将 mock 输出写为 JSONL。

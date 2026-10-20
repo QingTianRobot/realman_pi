@@ -272,6 +272,10 @@ class WebControlNode(Node):
             )
             for arm in ARMS
         }
+        # Remote Ctrl-C for `./rm65 bt`: the executor halts, drains cancels, then exits.
+        self._bt_shutdown_client = self.create_client(
+            Trigger, "/realman_bt_executor/shutdown", callback_group=self._callback_group,
+        )
         self._recovery_clients = {
             arm: self.create_client(
                 RecoverMotion,
@@ -466,6 +470,8 @@ class WebControlNode(Node):
             self._software_stop(client_id, message)
         elif message_type == "recover_motion":
             self._recover_motion(client_id, message)
+        elif message_type == "stop_behavior_tree":
+            self._stop_behavior_tree(client_id, message)
         elif message_type == "capture_calibration_sample":
             self._capture_calibration_sample(client_id, message)
         elif message_type == "solve_calibration":
@@ -1026,7 +1032,7 @@ class WebControlNode(Node):
         if reference_type == 3:
             return 0, "base", self._tf_reference_frame(arm, reference_name, request_id)
         goal = {"reference_type": reference_type, "reference_name": reference_name}
-        self._validate_reference(arm, goal)
+        self._validate_reference(arm, goal, request_id)
         return reference_type, reference_name, None
 
     def _transform_pose(
@@ -1572,7 +1578,7 @@ class WebControlNode(Node):
         reference_type, reference_name = self._default_reference(arm)
         goal_values["reference_type"] = reference_type
         goal_values["reference_name"] = reference_name
-        frame = self._validate_reference(arm, goal_values)
+        frame = self._validate_reference(arm, goal_values, message["request_id"])
         settings = self._robots[arm]["motion"]
         exact_fields = (
             "velocity_control_period_ms",
@@ -1624,19 +1630,33 @@ class WebControlNode(Node):
         goal = assign_fields(CartesianVelocity.Goal(), goal_values)
         self._send_goal(client, goal, record)
 
-    def _validate_reference(self, arm: str, goal: dict[str, Any]) -> dict[str, Any]:
+    def _validate_reference(
+        self, arm: str, goal: dict[str, Any], request_id: str = ""
+    ) -> dict[str, Any]:
+        candidates = [
+            value
+            for value in self._robots[arm]["frames"].values()
+            if value["type"] == goal["reference_type"]
+        ]
+        # Pika modes switch the controller to another configured work frame
+        # (e.g. pikabase); the driver checks against that live frame, so a
+        # verified live work/tool frame is as valid as the manifest default.
+        state = self._coordinate_state.get(arm, {})
+        for key in ("work", "tool"):
+            live = state.get(key)
+            if (isinstance(live, dict) and live.get("type") == goal["reference_type"]
+                    and state.get(f"{key}_matched") is True
+                    and isinstance(live.get("name"), str) and isinstance(live.get("frame_id"), str)):
+                candidates.append({"type": live["type"], "name": live["name"], "frame_id": live["frame_id"]})
         frame = next(
-            (
-                value
-                for value in self._robots[arm]["frames"].values()
-                if value["type"] == goal["reference_type"]
-            ),
+            (value for value in candidates if value["name"] == goal["reference_name"]),
             None,
         )
-        if frame is None or frame["name"] != goal["reference_name"]:
+        if frame is None:
             raise ProtocolError(
                 "coordinate_mismatch",
                 "reference type/name must match the configured active frame",
+                request_id,
             )
         return frame
 
@@ -1895,6 +1915,29 @@ class WebControlNode(Node):
                 "message": str(error),
             }
         self._server.send_event(event, client_id)
+
+    def _stop_behavior_tree(self, client_id: str, message: dict[str, Any]) -> None:
+        request_id = message["request_id"]
+        if not self._bt_shutdown_client.service_is_ready():
+            raise ProtocolError(
+                "behavior_tree_unavailable",
+                "/realman_bt_executor/shutdown is not available; no behavior tree is running",
+                request_id,
+            )
+        self.get_logger().warning(f"Web client {client_id} requested behavior-tree shutdown")
+
+        def done(completed: Any) -> None:
+            try:
+                response = completed.result()
+                event = {"type": "behavior_tree_stop_result", "request_id": request_id,
+                         "success": bool(response.success), "message": response.message}
+            except Exception as error:
+                self.get_logger().error(f"Web behavior-tree shutdown failed: {error}")
+                event = {"type": "behavior_tree_stop_result", "request_id": request_id,
+                         "success": False, "message": str(error)}
+            self._server.send_event(event, client_id)
+
+        self._bt_shutdown_client.call_async(Trigger.Request()).add_done_callback(done)
 
     def _recover_motion(self, client_id: str, message: dict[str, Any]) -> None:
         arm = message["arm"]

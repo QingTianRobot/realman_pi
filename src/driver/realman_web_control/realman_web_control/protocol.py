@@ -142,6 +142,10 @@ def _parse_select_input_mode(message: dict[str, Any]) -> dict[str, Any]:
     return {"type": "select_input_mode", "request_id": request_id, "mode_id": mode_id}
 
 
+def _parse_stop_behavior_tree(message: dict[str, Any]) -> dict[str, Any]:
+    return {"type": "stop_behavior_tree", "request_id": _request_id(message)}
+
+
 def _parse_keyboard_state(message: dict[str, Any]) -> dict[str, Any]:
     arm = message.get("arm")
     if arm not in {"l", "r"}:
@@ -465,6 +469,7 @@ def _parse_recover_motion(message: dict[str, Any], arm: str) -> dict[str, Any]:
 _ARMLESS_PARSERS = {
     "ping": _parse_ping,
     "select_input_mode": _parse_select_input_mode,
+    "stop_behavior_tree": _parse_stop_behavior_tree,
     "keyboard_state": _parse_keyboard_state,
     "capture_calibration_sample": _parse_capture_calibration_sample,
     "solve_calibration": _parse_solve_calibration,

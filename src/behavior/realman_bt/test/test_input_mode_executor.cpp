@@ -394,6 +394,35 @@ void testTaskControlNodesAreRegistered() {
 }
 }  // namespace
 
+// The Web "终止行为树" button calls ~/shutdown: it must answer, halt the tree, and then end
+// the process (the launch takes the routers down on executor exit). A second request while
+// draining is acknowledged rather than restarting the drain. Runs last: it shuts the context.
+void testShutdownServiceHaltsThenExits() {
+  Fixture f;
+  f.load(routerXml(), {{"shutdown_drain_timeout_sec", 0.5}});
+  f.start();
+  require(f.until([&] { return f.snapshot().find("\"root_status\":\"RUNNING\"") != std::string::npos; }),
+          "tree did not start ticking");
+  auto client = f.client_node->create_client<Trigger>("/realman_bt_executor/shutdown");
+  require(client->wait_for_service(2s), "missing service: /realman_bt_executor/shutdown");
+  auto first = client->async_send_request(std::make_shared<Trigger::Request>());
+  auto second = client->async_send_request(std::make_shared<Trigger::Request>());
+  require(f.until([&] {
+            return first.wait_for(0s) == std::future_status::ready &&
+                   second.wait_for(0s) == std::future_status::ready;
+          }),
+          "shutdown service did not answer before exiting");
+  const auto accepted = first.get();
+  const auto repeated = second.get();
+  require(accepted->success && accepted->message.rfind("shutting down after 0", 0) == 0,
+          "unexpected shutdown response: " + accepted->message);
+  require(repeated->success && repeated->message == "already shutting down",
+          "second shutdown request was not acknowledged: " + repeated->message);
+  require(f.snapshot().find("\"root_status\":\"IDLE\"") != std::string::npos,
+          "tree was not halted before exit");
+  require(f.until([] { return !rclcpp::ok(); }), "executor did not exit after shutdown");
+}
+
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   try {
@@ -408,11 +437,12 @@ int main(int argc, char** argv) {
     testPolicyTaskCountsReachTheTreeThroughTheBlackboard();
     testAnInvalidPolicyTaskValueStopsTheExecutorFromStarting();
     testTaskControlNodesAreRegistered();
+    testShutdownServiceHaltsThenExits();
   } catch (const std::exception& error) {
     RCLCPP_ERROR(rclcpp::get_logger("test_input_mode_executor"), "%s", error.what());
     rclcpp::shutdown();
     return 1;
   }
-  rclcpp::shutdown();
+  if (rclcpp::ok()) rclcpp::shutdown();
   return 0;
 }

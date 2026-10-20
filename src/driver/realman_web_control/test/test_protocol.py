@@ -41,6 +41,16 @@ def test_select_input_mode_is_global_and_validates_syntax_only():
         }))["mode_id"] == mode
 
 
+def test_stop_behavior_tree_is_global_and_needs_only_a_request_id():
+    assert parse_message('{"type":"stop_behavior_tree","request_id":"bt-1"}') == {
+        "type": "stop_behavior_tree", "request_id": "bt-1",
+    }
+    # No arm: the executor owns every arm of the tree it runs.
+    assert "arm" not in parse_message('{"type":"stop_behavior_tree","request_id":"bt-1","arm":"l"}')
+    with pytest.raises(ProtocolError):
+        parse_message('{"type":"stop_behavior_tree"}')
+
+
 @pytest.mark.parametrize("mode", ["", "Policy", "pika!", "a-b", "a_b", "2policy", "策略", "a" * 97])
 def test_select_input_mode_rejects_invalid_identifiers(mode):
     with pytest.raises(ProtocolError, match="mode_id"):

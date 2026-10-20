@@ -202,6 +202,12 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await expect(page.locator(".visualization-column > .viewer-panel")).toHaveCount(1);
   await expect(page.locator(".visualization-column > #velocity-telemetry-panel")).toHaveCount(1);
   await expect(page.locator(".controls > #velocity-telemetry-panel")).toHaveCount(0);
+  await expect(page.locator(".visualization-column > .status-row > #coordinate-panel")).toHaveCount(1);
+  await expect(page.locator(".visualization-column > .status-row > #action-monitor-panel")).toHaveCount(1);
+  await expect(page.locator("#motion-panel")).toBeVisible();
+  await expect(page.locator("#velocity-panel")).toBeHidden();
+  await expect(page.locator("#gripper-panel")).toBeHidden();
+  await expect(page.locator("#control-tab-keyboard")).toBeHidden();
   const liveCanvasBeforeFeedback = await canvasChecksum(page);
   await page.evaluate(() => {
     (window as any).__webSocket.emit("message", { data: JSON.stringify({
@@ -423,6 +429,177 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
   await page.screenshot({ path: test.info().outputPath("web-control.png"), fullPage: true });
 });
 
+test("switches control tabs and remembers the last one across reloads", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#control-tab-motion")).toHaveAttribute("aria-selected", "true");
+  await page.locator("#control-tab-velocity").click();
+  await expect(page.locator("#velocity-panel")).toBeVisible();
+  await expect(page.locator("#motion-panel")).toBeHidden();
+  await expect(page.locator("#coordinate-panel")).toBeVisible();
+  await expect(page.locator("#action-monitor-panel")).toBeVisible();
+  await page.reload();
+  await expect(page.locator("#control-tab-velocity")).toHaveAttribute("aria-selected", "true");
+  await expect(page.locator("#velocity-panel")).toBeVisible();
+});
+
+test("resets the joint target to the live pose on load and when reopening the motion tab", async ({ page }) => {
+  await page.goto("/");
+  // The fake socket's initial l sample is all zero; the first real pose must still reach the sliders.
+  await emitWebSocketEvent(page, { type: "joint_state", arm: "l", positions_rad: [0.5, 0.2, -0.3, 0.1, 0.4, -0.2], stamp_ns: 100 });
+  await expect(page.locator("input[data-joint-index=\"0\"]")).toHaveValue(/^28\.6/);
+  await expect(page.locator("#joint-value-0")).toHaveText("28.65°");
+
+  await page.locator("#control-tab-velocity").click();
+  await emitWebSocketEvent(page, { type: "joint_state", arm: "l", positions_rad: [1.0, 0.2, -0.3, 0.1, 0.4, -0.2], stamp_ns: 101 });
+  await expect(page.locator("#joint-value-0")).toHaveText("28.65°");
+  await page.locator("#control-tab-motion").click();
+  await expect(page.locator("input[data-joint-index=\"0\"]")).toHaveValue(/^57\.3/);
+  await expect(page.locator("#joint-value-0")).toHaveText("57.30°");
+
+  // Clicking the already-open motion tab keeps a manual edit.
+  await page.locator("input[data-joint-index=\"0\"]").evaluate((element: HTMLInputElement) => {
+    element.value = "10";
+    element.dispatchEvent(new Event("input", { bubbles: true }));
+  });
+  await page.locator("#control-tab-motion").click();
+  await expect(page.locator("#joint-value-0")).toHaveText(/^10\.0\d°$/);
+});
+
+function btNode(path: string, kind: string, registration: string, name: string, status: string, failure_reason = "") {
+  return { path, kind, registration_name: registration, name, status, failure_reason };
+}
+// Shape of the live control.xml snapshot on realman_ts (policy mode active), trimmed.
+const controlRuntime = {
+  available: true, tree_id: "control", sequence: 7, timestamp_ms: 1, root_status: "RUNNING", failure_reason: "",
+  nodes: [
+    btNode("0", "Control", "ReactiveSequence", "input_control", "RUNNING"),
+    btNode("0/0", "Action", "SelectInputMode", "SelectInputMode", "SUCCESS"),
+    btNode("0/1", "Control", "ReactiveFallback", "input_router", "RUNNING"),
+    btNode("0/1/0", "Control", "ReactiveSequence", "keyboard_branch", "FAILURE"),
+    btNode("0/1/0/0", "Condition", "InputModeGuard", "InputModeGuard", "FAILURE"),
+    btNode("0/1/0/1", "Action", "KeyboardVelocityInput", "KeyboardVelocityInput", "IDLE"),
+    btNode("0/1/1", "Control", "ReactiveSequence", "policy_branch", "RUNNING"),
+    btNode("0/1/1/0", "Condition", "InputModeGuard", "InputModeGuard", "SUCCESS"),
+    btNode("0/1/1/1", "Control", "Sequence", "policy_entry", "RUNNING"),
+    btNode("0/1/1/1/0", "Action", "ThreeArmMoveJ", "policy_start_pose", "SUCCESS"),
+    btNode("0/1/1/1/1", "Decorator", "RetryUnlessFault", "RetryUnlessFault", "RUNNING"),
+    btNode("0/1/1/1/1/0", "Action", "PolicyRun", "PolicyRun", "FAILURE", "policy server timeout"),
+    btNode("0/1/2", "Control", "ReactiveSequence", "none_branch", "IDLE"),
+    btNode("0/1/2/0", "Condition", "InputModeGuard", "InputModeGuard", "IDLE"),
+    btNode("0/1/2/1", "Action", "IdleInput", "IdleInput", "IDLE"),
+  ],
+};
+const moveRuntime = {
+  available: true, tree_id: "arm_move", sequence: 3, timestamp_ms: 1, root_status: "SUCCESS", failure_reason: "",
+  nodes: [
+    btNode("0", "Control", "Sequence", "arm_move", "SUCCESS"),
+    btNode("0/0", "Action", "MoveJ", "ready_pose", "SUCCESS"),
+    btNode("0/1", "Action", "MoveJ", "work_pose", "SUCCESS"),
+  ],
+};
+
+test("shows the behavior-tree tab only while a tree runs and focuses the active router branch", async ({ page }) => {
+  let runtime: Record<string, unknown> = { available: false };
+  await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: runtime }));
+  await page.goto("/");
+  await expect(page.locator("#control-tab-bt")).toBeHidden();
+
+  runtime = controlRuntime;
+  await expect(page.locator("#control-tab-bt")).toBeVisible();
+  // Appearing does not take over the panel the operator is using.
+  await expect(page.locator("#motion-panel")).toBeVisible();
+  await page.locator("#control-tab-bt").click();
+  await expect(page.locator("#bt-root-status")).toHaveText("RUNNING");
+  await expect(page.locator("#bt-tree-id")).toContainText("输入路由 policy_branch");
+  await expect(page.locator("#bt-breadcrumb")).toContainText("input_control");
+  await expect(page.locator("#bt-breadcrumb")).toContainText("input_router");
+  await expect(page.locator("#bt-tree > .bt-node")).toHaveAttribute("data-path", "0/1/1");
+  await expect(page.locator("#bt-tree")).not.toContainText("keyboard_branch");
+  await expect(page.locator('#bt-tree [data-path="0/1/1/1/1/0"]')).toHaveAttribute("data-status", "FAILURE");
+  await expect(page.locator("#bt-tree")).toContainText("policy server timeout");
+
+  // Collapse and expand a subtree; the choice survives the next snapshot.
+  await page.locator('[data-bt-toggle="0/1/1/1"]').click();
+  await expect(page.locator('#bt-tree [data-path="0/1/1/1/0"]')).toHaveCount(0);
+  await page.waitForTimeout(700);
+  await expect(page.locator('#bt-tree [data-path="0/1/1/1/0"]')).toHaveCount(0);
+  await page.locator('[data-bt-toggle="0/1/1/1"]').click();
+  await expect(page.locator('#bt-tree [data-path="0/1/1/1/0"]')).toHaveCount(1);
+
+  // Whole tree on demand: other branches appear, IDLE subtrees start collapsed.
+  await page.locator("#bt-scope-toggle").click();
+  await expect(page.locator("#bt-tree > .bt-node")).toHaveAttribute("data-path", "0");
+  await expect(page.locator("#bt-tree")).toContainText("keyboard_branch");
+  await expect(page.locator('#bt-tree [data-path="0/1/2/1"]')).toHaveCount(0);
+  // Unused input branches are muted and folded: their guard FAILURE is normal routing.
+  await expect(page.locator('#bt-tree [data-path="0/1/0"]')).toHaveClass(/bt-muted/);
+  await expect(page.locator('#bt-tree [data-path="0/1/0/0"]')).toHaveCount(0);
+  await expect(page.locator('#bt-tree [data-path="0/1/1"]')).not.toHaveClass(/bt-muted/);
+  await expect(page.locator("#bt-breadcrumb")).toBeHidden();
+
+  // The tree stops: bt-start takes the monitor down and the tab goes away.
+  runtime = { available: false };
+  await expect(page.locator("#control-tab-bt")).toBeHidden();
+  await expect(page.locator("#motion-panel")).toBeVisible();
+});
+
+test("stops the running behavior tree after a confirming second click", async ({ page }) => {
+  let runtime: Record<string, unknown> = controlRuntime;
+  await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: runtime }));
+  await page.goto("/");
+  await page.locator("#control-tab-bt").click();
+  const stopRequests = () => page.evaluate(() => ((window as any).__webMessages as string[])
+    .map((value) => JSON.parse(value)).filter((item) => item.type === "stop_behavior_tree"));
+
+  // First click only arms the button.
+  await page.locator("#bt-stop").click();
+  await expect(page.locator("#bt-stop")).toHaveText("确认终止？");
+  expect(await stopRequests()).toHaveLength(0);
+  await page.locator("#bt-stop").click();
+  await expect.poll(stopRequests).toHaveLength(1);
+  const [request] = await stopRequests();
+  expect(Object.keys(request).sort()).toEqual(["request_id", "type"]);
+  await expect(page.locator("#bt-stop")).toHaveText("正在终止…");
+  await expect(page.locator("#bt-stop")).toBeDisabled();
+
+  await emitWebSocketEvent(page, {
+    type: "behavior_tree_stop_result", request_id: request.request_id, success: true,
+    message: "shutting down after 0 pending cancellation(s)",
+  });
+  await expect(page.locator("#bt-stop-status")).toContainText("等待行为树取消动作并退出");
+
+  // The executor exits, bt-start stops the monitor: tab and in-flight state go away.
+  runtime = { available: false };
+  await expect(page.locator("#control-tab-bt")).toBeHidden();
+  await expect(page.locator("#motion-panel")).toBeVisible();
+
+  // A later tree starts clean; a refused request is reported and the button re-enabled.
+  runtime = controlRuntime;
+  await page.locator("#control-tab-bt").click();
+  await expect(page.locator("#bt-stop")).toHaveText("终止行为树");
+  await page.locator("#bt-stop").click();
+  await page.locator("#bt-stop").click();
+  await expect.poll(stopRequests).toHaveLength(2);
+  const second = (await stopRequests())[1];
+  await emitWebSocketEvent(page, {
+    type: "error", code: "behavior_tree_unavailable", request_id: second.request_id,
+    message: "/realman_bt_executor/shutdown is not available; no behavior tree is running",
+  });
+  await expect(page.locator("#bt-stop-status")).toContainText("终止失败");
+  await expect(page.locator("#bt-stop")).toBeEnabled();
+});
+
+test("shows every node of a tree that is not the control router", async ({ page }) => {
+  await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: moveRuntime }));
+  await page.goto("/");
+  await page.locator("#control-tab-bt").click();
+  await expect(page.locator("#bt-root-status")).toHaveText("SUCCESS");
+  await expect(page.locator("#bt-tree-id")).toContainText("整棵树");
+  await expect(page.locator("#bt-scope-toggle")).toBeHidden();
+  await expect(page.locator("#bt-tree .bt-node")).toHaveCount(3);
+  await expect(page.locator("#bt-tree")).toContainText("work_pose");
+});
+
 test("reports a WebGL renderer failure when WebGL is unavailable", async ({ page }) => {
   await page.addInitScript(() => {
     const originalGetContext = HTMLCanvasElement.prototype.getContext;
@@ -567,6 +744,8 @@ test("renders the server-discovered global input mode and sends selections", asy
 
 test("renders command and measured Cartesian velocity telemetry for both arms", async ({ page }) => {
   await page.goto("/");
+  // The WORK command is rotated with the arm's coordinate_state, so wait for it first.
+  await expect(page.locator("#motion-reference")).toHaveText("WORK / cell");
   await emitWebSocketEvent(page, {
     type: "cartesian_velocity_state",
     arm: "l",
@@ -610,13 +789,52 @@ test("renders command and measured Cartesian velocity telemetry for both arms", 
 
   await expect(page.locator("#velocity-telemetry-panel")).toBeVisible();
   await expect(page.locator("#velocity-telemetry-l")).toContainText("l/work/cell");
-  await expect(page.locator("#velocity-telemetry-l")).toContainText("命令线速度");
-  await expect(page.locator("#velocity-telemetry-l")).toContainText("0.400");
   await expect(page.locator("#velocity-telemetry-l")).toContainText("l/base_link");
   await expect(page.locator("#velocity-telemetry-l")).toContainText("VALID");
+  await expect(page.locator("#velocity-telemetry-l")).toContainText("命令已从 WORK / cell 旋转到实测坐标系");
   await expect(page.locator("#velocity-telemetry-r")).toContainText("r/work/cell");
   await expect(page.locator("#velocity-telemetry-r")).toContainText("r/base_link");
   await expect(page.locator("#velocity-telemetry-r")).toContainText("STALE / NO DATA");
+  // No numeric readouts any more: the card only carries frames, status and the two charts.
+  await expect(page.locator("#velocity-telemetry-l")).not.toContainText("0.400");
+
+  // y-axis autoscale: peak 0.2 m/s and 0.05 rad/s, padded and rounded up; idle arm keeps the floor.
+  const trace = (arm: string, kind: string) => page.locator(`#velocity-telemetry-${arm} [data-field="${kind}-trace"]`);
+  await expect(trace("l", "linear")).toHaveAttribute("data-y-max", "0.25");
+  await expect(trace("l", "angular")).toHaveAttribute("data-y-max", "0.1");
+  await expect(trace("r", "linear")).toHaveAttribute("data-y-max", "0.01");
+  await expect(trace("l", "linear")).toHaveAttribute("data-last-command", "[0.2,0,0]");
+});
+
+test("expresses WORK commands in the measured base frame and skips TOOL commands", async ({ page }) => {
+  await page.goto("/");
+  await expect(page.locator("#motion-reference")).toHaveText("WORK / cell");
+  const yawQuarterTurn = [Math.SQRT1_2, 0, 0, Math.SQRT1_2];
+  await emitWebSocketEvent(page, {
+    type: "coordinate_state", arm: "l", motion_allowed: true, preferred_reference_type: 1, preferred_reference_name: "cell",
+    preferred_reference: { type: 1, name: "cell", frame_id: "l/work/cell" },
+    tool: null, work: { type: 1, name: "cell", frame_id: "l/work/cell", xyz_m: [0, 0, 0], quaternion_wxyz: yawQuarterTurn },
+    current_tool: "", current_work: "cell", expected_tool: "", expected_work: "cell", matched: true, tool_matched: true,
+    work_matched: true, api2_status: 0, message: "ok",
+  });
+  const state = (referenceType: number, name: string) => ({
+    type: "cartesian_velocity_state", arm: "l", state: {
+      session_active: true, reference_type: referenceType, reference_name: name, command_frame_id: `l/${referenceType === 2 ? "tool" : "work"}/${name}`,
+      commanded_linear_velocity_mps: [0.1, 0, 0], commanded_angular_velocity_radps: [0, 0, 0.2],
+      limited_linear_velocity_mps: [0.1, 0, 0], limited_angular_velocity_radps: [0, 0, 0.2],
+      measured_frame_id: "l/base_link", measured_linear_velocity_mps: [0, 0.09, 0], measured_angular_velocity_radps: [0, 0, 0.19],
+      measured_valid: true, command_age_ms: 10, measured_age_ms: 10,
+    },
+  });
+  const trace = (kind: string) => page.locator(`#velocity-telemetry-l [data-field="${kind}-trace"]`);
+  await emitWebSocketEvent(page, state(1, "cell"));
+  // +X in the work frame is +Y in base after a quarter turn about Z; Z rotation is unchanged.
+  await expect(trace("linear")).toHaveAttribute("data-last-command", "[0,0.1,0]");
+  await expect(trace("angular")).toHaveAttribute("data-last-command", "[0,0,0.2]");
+
+  await emitWebSocketEvent(page, state(2, "tcpgrip"));
+  await expect(page.locator("#velocity-telemetry-l")).toContainText("TOOL 坐标系命令随末端旋转，未叠加命令");
+  await expect(trace("linear")).toHaveAttribute("data-last-command", "null");
 });
 
 test("unlocks input mode selection when reconnect loses its result", async ({ page }) => {
@@ -801,6 +1019,7 @@ test("highlights keyboard instructions without scrolling away from the work area
 
   await expect.poll(() => page.evaluate(() => (window as any).__keyboardGuideScrolls)).toBe(0);
   await expect(page.locator("#keyboard-control-card")).toHaveClass(/keyboard-guide-active/);
+  await expect(page.locator("#control-tab-keyboard")).toHaveAttribute("aria-selected", "true");
 
   await emitWebSocketEvent(page, active);
   await expect.poll(() => page.evaluate(() => (window as any).__keyboardGuideScrolls)).toBe(0);
@@ -1144,6 +1363,7 @@ test("mounts a gripper on every arm and follows live gripper position feedback",
 
 test("gripper travel limits are edited, confirmed and applied from the web panel", async ({ page }) => {
   await page.goto("/");
+  await page.locator("#control-tab-gripper").click();
   const sentCommands = () => page.evaluate(() =>
     ((window as any).__webMessages as string[])
       .map((value) => JSON.parse(value))
@@ -1225,6 +1445,7 @@ test("gripper travel limits are edited, confirmed and applied from the web panel
 
 test("gripper limits editor errors stay visible while telemetry streams", async ({ page }) => {
   await page.goto("/");
+  await page.locator("#control-tab-gripper").click();
   await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
   const sentCommands = () => page.evaluate(() =>
     ((window as any).__webMessages as string[])
@@ -1324,6 +1545,7 @@ test("gripper limits editor errors stay visible while telemetry streams", async 
 
 test("gripper travel limits are disabled without write access", async ({ page }) => {
   await page.goto("/");
+  await page.locator("#control-tab-gripper").click();
   // The fake socket sends its own read_only:false hello 20 ms after load; wait for that burst first.
   await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
   await emitWebSocketEvent(page, { type: "hello", read_only: true });
@@ -1339,6 +1561,7 @@ test("gripper travel limits are disabled without write access", async ({ page })
 
 test("gripper travel limits are disabled while the socket is closed and re-enabled on reconnect", async ({ page }) => {
   await page.goto("/");
+  await page.locator("#control-tab-gripper").click();
   await expect(page.locator(".fleet-chip[data-arm=\"l\"]")).toContainText("ONLINE");
   await emitWebSocketEvent(page, {
     type: "gripper_list",

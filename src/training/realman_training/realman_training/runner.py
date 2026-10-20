@@ -8,6 +8,8 @@ import shlex
 import subprocess
 from typing import Callable, Sequence
 
+_STREAM_TERMINATE_TIMEOUT = 10  # seconds; tests may patch this
+
 
 @dataclasses.dataclass(frozen=True)
 class Completed:
@@ -66,7 +68,11 @@ class Runner:
         finally:
             if proc.poll() is None:
                 proc.terminate()
-                proc.wait(10)
+                try:
+                    proc.wait(_STREAM_TERMINATE_TIMEOUT)
+                except subprocess.TimeoutExpired:
+                    proc.kill()
+                    proc.wait()
 
     def pipe(self, producer, consumer, on_bytes: Callable[[int], None], *, chunk_size: int = 1 << 20) -> int:
         """producer | consumer through this process, so the bytes in flight can be counted."""

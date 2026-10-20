@@ -1,9 +1,11 @@
 from __future__ import annotations
 
 import sys
+from unittest import mock
 
 import pytest
 
+import realman_training.runner as runner_mod
 from realman_training.runner import CommandFailed, Runner, compact
 
 PY = sys.executable
@@ -46,3 +48,21 @@ def test_pipe_counts_bytes_and_reports_the_failing_side(tmp_path):
 def test_compact_keeps_the_last_progress_segment():
     assert compact("a 1%\rb 50%\rc 100%") == "c 100%"
     assert compact("plain") == "plain"
+
+
+def test_stream_finally_kills_sigterm_ignorer_and_preserves_original_exception():
+    """A child that ignores SIGTERM must be killed; the caller's exception must propagate."""
+
+    def raise_after_first(line: str) -> None:
+        raise ValueError("caller error")
+
+    # Use a tiny timeout so the test is fast
+    with mock.patch.object(runner_mod, "_STREAM_TERMINATE_TIMEOUT", 0.1):
+        with pytest.raises(ValueError, match="caller error"):
+            Runner().stream(
+                [PY, "-c",
+                 "import signal, time; signal.signal(signal.SIGTERM, signal.SIG_IGN); print('x'); time.sleep(30)"],
+                raise_after_first,
+            )
+    # Verify the child is actually dead (no zombie; we don't have a pid handle, but we can at
+    # least confirm stream returned — which means proc.wait() completed after kill).

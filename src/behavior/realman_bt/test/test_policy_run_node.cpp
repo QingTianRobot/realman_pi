@@ -960,7 +960,8 @@ void testEachAttemptGetsItsOwnTraceFile() {
 
 // The pick-only demonstration once the bridge is active: reach down, close on the adapter, lift.
 struct PickScenario {
-  explicit PickScenario(bool turn_to_bin = false) : to_bin(turn_to_bin) {}
+  explicit PickScenario(bool turn_to_bin = false, double closed_position = 5700.0, bool torque = true)
+      : to_bin(turn_to_bin), closed_at(closed_position), close_torque(torque) {}
 
   void operator()(FakeStack& s, double now) {
     if (armed_at < 0.0) {
@@ -972,8 +973,8 @@ struct PickScenario {
     if (t > 0.35 && !closed) {
       closed = true;
       s.policy_gripper = 0.0;
-      s.gripper_position = 5700.0;
-      s.torque_reached = true;
+      s.gripper_position = closed_at;
+      s.torque_reached = close_torque;
     }
     if (t > 0.8) {
       if (to_bin) {
@@ -985,6 +986,8 @@ struct PickScenario {
   }
 
   bool to_bin;
+  double closed_at;
+  bool close_torque;
   double armed_at{-1.0};
   bool closed{false};
 };
@@ -1052,6 +1055,20 @@ void testThePickTaskTurningToTheBinIsAFaultAndStopsTheBridge() {
   assert(f.faultRaised());  // not retried: the policy does not follow the prompt
   expectStopsInOrder(f.stack);
   assert(f.text(realman_bt::kPolicyAttemptResultKey) == "wrong_task");
+}
+
+// A missed grasp that then heads for the bin is retryable: no fault, the bridge is still stopped.
+void testThePickTaskTurningToTheBinWithEmptyJawsIsARetryableFailure() {
+  Fixture f(false, fastConfig(), "pick");
+  f.stack.serve();
+  PickScenario scenario(true, 8431.0, false);
+
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::FAILURE);
+
+  assert(!f.faultRaised());
+  expectStopsInOrder(f.stack);
+  assert(f.text(realman_bt::kPolicyAttemptResultKey) == "wrong_side_empty");
+  assert(f.text(realman_bt::kPolicyGraspVerdictKey) == "empty");
 }
 
 void testAnUnknownTaskStopsBeforeTouchingAnything() {
@@ -1139,6 +1156,7 @@ int main(int argc, char** argv) {
   testABridgeThatKeepsTheWrongPromptIsAFaultAndNothingIsActivated();
   testABridgeThatDoesNotReportItsPromptIsAFault();
   testThePickTaskTurningToTheBinIsAFaultAndStopsTheBridge();
+  testThePickTaskTurningToTheBinWithEmptyJawsIsARetryableFailure();
   testAnUnknownTaskStopsBeforeTouchingAnything();
   testTheTraceNamesTheTaskAndItsPrompt();
   testItNeedsTheConfigurationToRun();

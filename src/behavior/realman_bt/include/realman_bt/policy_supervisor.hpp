@@ -19,7 +19,8 @@ enum class AttemptOutcome {
   kReleasedEmpty,  // release_over_bin: let go over the bin but nothing was held: retryable
   kLiftedHeld,     // lift_and_hold: lifted the object and kept holding it: success
   kDropped,        // lift_and_hold: held the object, then it slipped out of the closed jaws: retryable
-  kWrongTask,      // lift_and_hold: turned to the bin side, i.e. ran the place task: not retryable
+  kWrongTask,      // lift_and_hold: turned to the bin side holding the object, i.e. ran the place task: not retryable
+  kWrongSideEmpty, // lift_and_hold: turned to the bin side after closing on nothing (jaws met): retryable
   kTimeout,        // no success in max_attempt_sec: retryable
   kStall,          // gripper closed and the policy stopped moving: retryable
   kPolicyTimeout,  // the policy server or its bridge timed out: retryable on its own budget

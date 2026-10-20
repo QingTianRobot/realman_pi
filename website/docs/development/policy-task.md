@@ -55,7 +55,8 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 
 - **成功**（`lifted_held`）：夹爪夹住了物体（位置低于 `verdict.empty_position_min`，且出现过力矩），累计闭合时间不少于 `lift.min_closed_sec`，并且 `lift.joint_index` 指定的关节（J2）相对闭合时刻移动了 `lift.joint_delta_deg`（负值表示角度减小；RM65 抬起时 J2 减小）。上述条件持续 `lift.hold_sec` 即判定成功。
 - **掉落**（`dropped`，可重试）：曾夹住物体，但之后位置回到 `verdict.empty_position_min` 以上，而策略仍在指令夹爪闭合。
-- **执行了错误的任务**（`wrong_task`，故障）：闭合之后，`lift.wrong_side_joint_index` 指定的关节（J1）低于 `lift.wrong_side_below_deg`，即手臂转向了收纳盒一侧，说明策略没有按 prompt 执行抓起。这类情况重试也无济于事，因此不会重试。
+- **执行了错误的任务**（`wrong_task`，故障）：闭合之后，`lift.wrong_side_joint_index` 指定的关节（J1）低于 `lift.wrong_side_below_deg`，即手臂转向了收纳盒一侧，**且夹爪里有东西**（位置低于 `verdict.empty_position_min`），或者读不到夹爪位置。这说明策略在 pick 的 prompt 下仍把物体往收纳盒搬，没有按 prompt 执行抓起，重试也无济于事，因此不会重试。
+- **抓空后转向收纳盒**（`wrong_side_empty`，可重试）：同样越过 J1 的限制，但夹爪已合到底（位置不低于 `verdict.empty_position_min`），什么也没夹住。2026-10-20 真机上出现过：策略抓空后抬起并转向收纳盒。此时没有物体被带走，下一次尝试会张开夹爪、回位后重新开始。
 
 ## 抓取清台树（control_pick.xml）
 
@@ -78,6 +79,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
       </Repeat>
       <CheckBool key="pick_table_clear" expected="true"/>
     </Fallback>
+    <ThreeArmMoveJ name="pick_done_home" .../>  <!-- 清空后三臂回起始位姿 -->
     <PolicyInputStub/>
   </Sequence>
   <FailInputMode reason="{policy_failure_reason}"/>
@@ -92,7 +94,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 4. **松开**：`GripperReady` 张开右夹爪，物体落在放置侧。
 5. **检测**：`WhiteObjectsRemain` 读一帧全局相机（D435）图像，判断垫子上是否还有白色物体。有物体就返回 `SUCCESS`，`Repeat` 开始下一个周期；没有物体就写入 `pick_table_clear=true` 并返回失败，以此结束 `Repeat`。
 
-`Repeat` 结束后由 `CheckBool` 判断结束原因：如果是桌面已清空，分支成功，停在 `PolicyInputStub`（policy 模式空闲，桥接已停止）；其他原因（尝试次数用完、故障、某个 MoveJ 失败、相机没有图像）都不会写入 `pick_table_clear`，于是经 `FailInputMode` 进入 `FAILED`。注意抬升、转动这两步的 MoveJ 失败不会更新 `policy_failure_reason`，此时 `FAILED` 的说明可能是上一次失败尝试留下的原因（如果没有，就是默认的 `policy task failed`），具体原因需查看诊断事件。
+`Repeat` 结束后由 `CheckBool` 判断结束原因：如果是桌面已清空，先由 `pick_done_home` 让三臂回到起始位姿，再停在 `PolicyInputStub`（policy 模式空闲，桥接已停止）。回位这一步不能省：进入 policy 模式的第一步回位受输入模式切换超时（`behavior_tree.yaml` 的 `switch_timeout_ms`，5 s）限制，如果右臂停在 -135°，回位约需 8 s，会超时并退回 none（2026-10-20 真机上出现过）。其他原因（尝试次数用完、故障、某个 MoveJ 失败、相机没有图像）都不会写入 `pick_table_clear`，于是经 `FailInputMode` 进入 `FAILED`；这条路径不会自动回位，再次进入前如果右臂不在起始位姿附近，需要先手动回位（见下文操作流程）。注意抬升、转动这两步的 MoveJ 失败不会更新 `policy_failure_reason`，此时 `FAILED` 的说明可能是上一次失败尝试留下的原因（如果没有，就是默认的 `policy task failed`），具体原因需查看诊断事件。
 
 ### 白色物体检测（WhiteObjectsRemain）
 
@@ -156,7 +158,8 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick   # 真机：手臂抓取、转�
 | 夹爪闭合且指令几乎为零，持续 `stall.sec` | 失败，`stall` | 是 |
 | 桥接因推理连续超时而自行暂停、桥接统计中断超过 `stats_stale_sec`、预检时桥接迟迟未就绪、`/policy/activate` 无回应 | 失败，`policy_timeout` | 是，按 `timeout_retry` 单独计数，先等待 `backoff_sec` |
 | 关节超出范围、关节速度过大、另外两臂漂移、`joint_states` 丢失、路由服务缺失、夹爪无法张开 | 故障，`fault` | 否，经 `FailInputMode` 进入 `FAILED` |
-| `lift_and_hold`：闭合后转向收纳盒一侧 | 故障，`wrong_task` | 否，经 `FailInputMode` 进入 `FAILED` |
+| `lift_and_hold`：夹着物体转向收纳盒一侧 | 故障，`wrong_task` | 否，经 `FailInputMode` 进入 `FAILED` |
+| `lift_and_hold`：抓空后转向收纳盒一侧 | 失败，`wrong_side_empty` | 是 |
 
 以下关于放手和抓取的判定适用于 `release_over_bin`，`lift_and_hold` 的判定见上一节。**放手**指策略的夹爪指令在累计闭合足够久之后升到阈值以上，同时手臂位于收纳盒一侧（`release.joint_index` 对应的关节低于 `release.joint_below_deg`）。这一位置条件可以排除策略在垫子上为重新抓取而张开夹爪的情况。**抓取判定**依据放手前最后一段闭合期的夹爪位置：停在中间且出现过 `torque_reached`，说明夹住了物体；合到底且没有力矩，则是抓空。
 
@@ -246,7 +249,8 @@ REALMAN_BT_DRY_RUN=false ./scripts/bt.sh control    # 然后在 Web 中选择 po
 | `FAILED`，原因含 `policy is not ready to start` | 预检超时：原因中会列出缺少的项，可能是四个服务、三条臂的 `joint_states`、夹爪位置或 `/policy/stats`。如果缺的只是桥接，会先按超时重试，原因前面会加上 `policy server timed out N times` |
 | 原因含 `policy bridge prompt is '…', waiting for '…'` | 桥接没有切换到该任务的 prompt：确认桥接订阅了 `prompt_topic`，并且没有其他进程在向 `/policy/prompt` 发布别的文本 |
 | 原因含 `does not report its prompt in /policy/stats (too old a bridge)` | 桥接容器仍是旧代码，统计中没有 `prompt`：重建桥接镜像或同步代码后重启。prompt 未确认前不会激活桥接 |
-| `wrong_task` | 执行抓起任务时转向了收纳盒，说明策略没有按 prompt 区分任务：先核对 prompt 是否与训练视图逐字一致，再查看模型在离线 prompt 交换测试中的区分度 |
+| `wrong_side_empty` | 抓空后转向收纳盒，会自动重试；如果频繁出现，检查物体位置是否在训练分布内、夹爪是否张开充分 |
+| `wrong_task` | 执行抓起任务时夹着物体转向了收纳盒，说明策略没有按 prompt 区分任务：先核对 prompt 是否与训练视图逐字一致，再查看模型在离线 prompt 交换测试中的区分度 |
 | `FAILED`，原因以 `policy server timed out N times` 开头 | 策略服务在一个周期内超时了 `timeout_retry.attempts` 次，最后一次的原因跟在 `last:` 之后。`paused itself` 表示桥接连续推理失败后自行暂停，通常是 Wi-Fi 被占满（Pika 定位程序挤占链路时，往返延迟会从 100 ms 升到数秒），或 serve 容器刚重启、尚未预热：先在 serve 容器内做一次推理预热，再选择 policy |
 | 一次尝试结束后，约 20 s 没有动作 | `policy_timeout` 之后的 `backoff_sec` 等待：运行快照中会有一条 `WARN` 级别的 `attempt_end ... result=policy_timeout` 事件 |
 | 一轮结束后夹爪未张开就开始下一轮 | 不会发生：每次尝试的第一步都是 `GripperReady`，夹爪无法张开会判为故障 |

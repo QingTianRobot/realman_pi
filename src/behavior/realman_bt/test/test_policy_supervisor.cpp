@@ -560,6 +560,7 @@ void testOutcomeNamesAreStable() {
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kLiftedHeld)) == "lifted_held");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kDropped)) == "dropped");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kWrongTask)) == "wrong_task");
+  assert(std::string(realman_bt::outcomeName(AttemptOutcome::kWrongSideEmpty)) == "wrong_side_empty");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kTimeout)) == "timeout");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kStall)) == "stall");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kPolicyTimeout)) == "policy_timeout");
@@ -574,7 +575,7 @@ void testOnlyTheTwoHeldOutcomesAreSuccessesAndOnlyFaultAndWrongTaskEndTheTask() 
   }
   using realman_bt::isPolicyTimeout;
   for (auto outcome : {AttemptOutcome::kReleasedEmpty, AttemptOutcome::kDropped, AttemptOutcome::kTimeout,
-                       AttemptOutcome::kStall}) {
+                       AttemptOutcome::kStall, AttemptOutcome::kWrongSideEmpty}) {
     assert(!isSuccess(outcome) && !isFault(outcome) && !isPolicyTimeout(outcome));
   }
   for (auto outcome : {AttemptOutcome::kFault, AttemptOutcome::kWrongTask}) {
@@ -726,6 +727,31 @@ void testPickTurningToTheBinIsAWrongTaskFault() {
   assert(rig.arm[0] < -25.0 && rig.arm[0] > -28.0);  // caught at the first sample past the limit
 }
 
+// 2026-10-20 live run: the jaws met at ~8430 without torque, then the policy lifted and turned J1
+// to the bin side. Nothing is carried away, so this is a retryable miss, not a wrong task.
+void testPickTurningToTheBinWithEmptyJawsIsARetryableMiss() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 8431.0, false);
+  driveJ1To(rig, -30.0);
+  assert(rig.verdict.finished);
+  assert(rig.verdict.outcome == AttemptOutcome::kWrongSideEmpty);
+  assert(!rig.verdict.fault && !rig.verdict.succeeded);
+  assert(rig.verdict.grasp_verdict == "empty");
+  assert(rig.verdict.reason.find("empty jaws") != std::string::npos);
+  assert(rig.arm[0] < -25.0 && rig.arm[0] > -28.0);
+}
+
+// Partly closed (something between the jaws) is still the wrong task, torque or not.
+void testPickTurningToTheBinPartlyClosedIsStillAWrongTask() {
+  Rig rig;
+  rig.start("pick");
+  reachAndGrasp(rig, 6000.0, false);
+  driveJ1To(rig, -30.0);
+  assert(rig.verdict.outcome == AttemptOutcome::kWrongTask);
+  assert(rig.verdict.fault);
+}
+
 void testPickJ1OnTheBinSideBeforeAnyGraspIsNotAWrongTask() {
   Rig rig;
   rig.start("pick");
@@ -845,6 +871,8 @@ int main() {
   testPickTheObjectSlippingOutIsARetryableDrop();
   testPickOpeningOnPurposeAfterAHoldIsNotADrop();
   testPickTurningToTheBinIsAWrongTaskFault();
+  testPickTurningToTheBinWithEmptyJawsIsARetryableMiss();
+  testPickTurningToTheBinPartlyClosedIsStillAWrongTask();
   testPickJ1OnTheBinSideBeforeAnyGraspIsNotAWrongTask();
   testPlaceIgnoresTheLiftAndStillNeedsTheRelease();
   testTheDefaultTaskIsPlace();

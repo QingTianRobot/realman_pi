@@ -88,6 +88,20 @@ void PolicyRunNode::initialize() {
           joints_at_[joint_arm] = Clock::now();
         }));
   }
+  // Joint currents (mA in JointState.effort), published by the driver next to joint_states. Only
+  // recorded in the attempt trace for now, to find the current that pressing on the table draws.
+  for (const char* name : {"l", "m", "r"}) {
+    const std::string current_arm = name;
+    subscriptions_.push_back(ros_node_->create_subscription<sensor_msgs::msg::JointState>(
+        "/" + current_arm + "/joint_currents", sensor_qos,
+        [this, current_arm](sensor_msgs::msg::JointState::ConstSharedPtr message) {
+          if (message->effort.size() < 6) return;
+          Joints milliamps{};
+          for (std::size_t i = 0; i < 6; ++i) milliamps[i] = message->effort[i];
+          std::lock_guard<std::mutex> lock(mutex_);
+          supervisor_->onJointCurrents(current_arm, milliamps);
+        }));
+  }
   subscriptions_.push_back(
       ros_node_->create_subscription<diagnostic_msgs::msg::DiagnosticArray>(
           "/policy/stats", sensor_qos,

@@ -54,6 +54,9 @@ class FakeRobot:
     def rm_get_current_arm_state(self):
         return self._call("rm_get_current_arm_state")
 
+    def rm_get_current_joint_current(self):
+        return self._call("rm_get_current_joint_current")
+
     def rm_algo_forward_kinematics(self, joint, flag=1):
         return self._call("rm_algo_forward_kinematics", joint, flag)
 
@@ -463,6 +466,54 @@ def test_get_state_vendor_exception_marks_connection_for_retry(adapter, fake_rob
     assert state.error_code == -1
     assert adapter.connected is False
     assert adapter.last_error_message == "controller read failed"
+
+
+def test_joint_currents_returns_the_vendor_milliamps(adapter, fake_robot):
+    fake_robot.results["rm_get_current_joint_current"] = (0, [812.4, -2440, 1503.0, 95, -310.2, 12])
+
+    assert adapter.joint_currents() == (812.4, -2440.0, 1503.0, 95.0, -310.2, 12.0)
+    assert fake_robot.calls[-1] == ("rm_get_current_joint_current",)
+
+
+@pytest.mark.parametrize(
+    "result",
+    [
+        (-2, [1.0] * 6),
+        (0, []),
+        (0, [1.0, float("nan"), 1.0, 1.0, 1.0, 1.0]),
+        (0, None),
+        5,
+        RuntimeError("controller read failed"),
+    ],
+)
+def test_joint_currents_failure_is_none_and_leaves_the_connection_alone(adapter, fake_robot, result):
+    fake_robot.results["rm_get_current_joint_current"] = result
+
+    assert adapter.joint_currents() is None
+    # A side read: it must not mark the arm disconnected or overwrite the recorded error.
+    assert adapter.connected is True
+    assert adapter.last_error == 0
+    assert adapter.last_error_message == ""
+
+
+def test_joint_currents_without_a_connection_does_not_call_the_sdk(adapter, fake_robot):
+    adapter._connected = False
+
+    assert adapter.joint_currents() is None
+    assert ("rm_get_current_joint_current",) not in fake_robot.calls
+
+
+def test_mock_joint_currents_are_zero():
+    adapter = RealManSdkAdapter(
+        ip="192.0.2.123",
+        port=8080,
+        thread_mode="RM_TRIPLE_MODE_E",
+        robot_model="RM65-B",
+        mock_mode=True,
+        arm_id="l",
+    )
+    assert adapter.connect() == 0
+    assert adapter.joint_currents() == (0.0,) * 6
 
 
 def test_mock_current_trajectory_uses_documented_raw_dict_shape():

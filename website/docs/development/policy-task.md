@@ -245,6 +245,7 @@ timeout_retry:
 | `gripper_position`、`torque_reached` | 夹爪位置（设备单位）和力矩到达标志 |
 | `closed_total_sec` | 夹爪指令累计闭合的时间（用于放手判定） |
 | `allow_publish`、`paused` | 桥接的统计值 |
+| `i1_ma` 到 `i6_ma` | 受监督机械臂的关节电流（mA，来自驱动的 `/<臂>/joint_currents`）。目前只记录不拦截：用来比较正常抓取和顶到桌面时的电流，再确定拦截阈值 |
 
 没有读数的单元格留空。文件末尾是 `# result=`、`# grasp=`、`# seconds=`、`# reason=` 四行；被 `halt()` 中断的尝试记为 `# result=halted`。可以在 `policy_task.trace` 中关闭记录、修改目录或采样周期；文件写入失败只会缺少这份记录，不影响尝试本身。
 

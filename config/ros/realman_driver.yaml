@@ -23,6 +23,9 @@
     reconnect_interval: 5.0
     # State publication period in Hz. Must be greater than zero.
     state_publish_rate: 10.0
+    # Publish joint currents (mA, JointState.effort) on joint_currents with every joint state;
+    # PolicyRun records them in the attempt trace. One extra SDK read per state tick.
+    publish_joint_currents: true
     # Diagnostic: log joint angles around every velocity-session start, the controller's error
     # flags, and a per-session movev send-interval summary. Costs a few extra SDK reads per start.
     velocity_start_trace: true
@@ -51,6 +54,9 @@
     auto_connect: true
     reconnect_interval: 5.0
     state_publish_rate: 10.0
+    # Publish joint currents (mA, JointState.effort) on joint_currents with every joint state;
+    # PolicyRun records them in the attempt trace. One extra SDK read per state tick.
+    publish_joint_currents: true
     # Diagnostic: log joint angles around every velocity-session start, the controller's error
     # flags, and a per-session movev send-interval summary. Costs a few extra SDK reads per start.
     velocity_start_trace: true
@@ -76,6 +82,9 @@
     auto_connect: true
     reconnect_interval: 5.0
     state_publish_rate: 10.0
+    # Publish joint currents (mA, JointState.effort) on joint_currents with every joint state;
+    # PolicyRun records them in the attempt trace. One extra SDK read per state tick.
+    publish_joint_currents: true
     # Diagnostic: log joint angles around every velocity-session start, the controller's error
     # flags, and a per-session movev send-interval summary. Costs a few extra SDK reads per start.
     velocity_start_trace: true

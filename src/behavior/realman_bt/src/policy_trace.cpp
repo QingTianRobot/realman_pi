@@ -60,7 +60,7 @@ bool PolicyTraceWriter::open(const std::string& dir, const std::string& arm, con
   out_ << "t_sec,phase,q1_deg,q2_deg,q3_deg,q4_deg,q5_deg,q6_deg";
   for (const auto& other : other_arms_) out_ << ",drift_" << other << "_deg";
   out_ << ",cmd_lin_mps,cmd_ang_radps,policy_gripper,gripper_position,torque_reached,closed_total_sec,"
-          "allow_publish,paused\n";
+          "allow_publish,paused,i1_ma,i2_ma,i3_ma,i4_ma,i5_ma,i6_ma\n";
   out_.flush();
   return true;
 }
@@ -78,7 +78,11 @@ void PolicyTraceWriter::writeRow(const std::string& phase, const SupervisorSnaps
   out_ << "," << fixed(snapshot.cmd_linear, 4) << "," << fixed(snapshot.cmd_angular, 4) << ","
        << fixed(snapshot.policy_gripper, 2) << "," << fixed(snapshot.gripper_position, 0) << ","
        << (snapshot.torque_reached ? 1 : 0) << "," << fixed(snapshot.closed_total_sec, 2) << ","
-       << (snapshot.stats_allow_publish ? 1 : 0) << "," << (snapshot.stats_paused ? 1 : 0) << "\n";
+       << (snapshot.stats_allow_publish ? 1 : 0) << "," << (snapshot.stats_paused ? 1 : 0);
+  for (std::size_t joint = 0; joint < 6; ++joint) {
+    out_ << "," << (snapshot.currents_valid ? fixed(snapshot.currents_ma[joint], 0) : std::string());
+  }
+  out_ << "\n";
   out_.flush();
 }
 

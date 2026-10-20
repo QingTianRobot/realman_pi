@@ -89,6 +89,7 @@ struct FakeStack {
       joint_pubs[arm] = node->create_publisher<sensor_msgs::msg::JointState>(
           std::string("/") + arm + "/joint_states", 10);
     }
+    r_current_pub = node->create_publisher<sensor_msgs::msg::JointState>("/r/joint_currents", 10);
     position_pub = node->create_publisher<std_msgs::msg::Float64>("/gripper_right/position", 10);
     torque_pub = node->create_publisher<std_msgs::msg::Bool>("/gripper_right/torque_reached", 10);
     policy_gripper_pub =
@@ -196,6 +197,13 @@ struct FakeStack {
     publish_joints("l", l, l_alive);
     publish_joints("m", m, m_alive);
     publish_joints("r", r, r_alive);
+    if (r_alive) {
+      sensor_msgs::msg::JointState currents;  // the driver's joint_currents: mA in effort
+      currents.header.stamp = stamp;
+      currents.name = {"j1", "j2", "j3", "j4", "j5", "j6"};
+      currents.effort = {812.0, -2440.0, 1503.0, 95.0, -310.0, 12.0};
+      r_current_pub->publish(currents);
+    }
     if (gripper_alive) {
       std_msgs::msg::Float64 position;
       position.data = gripper_position;
@@ -239,6 +247,7 @@ struct FakeStack {
   std::shared_ptr<rclcpp::Node> node;
   rclcpp::executors::SingleThreadedExecutor executor;
   std::map<std::string, rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr> joint_pubs;
+  rclcpp::Publisher<sensor_msgs::msg::JointState>::SharedPtr r_current_pub;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr position_pub;
   rclcpp::Publisher<std_msgs::msg::Bool>::SharedPtr torque_pub;
   rclcpp::Publisher<std_msgs::msg::Float32>::SharedPtr policy_gripper_pub;
@@ -844,8 +853,10 @@ void testASuccessfulAttemptLeavesATraceOfTheTrajectoryAndTheOutcome() {
   bool saw_running = false;
   bool stopping_after_running = true;
   bool seen_stopping = false;
+  bool saw_currents = false;
   for (const auto& row : rows) {
-    assert(row.size() == 18);
+    assert(row.size() == 24);
+    if (!row[19].empty() && cell(row, 19) == -2440.0) saw_currents = true;  // i2_ma
     const double t = cell(row, 0);
     assert(t >= previous_time);
     previous_time = t;
@@ -860,6 +871,7 @@ void testASuccessfulAttemptLeavesATraceOfTheTrajectoryAndTheOutcome() {
   assert(saw_running && seen_stopping && stopping_after_running);
   assert(lowest_j1 < -40.0);          // the arm's trip to the bin is in the record
   assert(saw_closed_position);        // so is the gripper closing
+  assert(saw_currents);               // and the right arm's joint currents from /r/joint_currents
   removeTraceDir(f.config);
 }
 

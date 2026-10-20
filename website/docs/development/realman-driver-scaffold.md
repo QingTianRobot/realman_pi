@@ -64,6 +64,7 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 ```text
 /l/realman_driver
 ├── /l/joint_states       sensor_msgs/msg/JointState
+├── /l/joint_currents     sensor_msgs/msg/JointState（effort = 关节电流，mA）
 ├── /l/connected          std_msgs/msg/Bool
 ├── /l/coordinates/state  std_msgs/msg/String（JSON，transient-local）
 ├── /l/execute_motion     realman_msgs/action/ExecuteMotion
@@ -92,6 +93,8 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 ```
 
 `joint_states.position` 遵守 ROS 约定使用弧度。适配器从 `rm_get_joint_degree()` 读取厂商的度数，节点只在发布边界转换一次。RM65-B 的六个名称固定为 `joint_1` 到 `joint_6`，由配置中的 `joint_names` 显式声明。
+
+每发布一次 `joint_states`，节点还会用 `rm_get_current_joint_current()` 读一次关节电流，发布到 `joint_currents`：电流（mA）放在 `JointState.effort`，`position` 为空，时间戳与对应的 `joint_states` 相同。读取失败时只是这一拍不发布，不会把机械臂标记为断连，也不会覆盖已记录的错误。PolicyRun 把它记录进每次尝试的轨迹，用于找出顶到桌面时的电流特征（先记录，之后再据此拦截）。这一读与速度指令共用 SDK 锁，如果速度会话的 `late` 计数明显上升，可以设置 `publish_joint_currents: false` 关闭。
 
 未连接或 SDK 状态查询失败时不发布不可用的关节状态；mock 连接后发布六轴零位。通信错误
 `-1/-2` 或 SDK 异常会将当前连接标记为失效，节点记录错误、发布该臂离线状态并按
@@ -274,6 +277,7 @@ ros2 topic pub --rate 20 /l/cartesian_velocity/command \
 | `auto_connect` | `true` | 启动时连接并开始回读；设为 `false` 可手动调用 `connect` |
 | `reconnect_interval` | `5.0` 秒 | 连接失败、断线或事件通道隔离后的重连/恢复周期；`0.0` 禁用 |
 | `state_publish_rate` | `10.0` Hz | 必须大于零；后续应按网络和控制器能力测定 |
+| `publish_joint_currents` | `true` | 随每次 `joint_states` 发布 `joint_currents`（mA，`effort`）；每拍多一次 SDK 读取 |
 | `coordinate_state_publish_rate` | `1.0` Hz | 必须大于零；低频重发最近一次完整坐标校验结果，覆盖首个样本早于 DDS endpoint discovery 的启动时序 |
 | `passthrough_reanchor_mode` | `canfd_current` | 每次普通运动前重新锚定 CANFD 透传目标，避免下个速度 session 被拉向旧位姿；只有该值经真机验证（见[Pika 遥操作](./pika-teleop#每次速度-session-启动时手臂被拉动-已在-driver-中修复)）。不在 `realman_driver.yaml` 中，使用节点默认值 |
 | `velocity_start_trace` / `velocity_init_settle_ms` | `false` / `0.0` | 诊断：记录速度 session 启动前后的关节角和节拍；`init` 之后的等待毫秒数 |

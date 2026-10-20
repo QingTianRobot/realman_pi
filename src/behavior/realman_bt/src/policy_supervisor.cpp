@@ -173,6 +173,15 @@ void PolicySupervisor::onDriverCommand(double linear_mps, double angular_radps, 
   cmd_valid_ = true;
 }
 
+void PolicySupervisor::onJointCurrents(const std::string& arm, const Joints& milliamps) {
+  if (arm != config_.arm) return;
+  for (const double value : milliamps) {
+    if (!std::isfinite(value)) return;
+  }
+  currents_ma_ = milliamps;
+  currents_valid_ = true;
+}
+
 void PolicySupervisor::onGripperReading(double position, bool torque_reached, double time) {
   last_gripper_position_ = position;
   last_torque_reached_ = torque_reached;
@@ -257,6 +266,8 @@ SupervisorSnapshot PolicySupervisor::snapshot(double now) const {
   if (policy_gripper_valid_) out.policy_gripper = policy_gripper_;
   out.gripper_position = last_gripper_position_;
   out.torque_reached = last_torque_reached_;
+  out.currents_valid = currents_valid_;
+  out.currents_ma = currents_ma_;
   if (cmd_valid_) {
     out.cmd_linear = cmd_linear_;
     out.cmd_angular = cmd_angular_;

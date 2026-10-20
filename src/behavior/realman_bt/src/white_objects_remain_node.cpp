@@ -1,6 +1,7 @@
 #include "realman_bt/white_objects_remain_node.hpp"
 
 #include <algorithm>
+#include <array>
 #include <stdexcept>
 #include <vector>
 
@@ -24,6 +25,22 @@ std::size_t countWhiteCorePixels(const std::uint8_t* data, int width, int height
   const int k = params.erode_px;
   if (k < 1 || k > roi_w || k > roi_h) return 0;
 
+  // Excluded rectangles, clipped to the ROI, as ROI-relative half-open [x0, x1) x [y0, y1).
+  std::vector<std::array<int, 4>> excluded;
+  for (std::size_t i = 0; i + 3 < params.exclude_xywh.size(); i += 4) {
+    const int ex0 = std::max(params.exclude_xywh[i] - x0, 0);
+    const int ey0 = std::max(params.exclude_xywh[i + 1] - y0, 0);
+    const int ex1 = std::min(params.exclude_xywh[i] + params.exclude_xywh[i + 2] - x0, roi_w);
+    const int ey1 = std::min(params.exclude_xywh[i + 1] + params.exclude_xywh[i + 3] - y0, roi_h);
+    if (ex0 < ex1 && ey0 < ey1) excluded.push_back({ex0, ey0, ex1, ey1});
+  }
+  const auto isExcluded = [&excluded](int x, int y) {
+    for (const auto& box : excluded) {
+      if (x >= box[0] && x < box[2] && y >= box[1] && y < box[3]) return true;
+    }
+    return false;
+  };
+
   // Integral image of the white mask over the ROI, one extra leading row and column of zeros.
   const int stride = roi_w + 1;
   std::vector<std::int32_t> integral(static_cast<std::size_t>(stride) * (roi_h + 1), 0);
@@ -34,7 +51,7 @@ std::size_t countWhiteCorePixels(const std::uint8_t* data, int width, int height
       const std::uint8_t* pixel = row + x * channels;
       const int lo = std::min({pixel[0], pixel[1], pixel[2]});
       const int hi = std::max({pixel[0], pixel[1], pixel[2]});
-      row_sum += (lo >= params.min_channel && hi - lo <= params.max_chroma) ? 1 : 0;
+      row_sum += (lo >= params.min_channel && hi - lo <= params.max_chroma && !isExcluded(x, y)) ? 1 : 0;
       integral[static_cast<std::size_t>(y + 1) * stride + x + 1] =
           integral[static_cast<std::size_t>(y) * stride + x + 1] + row_sum;
     }

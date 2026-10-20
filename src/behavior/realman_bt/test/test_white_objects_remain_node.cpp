@@ -100,7 +100,8 @@ bt_core::NodeStatus runWithImage(realman_bt::WhiteObjectsRemainNode& node,
 }  // namespace
 
 int main(int argc, char** argv) {
-  PolicyTaskConfig::ObjectDetection params;  // ROI 235,125 250x230, erode 9, min_pixels 80
+  PolicyTaskConfig::ObjectDetection params;  // ROI 235,125 250x230, erode 9
+  params.exclude_xywh = {};
 
   // A solid 30x20 blob keeps (30-8) x (20-8) core pixels; a 3 px wide cable keeps none.
   assert(count(makeImage({{300, 200, 30, 20}}), params) == 22u * 12u);
@@ -131,6 +132,17 @@ int main(int argc, char** argv) {
       threw = true;
     }
     assert(threw);
+  }
+  // An excluded rectangle (the light's reflection) hides what is inside it, and only that.
+  {
+    auto masked = params;
+    masked.exclude_xywh = {290, 190, 60, 40};
+    assert(count(makeImage({{300, 200, 30, 20}}), masked) == 0u);
+    assert(count(makeImage({{300, 200, 30, 20}, {400, 280, 30, 20}}), masked) == 22u * 12u);
+    // A blob half inside keeps only the part outside, eroded: x 350..359 is 10 wide, 2 core columns.
+    assert(count(makeImage({{340, 200, 20, 20}}), masked) == 2u * 12u);
+    masked.exclude_xywh = {};
+    assert(count(makeImage({{300, 200, 30, 20}}), masked) == 22u * 12u);
   }
   assert(realman_bt::whiteDetectionChannels("mono8") == 0);
   assert(realman_bt::whiteDetectionChannels("rgb8") == 3);

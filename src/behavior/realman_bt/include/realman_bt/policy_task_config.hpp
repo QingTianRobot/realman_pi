@@ -3,6 +3,7 @@
 #include <array>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace realman_bt {
 
@@ -87,14 +88,18 @@ struct PolicyTaskConfig {
   // (this drops the thin white cables), and min_pixels survivors mean an object is left. The image
   // is the first one received settle_sec after the check starts, so it shows the parked arm.
   // Measured 2026-10-20 on D435 frames: adapters 110-170 per channel, the green mat below 40,
-  // one adapter keeps 100-500 pixels after a 9 px erosion, the cables none.
+  // one adapter keeps 245-500 pixels after a 9 px erosion, the cables at most 73 (live, 2026-10-20).
+  // exclude_xywh lists rectangles (x, y, width, height, flattened) inside which no pixel counts as
+  // white: the ceiling light's reflection on the glossy mat is as white as an adapter. An object
+  // lying in an excluded rectangle is not seen, so the loop can end with it still there.
   struct ObjectDetection {
     std::string image_topic{"/camera_global/d435/color/image_raw"};
     std::array<int, 4> roi_xywh{235, 125, 250, 230};
+    std::vector<int> exclude_xywh{392, 170, 75, 185};
     int min_channel{90};
     int max_chroma{40};
     int erode_px{9};
-    int min_pixels{80};
+    int min_pixels{150};
     double settle_sec{1.0};
     double timeout_sec{5.0};
   };

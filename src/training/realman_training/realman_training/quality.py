@@ -42,14 +42,17 @@ class QualityUnavailable(ValueError):
     """The dataset has no raw gripper readings to judge (a training view, or another robot)."""
 
 
-def _runs(mask: np.ndarray) -> list[tuple[bool, int, int]]:
+def runs(mask: np.ndarray) -> list[tuple[bool, int, int]]:
     """(value, start, end) for each run of equal values; end is exclusive."""
-    runs, start = [], 0
+    result, start = [], 0
     for i in range(1, len(mask) + 1):
         if i == len(mask) or mask[i] != mask[start]:
-            runs.append((bool(mask[start]), start, i))
+            result.append((bool(mask[start]), start, i))
             start = i
-    return runs
+    return result
+
+
+_runs = runs  # backwards compatibility
 
 
 def check_episode(
@@ -81,16 +84,16 @@ def check_episode(
         rising = int(np.count_nonzero(closed[1:] & ~closed[:-1]))
         if rising >= 2:
             drop("regrasp", f"{rising} closing events (re-grasp)")
-        runs = _runs(closed)
+        run_list = runs(closed)
         gaps = [
             (start, end)
-            for k, (value, start, end) in enumerate(runs)
-            if not value and 0 < k < len(runs) - 1 and end - start <= config.glitch_max_frames
+            for k, (value, start, end) in enumerate(run_list)
+            if not value and 0 < k < len(run_list) - 1 and end - start <= config.glitch_max_frames
         ]
         if gaps:
             start, end = gaps[0]
             drop("glitch", f"closed reading interrupted for {end - start} frame(s) at frame {start}")
-        _, run_start, run_end = [run for run in runs if run[0]][-1]
+        _, run_start, run_end = [run for run in run_list if run[0]][-1]
         window = max(1, int(round(config.plateau_window_sec * fps)))
         plateau = float(np.median(gripper[max(run_start, run_end - window) : run_end]))
         if plateau >= config.empty_position_min:

@@ -126,11 +126,13 @@ class Runner:
                 prod_stderr = b"".join(prod_stderr_chunks).decode(errors="replace")
                 cons_stderr = cons.stderr.read().decode(errors="replace")
                 prod_code = prod.returncode
-                if prod_code:
-                    # Producer is the root cause; mention the consumer's error too.
+                if prod_code and prod_code != 255:
+                    # Producer is the root cause (255 = SSH error, consumer likely lost the stream).
                     extra = f"; consumer: {cons_stderr.strip()[:200]}" if cons_stderr.strip() else ""
                     raise CommandFailed(producer, prod_code, prod_stderr + extra)
-                raise CommandFailed(consumer, cons_code, cons_stderr)
+                # Consumer is the root cause (or SSH dropped: prod_code 0 or 255).
+                suffix = f" (producer exited {prod_code}: {prod_stderr.strip()[:200]})" if prod_code else ""
+                raise CommandFailed(consumer, cons_code, cons_stderr + suffix)
             prod_code = prod.wait()
             if prod_code:
                 stderr_thread.join(timeout=2.0)

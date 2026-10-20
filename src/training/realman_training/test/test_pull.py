@@ -28,12 +28,25 @@ def recording(tmp_path):
     return root
 
 
+def _video_sizes(recording) -> str:
+    """Return a `find ... -printf '%s %P\\n'` style listing of all video files."""
+    videos = recording / "videos"
+    if not videos.exists():
+        return ""
+    lines = []
+    for p in sorted(videos.rglob("*")):
+        if p.is_file():
+            lines.append(f"{p.stat().st_size} {p.relative_to(videos)}")
+    return "\n".join(lines) + ("\n" if lines else "")
+
+
 def fake_remote(recording, *, drop_video=False):
-    """Answers the remote du/cat and runs the remote tar locally against the fixture."""
+    """Answers the remote du/cat/find and runs the remote tar locally against the fixture."""
     runner = FakeRunner()
     size = sum(p.stat().st_size for p in recording.rglob("*") if p.is_file())
     runner.on("du -sb", stdout=f"{size}\t{SOURCE}\n")
     runner.on("cat", stdout=(recording / "meta/info.json").read_text())
+    runner.on("find", stdout=_video_sizes(recording))
 
     def pipe_impl(producer, consumer, on_bytes):
         assert producer[:2] == ["ssh", "-o"] and REMOTE.ssh_host in producer
@@ -93,7 +106,8 @@ def test_a_leftover_partial_is_refused(recording, tmp_path):
 
 
 def test_a_missing_video_fails_and_removes_the_partial_copy(recording, tmp_path):
-    with pytest.raises(StepFailed, match="missing video"):
+    # size check fires first (remote knows the file; local copy is missing it) → "size mismatch"
+    with pytest.raises(StepFailed, match="size mismatch|missing video"):
         pull.run({"target": str(tmp_path / "t")}, RecordingLog(), runner=fake_remote(recording, drop_video=True))
     assert not (tmp_path / "t").exists() and not (tmp_path / "t.partial").exists()
 
@@ -162,11 +176,13 @@ def test_meta_stream_raises_step_failed_after_two_failures(recording, tmp_path):
     assert not target.exists() and not (tmp_path / "data" / "t.partial").exists()
 
 
-def test_videos_stream_retry_uses_skip_old_files(recording, tmp_path):
-    """On retry, the videos tar consumer argv should include --skip-old-files.
+def test_videos_stream_retry_uses_plain_extract(recording, tmp_path):
+    """On retry the videos consumer must be the plain extract (no --skip-old-files).
 
-    We do NOT run the consumer for the retry because bsdtar on macOS lacks --skip-old-files;
-    GNU tar (Linux / server5090) does support it. We assert the argv and use a no-op consumer.
+    GNU tar replaces existing files, so a partial write from the first attempt is
+    safely overwritten. We assert the argv and use a fake consumer for the retry
+    (bsdtar on macOS may not support all GNU tar flags, but that doesn't matter
+    here since the retry is the correct plain form).
     """
     from realman_training.runner import CommandFailed
 
@@ -182,31 +198,45 @@ def test_videos_stream_retry_uses_skip_old_files(recording, tmp_path):
             call_count["videos"] += 1
             if call_count["videos"] == 1:
                 raise CommandFailed(producer, 1, "tar: EOF")
-            # Second call: drain producer without running the real consumer
-            import subprocess
-            data = subprocess.run(
-                [str(a) for a in producer], capture_output=True
-            ).stdout
-            on_bytes(len(data))
-            return len(data)
+            # Second call: run real tar so videos land on disk (size check needs them).
+            return original_pipe_impl(producer, consumer, on_bytes)
         return original_pipe_impl(producer, consumer, on_bytes)
 
     base.pipe_impl = track_pipe_impl
     target = tmp_path / "data" / "t"
     log = RecordingLog()
-    # The pull will succeed (meta was extracted; videos drain is faked).
-    # We tolerate StepFailed here since missing videos may trigger that check,
-    # but what we need is that the consumer argv was --skip-old-files on retry.
-    try:
-        pull.run({"target": str(target)}, log, runner=base)
-    except Exception:
-        pass
+    pull.run({"target": str(target)}, log, runner=base)
     assert call_count["videos"] == 2
     partial = tmp_path / "data" / "t.partial"
     expected_dest = str(partial / REMOTE.dataset)
     assert consumers_seen[0] == ["tar", "-C", expected_dest, "-xf", "-"]
-    assert "--skip-old-files" in consumers_seen[1]
+    # Retry must NOT use --skip-old-files (plain extract overwrites partial files)
+    assert "--skip-old-files" not in consumers_seen[1]
+    assert consumers_seen[1] == ["tar", "-C", expected_dest, "-xf", "-"]
     assert any("retrying videos" in line for line in log.lines)
+
+
+def test_video_size_mismatch_raises_step_failed(recording, tmp_path):
+    """If a video file's size doesn't match the remote, StepFailed is raised and partial is removed."""
+    runner = FakeRunner()
+    size = sum(p.stat().st_size for p in recording.rglob("*") if p.is_file())
+    runner.on("du -sb", stdout=f"{size}\t{SOURCE}\n")
+    runner.on("cat", stdout=(recording / "meta/info.json").read_text())
+    # Report one video as 1 byte larger than it really is
+    real_sizes = _video_sizes(recording)
+    # Corrupt just the first file's reported size
+    first_line, _, rest = real_sizes.partition("\n")
+    real_sz, _, rel = first_line.partition(" ")
+    bad_sizes = f"{int(real_sz) + 1} {rel}\n{rest}"
+    runner.on("find", stdout=bad_sizes)
+
+    base_pipe = fake_remote(recording).pipe_impl
+    runner.pipe_impl = base_pipe
+
+    target = tmp_path / "data" / "t"
+    with pytest.raises(StepFailed, match="size mismatch"):
+        pull.run({"target": str(target)}, RecordingLog(), runner=runner)
+    assert not target.exists() and not (tmp_path / "data" / "t.partial").exists()
 
 
 def test_default_target_name(tmp_path):

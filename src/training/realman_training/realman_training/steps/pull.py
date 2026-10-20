@@ -80,12 +80,41 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
         log("videos and the rest")
         rest = ["tar", "-C", source, "-cf", "-", "--exclude=./meta", "--exclude=./data", "."]
         videos_argv = remote(config, rest)
-        extract_skip = ["tar", "-C", str(dest), "-xf", "-", "--skip-old-files"]
         try:
             copied += runner.pipe(videos_argv, extract, progress(copied))
         except CommandFailed as first_error:
             log(f"retrying videos after: {first_error}")
-            copied += runner.pipe(videos_argv, extract_skip, progress(copied))
+            # Use plain extract (GNU tar replaces existing files, so partial writes are overwritten).
+            copied += runner.pipe(videos_argv, extract, progress(copied))
+
+        # Verify video file sizes against the remote to catch truncated copies.
+        try:
+            remote_sizes_raw = runner.check(
+                remote(config, ["find", f"{source}/videos", "-type", "f", "-printf", "%s %P\n"])
+            )
+        except CommandFailed as error:
+            raise StepFailed(f"cannot read remote video sizes from {origin}: {error}") from None
+        remote_sizes = {}
+        for line in remote_sizes_raw.splitlines():
+            line = line.strip()
+            if not line:
+                continue
+            size_str, _, rel = line.partition(" ")
+            try:
+                remote_sizes[rel] = int(size_str)
+            except ValueError:
+                pass
+        size_errors = []
+        for rel, expected in remote_sizes.items():
+            local = dest / "videos" / rel
+            if not local.is_file():
+                size_errors.append(f"{rel}: missing")
+            elif local.stat().st_size != expected:
+                size_errors.append(f"{rel}: {local.stat().st_size} != {expected}")
+        if size_errors:
+            raise StepFailed(
+                f"size mismatch in {len(size_errors)} video file(s) after the copy, e.g. {size_errors[:3]}"
+            )
 
         try:
             summary = summarize(dest)

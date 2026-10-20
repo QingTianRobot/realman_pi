@@ -56,10 +56,6 @@ select:disabled, input:disabled { cursor: not-allowed; opacity: .55; }
 .button.ghost:hover:not(:disabled) { background: var(--btn-bg); border-color: var(--accent-bar); color: var(--btn-content); }
 .button.danger { background: var(--danger-bg); color: var(--danger); }
 .button.danger:hover:not(:disabled) { background: var(--danger-bg-hover); }
-/* Robot-arm brand mark shared by the control and calibration headers. */
-.brand { display: flex; align-items: center; gap: 10px; }
-.brand-mark { display: grid; place-items: center; flex: none; width: 34px; height: 34px; border-radius: 10px; background: var(--btn-bg); color: var(--primary-strong); }
-.brand-mark .arm-icon { width: 22px; height: 22px; }
 .eyebrow { color: var(--primary); font-size: 10px; font-weight: 800; letter-spacing: .14em; }
 h1, h2 { position: relative; margin: 4px 0 0; padding-left: 12px; letter-spacing: -.01em; color: var(--text); }
 h1::before, h2::before { content: ""; position: absolute; left: 0; top: .2em; bottom: .2em; width: 4px; border-radius: 2px; background: var(--accent-bar); }

@@ -10,6 +10,47 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+_QUANTILES = {"q01": 0.01, "q10": 0.10, "q50": 0.50, "q90": 0.90, "q99": 0.99}
+
+
+def _stats(values: np.ndarray, integer: bool = False) -> dict[str, list]:
+    """Per-episode stats the way the recorder stores them (lists, count as [n])."""
+    values = values.reshape(len(values), -1).astype(np.float64)
+    cast = (lambda a: [int(round(v)) for v in a]) if integer else (lambda a: [float(v) for v in a])
+    out = {
+        "min": cast(values.min(0)),
+        "max": cast(values.max(0)),
+        "mean": cast(values.mean(0)),
+        "std": [float(v) for v in values.std(0)],
+        "count": [len(values)],
+    }
+    out.update({name: cast(np.quantile(values, q, axis=0)) for name, q in _QUANTILES.items()})
+    return out
+
+
+def _aggregate_json(per_episode: list[dict[str, dict[str, list]]]) -> dict:
+    """meta/stats.json for the fixture: exact min/max/mean/std/count, count-weighted quantiles."""
+    out = {}
+    for feature in per_episode[0]:
+        count = np.array([e[feature]["count"][0] for e in per_episode], dtype=np.float64)
+        total = count.sum()
+        mean = np.array([e[feature]["mean"] for e in per_episode])
+        std = np.array([e[feature]["std"] for e in per_episode])
+        weight = count[:, None]
+        grand = (mean * weight).sum(0) / total
+        var = (weight * (std**2 + (mean - grand) ** 2)).sum(0) / total
+        stats = {
+            "min": np.array([e[feature]["min"] for e in per_episode]).min(0).tolist(),
+            "max": np.array([e[feature]["max"] for e in per_episode]).max(0).tolist(),
+            "mean": grand.tolist(),
+            "std": np.sqrt(var).tolist(),
+            "count": [int(total)],
+        }
+        for name in _QUANTILES:
+            stats[name] = ((np.array([e[feature][name] for e in per_episode]) * weight).sum(0) / total).tolist()
+        out[feature] = stats
+    return out
+
 FPS = 30
 HOME_DEG = (-9.89, 18.04, 79.08, 15.51, 79.60, -6.20)
 CAMERAS = ("d435", "orbbec-right")
@@ -85,19 +126,23 @@ def build_dataset(root: Path, episodes: list[Episode], *, task_column: str = "__
         root / "meta" / "tasks.parquet",
     )
     start = 0
+    all_stats: list[dict] = []
     for i, episode in enumerate(episodes):
         n = len(episode.gripper)
         grip = np.zeros((n, 3))
         grip[:, 2] = episode.gripper
         joints = np.zeros((n, 18))
         joints[:, 12:18] = np.radians(episode.start_deg)
+        command = np.zeros((n, 18))
+        index = np.arange(start, start + n, dtype=np.int64)
         pq.write_table(
             pa.table(
                 {
                     "observation.gripper_position": _list_column(grip),
                     "observation.joint_position": _list_column(joints),
+                    "action.command_action": _list_column(command),
                     "episode_index": pa.array(np.full(n, i, np.int64)),
-                    "index": pa.array(np.arange(start, start + n, dtype=np.int64)),
+                    "index": pa.array(index),
                     "frame_index": pa.array(np.arange(n, dtype=np.int64)),
                     "task_index": pa.array(np.full(n, task_index[episode.task], np.int64)),
                     "timestamp": pa.array((np.arange(n) / FPS).astype(np.float32)),
@@ -105,6 +150,16 @@ def build_dataset(root: Path, episodes: list[Episode], *, task_column: str = "__
             ),
             root / "data" / "chunk-000" / f"file-{i:03d}.parquet",
         )
+        stats = (
+            {
+                "observation.gripper_position": _stats(grip.astype(np.float32)),
+                "index": _stats(index, integer=True),
+                "episode_index": _stats(np.full(n, i), integer=True),
+            }
+            if n
+            else {}
+        )
+        all_stats.append(stats)
         row = {
             "episode_index": i,
             "tasks": [episode.task],
@@ -113,14 +168,26 @@ def build_dataset(root: Path, episodes: list[Episode], *, task_column: str = "__
             "data/file_index": i,
             "dataset_from_index": start,
             "dataset_to_index": start + n,
+            **{f"stats/{feature}/{name}": value for feature, block in stats.items() for name, value in block.items()},
         }
         _write_videos(root, i, row)
         pq.write_table(pa.Table.from_pylist([row]), root / "meta" / "episodes" / "chunk-000" / f"file-{i:03d}.parquet")
         start += n
+    kept = [s for s in all_stats if s]
+    if kept:
+        (root / "meta" / "stats.json").write_text(json.dumps(_aggregate_json(kept)))
     return root
 
 
-def build_view(root: Path, *, source: str, prompts: dict[str, str], lengths: list[int]) -> Path:
+def build_view(
+    root: Path,
+    *,
+    source: str,
+    prompts: dict[str, str],
+    lengths: list[int],
+    gripper_targets: list[list[float]] | None = None,
+    tasks: list[str] | None = None,
+) -> Path:
     """A training view as make_realman_view.py writes it: 7-dim state/action, prompts as tasks, contract.json."""
     names = list(prompts.values())
     (root / "meta" / "episodes" / "chunk-000").mkdir(parents=True)
@@ -136,12 +203,16 @@ def build_view(root: Path, *, source: str, prompts: dict[str, str], lengths: lis
     pq.write_table(pa.table({"task_index": list(range(len(names))), "task": names}), root / "meta" / "tasks.parquet")
     start = 0
     for i, n in enumerate(lengths):
-        task = i % len(names)
+        task_name = tasks[i] if tasks else list(prompts)[i % len(prompts)]
+        task = names.index(prompts[task_name])
+        action = np.zeros((n, 7))
+        if gripper_targets is not None:
+            action[:, 6] = gripper_targets[i]
         pq.write_table(
             pa.table(
                 {
                     "observation.state": _list_column(np.zeros((n, 7))),
-                    "action": _list_column(np.zeros((n, 7))),
+                    "action": _list_column(action),
                     "episode_index": pa.array(np.full(n, i, np.int64)),
                     "index": pa.array(np.arange(start, start + n, dtype=np.int64)),
                     "frame_index": pa.array(np.arange(n, dtype=np.int64)),

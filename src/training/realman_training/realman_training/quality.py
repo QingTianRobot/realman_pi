@@ -12,7 +12,7 @@ from pathlib import Path
 import numpy as np
 
 from .config import QualityConfig
-from .lerobot_io import read_episode_columns, read_episodes, read_info
+from .lerobot_io import read_columns, read_episodes, read_info
 
 GRIPPER_COLUMN = "observation.gripper_position"
 JOINT_COLUMN = "observation.joint_position"
@@ -62,6 +62,9 @@ def check_episode(
 
     def warn(code: str, message: str) -> None:
         findings.append(Finding(code, "warn", message))
+
+    if len(gripper) == 0:
+        return (Finding("empty", "drop", "episode has no frames"),)
 
     threshold = config.closed_threshold_raw
     closed = gripper > threshold
@@ -129,11 +132,14 @@ def inspect_dataset(root: str | Path, config: QualityConfig) -> list[EpisodeQual
             )
     fps = float(info["fps"])
     arm = ARM_INDEX[config.arm]
+    columns = read_columns(root, [GRIPPER_COLUMN, JOINT_COLUMN])
     results = []
     for episode in read_episodes(root):
-        columns = read_episode_columns(episode, [GRIPPER_COLUMN, JOINT_COLUMN])
-        gripper = columns[GRIPPER_COLUMN][:, arm]
-        joints = np.degrees(columns[JOINT_COLUMN][:, arm * 6 : arm * 6 + 6])
+        data = columns[episode.index]
+        gripper = data[GRIPPER_COLUMN][:, arm] if len(data[GRIPPER_COLUMN]) else np.zeros(0)
+        joints = (
+            np.degrees(data[JOINT_COLUMN][:, arm * 6 : arm * 6 + 6]) if len(data[JOINT_COLUMN]) else np.zeros((0, 6))
+        )
         findings = check_episode(episode.task, gripper, joints, fps, config)
         results.append(EpisodeQuality(episode.index, episode.task, episode.length, _verdict(findings), findings))
     return results

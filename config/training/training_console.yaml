@@ -22,3 +22,34 @@ training_console:
     release_tasks: [pick_and_place]   # tasks that must end with the gripper open again
     start_pose_deg: [-9.89, 18.04, 79.08, 15.51, 79.60, -6.20]  # right arm training start pose
     start_pose_tol_deg: 2.0       # first frame further than this from the start pose = warning only
+
+  # Jobs (one directory each) and other console state. null = <data_root>/_console.
+  state_dir: null
+
+  # Tasks -> prompts. Training views get these unless --task-prompt overrides them; they must equal
+  # policy_bridge's prompt verbatim.
+  prompts:
+    pick_and_place: pick up the power adapter and put it in the blue bin
+    pick_only: pick up the power adapter
+
+  # The recording on realman_ts, pulled from server5090 (files are root 600 on the host, so through the
+  # recording container). Hosts by ssh alias only.
+  remote:
+    ssh_host: realman_local
+    recording_container: realman_pi-realman_recording-1
+    recording_root: /data/realman-recordings/lerobot   # path inside the container
+    dataset: realman__pi05-three-arm
+    connect_timeout_sec: 10
+    lock_wait_sec: 120              # the recorder holds .<dataset>.lock only while appending an episode
+
+  # The openpi checkout and its docker data on server5090.
+  openpi:
+    repo: ~/organization/openpi
+    docker_data: ~/organization/openpi-docker-data
+    image: openpi:dev
+    compose_project: openpi-console
+    compose_overlay: openpi-console.compose.yaml   # relative = next to this file
+    weights: /home/openpi/.cache/openpi/openpi-assets/checkpoints/pi05_base_from_mac/params
+    gpu_busy_mib: 2000              # more than this used on a GPU = someone else holds it
+    num_workers: 6
+    eval_stride: 10

@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import fcntl
 import json
 import os
 import signal
@@ -7,9 +8,11 @@ import subprocess
 import sys
 import time
 from pathlib import Path
+from unittest import mock
 
 import pytest
 
+import realman_training.jobs as jobs_mod
 from realman_training.jobs import JobConflict, JobStore
 
 TEST_DIR = Path(__file__).resolve().parent
@@ -150,3 +153,22 @@ def test_cancel_twice_still_ends_cancelled(store, tmp_path):
     assert store.cancel(job.id)  # second cancel; fire-once handler means SIG_IGN, no exception on cleanup
     status = store.wait(job.id, lambda line: None)
     assert status["state"] == "cancelled"
+
+
+def test_external_lock_holder_raises_conflict_within_deadline(store):
+    """An fd held outside any active job causes JobConflict within the deadline, not an infinite block."""
+    lock_path = store.root / "locks" / "pull.lock"
+    fd = os.open(lock_path, os.O_CREAT | os.O_RDWR, 0o644)
+    fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+    try:
+        with mock.patch.object(jobs_mod, "_LOCK_WAIT_DEADLINE", 0.3):
+            with pytest.raises(JobConflict, match="pull"):
+                store.start("pull", {}, target="fake_steps:ok")
+    finally:
+        os.close(fd)
+
+
+def test_log_text_with_zero_tail_lines_returns_empty(store):
+    job = store.start("pull", {"a": 1}, target="fake_steps:ok")
+    store.wait(job.id, lambda line: None)
+    assert job.log_text(0) == ""

@@ -107,6 +107,9 @@ def main(argv: list[str] | None = None) -> int:
     if argv[:1] == ["_job-run"]:
         from .jobs import run_job
 
+        if len(argv) < 2:
+            print("usage: realman-train _job-run <job-dir>", file=sys.stderr)
+            return 2
         return run_job(argv[1])
     parser = argparse.ArgumentParser(prog="realman-train", description=__doc__)
     parser.add_argument("--config", help="console config (default: config/training/training_console.yaml)")

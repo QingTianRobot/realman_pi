@@ -28,6 +28,7 @@ STEPS = {
 ACTIVE = ("starting", "running")
 FINAL = ("succeeded", "failed", "cancelled", "interrupted")
 PACKAGE_PARENT = str(Path(__file__).resolve().parents[1])
+_LOCK_WAIT_DEADLINE = 5.0  # seconds to wait for an exiting child to release its kind lock
 
 
 class StepFailed(RuntimeError):
@@ -111,7 +112,9 @@ class Job:
     def log_text(self, tail_lines: int | None = None) -> str:
         path = self.dir / "log.txt"
         text = path.read_text(encoding="utf-8", errors="replace") if path.exists() else ""
-        return "\n".join(text.splitlines()[-tail_lines:]) if tail_lines else text
+        if tail_lines is None:
+            return text
+        return "\n".join(text.splitlines()[-tail_lines:]) if tail_lines > 0 else ""
 
 
 class JobStore:
@@ -140,12 +143,23 @@ class JobStore:
             try:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
-                running = self.running(kind)
-                if running is not None:
-                    raise JobConflict(f"a {kind} job is already running: {running.id}") from None
-                # Lock is held but no active job found: the child is in its final exit path.
-                # Block until it releases the lock (sub-second in practice).
-                fcntl.flock(fd, fcntl.LOCK_EX)
+                # Retry loop: the lock may be held by a child that just wrote its final status
+                # but hasn't exited yet (sub-second window), OR by a genuinely running job.
+                deadline = time.monotonic() + _LOCK_WAIT_DEADLINE
+                while True:
+                    running = self.running(kind)
+                    if running is not None:
+                        raise JobConflict(f"a {kind} job is already running: {running.id}") from None
+                    if time.monotonic() >= deadline:
+                        raise JobConflict(
+                            f"a {kind} job is finishing or something else holds locks/{kind}.lock"
+                        ) from None
+                    time.sleep(0.05)
+                    try:
+                        fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
+                        break
+                    except BlockingIOError:
+                        pass
             job_id = f"{datetime.datetime.now():%Y%m%d-%H%M%S}-{kind}-{secrets.token_hex(2)}"
             folder = self.root / "jobs" / job_id
             folder.mkdir()
@@ -226,8 +240,12 @@ class JobStore:
         status = job.status()
         if status.get("state") not in ACTIVE:
             return False
+        if self._dead(status):
+            return False
         # Write marker so the child sees it even if it has not yet registered a pid
         (job.dir / "cancel").touch()
+        # Re-read: a pid may have appeared between our first read and touching the marker
+        status = job.status()
         pid = status.get("pid")
         if pid and not self._dead(status):
             try:
@@ -315,6 +333,9 @@ def run_job(folder: str | Path) -> int:
         traceback.print_exc()
         sys.stdout.flush()
         status.update(state="failed", error=f"{type(error).__name__}: {error}")
+    # Ignore late signals so a second cancel cannot corrupt the final status write.
+    signal.signal(signal.SIGTERM, signal.SIG_IGN)
+    signal.signal(signal.SIGINT, signal.SIG_IGN)
     status["ended"] = now()
     write_json(status_path, status)
     # Release the lock fd explicitly so the kind slot is freed before Python runtime teardown.

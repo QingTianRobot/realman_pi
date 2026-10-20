@@ -2,7 +2,6 @@ from __future__ import annotations
 
 import csv
 import json
-from pathlib import Path
 
 import pytest
 from fake_runner import FakeRunner, RecordingLog
@@ -17,6 +16,7 @@ LOG = """\
 02:01:20.602 [I] Step 100: grad_norm=0.218596, loss=0.0646374, param_norm=1801.99, learning_rate=5.04496e-06 (1162:train.py:333)
 02:02:35.564 [I] Step 200: grad_norm=0.151241, loss=0.0420924, param_norm=1801.99, learning_rate=1.004e-05 (1162:train.py:333)
 """
+NEW_LOG = "02:03:50.100 [I] Step 300: grad_norm=0.131, loss=0.0320, param_norm=1801.99, learning_rate=1.5e-05 (1162:train.py:333)\n"
 
 
 @pytest.fixture()
@@ -61,6 +61,11 @@ def test_norm_fails_when_the_stats_do_not_appear(env):
         norm.run({"config_name": "pi05_x", "view": str(env["view"]), "config": env["config"]}, RecordingLog(), runner=runner)
 
 
+def test_norm_bad_config_name_refused(env):
+    with pytest.raises(StepFailed, match="config_name"):
+        norm.run({"config_name": "bad name!", "view": str(env["view"]), "config": env["config"]}, RecordingLog(), runner=base_runner())
+
+
 def train_params(env, **extra):
     return {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1,2", "config": env["config"],
             "poll_sec": 0, **extra}
@@ -78,9 +83,17 @@ def test_train_dry_run_shows_the_command_and_touches_nothing(env):
     inner = command[-1]
     assert "opic-train pi05_x" in inner and "--exp-name=e1" in inner and "--batch-size=16" in inner
     assert "--num-train-steps=30000" in inner and "--weight-loader.params-path=/home/openpi/" in inner
-    assert "> /workspace/wandb/e1.log 2>&1" in inner
+    assert ">> /workspace/wandb/e1.log 2>&1" in inner
     assert runner.commands("compose") and not [c for c in runner.commands("compose") if "-d" in c]  # only config_info
     assert not (env["docker_data"] / "checkpoints").exists()
+
+
+def test_train_dry_run_with_missing_norm_stats_returns_norm_result_without_streaming(env):
+    runner = base_runner().on("container inspect", returncode=1)
+    result = train.run(train_params(env, dry_run=True), RecordingLog(), runner=runner)
+    assert result["dry_run"] is True
+    assert result["norm"] is not None and result["norm"].get("dry_run") is True
+    assert runner.commands("opic-norm") == []
 
 
 def test_train_refuses_gpus_held_by_someone_else(env):
@@ -166,7 +179,26 @@ def test_cancelling_stops_the_container(env):
 
     with pytest.raises(JobCancelled):
         train.run(train_params(env), RecordingLog(), runner=runner, sleep=cancel)
-    assert runner.commands("docker stop")
+    stops = runner.commands("docker stop")
+    assert stops and "openpi-console-train-e1" in " ".join(stops[0])
+
+
+def test_cancelling_during_start_stops_the_container(env):
+    stats_path(env).parent.mkdir(parents=True)
+    stats_path(env).write_text("{}")
+
+    def raise_cancel(argv, input):
+        raise JobCancelled()
+
+    runner = (
+        base_runner().on("container inspect", returncode=1)
+        .on("opic-train", action=raise_cancel)
+        .on("git -C", stdout="abc\n")
+    )
+    with pytest.raises(JobCancelled):
+        train.run(train_params(env), RecordingLog(), runner=runner)
+    stops = runner.commands("docker stop")
+    assert stops and "openpi-console-train-e1" in " ".join(stops[0])
 
 
 def test_attach_follows_an_existing_container_without_starting_one(env):
@@ -181,6 +213,46 @@ def test_attach_follows_an_existing_container_without_starting_one(env):
     assert result["last_step"] == 200 and runner.commands("opic-train") == []
 
 
+def test_attach_with_no_container_fails(env):
+    runner = base_runner().on("container inspect", returncode=1)
+    with pytest.raises(StepFailed, match="no container"):
+        train.run(train_params(env, attach=True), RecordingLog(), runner=runner)
+
+
+def test_train_resume_appends_to_log_and_reports_only_new_steps(env):
+    log_path = env["docker_data"] / "wandb/e1.log"
+    run_dir = env["docker_data"] / "checkpoints/pi05_x/e1"
+    run_dir.mkdir(parents=True)
+    log_path.write_text(LOG)  # pre-existing steps 0, 100, 200
+    stats_path(env).parent.mkdir(parents=True)
+    stats_path(env).write_text("{}")
+    states = iter(["true", "false"])
+
+    def append_log(argv, input):
+        with log_path.open("a") as fh:
+            fh.write(NEW_LOG)
+
+    runner = (
+        base_runner()
+        .on("container inspect", returncode=1)
+        .on("opic-train", action=append_log, stdout="container-id\n")
+        .on("{{.State.Running}}", stdout=lambda argv, input: next(states, "false") + "\n")
+        .on("{{.State.ExitCode}}", stdout="0\n")
+        .on("git -C", stdout="abc\n")
+    )
+    log = RecordingLog()
+    result = train.run(train_params(env, resume=True), log, runner=runner)
+    # Command contains --resume and >>
+    train_calls = runner.commands("opic-train")
+    assert train_calls and "--resume" in " ".join(train_calls[0])
+    assert train_calls and ">>" in " ".join(train_calls[0])
+    # Old content still in log
+    assert LOG in log_path.read_text()
+    # Progress and last_step come only from new steps (300), not old (0, 100, 200)
+    assert result["last_step"] == 300
+    assert all(step == 300 for step, _, _ in log.progress_calls)
+
+
 def test_parse_metrics():
     rows = train.parse_metrics(LOG + "noise\n")
     assert rows[0] == {"step": 0, "grad_norm": 0.2538, "loss": 0.0836821, "param_norm": 1801.99, "learning_rate": 4.99494e-08}
@@ -192,5 +264,6 @@ def test_bad_experiment_names_are_refused(env):
         train.run(train_params(env, exp="a b;rm"), RecordingLog(), runner=base_runner())
 
 
-def test_paths_do_not_leak():
-    assert Path(train.__file__).name == "train.py"
+def test_train_bad_config_name_refused(env):
+    with pytest.raises(StepFailed, match="config_name"):
+        train.run(train_params(env, config_name="bad name!"), RecordingLog(), runner=base_runner())

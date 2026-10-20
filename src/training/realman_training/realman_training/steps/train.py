@@ -32,7 +32,7 @@ from ..runner import Runner, compact
 from . import norm
 
 STEP_LINE = re.compile(r"Step (\d+): (.*?)(?: \(\d+:train\.py:\d+\))?$")
-EXP_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 def container_name(project: str, exp: str) -> str:
@@ -56,8 +56,8 @@ def parse_metrics(text: str) -> list[dict]:
     return rows
 
 
-def _follow(runner: Runner, container: str, log_path: Path, total: int, log, poll: float, sleep) -> int | None:
-    offset, pending, last = 0, "", None
+def _follow(runner: Runner, container: str, log_path: Path, total: int, log, poll: float, sleep, offset: int = 0) -> int | None:
+    pending, last = "", None
     while True:
         running = runner.check(["docker", "inspect", "-f", "{{.State.Running}}", container]).strip() == "true"
         if log_path.exists():
@@ -85,9 +85,11 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
     config = load_config(params.get("config"))
     oc = config.openpi
     exp = str(params["exp"])
-    if not EXP_NAME.match(exp):
+    if not SAFE_NAME.match(exp):
         raise StepFailed(f"exp name {exp!r}: use letters, digits, '_', '-', '.'")
     name = params["config_name"]
+    if not SAFE_NAME.match(name):
+        raise StepFailed(f"config_name {name!r}: use letters, digits, '_', '-', '.'")
     view = Path(params["view"]).expanduser().resolve()
     gpus = parse_gpus(params["gpus"])
     container = container_name(oc.compose_project, exp)
@@ -111,6 +113,11 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
         "weights": oc.weights,
         "container": container,
     }
+
+    # argv is set in the non-attach path; log_offset is 0 for attach (show existing history)
+    argv = None
+    log_offset = 0
+
     if attach:
         if not exists:
             raise StepFailed(f"no container {container} to attach to")
@@ -143,23 +150,30 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
             args.append(f"--num-train-steps={int(params['steps'])}")
         if params.get("resume"):
             args.append("--resume")
-        command = f"opic-train {shlex.quote(name)} {shlex.join(args)} > /workspace/wandb/{exp}.log 2>&1"
+        command = f"opic-train {shlex.quote(name)} {shlex.join(args)} >> /workspace/wandb/{exp}.log 2>&1"
         argv = compose.run(command, env=train_env(gpus), name=container)
         log("$ " + shlex.join(argv))
         if params.get("dry_run"):
             return {"dry_run": True, "command": argv, "container": container, "norm": norm_result}
         record["openpi_commit"] = repo_commit(runner, oc.repo)
         record["started"] = now()
-        runner.check(argv, env=compose.env())
-        log(f"training started in {container}; log {host_log}")
+        log_offset = host_log.stat().st_size if host_log.exists() else 0
+
     if "openpi_commit" not in record:
         record["openpi_commit"] = repo_commit(runner, oc.repo)
+
     try:
-        last = _follow(runner, container, host_log, total, log, float(params.get("poll_sec", 15)), sleep)
+        if argv is not None:
+            runner.check(argv, env=compose.env())
+            log(f"training started in {container}; log {host_log}")
+        last = _follow(runner, container, host_log, total, log, float(params.get("poll_sec", 15)), sleep, log_offset)
     except JobCancelled:
         log(f"cancelled: stopping {container}")
-        runner.run(["docker", "stop", "-t", "60", container])
+        result = runner.run(["docker", "stop", "-t", "60", container])
+        if result.returncode:
+            log(f"could not stop {container}: {result.stderr}; the GPUs may still be held")
         raise
+
     exit_code = int(runner.check(["docker", "inspect", "-f", "{{.State.ExitCode}}", container]).strip())
     runner.run(["docker", "rm", container])
     metrics = parse_metrics(host_log.read_text(encoding="utf-8", errors="replace")) if host_log.exists() else []

@@ -265,8 +265,9 @@ Web 服务把它代理为同源只读接口 `GET /api/bt/runtime`（`bt_runtime.
 
 页面每 0.5 s 轮询一次（页面不可见时暂停）：
 
-- **出现时机**：只有接口 `available` 时，标签栏才出现“行为树”标签；新出现时标签短暂高亮提示，但不会抢走当前面板。
-  树停止后标签消失，若正停在该标签则回到“运动”。标签上的圆点随根状态变色，RUNNING 时闪烁。
+- **出现时机**：可以从本页启动行为树（见下文“启动行为树”）或有树在运行时，标签栏才出现“行为树”标签；树开始运行时
+  标签短暂高亮提示，但不会抢走当前面板。两者都不可用时标签消失，若正停在该标签则回到“运动”。标签上的圆点随根状态变色，
+  RUNNING 时闪烁；没有树运行时面板显示启动菜单，根状态为“未运行”。
 - **control 路由树**：识别方式是某个 Fallback/ReactiveFallback 的每个子节点都以 `InputModeGuard` 开头
   （即 `input_router`）。默认只显示当前输入模式对应的分支（`<active_mode>_branch`，找不到时取 guard
   成功或正在运行的分支），上方用面包屑列出从根到路由器的祖先及其状态；“显示整棵树”可切换到完整树，此时未使用的
@@ -280,6 +281,28 @@ Web 服务把它代理为同源只读接口 `GET /api/bt/runtime`（`bt_runtime.
   `./rm65 bt` 按 Ctrl-C：halt 树、等运动取消排空、executor 退出、router 随 launch 关闭、`bt-start` 归档并关掉
   :8080，标签随之消失。成功时回 `behavior_tree_stop_result`（`request_id`、`success`、`message`）；没有行为树时
   回错误 `behavior_tree_unavailable`。机械臂 driver、Web 服务和其它容器不受影响。
+
+### 启动行为树
+
+没有树运行时，“行为树”标签显示启动菜单：
+
+- **文件列表**：下拉框列出 `config/behavior-trees/` 下所有 `*.xml`（Web 服务直接读取挂载的配置目录，`bt_library.py`），
+  每项显示 XML `<root>` 的 `realman_launch` 和所需 arm；无法解析的 XML 灰显且不可选。所选文件按浏览器记住。
+- **收藏置顶**：点星号收藏/取消。收藏是共享的，写入 `config/web-control/behavior-trees/favorites.yaml`
+  （`realman_bt_favorites.v1`，原子替换），所有浏览器看到同一份；列表先按收藏顺序列出“收藏”，再按文件名列出其它。
+  该目录在 Compose 中与关节记录一样以读写方式挂载给 Web 服务。
+- **真实运动**：勾选框默认勾上（等同生产上的 `REALMAN_BT_DRY_RUN=false`），去掉则以 dry-run 启动。
+- **启动**：第一次点击只变为“确认启动（真实运动）？”/“确认启动（dry-run）？”，4 s 内再点才发送
+  `POST /api/bt/start {"tree", "dry_run"}`。按钮在已有树运行或启动进行中时禁用。启动后显示进度，树的监视器出现即切换到
+  树视图；若 `bt-start` 自行退出（例如某臂 `execute_motion` Action 未就绪），显示退出码和日志末尾若干行。
+
+启动由 bringup 容器里的 `bt_launcher`（`realman_bt`，`config/ros/bt_launcher.yaml`）执行：它只监听
+`127.0.0.1:8781`，Web 服务代理 `GET /status` 与 `POST /start`（写接口与 WebSocket 一样做同源校验，`GET /api/bt/trees`
+返回文件列表和 launcher 状态）。一次启动就是 `./scripts/bt.sh <tree>` 经 `docker exec` 做的事：以同样的 `bt-start`
+环境变量运行容器内的 `bt-start`，arm 和 launch 由 XML 属性决定，输出写到 `logs/bt-launcher/<时间>_<树名>.log`。
+`bt-start` 持有的 `/tmp/realman-bt.lock` 让 launcher 同时识别终端里 `./rm65 bt` 启动的树，不会并发启动第二棵。
+launcher 从不终止任何进程，停止仍走“终止行为树”。`realman_bringup_remote` 默认 `start_bt_launcher:=true`
+（`REALMAN_START_BT_LAUNCHER=false` 可关闭）；`realman_web_control.yaml` 的 `behavior_tree_launcher.url` 置空则隐藏启动菜单。
 
 ## WebSocket 协议
 

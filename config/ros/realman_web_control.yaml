@@ -25,3 +25,11 @@ behavior_tree_monitor:
   url: http://127.0.0.1:8080  # Empty string disables the tree view.
   timeout_sec: 0.5  # Per-request limit; an unreachable monitor reads as "no tree".
   stale_after_sec: 5.0  # Hide snapshots the executor has not rewritten for this long.
+
+# Start menu on :8765. bt_launcher (realman_bringup_remote, start_bt_launcher:=true)
+# runs bt-start like ./scripts/bt.sh; paths are relative to the config root.
+behavior_tree_launcher:
+  url: http://127.0.0.1:8781  # Empty string hides the start menu.
+  timeout_sec: 2.0
+  tree_dir: behavior-trees  # Every *.xml here is offered.
+  favorites_file: web-control/behavior-trees/favorites.yaml  # Shared pins; needs the rw mount.

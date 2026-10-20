@@ -278,6 +278,9 @@ timer 提交所有未完成 Action 的取消请求；快照中的 `pending_cance
 launch/executor 进程组、停止监视器、归档 runtime snapshot 并释放锁。若取消在 10 秒内未清空，wrapper
 会打印警告并强制清理；CLI 返回 130。其他 driver 和其他容器保持运行。
 
+启动同样可以在 :8765 控制页完成：“行为树”标签的下拉框选择 `config/behavior-trees/` 中的文件（可收藏置顶），勾选是否真实运动后
+点“启动”；bringup 容器内的 `bt_launcher` 以与 `./scripts/bt.sh` 相同的环境运行 `bt-start`（见 Web 控制页的“启动行为树”）。
+
 没有终端时，可以在 :8765 控制页的“行为树”标签点“终止行为树”（两次点击确认），效果等同上面的 Ctrl-C：Web 节点
 调用 `/realman_bt_executor/shutdown`（`std_srvs/srv/Trigger`），executor 先 `stop()` halt 树并提交取消，
 等待 `pending_cancellations` 归零（最长 `behavior_tree.yaml` 的 `shutdown_drain_timeout_sec`，默认 10 s，超时告警后

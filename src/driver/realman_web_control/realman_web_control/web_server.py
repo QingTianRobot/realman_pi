@@ -17,6 +17,7 @@ import uuid
 
 import yaml
 
+from .bt_library import list_trees, set_favorite
 from .bt_runtime import UNAVAILABLE as BT_RUNTIME_UNAVAILABLE, compact_runtime_snapshot
 from .model_manifest import resolve_model_asset
 from .protocol import ProtocolError, parse_message
@@ -35,6 +36,11 @@ class WebServerConfig:
     bt_monitor_url: str = ""
     bt_monitor_timeout_sec: float = 0.5
     bt_monitor_stale_after_sec: float = 5.0
+    # bt_launcher in the bringup container starts trees; empty URL hides the start menu.
+    bt_launcher_url: str = ""
+    bt_launcher_timeout_sec: float = 2.0
+    bt_tree_dir: Path | None = None
+    bt_favorites_file: Path | None = None
 
 
 def load_server_config(path: str | Path) -> WebServerConfig:
@@ -67,6 +73,26 @@ def load_server_config(path: str | Path) -> WebServerConfig:
                 or not math.isfinite(value) or value <= 0):
             raise ValueError(f"behavior_tree_monitor.{field} must be finite and positive")
         timing[f"bt_monitor_{field}"] = float(value)
+    launcher = document.get("behavior_tree_launcher", {})
+    if not isinstance(launcher, dict):
+        raise ValueError("behavior_tree_launcher must be a mapping")
+    launcher_url = launcher.get("url", "")
+    if not isinstance(launcher_url, str) or (
+        launcher_url and urlsplit(launcher_url).scheme not in ("http", "https")
+    ):
+        raise ValueError("behavior_tree_launcher.url must be an http(s) URL or empty")
+    launcher_timeout = launcher.get("timeout_sec", 2.0)
+    if (isinstance(launcher_timeout, bool) or not isinstance(launcher_timeout, (int, float))
+            or not math.isfinite(launcher_timeout) or launcher_timeout <= 0):
+        raise ValueError("behavior_tree_launcher.timeout_sec must be finite and positive")
+    # Relative paths are under the config root (the parent of this file's ros/ directory).
+    config_root = Path(path).resolve().parent.parent
+    launcher_paths: dict[str, Path | None] = {}
+    for field in ("tree_dir", "favorites_file"):
+        value = launcher.get(field)
+        if launcher_url and (not isinstance(value, str) or not value):
+            raise ValueError(f"behavior_tree_launcher.{field} must be a path")
+        launcher_paths[field] = (config_root / value) if isinstance(value, str) and value else None
     bind_host = server.get("bind_host")
     origins = server.get("allowed_origins")
     if not isinstance(bind_host, str) or not bind_host:
@@ -82,6 +108,10 @@ def load_server_config(path: str | Path) -> WebServerConfig:
         max_clients=int(server.get("max_clients", 8)),
         max_message_bytes=int(server.get("max_message_bytes", 65536)),
         bt_monitor_url=bt_monitor_url.rstrip("/"),
+        bt_launcher_url=launcher_url.rstrip("/"),
+        bt_launcher_timeout_sec=float(launcher_timeout),
+        bt_tree_dir=launcher_paths["tree_dir"],
+        bt_favorites_file=launcher_paths["favorites_file"],
         **timing,
     )
     if not 1 <= config.port <= 65535:
@@ -189,6 +219,9 @@ class WebControlServer:
         app.router.add_get("/healthz", self._health)
         app.router.add_get("/api/layout", self._layout)
         app.router.add_get("/api/bt/runtime", self._bt_runtime)
+        app.router.add_get("/api/bt/trees", self._bt_trees)
+        app.router.add_post("/api/bt/favorites", self._bt_favorite)
+        app.router.add_post("/api/bt/start", self._bt_start)
         app.router.add_get("/api/calibration", self._calibration)
         app.router.add_get("/api/calibration/sessions", self._calibration_sessions)
         app.router.add_delete(
@@ -253,6 +286,83 @@ class WebControlServer:
             document, int(time.time() * 1000), int(self.config.bt_monitor_stale_after_sec * 1000)
         )
         return web.json_response(payload, headers=headers)
+
+    def _bt_launcher_enabled(self) -> bool:
+        return bool(self.config.bt_launcher_url and self.config.bt_tree_dir and self.config.bt_favorites_file)
+
+    async def _bt_launcher_call(self, method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+        import aiohttp
+
+        if self._bt_session is None:
+            self._bt_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.config.bt_monitor_timeout_sec)
+            )
+        timeout = aiohttp.ClientTimeout(total=self.config.bt_launcher_timeout_sec)
+        try:
+            async with self._bt_session.request(
+                method, f"{self.config.bt_launcher_url}{path}", json=body, timeout=timeout,
+            ) as response:
+                payload = await response.json(content_type=None)
+                return response.status, payload if isinstance(payload, dict) else {}
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+            return 503, {"ok": False, "error": "behavior-tree launcher is not reachable"}
+
+    async def _bt_trees(self, _request: Any) -> Any:
+        """Startable tree files (favorites first) and what the launcher is doing."""
+        from aiohttp import web
+
+        headers = {"Cache-Control": "no-store"}
+        if not self._bt_launcher_enabled():
+            return web.json_response({"available": False}, headers=headers)
+        status_code, status = await self._bt_launcher_call("GET", "/status")
+        trees = await asyncio.to_thread(list_trees, self.config.bt_tree_dir, self.config.bt_favorites_file)
+        return web.json_response({
+            "available": status_code == 200,
+            "launcher": status if status_code == 200 else {"error": status.get("error", "")},
+            "trees": trees,
+        }, headers=headers)
+
+    async def _bt_json_body(self, request: Any) -> dict[str, Any]:
+        from aiohttp import web
+
+        if not self._origin_allowed(request):
+            raise web.HTTPForbidden(text="origin is not allowed")
+        if not self._bt_launcher_enabled():
+            raise web.HTTPNotFound(text="behavior-tree launcher is disabled")
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text="request body must be a JSON object")
+        return body
+
+    async def _bt_favorite(self, request: Any) -> Any:
+        from aiohttp import web
+
+        body = await self._bt_json_body(request)
+        try:
+            await asyncio.to_thread(
+                set_favorite, self.config.bt_tree_dir, self.config.bt_favorites_file,
+                body.get("name"), body.get("favorite"),
+            )
+        except ValueError as error:
+            return web.json_response({"ok": False, "error": str(error)}, status=400)
+        except OSError as error:
+            self.logger.error(f"cannot write behavior-tree favorites: {error}")
+            return web.json_response({"ok": False, "error": "favorites file is not writable"}, status=500)
+        trees = await asyncio.to_thread(list_trees, self.config.bt_tree_dir, self.config.bt_favorites_file)
+        return web.json_response({"ok": True, "trees": trees})
+
+    async def _bt_start(self, request: Any) -> Any:
+        from aiohttp import web
+
+        body = await self._bt_json_body(request)
+        tree, dry_run = body.get("tree"), body.get("dry_run")
+        status_code, payload = await self._bt_launcher_call("POST", "/start", {"tree": tree, "dry_run": dry_run})
+        log = getattr(self.logger, "warning", None) or self.logger.error
+        log(f"Web start of behavior tree {tree!r} (dry_run={dry_run}) -> {status_code} {payload.get('error', '')}")
+        return web.json_response(payload, status=status_code)
 
     async def _calibration(self, _request: Any) -> Any:
         from aiohttp import web

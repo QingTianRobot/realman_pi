@@ -3,6 +3,7 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import URDFLoader from "urdf-loader";
 import "./theme.css";
 import "./style.css";
+import { ARM_ICON_SVG } from "./arm_icon";
 import { AXIS_COLORS, VelocityTrace } from "./velocity_trace";
 import { activeRouterBranch, ancestors, buildBtTree, findInputRouter, renderBreadcrumb, renderBtNode, type BtRuntime } from "./bt_tree";
 
@@ -135,7 +136,7 @@ type CartesianVelocityTelemetry = {
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><span class="brand-mark">RM</span><div><strong>RealMan Web Control</strong><small>ROS 2 action console</small></div></div>
+    <div class="brand"><span class="brand-mark">${ARM_ICON_SVG}</span><div><strong>RealMan Web Control</strong><small>ROS 2 action console</small></div></div>
     <label class="arm-picker">ARM <select id="arm-select"><option value="l">LEFT / 123</option><option value="m">MIDDLE / 125</option><option value="r">RIGHT / 124</option></select></label>
     <span id="connection" class="status-pill offline">OFFLINE</span>
     <span id="mode" class="status-pill ready">CONTROL READY</span>
@@ -168,12 +169,35 @@ app.innerHTML = `
         <div class="panel-heading compact"><div><span class="eyebrow">GLOBAL INPUT</span><h2>输入模式</h2></div><span id="input-mode-active" class="mini-state">WAIT</span></div>
         <div class="input-mode-body"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div></div>
       </section>
+      <section id="bt-panel" class="panel panel-section bt-panel" aria-label="行为树" hidden>
+        <div class="panel-heading compact"><div><span class="eyebrow">BEHAVIOR TREE</span><h2>行为树<span id="bt-dot" class="tab-dot"></span></h2></div><div class="panel-actions"><span id="bt-root-status" class="bt-status bt-idle">未运行</span><button id="bt-stop" class="button danger" type="button" hidden>终止行为树</button><button id="bt-collapse" class="bt-collapse" type="button" aria-expanded="true" aria-controls="bt-body" title="收起">▾</button></div></div>
+        <div id="bt-body">
+        <div id="bt-launcher" class="bt-launcher" hidden>
+          <div class="bt-launcher-row">
+            <div class="bt-picker">
+              <button id="bt-picker-button" class="bt-picker-button" type="button" aria-haspopup="listbox" aria-expanded="false"><span id="bt-picker-label" class="bt-picker-label">选择行为树</span><span id="bt-picker-meta" class="bt-picker-meta"></span><span class="bt-picker-caret">▾</span></button>
+              <div id="bt-picker-list" class="bt-picker-list" role="listbox" aria-label="行为树文件" hidden></div>
+            </div>
+            <label class="bt-real-motion" title="不勾选则 dry-run：行为树运行但不发送真实运动"><input id="bt-real-motion" type="checkbox" checked /> 真实运动</label>
+            <button id="bt-start" class="button primary" type="button" disabled>启动</button>
+          </div>
+          <div id="bt-start-status" class="bt-stop-status" role="status" aria-live="polite" hidden></div>
+          <pre id="bt-start-log" class="bt-start-log" hidden></pre>
+        </div>
+        <div id="bt-running" hidden>
+          <div id="bt-stop-status" class="bt-stop-status" role="status" aria-live="polite" hidden></div>
+          <div class="bt-meta"><span id="bt-tree-id"></span><button id="bt-scope-toggle" class="text-button" type="button" hidden>显示整棵树</button></div>
+          <div id="bt-breadcrumb" class="bt-breadcrumb" hidden></div>
+          <div id="bt-failure" class="bt-reason bt-root-reason" hidden></div>
+          <ul id="bt-tree" class="bt-tree" aria-live="off"></ul>
+        </div>
+        </div>
+      </section>
       <div id="control-tabs" class="control-tabs" role="tablist" aria-label="操作面板">
         <button type="button" role="tab" id="control-tab-motion" data-control-tab="motion" aria-controls="motion-panel">运动</button>
         <button type="button" role="tab" id="control-tab-velocity" data-control-tab="velocity" aria-controls="velocity-panel">速度</button>
         <button type="button" role="tab" id="control-tab-gripper" data-control-tab="gripper" aria-controls="gripper-panel">夹爪</button>
         <button type="button" role="tab" id="control-tab-keyboard" data-control-tab="keyboard" aria-controls="keyboard-control-card" hidden>键盘</button>
-        <button type="button" role="tab" id="control-tab-bt" data-control-tab="bt" aria-controls="bt-panel" hidden>行为树<span id="bt-tab-dot" class="tab-dot"></span></button>
       </div>
       <section id="keyboard-control-card" class="panel panel-section keyboard-control-card" role="tabpanel" aria-labelledby="control-tab-keyboard" data-control-panel="keyboard" hidden>
         <div class="panel-heading compact"><div><span class="eyebrow">KEYBOARD / L + R</span><h2>双臂键盘速度与夹爪</h2></div><span id="keyboard-control-state" class="mini-state">RELEASED</span></div>
@@ -240,14 +264,6 @@ app.innerHTML = `
       </section>
       <section id="velocity-panel" class="panel panel-section" role="tabpanel" aria-labelledby="control-tab-velocity" data-control-panel="velocity"><div class="panel-heading compact"><div><span class="eyebrow">CARTESIAN</span><h2>末端速度</h2></div><span id="velocity-state" class="mini-state">IDLE</span></div><div class="form-grid"><label>参考系<select id="velocity-frame"></select></label><label>周期 (ms)<input id="velocity-period" type="number" min="1" step="1" /></label><label>看门狗 (ms)<input id="velocity-watchdog" type="number" min="1" step="1" /></label><label>线加速度<input id="linear-accel" type="number" min="0.001" step="0.01" /></label><label>角加速度<input id="angular-accel" type="number" min="0.001" step="0.01" /></label></div><div id="velocity-inputs" class="velocity-inputs"></div><div class="inline-actions"><button id="start-velocity" class="button secondary" type="button" disabled>启动速度 Action</button><button id="cancel-velocity" class="button ghost" type="button" disabled>取消</button></div></section>
       <section id="gripper-panel" class="panel panel-section" role="tabpanel" aria-labelledby="control-tab-gripper" data-control-panel="gripper"><div class="panel-heading compact"><div><span class="eyebrow">GRIPPER</span><h2>夹爪控制</h2></div><span id="gripper-state" class="mini-state">WAIT</span></div><div class="form-grid"><label>设备<select id="gripper-select"></select></label><label>开合度 (0=闭合)<input id="gripper-percentage" type="range" min="0" max="1" step="0.01" value="1" /></label></div><div class="inline-actions"><button id="gripper-open" class="button secondary" type="button">打开</button><button id="gripper-close" class="button secondary" type="button">闭合</button><button id="gripper-enable" class="button ghost" type="button">使能</button><button id="gripper-reset" class="button danger" type="button">复位</button></div><div id="gripper-feedback" class="feedback">等待夹爪状态</div><details id="gripper-limits" class="gripper-limits"><summary>行程设置</summary><div class="gripper-limits-body"><div class="form-grid"><label>开位<input id="gripper-open-position" type="number" step="1" /></label><label>闭位<input id="gripper-close-position" type="number" step="1" /></label></div><div class="inline-actions"><button id="gripper-teach-open" class="button ghost" type="button">开位=当前位置</button><button id="gripper-teach-close" class="button ghost" type="button">闭位=当前位置</button></div><label class="gripper-raw">原始位置 <output id="gripper-raw-value">0</output><input id="gripper-raw-position" type="range" min="0" max="1" step="1" value="0" /></label><button id="gripper-limits-apply" class="button primary full" type="button">应用行程</button><div id="gripper-limits-range" class="feedback"></div><div id="gripper-limits-status" class="feedback" role="status" aria-live="polite"></div></div></details></section>
-      <section id="bt-panel" class="panel panel-section bt-panel" role="tabpanel" aria-labelledby="control-tab-bt" data-control-panel="bt" hidden>
-        <div class="panel-heading compact"><div><span class="eyebrow">BEHAVIOR TREE</span><h2>行为树</h2></div><div class="panel-actions"><span id="bt-root-status" class="bt-status bt-idle">IDLE</span><button id="bt-stop" class="button danger" type="button">终止行为树</button></div></div>
-        <div id="bt-stop-status" class="bt-stop-status" role="status" aria-live="polite" hidden></div>
-        <div class="bt-meta"><span id="bt-tree-id"></span><button id="bt-scope-toggle" class="text-button" type="button" hidden>显示整棵树</button></div>
-        <div id="bt-breadcrumb" class="bt-breadcrumb" hidden></div>
-        <div id="bt-failure" class="bt-reason bt-root-reason" hidden></div>
-        <ul id="bt-tree" class="bt-tree" aria-live="off"></ul>
-      </section>
     </aside>
   </main>
 `;
@@ -283,12 +299,12 @@ const keyboardControlCard = $("#keyboard-control-card") as HTMLElement;
 const keyboardControlState = $("#keyboard-control-state");
 const keyboardFrameLegend = $("#keyboard-frame-legend") as HTMLElement;
 const keyboardControlTab = $("#control-tab-keyboard") as HTMLButtonElement;
-type ControlTab = "motion" | "velocity" | "gripper" | "keyboard" | "bt";
+type ControlTab = "motion" | "velocity" | "gripper" | "keyboard";
 const controlTabStorageKey = "realman-web-control.tab";
 let activeControlTab: ControlTab = "motion";
 try {
   const stored = window.localStorage.getItem(controlTabStorageKey);
-  if (stored === "motion" || stored === "velocity" || stored === "gripper" || stored === "keyboard" || stored === "bt") activeControlTab = stored;
+  if (stored === "motion" || stored === "velocity" || stored === "gripper" || stored === "keyboard") activeControlTab = stored;
 } catch {
   // Storage can be blocked; the motion tab is a safe default.
 }
@@ -2258,8 +2274,25 @@ gripperRaw.addEventListener("change", () => sendGripper("move_raw", { position: 
 connect();
 
 // Behavior tree: shown only while bt-start's monitor serves a live snapshot.
-const btTab = $("#control-tab-bt") as HTMLButtonElement;
-const btTabDot = $("#bt-tab-dot") as HTMLElement;
+const btPanel = $("#bt-panel") as HTMLElement;
+const btTabDot = $("#bt-dot") as HTMLElement;
+const btCollapse = $("#bt-collapse") as HTMLButtonElement;
+const btBody = $("#bt-body") as HTMLElement;
+const btCollapsedStorageKey = "realman-web-control.bt-collapsed";
+let btCollapsed = false;
+try { btCollapsed = window.localStorage.getItem(btCollapsedStorageKey) === "true"; } catch { /* per-viewer convenience only */ }
+function renderBtCollapse() {
+  btBody.hidden = btCollapsed;
+  btCollapse.textContent = btCollapsed ? "▸" : "▾";
+  btCollapse.title = btCollapsed ? "展开" : "收起";
+  btCollapse.setAttribute("aria-expanded", String(!btCollapsed));
+}
+btCollapse.addEventListener("click", () => {
+  btCollapsed = !btCollapsed;
+  try { window.localStorage.setItem(btCollapsedStorageKey, String(btCollapsed)); } catch { /* per-viewer convenience only */ }
+  renderBtCollapse();
+});
+renderBtCollapse();
 const btRootStatus = $("#bt-root-status") as HTMLElement;
 const btTreeId = $("#bt-tree-id") as HTMLElement;
 const btScopeToggle = $("#bt-scope-toggle") as HTMLButtonElement;
@@ -2270,18 +2303,24 @@ const btToggled = new Map<string, boolean>();
 let btRuntime: BtRuntime = { available: false };
 let btShowWholeTree = false;
 let btLastMarkup = "";
+let btWasRunning = false;
 function renderBehaviorTree() {
-  const wasHidden = btTab.hidden;
-  btTab.hidden = !btRuntime.available;
-  if (btTab.hidden !== wasHidden) {
-    renderControlTabs();
-    // A tree that just started is announced on its tab without taking over the panel.
-    if (!btTab.hidden) {
-      btTab.classList.add("tab-attention");
-      window.setTimeout(() => btTab.classList.remove("tab-attention"), 4000);
-    }
+  // The card stays while trees can be started from here, and always while one runs.
+  btPanel.hidden = !btRuntime.available && !btLibrary.available;
+  if (btRuntime.available && !btWasRunning) {
+    // A tree that just started is announced by a short highlight, even when the card is folded.
+    btPanel.classList.add("bt-attention");
+    window.setTimeout(() => btPanel.classList.remove("bt-attention"), 4000);
   }
+  btWasRunning = btRuntime.available;
+  btRunningSection.hidden = !btRuntime.available;
+  btStopButton.hidden = !btRuntime.available;
+  renderBtLauncher();
   if (!btRuntime.available) {
+    btRootStatus.textContent = "未运行";
+    btRootStatus.className = "bt-status bt-idle";
+    btTabDot.className = "tab-dot";
+    btLastMarkup = "";
     // The tree is gone (stopped from here, Ctrl-C or a terminal exit): forget any stop in flight.
     if (btStopRequest) setBtStopStatus("", false);
     btStopRequest = "";
@@ -2358,6 +2397,167 @@ btScopeToggle.addEventListener("click", () => {
   btShowWholeTree = !btShowWholeTree;
   renderBehaviorTree();
 });
+// Start menu: tree files from config/behavior-trees, shared favorites pinned first.
+type BtLibraryTree = { name: string; main_tree: string; launch: string; arms: string[]; valid: boolean; favorite: boolean };
+type BtLibrary = { available: boolean; trees?: BtLibraryTree[]; launcher?: Record<string, any> };
+const btLauncherSection = $("#bt-launcher") as HTMLElement;
+const btPickerButton = $("#bt-picker-button") as HTMLButtonElement;
+const btPickerLabel = $("#bt-picker-label") as HTMLElement;
+const btPickerMeta = $("#bt-picker-meta") as HTMLElement;
+const btPickerList = $("#bt-picker-list") as HTMLElement;
+const btRealMotion = $("#bt-real-motion") as HTMLInputElement;
+const btStartButton = $("#bt-start") as HTMLButtonElement;
+const btStartStatus = $("#bt-start-status") as HTMLElement;
+const btStartLog = $("#bt-start-log") as HTMLElement;
+const btRunningSection = $("#bt-running") as HTMLElement;
+const btSelectedStorageKey = "realman-web-control.bt-tree";
+let btLibrary: BtLibrary = { available: false };
+let btSelectedTree = "";
+try { btSelectedTree = window.localStorage.getItem(btSelectedStorageKey) ?? ""; } catch { /* per-viewer convenience only */ }
+let btStartArmedUntil = 0;
+let btStartPending: { tree: string; dryRun: boolean; since: number; startedAt?: number } | undefined;
+function treeMeta(tree: BtLibraryTree) {
+  if (!tree.valid) return "XML 无法解析";
+  return [tree.launch || "launch?", tree.arms.length ? tree.arms.join(",") : ""].filter(Boolean).join(" · ");
+}
+function setBtStartStatus(text: string, error = false, log: string[] = []) {
+  btStartStatus.hidden = !text;
+  btStartStatus.textContent = text;
+  btStartStatus.classList.toggle("error", error);
+  btStartLog.hidden = !log.length;
+  btStartLog.textContent = log.join("\n");
+}
+function renderBtPickerList() {
+  const trees = btLibrary.trees ?? [];
+  const row = (tree: BtLibraryTree) => `<div class="bt-option${tree.name === btSelectedTree ? " selected" : ""}${tree.valid ? "" : " invalid"}" role="option" aria-selected="${tree.name === btSelectedTree}" data-tree="${escapeHtml(tree.name)}">
+      <button type="button" class="bt-star${tree.favorite ? " on" : ""}" data-favorite-toggle="${escapeHtml(tree.name)}" aria-pressed="${tree.favorite}" title="${tree.favorite ? "取消收藏" : "收藏置顶"}">${tree.favorite ? "★" : "☆"}</button>
+      <span class="bt-option-name">${escapeHtml(tree.name.replace(/\.xml$/, ""))}</span><span class="bt-option-meta">${escapeHtml(treeMeta(tree))}</span></div>`;
+  const favorites = trees.filter((tree) => tree.favorite);
+  const others = trees.filter((tree) => !tree.favorite);
+  btPickerList.innerHTML = (favorites.length ? `<div class="bt-option-group">收藏</div>${favorites.map(row).join("")}` : "")
+    + `<div class="bt-option-group">${favorites.length ? "其它" : "全部"}</div>${others.map(row).join("") || `<div class="bt-option-empty">没有行为树文件</div>`}`;
+}
+function renderBtLauncher() {
+  btLauncherSection.hidden = btRuntime.available || !btLibrary.available;
+  const trees = btLibrary.trees ?? [];
+  if (!trees.some((tree) => tree.name === btSelectedTree)) btSelectedTree = trees.find((tree) => tree.valid)?.name ?? "";
+  const selected = trees.find((tree) => tree.name === btSelectedTree);
+  btPickerLabel.textContent = selected ? `${selected.favorite ? "★ " : ""}${selected.name.replace(/\.xml$/, "")}` : "选择行为树";
+  btPickerMeta.textContent = selected ? treeMeta(selected) : "";
+  if (!btPickerList.hidden) renderBtPickerList();
+  const launcher = btLibrary.launcher ?? {};
+  const busy = Boolean(launcher.running) || Boolean(btStartPending);
+  const armed = btStartArmedUntil > Date.now();
+  btStartButton.disabled = !btLibrary.available || !selected?.valid || busy;
+  btStartButton.classList.toggle("armed", armed && !busy);
+  btStartButton.classList.toggle("danger", armed && btRealMotion.checked);
+  btStartButton.textContent = btStartPending ? "正在启动…" : armed
+    ? (btRealMotion.checked ? "确认启动（真实运动）？" : "确认启动（dry-run）？") : "启动";
+  if (btRuntime.available && btStartPending) {
+    btStartPending = undefined;
+    setBtStartStatus("");
+  } else if (btStartPending) {
+    // bt-start exits on its own when it cannot start (e.g. an arm Action is not ready).
+    const exited = launcher.tree === btStartPending.tree && launcher.started_at_ms === btStartPending.startedAt &&
+      typeof launcher.exit_code === "number";
+    if (exited) {
+      setBtStartStatus(`启动失败：bt-start 退出码 ${launcher.exit_code}（日志 ${launcher.log ?? ""}）`, true, launcher.log_tail ?? []);
+      btStartPending = undefined;
+    } else if (Date.now() - btStartPending.since > 60_000) {
+      setBtStartStatus(`${btStartPending.tree} 60 s 内仍未运行，请查看日志 ${launcher.log ?? ""}`, true);
+      btStartPending = undefined;
+    }
+  } else if (!btRuntime.available && launcher.running && !launcher.launched_here) {
+    setBtStartStatus("已有行为树进程在运行（例如终端里的 ./rm65 bt），等待其监视器…");
+  }
+}
+function closeBtPicker() {
+  btPickerList.hidden = true;
+  btPickerButton.setAttribute("aria-expanded", "false");
+}
+btPickerButton.addEventListener("click", () => {
+  const opening = btPickerList.hidden;
+  btPickerList.hidden = !opening;
+  btPickerButton.setAttribute("aria-expanded", String(opening));
+  if (opening) renderBtPickerList();
+});
+document.addEventListener("click", (event) => {
+  if (!btPickerList.hidden && !(event.target as HTMLElement).closest(".bt-picker")) closeBtPicker();
+});
+document.addEventListener("keydown", (event) => {
+  if (event.key === "Escape" && !btPickerList.hidden) closeBtPicker();
+});
+btPickerList.addEventListener("click", async (event) => {
+  const target = event.target as HTMLElement;
+  const star = target.closest<HTMLButtonElement>("[data-favorite-toggle]");
+  if (star) {
+    const name = star.dataset.favoriteToggle!;
+    const response = await fetch("/api/bt/favorites", {
+      method: "POST", headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ name, favorite: star.getAttribute("aria-pressed") !== "true" }),
+    }).catch(() => undefined);
+    const payload = response && await response.json().catch(() => undefined);
+    if (payload?.ok) btLibrary = { ...btLibrary, trees: payload.trees };
+    else setBtStartStatus(`收藏失败：${payload?.error ?? "网络错误"}`, true);
+    renderBtLauncher();
+    renderBtPickerList();
+    return;
+  }
+  const option = target.closest<HTMLElement>("[data-tree]");
+  if (!option || option.classList.contains("invalid")) return;
+  btSelectedTree = option.dataset.tree!;
+  try { window.localStorage.setItem(btSelectedStorageKey, btSelectedTree); } catch { /* per-viewer convenience only */ }
+  btStartArmedUntil = 0;
+  closeBtPicker();
+  renderBtLauncher();
+});
+btRealMotion.addEventListener("change", () => {
+  btStartArmedUntil = 0;
+  renderBtLauncher();
+});
+btStartButton.addEventListener("click", async () => {
+  if (btStartButton.disabled) return;
+  if (btStartArmedUntil <= Date.now()) {
+    btStartArmedUntil = Date.now() + 4000;
+    renderBtLauncher();
+    window.setTimeout(renderBtLauncher, 4100);
+    return;
+  }
+  btStartArmedUntil = 0;
+  const tree = btSelectedTree;
+  const dryRun = !btRealMotion.checked;
+  btStartPending = { tree, dryRun, since: Date.now() };
+  setBtStartStatus(`正在启动 ${tree}（${dryRun ? "dry-run" : "真实运动"}），等待机械臂 Action 就绪…`);
+  renderBtLauncher();
+  const response = await fetch("/api/bt/start", {
+    method: "POST", headers: { "Content-Type": "application/json" }, body: JSON.stringify({ tree, dry_run: dryRun }),
+  }).catch(() => undefined);
+  const payload = response && await response.json().catch(() => undefined);
+  if (!response?.ok || !payload?.ok) {
+    btStartPending = undefined;
+    setBtStartStatus(`启动失败：${payload?.error ?? "网络错误"}`, true);
+  } else if (btStartPending) {
+    btStartPending.startedAt = payload.started_at_ms;
+  }
+  renderBtLauncher();
+  pollBehaviorTreeLibrary();
+});
+let btLibraryPollInFlight = false;
+async function pollBehaviorTreeLibrary() {
+  if (btLibraryPollInFlight || document.hidden) return;
+  btLibraryPollInFlight = true;
+  try {
+    const response = await fetch("/api/bt/trees", { cache: "no-store" });
+    btLibrary = response.ok ? await response.json() as BtLibrary : { available: false };
+  } catch {
+    btLibrary = { available: false };
+  } finally {
+    btLibraryPollInFlight = false;
+  }
+  renderBehaviorTree();
+}
+window.setInterval(pollBehaviorTreeLibrary, 2000);
+pollBehaviorTreeLibrary();
 let btPollInFlight = false;
 async function pollBehaviorTree() {
   if (btPollInFlight || document.hidden) return;

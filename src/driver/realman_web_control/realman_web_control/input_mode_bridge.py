@@ -246,10 +246,15 @@ class InputModeBridge:
         pending, snapshot = self._pending, self._snapshot
         if pending is None or snapshot is None or pending.executor_request_id is None:
             return []
+        # "already active" replies reuse the current request id and publish no
+        # new state; a matching ACTIVE cache is then the only confirmation.
+        # New selections always get a larger id, so they still wait for state.
         current_active_matches = (
             allow_current_active
-            and pending.mode_id == "keyboard"
-            and pending.motion is None
+            and (
+                (pending.mode_id == "keyboard" and pending.motion is None)
+                or (pending.mode_id == "web" and pending.motion is not None)
+            )
             and snapshot.phase == "ACTIVE"
             and snapshot.active_mode == pending.mode_id
             and snapshot.request_id == pending.executor_request_id

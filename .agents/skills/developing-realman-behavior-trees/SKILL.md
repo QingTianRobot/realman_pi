@@ -27,14 +27,16 @@ Treat `src/behavior/realman_bt/` and `config/behavior-trees/` as a robot-motion 
 
 ## Current Runtime Shape
 
-The executor currently registers `Sequence`, `ReactiveSequence`, `ReactiveFallback`, `Fallback`, `Repeat`, `Retry`, `RetryUnlessFault`, `GripperReady`, `PolicyRun`, `FailInputMode`, input-mode nodes, `MoveJ`, `ThreeArmMoveJ`, and `CartesianVelocityForDuration`. The production trees are:
+The executor currently registers `Sequence`, `ReactiveSequence`, `ReactiveFallback`, `Fallback`, `Repeat`, `Retry`, `RetryUnlessFault`, `GripperReady`, `PolicyRun`, `FailInputMode`, input-mode nodes, `MoveJ`, `ThreeArmMoveJ`, `RotateJoint`, `MoveJointTo`, `WhiteObjectsRemain`, `SetBool`, `CheckBool`, and `CartesianVelocityForDuration`. The production trees are:
 
 | XML | Purpose | Lifecycle |
 | --- | --- | --- |
 | `move.xml` | One arm `MoveJ` | One-shot |
 | `three.xml` | Two staged, concurrent three-arm barriers | One-shot |
+| `rotate_joint.xml` | Right-arm J6 `RotateJoint` ccw 10° then cw 10° | One-shot |
 | `tool_x.xml` | Timed Cartesian velocity in a configured logical frame | One-shot |
 | `control.xml` | Global Web/Policy/Pika/None input router | Persistent |
+| `control_pick.xml` | `control.xml` with a pick-and-clear policy branch (pick, lift pose, J1 to -135, release, white-blob check, repeat) | Persistent |
 
 `approach_and_grasp.xml` and `pick_task.xml` contain task-template tags that the current executor does not register. Do not present them as runnable production trees unless all referenced nodes and controls are implemented, registered, and tested.
 

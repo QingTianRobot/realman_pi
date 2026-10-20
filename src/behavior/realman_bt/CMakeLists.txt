@@ -47,6 +47,7 @@ target_link_libraries(input_mode_nodes PUBLIC
 add_library(move_j_nodes
   src/cartesian_velocity_for_duration_node.cpp
   src/move_j_node.cpp
+  src/rotate_joint_node.cpp
   src/three_arm_move_j_node.cpp)
 target_include_directories(move_j_nodes PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -59,7 +60,8 @@ ament_target_dependencies(move_j_nodes
 add_library(policy_task_nodes
   src/gripper_ready_node.cpp
   src/policy_run_node.cpp
-  src/policy_task_params.cpp)
+  src/policy_task_params.cpp
+  src/white_objects_remain_node.cpp)
 target_include_directories(policy_task_nodes PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
@@ -134,7 +136,9 @@ install(TARGETS move_j_nodes prepare_keyboard_work_node policy_task_nodes policy
 install(DIRECTORY launch DESTINATION share/${PROJECT_NAME} FILES_MATCHING PATTERN "*.py")
 install(FILES
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/move.xml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/rotate_joint.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/control.xml"
+  "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/control_pick.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/three.xml"
   "${CMAKE_CURRENT_SOURCE_DIR}/../../../config/behavior-trees/tool_x.xml"
   DESTINATION share/${PROJECT_NAME}/behavior-trees)
@@ -188,6 +192,22 @@ if(BUILD_TESTING)
   target_link_libraries(test_three_arm_move_j_node move_j_nodes)
   ament_target_dependencies(test_three_arm_move_j_node rclcpp rclcpp_action realman_msgs)
   add_test(NAME test_three_arm_move_j_node COMMAND test_three_arm_move_j_node)
+
+  add_executable(test_rotate_joint_node test/test_rotate_joint_node.cpp)
+  target_link_libraries(test_rotate_joint_node move_j_nodes)
+  ament_target_dependencies(test_rotate_joint_node rclcpp rclcpp_action realman_msgs)
+  add_test(NAME test_rotate_joint_node COMMAND test_rotate_joint_node)
+  set_tests_properties(test_rotate_joint_node PROPERTIES
+    TIMEOUT 60 ENVIRONMENT "ROS_DOMAIN_ID=222;ROS_LOCALHOST_ONLY=1")
+
+  add_executable(test_white_objects_remain_node test/test_white_objects_remain_node.cpp)
+  target_include_directories(test_white_objects_remain_node PRIVATE
+    "${BT_VENDOR_ROOT}" "${BT_VENDOR_ROOT}/bt_nodes")
+  target_link_libraries(test_white_objects_remain_node policy_task_nodes)
+  ament_target_dependencies(test_white_objects_remain_node rclcpp sensor_msgs)
+  add_test(NAME test_white_objects_remain_node COMMAND test_white_objects_remain_node)
+  set_tests_properties(test_white_objects_remain_node PROPERTIES
+    TIMEOUT 60 ENVIRONMENT "ROS_DOMAIN_ID=223;ROS_LOCALHOST_ONLY=1")
 
   add_executable(test_cartesian_velocity_for_duration_node
     test/test_cartesian_velocity_for_duration_node.cpp)
@@ -302,6 +322,8 @@ if(BUILD_TESTING)
     test/test_launch_module_imports.py)
   ament_add_pytest_test(test_tree_startup_metadata test/test_tree_startup_metadata.py)
   ament_add_pytest_test(test_arm_move_tree test/test_arm_move_tree.py)
+  ament_add_pytest_test(test_rotate_joint_tree test/test_rotate_joint_tree.py)
+  ament_add_pytest_test(test_control_pick_tree test/test_control_pick_tree.py)
   ament_add_pytest_test(test_three_arm_move_tree test/test_three_arm_move_tree.py)
 endif()
 

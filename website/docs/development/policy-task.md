@@ -49,7 +49,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 | `prompt` | 发送给桥接的任务文本，必须与训练数据视图中的任务文本逐字一致；哪怕相差一个字符，模型的输入也会偏离训练分布 |
 | `completion` | 一次尝试的成功判定方式：`release_over_bin`（在收纳盒一侧放手，且曾夹住物体）或 `lift_and_hold`（抬起后仍夹住物体） |
 
-目前有两项：`place`（`pick up the power adapter and put it in the blue bin`，`release_over_bin`）和 `pick`（`pick up the power adapter`，`lift_and_hold`）。生产树的 policy 分支使用 `task="place"`。纯抓起任务将有自己的树：抓起成功后夹爪仍夹着物体，在下一次尝试的 `GripperReady` 张开夹爪之前，需要先决定把物体放在哪里。
+目前有两项：`place`（`pick up the power adapter and put it in the blue bin`，`release_over_bin`）和 `pick`（`pick up the power adapter`，`lift_and_hold`）。生产树 `control.xml` 的 policy 分支使用 `task="place"`。纯抓起任务用的是 `control_pick.xml`（见下文[抓取清台树](#抓取清台树-control-pick-xml)）：抓起成功后由树把物体送到放置位置再松开，然后用全局相机判断桌上还有没有物体。
 
 两种完成条件的阈值分别位于 `release` 和 `lift` 两个配置块中，由使用同一完成条件的所有任务共用。`lift_and_hold` 从策略第一次闭合夹爪（夹爪指令低于 `release.closed_below`）时开始判定：
 
@@ -57,12 +57,72 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 - **掉落**（`dropped`，可重试）：曾夹住物体，但之后位置回到 `verdict.empty_position_min` 以上，而策略仍在指令夹爪闭合。
 - **执行了错误的任务**（`wrong_task`，故障）：闭合之后，`lift.wrong_side_joint_index` 指定的关节（J1）低于 `lift.wrong_side_below_deg`，即手臂转向了收纳盒一侧，说明策略没有按 prompt 执行抓起。这类情况重试也无济于事，因此不会重试。
 
+## 抓取清台树（control_pick.xml）
+
+`config/behavior-trees/control_pick.xml` 是 `control.xml` 的副本，除 policy 分支外，其余分支逐字相同（有测试检查）。它的 policy 分支用纯抓起策略把桌上的电源适配器一个个拿走，直到桌面清空：
+
+```xml
+<Fallback name="pick_task">
+  <Sequence name="pick_task_ok">
+    <SetBool key="pick_table_clear" value="false"/>
+    <Fallback name="pick_until_clear">
+      <Repeat num_cycles="-1">
+        <Sequence name="pick_cycle">
+          <RetryUnlessFault ...>  <!-- GripperReady → 回位 → PolicyRun task="pick" -->
+          <MoveJ name="pick_lift_pose" arm_id="r" joint_degrees="{pick_lift_joint_degrees}" .../>
+          <MoveJointTo name="pick_turn_to_release" arm_id="r" joint="{pick_release_joint}"
+                       target_degrees="{pick_release_joint_deg}" .../>
+          <GripperReady name="pick_release" arm_id="r" .../>
+          <WhiteObjectsRemain name="objects_remain" table_clear="{pick_table_clear}" .../>
+        </Sequence>
+      </Repeat>
+      <CheckBool key="pick_table_clear" expected="true"/>
+    </Fallback>
+    <PolicyInputStub/>
+  </Sequence>
+  <FailInputMode reason="{policy_failure_reason}"/>
+</Fallback>
+```
+
+每个周期依次执行：
+
+1. **抓起**：与 `control.xml` 相同的尝试结构（张开夹爪、三臂回位、`PolicyRun`），只是 `task="pick"`，以 `lift_and_hold` 判定成功：夹住物体并抬起后保持，夹爪仍然闭合。重试、故障和超时规则与上文相同。
+2. **抬升到固定位姿**：右臂 `MoveJ` 到 `pick_cycle.lift_joint_degrees`。目前取右臂起始位姿（`pika_config.yaml`），等测出专门的抬升位姿后在配置里修改即可，不用改 XML。
+3. **转到放置侧**：`MoveJointTo` 只把 J1（`pick_cycle.release_joint`）转到 `pick_cycle.release_joint_deg`（-135°），其余关节保持不动。从上往下看是顺时针转动（J1 角度减小约 125°）。2026-10-20 在真机上空载、以 5% 速度从抬升位姿转到 -135° 再转回，现场确认路径上没有障碍。
+4. **松开**：`GripperReady` 张开右夹爪，物体落在放置侧。
+5. **检测**：`WhiteObjectsRemain` 读一帧全局相机（D435）图像，判断垫子上是否还有白色物体。有物体就返回 `SUCCESS`，`Repeat` 开始下一个周期；没有物体就写入 `pick_table_clear=true` 并返回失败，以此结束 `Repeat`。
+
+`Repeat` 结束后由 `CheckBool` 判断结束原因：如果是桌面已清空，分支成功，停在 `PolicyInputStub`（policy 模式空闲，桥接已停止）；其他原因（尝试次数用完、故障、某个 MoveJ 失败、相机没有图像）都不会写入 `pick_table_clear`，于是经 `FailInputMode` 进入 `FAILED`。注意抬升、转动这两步的 MoveJ 失败不会更新 `policy_failure_reason`，此时 `FAILED` 的说明可能是上一次失败尝试留下的原因（如果没有，就是默认的 `policy task failed`），具体原因需查看诊断事件。
+
+### 白色物体检测（WhiteObjectsRemain）
+
+检测在 `object_detection.roi_xywh` 所框出的绿色垫子区域内进行，桌外白色的地面和机械臂不计入：
+
+- 一个像素的 RGB 三个通道中，最小值不低于 `min_channel`、最大值与最小值之差不超过 `max_chroma`，就算作白色。
+- 做一次 `erode_px`×`erode_px` 的方形腐蚀：只有整个方块都是白色的像素才保留。适配器的白色线缆只有几个像素宽，会被这一步去掉。
+- 保留下来的像素数不少于 `min_pixels`，就认为桌上还有物体。
+
+图像必须在检测开始 `settle_sec` 之后收到，以确保拍到的是手臂已停在放置侧时的画面；`timeout_sec` 内没有图像则判为失败。2026-10-20 用录制的 D435 画面标定：适配器每个通道约 110–170，垫子低于 40；腐蚀后每个适配器保留 245–508 个像素，线缆最多残留 2 个，阈值 80 介于两者之间。检测时手臂必须离开垫子区域：右臂停在 J1=-135° 时应位于画面之外，但这一点还没有在真机上确认。相机或垫子挪动后需要重新标定 ROI。
+
+dry-run 时不读相机，直接报告桌面已清空，因此 dry-run 只跑一个周期就结束。
+
+### 运行
+
+```bash
+REALMAN_BT_DRY_RUN=true ./rm65 bt control_pick    # 选择 policy：一个周期全部只做校验，然后停在 policy 空闲
+REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick   # 真机：手臂抓取、转到 -135° 并松爪，循环直到桌面清空
+```
+
+转动路径已在 2026-10-20 空载确认。真机首次带物体运行前，还需确认在 -135° 松爪时物体能落到预期位置，再按下文的阶梯推进（例如先用 `attempts: 1`）。
+
 ## 节点
 
 | 节点 | 作用 | 失败时 |
 | --- | --- | --- |
 | `GripperReady` | 读取 `/gripper_<name>/position`；夹爪未张开时调用一次 `/gripper_<name>/open`，并等待位置回到阈值以内 | 服务缺失、没有位置数据、请求被拒绝或超时：判为故障 |
 | `PolicyRun` | 预检、激活、监督一次尝试，并按固定顺序停止 | 见下表 |
+| `MoveJointTo` | 读取当前关节角，只把一个关节转到绝对角度，再作为普通 MoveJ 执行（`control_pick.xml` 用它把 J1 转到放置侧） | 读角度失败、MoveJ 失败或超时 |
+| `WhiteObjectsRemain` | 用全局相机检测垫子上是否还有白色物体，结果写入 `table_clear` | 有物体返回 `SUCCESS`；桌面已清空时返回失败并写入 `table_clear=true`；没有图像、编码不支持或 ROI 超出图像范围时返回失败，并写入 `policy_failure_reason` |
 | `FailInputMode` | 把任务级失败转为输入模式 `FAILED`，原因取自 `policy_failure_reason`；协调器随后切换到 `none` | — |
 | `RetryUnlessFault` | 与 `Retry` 相同，但如果失败的叶节点已置位 `policy_fault`，会立即返回失败，不再消耗剩余次数；置位 `policy_timeout` 的失败按 `timeout_attempts` 单独计数，等待 `timeout_backoff_sec` 后再重试 | 超时次数耗尽时，在 `policy_failure_reason` 前加上 `policy server timed out N times; last: `；运行开始、每次重试前和成功时清空 `policy_failure_reason`，失败结束时保留最后一次尝试的原因 |
 

@@ -11,7 +11,7 @@ description: ./rm65 统一入口、行为树启动器、.env 与 Compose 环境�
 
 | 命令 | 作用 |
 | --- | --- |
-| `./rm65 build` | 重建 `realman_bringup_remote` 与 `realman_web_control` 镜像；不改变容器状态 |
+| `./rm65 build [service ...]` | 默认重建 `realman_bringup_remote` 与 `realman_web_control`，可指定如 `rm65_rviz`；使用 Bake 显式授权 `network.host` 并载入本机镜像，不改变容器状态 |
 | `./rm65 up` | 生产默认：ROS 2 彩色相机 + 三臂真实驱动 + Web control + 数据录制 recorder 与回放网页（`:8770`）+ 标定健康诊断；无 RViz，不需要 `DISPLAY` |
 | `./rm65 up desktop` | 同上，并启动 RViz-only 的远程查看服务 `realman_remote_rviz` |
 | `./rm65 up policy` | 生产图 + VLA 策略桥容器 `policy_bridge`（等待模式路由选中 `policy` 并调用 `/policy/activate`） |

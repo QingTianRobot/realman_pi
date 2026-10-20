@@ -221,7 +221,7 @@ export XAUTHORITY="$HOME/.Xauthority"   # 普通 Xorg 会话中 XAUTHORITY 为�
 构建 RViz 镜像（首次，或代码更新后）：
 
 ```bash
-docker compose build rm65_rviz
+./rm65 build rm65_rviz
 ```
 
 启动默认型号：

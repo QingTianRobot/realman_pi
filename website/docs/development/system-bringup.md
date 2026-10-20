@@ -39,7 +39,10 @@ description: 三臂、RViz 2、输入节点、远程调试和 ROS 2 运行日志
 ./rm65 logs
 ```
 
-`./rm65 build` 等价于 `docker compose build realman_bringup_remote realman_web_control`。
+`./rm65 build` 使用 `docker buildx bake --allow network.host --load` 构建
+`realman_bringup_remote` 与 `realman_web_control`，读取根目录 Compose 文件和 `.env`。
+指定服务时使用 `./rm65 build rm65_rviz`（可传多个服务）。显式授权满足
+`build.network: host` 的要求，`--load` 将镜像载入本机 Docker，供后续 Compose 启动使用。
 它用于代码、Dockerfile、ROS 包或 8765 静态页面更新后的本地镜像重建，只执行构建，不停止、启动或重建
 正在运行的容器。要部署新镜像，先确认机器人安全并退出活动行为树，再执行 `./rm65 down`、`./rm65 build`、
 `./rm65 up`；最后按需重新运行 `./rm65 bt control`。只有根 `config/` 下的挂载 YAML 变化时，通常重启
@@ -254,6 +257,7 @@ docker compose build realman_bringup
 构建的网络与缓存约定（`config/docker/compose.yaml`、Dockerfile 注释里有实测依据）：
 
 - 构建使用 `network: host`：生产机用 systemd-resolved（`127.0.0.53`），桥接网络的构建容器解析不了，pip 会报 `Temporary failure in name resolution`；
+- 如果 `docker compose build` 报 `additional privileges requested`，使用 `./rm65 build <service>`；部分 Compose 版本的 Bake 后端不会转发 `network.host` 授权，详见[构建权限排查](../troubleshooting#docker-构建提示-networkhost-权限)；
 - pip 层放在复制 `config` 和 `src` **之前**，只改源码或配置时 pip 层命中缓存，不会重新下载数 GB 依赖；
 - 选镜像看的是纯 HTTP/1.1 下的实际速度，而不只是能不能连上；IK 依赖层的下载超时放宽到 `300 s`。
 

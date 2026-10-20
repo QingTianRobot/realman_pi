@@ -126,8 +126,9 @@ class Runner:
                 prod_stderr = b"".join(prod_stderr_chunks).decode(errors="replace")
                 cons_stderr = cons.stderr.read().decode(errors="replace")
                 prod_code = prod.returncode
-                if prod_code and prod_code != 255:
-                    # Producer is the root cause (255 = SSH error, consumer likely lost the stream).
+                if prod_code > 0 and prod_code != 255:
+                    # Producer is the root cause. 255 = ssh error; < 0 = killed by a signal (SIGPIPE after the
+                    # consumer died, or our own kill above): then the consumer is the cause.
                     extra = f"; consumer: {cons_stderr.strip()[:200]}" if cons_stderr.strip() else ""
                     raise CommandFailed(producer, prod_code, prod_stderr + extra)
                 # Consumer is the root cause (or SSH dropped: prod_code 0 or 255).

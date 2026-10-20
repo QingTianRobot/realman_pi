@@ -117,14 +117,52 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 
 dry-run 时不读相机，直接报告桌面已清空，因此 dry-run 只跑一个周期就结束。
 
-### 运行
+### 操作流程
+
+**1. 准备（每次重建容器后都要做）**
+
+- 确认机器人栈正常：三条臂的 `joint_states` 都在约 10 Hz，`/l|m|r/execute_motion` 都在线，全局相机 `/camera_global/d435/color/image_raw` 有图像（`rgb8`）。
+- 检查右夹爪：读 `/gripper_right/position` 和 `/gripper_right/alarm`。重建容器后，夹爪常会停在半开的位置（如 900）且报警为 32（0x20），不响应指令。依次调用 `/gripper_right/reset` 和 `/gripper_right/enable` 即可恢复（必要时再调用 `open`）。报警值会一直保持 32，但 policy 链路上的任何环节都不检查它，不影响运行。
+- 布置场景：适配器放在绿色垫子上，避开右侧的反光排除区（`object_detection.exclude_xywh`）；收纳盒放在放置侧；清空工作区；有人手持急停。
+- 确认右臂在起始位姿附近。进入 policy 模式的第一步回位受 5 s 的切换超时限制。正常结束时 `pick_done_home` 会自动回位；如果上一次以 `FAILED` 结束、手臂停在远处（例如 J1 = -135°），需要先在 :8765 的运动面板把右臂移回起始位姿。
+
+**2. 先跑一遍 dry-run**
 
 ```bash
-REALMAN_BT_DRY_RUN=true ./rm65 bt control_pick    # 选择 policy：一个周期全部只做校验，然后停在 policy 空闲
-REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick   # 真机：手臂抓取、转到 -135° 并松爪，循环直到桌面清空
+REALMAN_BT_DRY_RUN=true ./rm65 bt control_pick
 ```
 
-转动路径已在 2026-10-20 空载确认。真机首次带物体运行前，还需确认在 -135° 松爪时物体能落到预期位置，再按下文的阶梯推进（例如先用 `attempts: 1`）。
+也可以在 :8765 的"行为树"卡片中选择 `control_pick`，不勾选真实运动后点"启动"。然后选择"Policy / 抓取清台"：一轮中所有步骤都只做校验，检测直接报告桌面已清空，随后停在 policy 空闲。确认没有 `FAILED` 后，终止这次 dry-run。
+
+**3. 真机运行**
+
+```bash
+REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
+```
+
+在 :8765 上，勾选真实运动后启动也可以。然后选择"Policy / 抓取清台"。`activation: auto` 下，选择即开始运动：三臂回到起始位姿，然后每轮依次执行抓取（约 10–15 s）、抬升、J1 转到 -135°、松爪、检测，有物体就继续下一轮；桌面清空后三臂回到起始位姿，停在 policy 空闲。
+
+**4. 结束**
+
+在 :8765 点"终止行为树"，或在终端按 Ctrl-C。终止不会让手臂移动。也可以先选择 `none` 停止当前动作，行为树保持运行。运行中需要紧急停下时，拍急停，**不要用"重启 Docker"**：重启会直接杀掉 `PolicyRun`，来不及执行停止流程，策略桥接会停在激活状态（见下表）。
+
+**5. 出现 FAILED 时**
+
+`FAILED` 后输入模式会自动切到 `none`。可以从以下几处查看原因：:8765 上显示的 FAILED 说明、`logs/behavior-trees/<时间>/runtime.json`，以及每次尝试的轨迹 `logs/policy-attempts/policy_attempt_*.csv`。常见原因：
+
+| 现象 | 原因与处理 |
+| --- | --- |
+| `input mode switch timed out` | 手臂离起始位姿太远，回位超过 5 s。先手动回位，再选择 policy |
+| 回位被拒（`goal rejected`，驱动日志 `arm r is busy`），尝试次数很快用完 | 策略桥接停在激活状态（`/policy/stats` 的 `allow_publish = 1`），进入 policy 后 router 立刻占用右臂。通常是运行中途重启了容器。调用 `/policy/deactivate`（`std_srvs/SetBool`，`data: true`）后再试 |
+| 重启容器后右夹爪不动、报警 32 | 依次调用 `/gripper_right/reset` 和 `enable` |
+| `wrong_task` | 夹着物体转向收纳盒，策略没有按 pick 的 prompt 执行。核对 prompt 与模型 |
+| 尝试次数用完 | 连续抓空、超时或卡住。检查物体位置是否在训练分布内，必要时调整摆放 |
+| `no image on /camera_global/...` | 全局相机没有画面。检查相机进程 |
+| 循环一直不停 | 检测误判。抓一帧图像，核对 ROI、排除区和阈值（`policy_task.yaml` 的 `object_detection`） |
+
+修改 `policy_task.yaml`（例如 `attempts`、`pick_cycle`、`object_detection`）后，需要重启 `./rm65 bt control_pick` 才会生效。
+
+转动路径于 2026-10-20 在空载下确认无障碍。同日真机运行：单个物体一轮完整成功（28 s）。三个物体的那次，3 次尝试都是抓空后转向收纳盒（`wrong_side_empty`），合爪时 J2 只有 54–62°，成功那轮是 65.6°，即在物体上方合了爪。重试和失败流程都按设计执行，但"还有物体 → 下一轮"这条路径尚未在真机上走通。
 
 ## 节点
 

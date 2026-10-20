@@ -112,3 +112,33 @@ def test_a_missing_registry_is_created(env):
 def test_bad_config_name_is_refused(env):
     with pytest.raises(StepFailed, match="config_name"):
         register.run({**params(env), "config_name": "bad name!"}, RecordingLog())
+
+
+def test_generated_card_json_has_generated_by_key(env):
+    register.run(params(env), RecordingLog())
+    card = json.loads((env["run"] / "model_card.json").read_text())
+    assert card.get("generated_by") == register.JSON_GENERATED_BY
+
+
+def test_hand_written_model_card_json_is_refused_without_force(env):
+    (env["run"] / "model_card.json").write_text(json.dumps({"hand": "written"}))
+    with pytest.raises(StepFailed, match="hand-written"):
+        register.run(params(env), RecordingLog())
+
+
+def test_hand_written_model_card_json_is_backed_up_with_force(env):
+    (env["run"] / "model_card.json").write_text(json.dumps({"hand": "written"}))
+    register.run(params(env, force=True), RecordingLog())
+    backups = list(env["run"].glob("model_card.json.bak-*"))
+    assert len(backups) == 1 and json.loads(backups[0].read_text())["hand"] == "written"
+    # The new file is generated
+    new = json.loads((env["run"] / "model_card.json").read_text())
+    assert new.get("generated_by") == register.JSON_GENERATED_BY
+
+
+def test_generated_model_card_json_is_overwritten_without_force(env):
+    # First run creates it; second run replaces it without needing force
+    register.run(params(env), RecordingLog())
+    register.run(params(env, status="已部署"), RecordingLog())
+    card = json.loads((env["run"] / "model_card.json").read_text())
+    assert card["status"] == "已部署" and not list(env["run"].glob("model_card.json.bak-*"))

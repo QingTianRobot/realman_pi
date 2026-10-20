@@ -16,6 +16,31 @@ docker compose exec realman_bringup_remote bash -lc '
 
 节点日志在 `logs/YYYYMMDD_HHMMSS/`。ROS domain 来自 `.env` 的 `ROS_DOMAIN_ID`，**所有**调试终端必须使用相同的值；改 `.env` 后需重建容器环境（`docker compose restart` 不会加载新的 `.env`）。
 
+## Docker 构建提示 network.host 权限
+
+如果 `docker compose build rm65_rviz` 立即报：
+
+```text
+additional privileges requested: pass "--allow=network.host" to grant requested privileges
+```
+
+`config/docker/compose.yaml` 中的 `build.network: host` 需要 BuildKit 授权。部分 Compose
+版本调用 Bake 时没有传递该授权；在仓库根目录改用项目入口：
+
+```bash
+./rm65 build rm65_rviz
+```
+
+该入口读取同一份 Compose 配置和 `.env`，通过以下命令显式授权，并将结果载入本机 Docker：
+
+```bash
+docker buildx bake -f docker-compose.yml --allow network.host --load rm65_rviz
+```
+
+`rm65_docker_build rm65_rviz` 也调用同一个入口。构建不启动服务。不要把 `--allow`
+追加到 `docker compose build`，该子命令没有这个参数。镜像源和网络要求见
+[系统 Bringup](./development/system-bringup#国内镜像与官方源切换)。
+
 ## 机械臂与运动
 
 ### 某只臂 `connected=false` 或没有 `joint_states`

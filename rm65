@@ -141,7 +141,14 @@ down() {
 }
 
 build() {
-  compose build realman_bringup_remote realman_web_control
+  local -a services=(realman_bringup_remote realman_web_control)
+  if (( $# > 0 )); then
+    services=("$@")
+  fi
+  # Compose's Bake backend may omit the grant for build.network: host.
+  # Load the image into Docker even when the selected builder is containerized.
+  (cd "$ROOT" && run docker buildx bake -f "$ROOT/docker-compose.yml" \
+    --allow network.host --load "${services[@]}")
 }
 
 status() {
@@ -179,7 +186,7 @@ usage() {
 Usage: ./rm65 <command> [profile]
 
 Commands:
-  build               Rebuild the local production driver and Web control images.
+  build [service ...] Rebuild selected images; default: production driver and Web control.
   up [desktop|model|policy]  Start production runtime, desktop RViz, offline model viewer, or production + policy bridge.
   down                Stop unified runtime and ROS 2 cameras.
   status              Show camera and Docker service state.

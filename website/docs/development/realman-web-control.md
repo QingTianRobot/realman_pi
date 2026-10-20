@@ -104,7 +104,9 @@ transient-local 订阅 `/realman_bt_executor/input_mode_state`。同一 YAML 的
 目录完全由 XML 的字面 `InputModeGuard` 项发现，浏览器不会维护模式名单。当前 picker 显示一个
 “GLOBAL INPUT / 输入模式”卡片，带一个动态 select：`none`、`keyboard`、`policy`、`pikaposition`、
 `pikavelocity`、`pikamixed` 都可选；`web` 虽会由
-状态显示为 active，却保持隐藏且不可选。没有正在运行的路由器或 discovery 不健康时，卡片隐藏；
+状态显示为 active，却保持隐藏且不可选。状态行优先显示 `input_mode_state.detail`；行为树常发空 detail，
+此时按 phase 显示“行为树已切换到 X（epoch N）”“正在切换到 X…”或“切换到 X 失败”，不再停留在“等待输入模式状态”。
+没有正在运行的路由器或 discovery 不健康时，卡片隐藏；
 既有直接 Action 控制继续兼容，仅在两项 router service 都确认为不可用时启用。服务只短暂失联或
 catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返回 `input_mode_unavailable`，而不是绕过仲裁。
 若 service 在等待 Web override 的已排队运动期间消失，该命令失败并被永久丢弃；即使之后确认 router
@@ -118,11 +120,15 @@ catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返
 | `input_mode_list` | `available`、`modes[]`，每项为 `id`、`label`、`selectable` |
 | `input_mode_result` | `request_id`、`executor_request_id`、`accepted`、`message` |
 | `input_mode_state` | `requested_mode`、`selected_mode`、`active_mode`、`phase`（`ACTIVE`/`SWITCHING`/`FAILED`）、`request_id`、`epoch`、`detail` |
+| `behavior_tree_stop_result` | `request_id`、`success`、`message`（回复浏览器的 `stop_behavior_tree`） |
 
 对非 Web picker 选择，桥总是先取消它持有的 Web Action，再请求 router。切换到不同模式时，router
 先运行一 tick 的 `none` 中性分支，下一 tick 才激活目标模式；重选 active 模式直接返回已有 request ID，
 没有中性 tick，`epoch` 不变。路由仅拦截 `execute_motion`、`execute_trajectory` 和
 `start_cartesian_velocity`：这些浏览器运动先请求 `web`，只在同一请求的 `ACTIVE/web` 状态到达后才会转发。
+若 `web` 已经 ACTIVE，router 回复 `already active` 并沿用当前 request ID、不发布新状态；此时桥以缓存中
+request ID 相同的 `ACTIVE/web` 状态作为确认立即转发，否则 web 模式下的第二条运动会在
+`web_override_timeout_sec` 后以 `input_mode_timeout` 被丢弃。
 `software_stop` 绕过路由；夹爪、恢复、标定、运动学、位姿和记录操作均是 mode-neutral（包括
 `gripper_command`、`recover_motion`、`capture_calibration_sample`、`solve_calibration`、
 `get_current_pose`、`solve_ik`、`list_joint_records`、`save_joint_record`、`delete_joint_record` 与
@@ -142,9 +148,9 @@ Action 取消也会丢弃匹配 arm/action 且由该浏览器拥有的排队请�
 
 ### 双臂键盘末端速度与夹爪
 
-只有动态目录包含可选的 `keyboard` 时，8765 页面才显示“双臂键盘速度与夹爪”卡片；切换状态必须达到
-`ACTIVE/keyboard` 后才捕获运动键。每个新的 keyboard `epoch` 首次进入活动态时，页面会短暂高亮该
-说明卡片，但不会滚动页面或移走三臂 3D、MoveJ 等工作区域；重复状态消息不会反复触发，刷新页面后收到
+只有动态目录包含可选的 `keyboard` 时，8765 页面右栏才出现“键盘”标签页（“双臂键盘速度与夹爪”卡片）；
+切换状态必须达到 `ACTIVE/keyboard` 后才捕获运动键。本页取得 lease 后，每个新的 keyboard `epoch`
+首次进入活动态时，页面会自动切到“键盘”标签并短暂高亮该卡片，但不会滚动页面或移动三臂 3D 和状态面板；重复状态消息不会反复触发，刷新页面后收到
 当前活动态也会引导一次。只有当前页面发起的模式请求进入匹配的 `ACTIVE` 或 `FAILED` 终态时，页面才会
 释放模式选择框焦点，使操作员不必额外点击空白区域即可使用控制键；后台重复状态不会抢走焦点。浏览器使用物理
 位置稳定的 `KeyboardEvent.code`，不使用会受输入法、
@@ -153,11 +159,26 @@ Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`s
 `ACTIVE/keyboard` 是全局行为树状态；页面还必须收到本页的 `keyboard_lease: {active: true}` 才拥有控制权。
 其他浏览器持有 lease 时显示 `REMOTE`，不发送键盘心跳；收到 `keyboard_lease` 错误也不会覆盖 MoveJ
 运行反馈，需在当前页面重新选择键盘模式取得 lease。
+#### 页面布局
+
 键盘说明和右侧控制卡片的增减不得改变左侧三臂 3D viewer 的高度。桌面、窄屏和手机布局分别使用
 有界的 viewer 面板高度，避免 WebGL canvas 被右栏总高度拉伸后压缩相机水平视场。
-桌面端左列由纵向 \`visualization-column\` 组成：上方是 WebGL 三臂展示，下方是
-\`velocity-telemetry-panel\`；右列继续承载坐标、一次性运动、速度 Action、夹爪和运行反馈。
-窄屏和手机端按 WebGL 展示、速度遥测、控制卡片的顺序单列排列。
+
+- 左列 \`visualization-column\`（只看不操作）：上方是 WebGL 三臂展示；中间 \`status-row\` 并排放
+  “当前坐标”和“运行反馈”，切换右侧标签页时它们始终可见；下方是 \`velocity-telemetry-panel\`。
+- 右列 \`controls\`（操作）：顶部是全局“输入模式”卡片，其下是独立的“行为树”卡片（启动菜单或运行中的树，见下文
+  “行为树视图”），再下是 \`control-tabs\` 标签栏——运动（一次性 MOVEJ/MOVEL/MOVEP 与关节记录）、速度（末端速度 Action）、
+  夹爪、键盘（仅在发现键盘模式时出现）。
+  一次只显示一个操作面板，所选标签保存在该浏览器的 \`localStorage\` 中，刷新后恢复；存储不可用时默认“运动”。
+  桌面端右列 sticky 跟随滚动，超出视口高度时在列内滚动。
+- 窄屏和手机端（≤980px）按 WebGL 展示、状态面板、控制卡片（输入模式 + 标签页）、速度遥测的顺序单列排列，
+  让操作区紧跟实时状态；状态面板在手机端也改为单列。
+- 视觉风格沿用 mafumaful.github.io 的浅色主题：共享的 `theme.css` 用 `--hue: 250` 派生全部颜色令牌
+  （页面底色、白色圆角卡片、浅蓝按钮、标题前的强调竖条），并提供按钮、输入框、卡片等公共样式；控制页
+  （`style.css`）和标定页（`calibration.css`）都先引入它、只写各自布局，改色只需改令牌。标定页的相机状态卡用
+  左侧色条区分 healthy/stale/missing，检测预览、配置行、复选项同样有悬停反馈。所有可交互元素都有悬停反馈：
+  按钮/标签/分段控件加深底色，输入框描边变蓝，卡片阴影加深，关节、坐标和遥测行高亮。3D 视图中悬停某条机械臂
+  会整体着蓝色并在指针旁显示 arm 和 link 名（夹爪显示为“夹爪”），单击（非拖动）即选中该 arm。
 左右臂按键完全独立，可同时按住：
 
 | 末端轴 | 左臂正/负 | 右臂正/负 |
@@ -233,6 +254,57 @@ RM65_DRY_RUN=1 ./rm65 bt control
 
 第二条仅输出持久 router 的容器执行计划；默认 `REALMAN_BT_DRY_RUN=true` 不会发送 Action goal。
 
+### 行为树视图
+
+`./rm65 bt <tree>` 运行期间，`bt-start` 在宿主网络 :8080 启动只读监视器 `bt_server`，执行器每个 tick
+原子重写一份运行快照（每个节点的 path、类型、名称和 `IDLE/RUNNING/SUCCESS/FAILURE` 状态及失败原因）。
+Web 服务把它代理为同源只读接口 `GET /api/bt/runtime`（`bt_runtime.py`）：去掉事件日志，只保留树结构和状态；
+监视器不可达、快照为空、或超过 `stale_after_sec` 未更新时返回 `{"available": false}`。树退出时
+`bt-start` 会停掉 :8080，所以“可达且有节点”就等价于“有树在运行”。地址和超时在
+`config/ros/realman_web_control.yaml` 的 `behavior_tree_monitor` 中配置，`url` 置空即关闭该视图。
+
+页面每 0.5 s 轮询一次（页面不可见时暂停）：
+
+- **独立卡片**：“行为树”是右列输入模式卡片下方的独立卡片，不在“运动/速度/夹爪/键盘”标签里，切换标签时始终可见。
+  可以从本页启动行为树（见下文“启动行为树”）或有树在运行时卡片出现，两者都不可用时隐藏。树开始运行时卡片短暂高亮，
+  标题旁的圆点随根状态变色、RUNNING 时闪烁；没有树运行时卡片显示启动菜单，根状态为“未运行”。右上角 ▾/▸ 可把卡片
+  收起成标题行（按浏览器记住），收起时仍显示根状态和“终止行为树”。
+- **control 路由树**：识别方式是某个 Fallback/ReactiveFallback 的每个子节点都以 `InputModeGuard` 开头
+  （即 `input_router`）。默认只显示当前输入模式对应的分支（`<active_mode>_branch`，找不到时取 guard
+  成功或正在运行的分支），上方用面包屑列出从根到路由器的祖先及其状态；“显示整棵树”可切换到完整树，此时未使用的
+  输入分支变灰并默认折叠，因为它们的 guard `FAILURE` 是正常路由而不是错误。
+- **其它树**（如 `move.xml`、`three.xml`）：没有路由结构，直接显示整棵树。
+- **折叠**：有子节点的节点可点击三角折叠/展开；IDLE 子树默认折叠，手动选择按节点 path 记住，不会被下一帧快照覆盖。
+  每个节点显示类型图标、节点名（与注册名不同时附注册名）、状态标签，失败节点下方显示 `failure_reason`；
+  根节点的失败原因显示在树上方。
+- **终止行为树**：面板右上角“终止行为树”按钮第一次点击只变为红色“确认终止？”，4 s 内再点一次才发送
+  `{"type":"stop_behavior_tree","request_id":...}`。Web 节点调用 `/realman_bt_executor/shutdown`，等同在终端对
+  `./rm65 bt` 按 Ctrl-C：halt 树、等运动取消排空、executor 退出、router 随 launch 关闭、`bt-start` 归档并关掉
+  :8080，标签随之消失。成功时回 `behavior_tree_stop_result`（`request_id`、`success`、`message`）；没有行为树时
+  回错误 `behavior_tree_unavailable`。机械臂 driver、Web 服务和其它容器不受影响。
+
+### 启动行为树
+
+没有树运行时，“行为树”卡片显示启动菜单：
+
+- **文件列表**：下拉框列出 `config/behavior-trees/` 下所有 `*.xml`（Web 服务直接读取挂载的配置目录，`bt_library.py`），
+  每项显示 XML `<root>` 的 `realman_launch` 和所需 arm；无法解析的 XML 灰显且不可选。所选文件按浏览器记住。
+- **收藏置顶**：点星号收藏/取消。收藏是共享的，写入 `config/web-control/behavior-trees/favorites.yaml`
+  （`realman_bt_favorites.v1`，原子替换），所有浏览器看到同一份；列表先按收藏顺序列出“收藏”，再按文件名列出其它。
+  该目录在 Compose 中与关节记录一样以读写方式挂载给 Web 服务。
+- **真实运动**：勾选框默认勾上（等同生产上的 `REALMAN_BT_DRY_RUN=false`），去掉则以 dry-run 启动。
+- **启动**：第一次点击只变为“确认启动（真实运动）？”/“确认启动（dry-run）？”，4 s 内再点才发送
+  `POST /api/bt/start {"tree", "dry_run"}`。按钮在已有树运行或启动进行中时禁用。启动后显示进度，树的监视器出现即切换到
+  树视图；若 `bt-start` 自行退出（例如某臂 `execute_motion` Action 未就绪），显示退出码和日志末尾若干行。
+
+启动由 bringup 容器里的 `bt_launcher`（`realman_bt`，`config/ros/bt_launcher.yaml`）执行：它只监听
+`127.0.0.1:8781`，Web 服务代理 `GET /status` 与 `POST /start`（写接口与 WebSocket 一样做同源校验，`GET /api/bt/trees`
+返回文件列表和 launcher 状态）。一次启动就是 `./scripts/bt.sh <tree>` 经 `docker exec` 做的事：以同样的 `bt-start`
+环境变量运行容器内的 `bt-start`，arm 和 launch 由 XML 属性决定，输出写到 `logs/bt-launcher/<时间>_<树名>.log`。
+`bt-start` 持有的 `/tmp/realman-bt.lock` 让 launcher 同时识别终端里 `./rm65 bt` 启动的树，不会并发启动第二棵。
+launcher 从不终止任何进程，停止仍走“终止行为树”。`realman_bringup_remote` 默认 `start_bt_launcher:=true`
+（`REALMAN_START_BT_LAUNCHER=false` 可关闭）；`realman_web_control.yaml` 的 `behavior_tree_launcher.url` 置空则隐藏启动菜单。
+
 ## WebSocket 协议
 
 连接 `/ws` 后首先收到 `hello`，其中包含 `read_only=false`、`client_id` 和完整的 `layout`。
@@ -295,8 +367,9 @@ Action 服务和驱动日志，确认轨迹是否仍在控制器中运行。
 `action_state` 的 `state=stopped`、`code=goal_handle_unknown`，并显示“运动已中断，请检查急停状态并恢复机械臂”；
 不会把底层英文异常作为用户提示，也会释放该 Web Action 的占用。这个状态不代表急停已经解除，恢复后仍需按现场流程确认控制柜状态。
 驱动对非阻塞 MOVEL/MOVEJ_P 会保留“提交调用返回前就到达”的成功事件；因此极短位姿运动不会因回调竞态被误判为超时。MOVEJ 仍要求提交返回后再接受事件，以避免复用旧轨迹回调。
-在没有人工改动目标之前，右侧滑条会跟随该 arm 的实时 `joint_state`；一旦人工拖动滑条，该 arm
-的目标值就会保持用户输入，直到再次切换或重置。
+滑条不会随每帧 `joint_state` 移动，而是在两个时机自动执行一次“重置目标”（滑条和目标影子对齐当前实测关节角）：
+页面加载后当前 arm 收到第一帧有效（非全零）`joint_state` 时，以及从其它标签页切回“运动”标签时。
+在已打开的“运动”标签内拖动滑条后，目标保持用户输入，直到切换 arm、切换标签再回来或手动点“重置目标”。
 
 MOVEL/MOVEP 面板有独立的“参考坐标系”选择器。列表由 Web 节点的 `tf2_ros.Buffer` 从
 `/tf` 和 `/tf_static` 发现，只保留能与当前 arm 的 `/{arm}/base_link` 连通的 frame；
@@ -321,7 +394,10 @@ Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条�
 滑轨，但仍可直接发送 `MOVEJ_P` Action。
 
 对于配置的 WORK/TOOL，驱动会在连接时自动将可读的激活坐标失配修复为配置值，并仍要求 `reference_type`/`reference_name` 与已验证的激活坐标
-完全一致。对于任意 TF frame，Web 节点先把位姿转换到 `/{arm}/base_link`，再以
+完全一致。Web 节点接受 manifest 中的默认 WORK/TOOL，以及 `coordinate_state` 中 `work_matched`/`tool_matched`
+为 true 的当前激活坐标：Pika 模式会把控制器切到 `pikabase` 等其他已配置工作坐标，之后网页仍按该激活坐标发送 MoveJ
+和速度命令。都不匹配时返回 `coordinate_mismatch`，并带上原请求的 `request_id`，页面据此解除发送按钮的禁用。
+对于任意 TF frame，Web 节点先把位姿转换到 `/{arm}/base_link`，再以
 `BASE/base` 调用驱动；它不会把任意 TF 名称伪装成 RealMan controller 的 WORK/TOOL。
 TF 查询失败、坐标验证失败、控制器状态不可读、目标不可达、SDK API2 非零或结果超限都会
 返回失败消息。服务边界的单位固定为：关节 degree、位置 m、四元数 WXYZ；SDK 算法内部的
@@ -458,6 +534,20 @@ ros2 topic echo --once /l/cartesian_velocity/state
 `l/base_link`/`r/base_link` 是独立的测量坐标约定，调用方不能把两者的分量直接相加。第一版测量频率
 由驱动状态轮询决定（默认约 10 Hz），后续可替换为 RealMan UDP 实时状态回调而不改变消息契约。
 
+#### 速度曲线
+
+每臂各有“线速度（m/s）”和“角速度（rad/s）”两张滚动曲线图（`velocity_trace.ts`，2D canvas），不再显示数值：
+
+- **线型与颜色**：X 红 / Y 绿 / Z 蓝；同一轴的命令和实际用同一颜色，**实线为实际**（`measured_*`），
+  **虚线为命令**（`limited_*`，即限速后真正送入 SDK 的速度）。
+- **时间窗**：最近 10 s，横轴 −10…0 s 持续滚动，没有新数据时曲线也随时间左移；样本间隔超过 0.6 s 或
+  `measured_valid=false` 时实线断开，不把缺失数据画成零。
+- **纵轴**：以 0 为中心对称，按窗口内命令与实际的最大绝对值 ×1.1 向上取 1/2/2.5/5×10ⁿ；数据变大立即放大，
+  变小需持续 1 s 才缩回，避免抖动。线速度最小 ±0.01 m/s、角速度最小 ±0.02 rad/s，静止时噪声不会撑满坐标轴。
+- **坐标系**：实测固定在 `<arm>/base_link`。BASE 命令直接叠加；WORK 命令用该臂 `coordinate_state` 中同名
+  work 坐标系的 `quaternion_wxyz` 旋转到 base 后再叠加，卡片显示“命令已从 WORK / x 旋转到实测坐标系”；
+  缺少该姿态或命令在 TOOL 坐标系（随末端旋转）时不画虚线，并在卡片上说明原因。
+
 ## 取消与软件停止
 
 “取消 Action”只对发起该 Action 的 WebSocket 客户端有效，调用 `cancel_goal_async()`，
@@ -536,7 +626,8 @@ PYTHONPATH=src/driver/realman_web_control \
 ```
 
 前端源代码在 `src/driver/realman_web_control/web/src/`，控制页面和
-`calibration.html` 标定页面共用一个 WebSocket 服务；配置在
+`calibration.html` 标定页面共用一个 WebSocket 服务。标定页按操作顺序排列：桌面端第一行是三路相机输入状态，
+然后是“保存样本 | 执行标定”、检测预览，最后是标定板配置与实时反馈；配置在
 `config/web-control/vite.config.mjs`。普通 ROS 镜像不依赖 Node，提交的 `static/` 是可复现
 构建产物；源码变更后在仓库 `website/` 目录执行：
 

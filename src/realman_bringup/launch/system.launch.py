@@ -69,6 +69,7 @@ def generate_launch_description():
     coordinates_config_file = LaunchConfiguration("coordinates_config_file")
     motion_config_file = LaunchConfiguration("motion_config_file")
     start_web_control = LaunchConfiguration("start_web_control")
+    start_bt_launcher = LaunchConfiguration("start_bt_launcher")
     start_camera_calibration = LaunchConfiguration("start_camera_calibration")
     camera_calibration_config_file = LaunchConfiguration("camera_calibration_config_file")
     update_layout_after_calibration = LaunchConfiguration("update_layout_after_calibration")
@@ -181,6 +182,11 @@ def generate_launch_description():
                 description="Changingtek gripper topology under root config/ros.",
             ),
             DeclareLaunchArgument(
+                "start_bt_launcher",
+                default_value="false",
+                description="Let the :8765 page start behavior trees (needs bt-start, i.e. the bringup image).",
+            ),
+            DeclareLaunchArgument(
                 "start_web_control",
                 default_value="false",
                 description="Start the authenticated browser WebSocket/action bridge.",
@@ -277,6 +283,13 @@ def generate_launch_description():
                     "calibration_config_file": camera_calibration_config_file,
                     "gripper_config_file": gripper_config_file,
                 }.items(),
+            ),
+            Node(
+                package="realman_bt",
+                executable="bt_launcher",
+                name="bt_launcher",
+                output="screen",
+                condition=IfCondition(start_bt_launcher),
             ),
             Node(
                 package="xbox_controller_driver",

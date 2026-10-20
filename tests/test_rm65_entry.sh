@@ -25,18 +25,29 @@ grep -Fq "realman_bringup_remote" <<<"$output"
 grep -Fq "realman_web_control" <<<"$output"
 
 output="$(RM65_DRY_RUN=1 "$ENTRY" build 2>&1)"
-grep -Fq "build realman_bringup_remote realman_web_control" <<<"$output"
+grep -Fq "docker buildx bake" <<<"$output"
+grep -Fq -- "--allow network.host --load realman_bringup_remote realman_web_control" <<<"$output"
 if grep -Eq " (up|stop|restart) " <<<"$output"; then
   echo "build unexpectedly starts services" >&2
   exit 1
 fi
+
+output="$(cd /tmp && RM65_DRY_RUN=1 "$ENTRY" build rm65_rviz 2>&1)"
+grep -Fq -- "--allow network.host --load rm65_rviz" <<<"$output"
+if grep -Fq "realman_bringup_remote" <<<"$output"; then
+  echo "selected build unexpectedly includes production services" >&2
+  exit 1
+fi
+
+output="$(cd /tmp && RM65_DRY_RUN=1 zsh -c 'source "$1/functions.zsh"; rm65_docker_build rm65_rviz' _ "$ROOT" 2>&1)"
+grep -Fq -- "--allow network.host --load rm65_rviz" <<<"$output"
 
 output="$(RM65_DRY_RUN=1 "$ENTRY" status 2>&1)"
 grep -Fq "status" <<<"$output"
 
 output="$("$ENTRY" help 2>&1)"
 grep -Fq "build" <<<"$output"
-grep -Fq "up [desktop|model]" <<<"$output"
+grep -Fq "up [desktop|model|policy]" <<<"$output"
 
 if "$ENTRY" does-not-exist >/dev/null 2>&1; then
   echo "invalid command unexpectedly succeeded" >&2

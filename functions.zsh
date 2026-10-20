@@ -65,7 +65,7 @@ rm65_docker_build() {
     services=("$@")
   fi
 
-  _rm65_compose build "${services[@]}"
+  "$RM65_PROJECT_ROOT/rm65" build "${services[@]}"
 }
 
 rm65_docker_rviz() {

@@ -8,3 +8,4 @@ realman_bt_executor:
     autostart: true
     stop_on_terminal: false
     exit_on_terminal: false
+    shutdown_drain_timeout_sec: 10.0  # ~/shutdown waits this long for MoveJ/velocity cancels before exiting.

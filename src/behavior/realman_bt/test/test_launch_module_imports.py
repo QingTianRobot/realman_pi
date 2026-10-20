@@ -23,6 +23,14 @@ def test_control_router_launches_keyboard_and_pika_routers():
     assert "keyboard_router" in source
 
 
+def test_control_router_launch_shuts_down_when_the_executor_exits():
+    # A Web-requested executor shutdown must also stop the routers and let bt-start finish.
+    source = (LAUNCH / "control_router.launch.py").read_text(encoding="utf-8")
+    assert "OnProcessExit(" in source
+    assert "target_action=executor" in source
+    assert "Shutdown(" in source
+
+
 def _load_launch_module():
     import importlib.util
     import sys

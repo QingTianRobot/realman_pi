@@ -172,6 +172,8 @@ services:
       # Web control persists operator-created records here when enabled; keep
       # all other launch/config YAML read-only inside the container.
       - ./config/web-control/joint-records:/opt/rm65_ws/config/web-control/joint-records:rw
+      # Shared behavior-tree favorites written by the :8765 page.
+      - ./config/web-control/behavior-trees:/opt/rm65_ws/config/web-control/behavior-trees:rw
       # The directory mount lets the calibration node atomically replace the
       # layout and create its .bak file. Node code writes only three_robots.yaml.
       - ./config/ros:/opt/rm65_ws/config/ros:rw
@@ -196,6 +198,7 @@ services:
       - use_gui:=${REALMAN_USE_GUI:-false}
       - use_rviz:=${REALMAN_USE_RVIZ:-false}
       - start_web_control:=${REALMAN_START_WEB_CONTROL:-false}
+      - start_bt_launcher:=${REALMAN_START_BT_LAUNCHER:-false}
       - start_camera_calibration:=${REALMAN_START_CAMERA_CALIBRATION:-false}
       - update_layout_after_calibration:=${REALMAN_UPDATE_LAYOUT_AFTER_CALIBRATION:-true}
       - wait_for_joy_device:=${REALMAN_WAIT_FOR_JOY_DEVICE:-false}
@@ -223,6 +226,8 @@ services:
       # it needs write access only to confirmed joint record files.
       - ./config:/opt/rm65_ws/config:ro
       - ./config/web-control/joint-records:/opt/rm65_ws/config/web-control/joint-records:rw
+      # Shared behavior-tree favorites written by the :8765 page.
+      - ./config/web-control/behavior-trees:/opt/rm65_ws/config/web-control/behavior-trees:rw
       - ./config/ros:/opt/rm65_ws/config/ros:rw
       - ./logs:/opt/rm65_ws/logs
     # Keep the production ROS graph available after host reboot, Docker daemon
@@ -245,6 +250,8 @@ services:
       - use_gui:=false
       - use_rviz:=false
       - start_web_control:=${REALMAN_START_WEB_CONTROL:-false}
+      # Localhost-only helper that lets the :8765 page start behavior trees.
+      - start_bt_launcher:=${REALMAN_START_BT_LAUNCHER:-true}
       # Keep the camera-health publisher present so the Web calibration page
       # can show all three ROS 2 image inputs during normal production bringup.
       - start_camera_calibration:=true
@@ -260,6 +267,8 @@ services:
       # rest of the root config tree remains read-only.
       - ./config:/opt/rm65_ws/config:ro
       - ./config/web-control/joint-records:/opt/rm65_ws/config/web-control/joint-records:rw
+      # Shared behavior-tree favorites written by the :8765 page.
+      - ./config/web-control/behavior-trees:/opt/rm65_ws/config/web-control/behavior-trees:rw
       - ./logs:/opt/rm65_ws/logs
     command:
       - ros2

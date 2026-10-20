@@ -134,3 +134,19 @@ def test_list_is_newest_first_and_filters_by_kind(store):
 def test_unknown_kinds_are_refused(store):
     with pytest.raises(KeyError):
         store.start("format_disk", {})
+
+
+def test_cancel_before_pid_written_still_completes_as_cancelled(store):
+    job = store.start("pull", {}, target="fake_steps:ok")
+    assert store.cancel(job.id)  # may fire before child writes its pid
+    status = store.wait(job.id, lambda line: None)
+    assert status["state"] == "cancelled"
+
+
+def test_cancel_twice_still_ends_cancelled(store, tmp_path):
+    job = store.start("train", {"flag": str(tmp_path / "f")}, target="fake_steps:sleep")
+    wait_for(tmp_path / "f")
+    assert store.cancel(job.id)
+    assert store.cancel(job.id)  # second cancel; fire-once handler means SIG_IGN, no exception on cleanup
+    status = store.wait(job.id, lambda line: None)
+    assert status["state"] == "cancelled"

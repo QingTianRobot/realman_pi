@@ -47,7 +47,7 @@ def now() -> str:
 
 
 def write_json(path: Path, data: dict) -> None:
-    tmp = path.with_name(path.name + ".tmp")
+    tmp = path.with_name(f"{path.name}.{os.getpid()}.{secrets.token_hex(2)}.tmp")
     tmp.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
     os.replace(tmp, path)
 
@@ -125,12 +125,15 @@ class JobStore:
     def _lock_path(self, kind: str) -> Path:
         return self.root / "locks" / f"{kind}.lock"
 
-    def _child_env(self) -> dict[str, str]:
+    def _child_env(self, lock_fd: int) -> dict[str, str]:
         env = {**os.environ, **self._env}
         env["PYTHONPATH"] = os.pathsep.join(p for p in (PACKAGE_PARENT, env.get("PYTHONPATH", "")) if p)
+        env["REALMAN_JOB_LOCK_FD"] = str(lock_fd)
         return env
 
     def start(self, kind: str, params: dict, *, target: str | None = None) -> Job:
+        if kind not in STEPS:
+            raise KeyError(kind)
         target = target or STEPS[kind]
         fd = os.open(self._lock_path(kind), os.O_CREAT | os.O_RDWR, 0o644)
         try:
@@ -138,9 +141,11 @@ class JobStore:
                 fcntl.flock(fd, fcntl.LOCK_EX | fcntl.LOCK_NB)
             except BlockingIOError:
                 running = self.running(kind)
-                raise JobConflict(
-                    f"a {kind} job is already running: {running.id if running else '(starting)'}"
-                ) from None
+                if running is not None:
+                    raise JobConflict(f"a {kind} job is already running: {running.id}") from None
+                # Lock is held but no active job found: the child is in its final exit path.
+                # Block until it releases the lock (sub-second in practice).
+                fcntl.flock(fd, fcntl.LOCK_EX)
             job_id = f"{datetime.datetime.now():%Y%m%d-%H%M%S}-{kind}-{secrets.token_hex(2)}"
             folder = self.root / "jobs" / job_id
             folder.mkdir()
@@ -157,7 +162,7 @@ class JobStore:
                     stderr=subprocess.STDOUT,
                     start_new_session=True,
                     pass_fds=(fd,),
-                    env=self._child_env(),
+                    env=self._child_env(fd),
                 )
             self._children.append(proc)
             return Job(folder)
@@ -207,19 +212,28 @@ class JobStore:
         for job in self.list():
             status = job.status()
             if self._dead(status):
-                status.update(state="interrupted", ended=now(), error="the job process ended without a final status")
-                write_json(job.dir / "status.json", status)
+                # Re-read right before writing to avoid a race with the child finishing
+                fresh = job.status()
+                if fresh.get("state") not in ACTIVE:
+                    continue
+                fresh.update(state="interrupted", ended=now(), error="the job process ended without a final status")
+                write_json(job.dir / "status.json", fresh)
                 interrupted.append(job.id)
         return interrupted
 
     def cancel(self, job_id: str) -> bool:
-        status = self.get(job_id).status()
-        if status.get("state") not in ACTIVE or not status.get("pid") or self._dead(status):
+        job = self.get(job_id)
+        status = job.status()
+        if status.get("state") not in ACTIVE:
             return False
-        try:
-            os.killpg(int(status["pid"]), signal.SIGTERM)
-        except ProcessLookupError:
-            return False
+        # Write marker so the child sees it even if it has not yet registered a pid
+        (job.dir / "cancel").touch()
+        pid = status.get("pid")
+        if pid and not self._dead(status):
+            try:
+                os.killpg(int(pid), signal.SIGTERM)
+            except ProcessLookupError:
+                pass
         return True
 
     def wait(self, job_id: str, on_line: Callable[[str], None], poll: float = 0.3) -> dict:
@@ -251,17 +265,31 @@ class JobStore:
 
 def run_job(folder: str | Path) -> int:
     folder = Path(folder)
+
+    # Mark the inherited lock fd non-inheritable so grandchildren don't hold it
+    lock_fd_str = os.environ.get("REALMAN_JOB_LOCK_FD")
+    if lock_fd_str is not None:
+        try:
+            os.set_inheritable(int(lock_fd_str), False)
+        except OSError:
+            pass
+
     status_path = folder / "status.json"
     spec = _read_json(folder / "params.json")
     status = _read_json(status_path)
-    status.update(state="running", pid=os.getpid(), proc_start=process_start(os.getpid()), started=now())
-    write_json(status_path, status)
 
+    # Install signal handlers BEFORE writing the running status so a cancel
+    # arriving in that window uses the handler rather than the default action.
     def on_signal(signum, frame):
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         raise JobCancelled()
 
     signal.signal(signal.SIGTERM, on_signal)
     signal.signal(signal.SIGINT, on_signal)
+
+    status.update(state="running", pid=os.getpid(), proc_start=process_start(os.getpid()), started=now())
+    write_json(status_path, status)
 
     def line(message: str) -> None:
         print(f"{datetime.datetime.now():%H:%M:%S} {message}", flush=True)
@@ -271,6 +299,9 @@ def run_job(folder: str | Path) -> int:
         write_json(status_path, status)
 
     try:
+        # Check cancel file before running the step (handles cancels in starting state)
+        if (folder / "cancel").exists():
+            raise JobCancelled()
         module, function = spec["target"].split(":")
         step = getattr(importlib.import_module(module), function)
         status.update(state="succeeded", result=step(spec["params"], StepLog(line, progress)))
@@ -286,4 +317,10 @@ def run_job(folder: str | Path) -> int:
         status.update(state="failed", error=f"{type(error).__name__}: {error}")
     status["ended"] = now()
     write_json(status_path, status)
+    # Release the lock fd explicitly so the kind slot is freed before Python runtime teardown.
+    if lock_fd_str is not None:
+        try:
+            os.close(int(lock_fd_str))
+        except OSError:
+            pass
     return 0 if status["state"] == "succeeded" else 1

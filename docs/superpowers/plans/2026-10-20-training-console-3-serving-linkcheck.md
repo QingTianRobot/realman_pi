@@ -19,7 +19,7 @@ Spec: `docs/superpowers/specs/2026-10-20-training-console-design.md` (section "�
 - Pika locator floods the Wi-Fi with small DDS packets (~2.6 MB/s, >18k pkt/s); then bulk TCP realman_ts → server5090 collapses to 0.1 MB/s while ping looks fine. Gate used on 10-14…10-19: Wi-Fi < 600 KB/s (500 on 10-14), bulk ≥ 2 MB/s, no `pika_*` nodes; 1400-byte pings showed 6 % loss when flooded.
 - realman_ts cannot reach GitHub; server5090 reaches it as `ssh realman_local`.
 
-**To confirm in Task 6's read-only check (config keys, not code):** the robot ROS container name (`serving.ros_container`, default `realman_pi-realman_bringup-1`), the serve service name (`serving.service`, default `openpi`) and whether the serve container listens on the host port (`serving.container_port`, `0` = same as `port`), and the address realman_ts sees in `$SSH_CLIENT` (must be server5090's LAN address, not Tailscale; else set `serving.server_host` from `.env`-style local config, never in the repo).
+**Verified on 2026-10-19 (parent session's live deployment):** ROS graph container `realman_pi-realman_bringup_remote-1` (the ros2 CLI daemon hangs: the probe uses rclpy directly), serve service `openpi`, serve_policy listens on `0.0.0.0:8000` inside the container (host port mapped from `OPENPI_POLICY_PORT`), Wi-Fi interface `wlx70f11c299f12` (auto-detected as the first `wl*`), the BT publishes `input_mode_state` transient-local depth 1 only on change (the probe subscribes transient-local and gets the current state at once). **Still to confirm in Task 6's read-only check:** the address realman_ts sees in `$SSH_CLIENT` (must be server5090's LAN address, not Tailscale; else set `serving.server_host` from `.env`-style local config, never in the repo).
 
 ## Global Constraints
 
@@ -92,7 +92,8 @@ def test_serving_defaults_are_the_deployed_chain():
     assert s.model == "pi05_realman_multitask_action_only/m_multitask_b16_2gpu"
     assert s.bridge_container == "realman_pi-policy_bridge-1" and s.bridge_service == "policy_bridge"
     assert s.policy_modes == ("policy",)
-    assert s.warmup_rounds == 2
+    assert s.warmup_rounds == 2 and s.container_port == 8000
+    assert s.ros_container == "realman_pi-realman_bringup_remote-1"
 
 
 def test_linkcheck_thresholds_come_from_the_live_runs():
@@ -148,7 +149,7 @@ class ServingConfig:
     checkpoint: str = ""  # "" = the latest numbered checkpoint of the run
     gpu: int = 2
     port: int = 18000  # must equal network.server_port of the robot's policy_bridge.yaml
-    container_port: int = 0  # port inside the serve container; 0 = same as port (host networking)
+    container_port: int = 8000  # serve_policy listens on 0.0.0.0:8000 inside; OPENPI_POLICY_PORT maps the host port
     start_timeout_sec: int = 600  # loading the checkpoint before the port listens
     warmup_rounds: int = 2  # the first inference after a restart JIT-compiles ~26 s
     warmup_timeout_sec: int = 180
@@ -157,7 +158,7 @@ class ServingConfig:
     bridge_container: str = "realman_pi-policy_bridge-1"
     bridge_config: str = "config/ros/policy_bridge.yaml"  # relative to robot_repo
     bridge_start_timeout_sec: int = 90
-    ros_container: str = "realman_pi-realman_bringup-1"  # any running ROS container on the robot's domain
+    ros_container: str = "realman_pi-realman_bringup_remote-1"  # any running ROS container on the robot's domain
     ros_setup: str = "source /opt/ros/humble/setup.bash && source /opt/rm65_ws/install/setup.bash"
     server_host: str = ""  # address the bridge uses for server5090; "" = what realman_ts sees in $SSH_CLIENT
     mode_wait_sec: float = 10.0  # input_mode_state is not published at a fixed high rate
@@ -242,7 +243,7 @@ In `config/training/training_console.yaml`, append (inside `training_console:`, 
     checkpoint: ""                  # "" = latest numbered checkpoint
     gpu: 2
     port: 18000                     # = network.server_port in the robot's config/ros/policy_bridge.yaml
-    container_port: 0               # 0 = same as port
+    container_port: 8000            # inside the container ("server listening on 0.0.0.0:8000"); 0 = same as port
     start_timeout_sec: 600
     warmup_rounds: 2                # first inference after a restart JIT-compiles ~26 s
     warmup_timeout_sec: 180
@@ -251,7 +252,7 @@ In `config/training/training_console.yaml`, append (inside `training_console:`, 
     bridge_container: realman_pi-policy_bridge-1
     bridge_config: config/ros/policy_bridge.yaml
     bridge_start_timeout_sec: 90
-    ros_container: realman_pi-realman_bringup-1
+    ros_container: realman_pi-realman_bringup_remote-1
     ros_setup: source /opt/ros/humble/setup.bash && source /opt/rm65_ws/install/setup.bash
     server_host: ""                 # "" = the address realman_ts sees in $SSH_CLIENT (never write an IP here)
     mode_wait_sec: 10
@@ -465,7 +466,7 @@ def test_ros_probe_sends_the_script_and_reads_the_last_json_line():
     r = robot(fake)
     assert r.bt_mode()["active_mode"] == "none"
     command = fake.calls[-1][-1]
-    assert command.startswith("docker exec -i realman_pi-realman_bringup-1 bash -lc ")
+    assert command.startswith("docker exec -i realman_pi-realman_bringup_remote-1 bash -lc ")
     assert "mode=10.0" in command
     assert fake.inputs[-1] == script("ros_probe")
 
@@ -664,7 +665,8 @@ class Robot:
 
 usage: python3 - REQUEST... < ros_probe.py
   nodes          node names on the graph (after 2 s of discovery)
-  mode=SEC       last /realman_bt_executor/input_mode_state within SEC (null = none, the BT is not running)
+  mode=SEC       current /realman_bt_executor/input_mode_state (null = no executor on the graph;
+                 {"unknown": true} = the executor runs but sent nothing within SEC)
   stats=SEC      last /policy/stats values of the policy_bridge status within SEC (null = none)
   prompt=TEXT    publish TEXT on /policy/prompt until /policy/stats reports it (10 s at most)
 """
@@ -693,13 +695,20 @@ def nodes(node):
 
 
 def mode(node, seconds):
+    from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
     from realman_msgs.msg import InputModeState
 
+    # The executor publishes transient-local depth 1, only on change: a transient-local subscription gets the
+    # current state at once.
+    qos = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
     box = []
-    sub = node.create_subscription(InputModeState, MODE_TOPIC, box.append, 10)
+    sub = node.create_subscription(InputModeState, MODE_TOPIC, box.append, qos)
     spin_until(node, lambda: box, seconds)
     node.destroy_subscription(sub)
     if not box:
+        names = [name for name, _ in node.get_node_names_and_namespaces()]
+        if "realman_bt_executor" in names:
+            return {"unknown": True, "detail": "realman_bt_executor is running but sent no input_mode_state"}
         return None
     m = box[-1]
     return {"requested_mode": m.requested_mode, "selected_mode": m.selected_mode, "active_mode": m.active_mode,
@@ -1401,7 +1410,7 @@ def test_start_runs_the_chain_in_order(config):
     assert f"POLICY_WS_HOST={SERVER_ADDR} " in fake.calls[bridge][-1]
     warm_cmd = fake.calls[warm][-1]
     assert fake.calls[warm][:4] == ["docker", "exec", "-i", SERVE_CONTAINER]
-    assert "127.0.0.1 18000 2 " in warm_cmd and PLACE in warm_cmd
+    assert "127.0.0.1 8000 2 " in warm_cmd and PLACE in warm_cmd
     assert result["warmup_ms"] == [900.0, 95.0] and result["prompt"] == PLACE and result["linkcheck_ok"] is True
     record = serving_state.load(config)
     assert record["prompt"] == PLACE and record["step"] == 29999 and record["gpu"] == 2
@@ -1426,6 +1435,22 @@ def test_start_refuses_while_the_bt_is_in_policy_mode(config, field):
     chain.mode[field] = "policy"
     with pytest.raises(StepFailed, match="behaviour tree is in policy mode"):
         start(config, chain)
+
+
+def test_start_and_stop_refuse_when_the_bt_mode_is_unknown(config):
+    chain = FakeChain()
+    chain.mode = {"unknown": True, "detail": "realman_bt_executor is running but sent no input_mode_state"}
+    with pytest.raises(StepFailed, match="cannot tell the behaviour tree's mode"):
+        start(config, chain)
+    with pytest.raises(StepFailed, match="cannot tell"):
+        serving.stop({"config": str(config.source), "action": "stop"}, RecordingLog(), chain.runner())
+
+
+def test_no_executor_on_the_graph_is_not_a_refusal(config):
+    chain = FakeChain()
+    chain.mode = None
+    result, _, log = start(config, chain)
+    assert "behaviour tree is not running" in log.text() and result["prompt"] == PLACE
 
 
 def test_start_refuses_a_gpu_held_by_someone_else(config):
@@ -1718,8 +1743,10 @@ def container_inspect(runner: Runner, name: str) -> dict | None:
 def _guard_bt(robot: Robot, sc: ServingConfig, log) -> dict | None:
     mode = robot.bt_mode()
     if mode is None:
-        log(f"no input_mode_state within {sc.mode_wait_sec:g} s: the behaviour tree is not running")
+        log("no realman_bt_executor on the ROS graph: the behaviour tree is not running")
         return None
+    if mode.get("unknown"):
+        raise StepFailed(f"cannot tell the behaviour tree's mode ({mode.get('detail')}); not touching the chain")
     modes = {mode.get(k) for k in ("requested_mode", "selected_mode", "active_mode")}
     if modes & set(sc.policy_modes):
         raise StepFailed(

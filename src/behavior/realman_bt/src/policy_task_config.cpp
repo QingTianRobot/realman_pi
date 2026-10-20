@@ -105,6 +105,13 @@ void PolicyTaskConfig::validate() const {
   require(detection.roi_xywh[0] >= 0 && detection.roi_xywh[1] >= 0 && detection.roi_xywh[2] > 0 &&
               detection.roi_xywh[3] > 0,
           "policy_task.object_detection.roi_xywh needs x, y >= 0 and width, height > 0");
+  require(detection.exclude_xywh.size() % 4 == 0,
+          "policy_task.object_detection.exclude_xywh must hold x, y, width, height per rectangle");
+  for (std::size_t i = 0; i + 3 < detection.exclude_xywh.size(); i += 4) {
+    require(detection.exclude_xywh[i] >= 0 && detection.exclude_xywh[i + 1] >= 0 &&
+                detection.exclude_xywh[i + 2] > 0 && detection.exclude_xywh[i + 3] > 0,
+            "policy_task.object_detection.exclude_xywh needs x, y >= 0 and width, height > 0");
+  }
   require(detection.min_channel >= 0 && detection.min_channel <= 255,
           "policy_task.object_detection.min_channel must be 0..255");
   require(detection.max_chroma >= 0 && detection.max_chroma <= 255,

@@ -61,6 +61,16 @@ class Reader {
     return value.get<std::vector<std::string>>();
   }
 
+  std::vector<int> integers(const std::string& key, const std::vector<int>& fallback) {
+    const auto value = declare(
+        key, rclcpp::ParameterValue(std::vector<int64_t>(fallback.begin(), fallback.end())));
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_INTEGER_ARRAY) {
+      throw std::invalid_argument(key + " must be a list of integers");
+    }
+    const auto numbers = value.get<std::vector<int64_t>>();
+    return std::vector<int>(numbers.begin(), numbers.end());
+  }
+
   std::array<int, 4> fourIntegers(const std::string& key, const std::array<int, 4>& fallback) {
     const auto value = declare(
         key, rclcpp::ParameterValue(std::vector<int64_t>(fallback.begin(), fallback.end())));
@@ -187,6 +197,8 @@ PolicyTaskConfig declareAndLoadPolicyTaskConfig(rclcpp::Node& node) {
       read.text(p + "object_detection.image_topic", detection.image_topic);
   config.object_detection.roi_xywh =
       read.fourIntegers(p + "object_detection.roi_xywh", detection.roi_xywh);
+  config.object_detection.exclude_xywh =
+      read.integers(p + "object_detection.exclude_xywh", detection.exclude_xywh);
   config.object_detection.min_channel =
       read.integer(p + "object_detection.min_channel", detection.min_channel);
   config.object_detection.max_chroma =

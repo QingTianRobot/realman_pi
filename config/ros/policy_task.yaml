@@ -136,16 +136,20 @@ realman_bt_executor:
       # green mat in the 640x480 image (pixels: x, y, width, height). A pixel is white when its smallest RGB channel is
       # at least min_channel and max-min of its channels is at most max_chroma; it counts only if its whole
       # erode_px x erode_px square is white, which removes the thin white cables. min_pixels such pixels = an object is
-      # left. Measured 2026-10-20 on recorded D435 frames: adapters 110-170 per channel, mat below 40, one adapter keeps
-      # 100-500 pixels, cables 0. The image used is the first one received settle_sec after the check started (the
+      # left. Measured 2026-10-20: recorded frames had adapters at 110-170 per channel, the live frame after the redeploy
+      # 215-250 (brighter); mat below 70; one adapter keeps 245-560 pixels, a coiled cable up to 73, so 150. exclude_xywh
+      # (x, y, width, height per rectangle, flattened) removes the ceiling light's reflection on the glossy mat, which is as
+      # white as an adapter (live frame: x 388-460, y 176-350 after erosion); an object lying inside it is not seen. The
+      # image used is the first one received settle_sec after the check started (the
       # arm has parked by then); none within timeout_sec more fails the task. Re-measure after moving the camera.
       object_detection:
         image_topic: /camera_global/d435/color/image_raw
         roi_xywh: [235, 125, 250, 230]
+        exclude_xywh: [392, 170, 75, 185]
         min_channel: 90
         max_chroma: 40
         erode_px: 9
-        min_pixels: 80
+        min_pixels: 150
         settle_sec: 1.0
         timeout_sec: 5.0
       # After the stop calls, wait this long for the router to release its velocity session (its input_timeout_ms is

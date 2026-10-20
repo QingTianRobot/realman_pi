@@ -17,6 +17,7 @@ import uuid
 
 import yaml
 
+from .bt_runtime import UNAVAILABLE as BT_RUNTIME_UNAVAILABLE, compact_runtime_snapshot
 from .model_manifest import resolve_model_asset
 from .protocol import ProtocolError, parse_message
 
@@ -30,6 +31,10 @@ class WebServerConfig:
     max_message_bytes: int
     discovery_period_sec: float
     web_override_timeout_sec: float
+    # Read-only behavior-tree monitor proxied at /api/bt/runtime; empty disables it.
+    bt_monitor_url: str = ""
+    bt_monitor_timeout_sec: float = 0.5
+    bt_monitor_stale_after_sec: float = 5.0
 
 
 def load_server_config(path: str | Path) -> WebServerConfig:
@@ -48,6 +53,20 @@ def load_server_config(path: str | Path) -> WebServerConfig:
                 or not math.isfinite(value) or value <= 0):
             raise ValueError(f"input_mode.{field} must be finite and positive")
         timing[field] = float(value)
+    bt_monitor = document.get("behavior_tree_monitor", {})
+    if not isinstance(bt_monitor, dict):
+        raise ValueError("behavior_tree_monitor must be a mapping")
+    bt_monitor_url = bt_monitor.get("url", "")
+    if not isinstance(bt_monitor_url, str) or (
+        bt_monitor_url and urlsplit(bt_monitor_url).scheme not in ("http", "https")
+    ):
+        raise ValueError("behavior_tree_monitor.url must be an http(s) URL or empty")
+    for field, default in (("timeout_sec", 0.5), ("stale_after_sec", 5.0)):
+        value = bt_monitor.get(field, default)
+        if (isinstance(value, bool) or not isinstance(value, (int, float))
+                or not math.isfinite(value) or value <= 0):
+            raise ValueError(f"behavior_tree_monitor.{field} must be finite and positive")
+        timing[f"bt_monitor_{field}"] = float(value)
     bind_host = server.get("bind_host")
     origins = server.get("allowed_origins")
     if not isinstance(bind_host, str) or not bind_host:
@@ -62,6 +81,7 @@ def load_server_config(path: str | Path) -> WebServerConfig:
         allowed_origins=tuple(origins),
         max_clients=int(server.get("max_clients", 8)),
         max_message_bytes=int(server.get("max_message_bytes", 65536)),
+        bt_monitor_url=bt_monitor_url.rstrip("/"),
         **timing,
     )
     if not 1 <= config.port <= 65535:
@@ -104,6 +124,7 @@ class WebControlServer:
         self._startup_error: BaseException | None = None
         self._clients: dict[str, Any] = {}
         self._runner: Any = None
+        self._bt_session: Any = None
 
     @property
     def read_only(self) -> bool:
@@ -167,6 +188,7 @@ class WebControlServer:
         app = web.Application(client_max_size=self.config.max_message_bytes)
         app.router.add_get("/healthz", self._health)
         app.router.add_get("/api/layout", self._layout)
+        app.router.add_get("/api/bt/runtime", self._bt_runtime)
         app.router.add_get("/api/calibration", self._calibration)
         app.router.add_get("/api/calibration/sessions", self._calibration_sessions)
         app.router.add_delete(
@@ -188,6 +210,9 @@ class WebControlServer:
                 *(client.close(code=1001, message=b"server shutdown") for client in clients),
                 return_exceptions=True,
             )
+        if self._bt_session is not None:
+            await self._bt_session.close()
+            self._bt_session = None
         if self._runner is not None:
             await self._runner.cleanup()
             self._runner = None
@@ -201,6 +226,33 @@ class WebControlServer:
         from aiohttp import web
 
         return web.json_response(self.manifest)
+
+    async def _bt_runtime(self, _request: Any) -> Any:
+        """Proxy the executor's runtime snapshot; any failure reads as "no tree running"."""
+        import time
+
+        import aiohttp
+        from aiohttp import web
+
+        headers = {"Cache-Control": "no-store"}
+        if not self.config.bt_monitor_url:
+            return web.json_response(BT_RUNTIME_UNAVAILABLE, headers=headers)
+        if self._bt_session is None:
+            self._bt_session = aiohttp.ClientSession(
+                timeout=aiohttp.ClientTimeout(total=self.config.bt_monitor_timeout_sec)
+            )
+        try:
+            async with self._bt_session.get(f"{self.config.bt_monitor_url}/api/runtime") as response:
+                if response.status != 200:
+                    return web.json_response(BT_RUNTIME_UNAVAILABLE, headers=headers)
+                document = await response.json(content_type=None)
+        except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
+            # bt-start stops the monitor when the tree exits, so a refused connection is normal.
+            return web.json_response(BT_RUNTIME_UNAVAILABLE, headers=headers)
+        payload = compact_runtime_snapshot(
+            document, int(time.time() * 1000), int(self.config.bt_monitor_stale_after_sec * 1000)
+        )
+        return web.json_response(payload, headers=headers)
 
     async def _calibration(self, _request: Any) -> Any:
         from aiohttp import web

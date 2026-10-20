@@ -17,3 +17,11 @@ server:
 input_mode:
   discovery_period_sec: 1.0  # Seconds between bounded router service probes.
   web_override_timeout_sec: 5.0  # No Web Action is sent after this wait expires.
+
+# Read-only behavior-tree view on :8765. bt-start runs the executor's monitor on
+# this port (BT_SERVER_PORT) while a tree is loaded; the Web server proxies its
+# /api/runtime so the page shows the tree only while one is running.
+behavior_tree_monitor:
+  url: http://127.0.0.1:8080  # Empty string disables the tree view.
+  timeout_sec: 0.5  # Per-request limit; an unreachable monitor reads as "no tree".
+  stale_after_sec: 5.0  # Hide snapshots the executor has not rewritten for this long.

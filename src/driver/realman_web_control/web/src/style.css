@@ -62,6 +62,48 @@ canvas { display: block; width: 100%; height: 100%; }
 .control-tabs button[hidden] { display: none; }
 .control-tabs button:hover:not(.selected) { background: var(--btn-bg-hover); color: var(--btn-content); }
 .control-tabs button.selected { background: var(--primary); color: #fff; box-shadow: 0 4px 12px oklch(0.6 0.14 var(--hue) / 0.25); }
+.control-tabs button { position: relative; padding: 0 4px; white-space: nowrap; }
+.control-tabs button .tab-dot { margin-left: 4px; }
+.tab-dot { display: inline-block; width: 7px; height: 7px; margin-left: 6px; border-radius: 50%; background: var(--line-strong); vertical-align: middle; }
+.tab-dot.bt-dot-running { background: var(--primary); animation: bt-pulse 1.4s ease-in-out infinite; }
+.tab-dot.bt-dot-success { background: var(--ok); }
+.tab-dot.bt-dot-failure { background: var(--danger); }
+.control-tabs button.tab-attention:not(.selected) { background: var(--btn-bg-hover); color: var(--btn-content); box-shadow: 0 0 0 2px var(--focus-ring); }
+@keyframes bt-pulse { 0%, 100% { opacity: 1; } 50% { opacity: .35; } }
+.bt-status { display: inline-block; padding: 2px 8px; border-radius: 999px; background: var(--btn-bg); color: var(--text-3); font-size: 9px; font-weight: 800; letter-spacing: .06em; white-space: nowrap; }
+.bt-status.bt-running { background: var(--btn-bg-hover); color: var(--primary-strong); }
+.bt-status.bt-success { background: var(--ok-bg); color: var(--ok); }
+.bt-status.bt-failure { background: var(--danger-bg); color: var(--danger); }
+.bt-status.bt-skipped { background: var(--card-sub); color: var(--text-3); }
+.bt-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: -4px 0 8px; color: var(--text-3); font-size: 10px; }
+.bt-breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-bottom: 8px; padding: 6px 8px; border-radius: 10px; background: var(--card-sub); font-size: 10px; }
+.bt-crumb { display: inline-flex; align-items: center; gap: 5px; }
+.bt-crumb-sep { color: var(--text-3); }
+.bt-tree, .bt-children { list-style: none; margin: 0; padding: 0; }
+.bt-tree { padding: 6px; border: 1px solid var(--line); border-radius: 12px; background: var(--card-bg); }
+.bt-children { margin-left: 11px; padding-left: 10px; border-left: 1px dashed var(--line-strong); }
+.bt-row { display: flex; align-items: center; gap: 6px; min-height: 26px; margin: 1px 0; padding: 2px 6px; border-radius: 8px; transition: background-color .15s ease; }
+.bt-row:hover { background: var(--card-hover); }
+.bt-node[data-status="RUNNING"] > .bt-row { background: oklch(0.96 0.03 var(--hue)); }
+.bt-node[data-status="FAILURE"] > .bt-row .bt-name { color: var(--danger); }
+.bt-node[data-status="IDLE"] > .bt-row .bt-name { color: var(--text-3); }
+.bt-node.bt-muted > .bt-row { opacity: .55; }
+.bt-node.bt-muted > .bt-row .bt-name { color: var(--text-3); }
+.bt-node.bt-muted > .bt-row .bt-status { background: var(--btn-bg); color: var(--text-3); }
+.bt-node.bt-muted > .bt-row:hover { opacity: 1; }
+.bt-caret { display: grid; place-items: center; width: 18px; height: 18px; padding: 0; border: 0; border-radius: 5px; background: transparent; color: var(--text-2); font-size: 11px; }
+.bt-caret:hover { background: var(--btn-bg-hover); color: var(--btn-content); }
+.bt-caret-spacer { width: 18px; flex: none; }
+.bt-icon { width: 14px; color: var(--text-3); font-size: 10px; text-align: center; flex: none; }
+.bt-kind-control > .bt-row .bt-icon { color: var(--primary); }
+.bt-kind-decorator > .bt-row .bt-icon { color: oklch(0.6 0.13 300); }
+.bt-kind-condition > .bt-row .bt-icon { color: var(--warn); }
+.bt-name { min-width: 0; overflow: hidden; color: var(--text); font-size: 11px; font-weight: 700; text-overflow: ellipsis; white-space: nowrap; }
+.bt-type { color: var(--text-3); font-size: 9px; white-space: nowrap; }
+.bt-row .bt-status { margin-left: auto; }
+.bt-reason { margin: 0 0 4px 44px; color: var(--danger); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
+.bt-root-reason { margin: 0 0 8px; padding: 6px 8px; border-radius: 8px; background: var(--danger-bg); }
+.bt-empty { padding: 10px; color: var(--text-3); font-size: 11px; text-align: center; }
 .status-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
 .status-row > .panel { min-width: 0; }
 .panel-section { padding: 16px 18px; }

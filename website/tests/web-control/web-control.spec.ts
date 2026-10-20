@@ -465,6 +465,95 @@ test("resets the joint target to the live pose on load and when reopening the mo
   await expect(page.locator("#joint-value-0")).toHaveText(/^10\.0\d°$/);
 });
 
+function btNode(path: string, kind: string, registration: string, name: string, status: string, failure_reason = "") {
+  return { path, kind, registration_name: registration, name, status, failure_reason };
+}
+// Shape of the live control.xml snapshot on realman_ts (policy mode active), trimmed.
+const controlRuntime = {
+  available: true, tree_id: "control", sequence: 7, timestamp_ms: 1, root_status: "RUNNING", failure_reason: "",
+  nodes: [
+    btNode("0", "Control", "ReactiveSequence", "input_control", "RUNNING"),
+    btNode("0/0", "Action", "SelectInputMode", "SelectInputMode", "SUCCESS"),
+    btNode("0/1", "Control", "ReactiveFallback", "input_router", "RUNNING"),
+    btNode("0/1/0", "Control", "ReactiveSequence", "keyboard_branch", "FAILURE"),
+    btNode("0/1/0/0", "Condition", "InputModeGuard", "InputModeGuard", "FAILURE"),
+    btNode("0/1/0/1", "Action", "KeyboardVelocityInput", "KeyboardVelocityInput", "IDLE"),
+    btNode("0/1/1", "Control", "ReactiveSequence", "policy_branch", "RUNNING"),
+    btNode("0/1/1/0", "Condition", "InputModeGuard", "InputModeGuard", "SUCCESS"),
+    btNode("0/1/1/1", "Control", "Sequence", "policy_entry", "RUNNING"),
+    btNode("0/1/1/1/0", "Action", "ThreeArmMoveJ", "policy_start_pose", "SUCCESS"),
+    btNode("0/1/1/1/1", "Decorator", "RetryUnlessFault", "RetryUnlessFault", "RUNNING"),
+    btNode("0/1/1/1/1/0", "Action", "PolicyRun", "PolicyRun", "FAILURE", "policy server timeout"),
+    btNode("0/1/2", "Control", "ReactiveSequence", "none_branch", "IDLE"),
+    btNode("0/1/2/0", "Condition", "InputModeGuard", "InputModeGuard", "IDLE"),
+    btNode("0/1/2/1", "Action", "IdleInput", "IdleInput", "IDLE"),
+  ],
+};
+const moveRuntime = {
+  available: true, tree_id: "arm_move", sequence: 3, timestamp_ms: 1, root_status: "SUCCESS", failure_reason: "",
+  nodes: [
+    btNode("0", "Control", "Sequence", "arm_move", "SUCCESS"),
+    btNode("0/0", "Action", "MoveJ", "ready_pose", "SUCCESS"),
+    btNode("0/1", "Action", "MoveJ", "work_pose", "SUCCESS"),
+  ],
+};
+
+test("shows the behavior-tree tab only while a tree runs and focuses the active router branch", async ({ page }) => {
+  let runtime: Record<string, unknown> = { available: false };
+  await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: runtime }));
+  await page.goto("/");
+  await expect(page.locator("#control-tab-bt")).toBeHidden();
+
+  runtime = controlRuntime;
+  await expect(page.locator("#control-tab-bt")).toBeVisible();
+  // Appearing does not take over the panel the operator is using.
+  await expect(page.locator("#motion-panel")).toBeVisible();
+  await page.locator("#control-tab-bt").click();
+  await expect(page.locator("#bt-root-status")).toHaveText("RUNNING");
+  await expect(page.locator("#bt-tree-id")).toContainText("输入路由 policy_branch");
+  await expect(page.locator("#bt-breadcrumb")).toContainText("input_control");
+  await expect(page.locator("#bt-breadcrumb")).toContainText("input_router");
+  await expect(page.locator("#bt-tree > .bt-node")).toHaveAttribute("data-path", "0/1/1");
+  await expect(page.locator("#bt-tree")).not.toContainText("keyboard_branch");
+  await expect(page.locator('#bt-tree [data-path="0/1/1/1/1/0"]')).toHaveAttribute("data-status", "FAILURE");
+  await expect(page.locator("#bt-tree")).toContainText("policy server timeout");
+
+  // Collapse and expand a subtree; the choice survives the next snapshot.
+  await page.locator('[data-bt-toggle="0/1/1/1"]').click();
+  await expect(page.locator('#bt-tree [data-path="0/1/1/1/0"]')).toHaveCount(0);
+  await page.waitForTimeout(700);
+  await expect(page.locator('#bt-tree [data-path="0/1/1/1/0"]')).toHaveCount(0);
+  await page.locator('[data-bt-toggle="0/1/1/1"]').click();
+  await expect(page.locator('#bt-tree [data-path="0/1/1/1/0"]')).toHaveCount(1);
+
+  // Whole tree on demand: other branches appear, IDLE subtrees start collapsed.
+  await page.locator("#bt-scope-toggle").click();
+  await expect(page.locator("#bt-tree > .bt-node")).toHaveAttribute("data-path", "0");
+  await expect(page.locator("#bt-tree")).toContainText("keyboard_branch");
+  await expect(page.locator('#bt-tree [data-path="0/1/2/1"]')).toHaveCount(0);
+  // Unused input branches are muted and folded: their guard FAILURE is normal routing.
+  await expect(page.locator('#bt-tree [data-path="0/1/0"]')).toHaveClass(/bt-muted/);
+  await expect(page.locator('#bt-tree [data-path="0/1/0/0"]')).toHaveCount(0);
+  await expect(page.locator('#bt-tree [data-path="0/1/1"]')).not.toHaveClass(/bt-muted/);
+  await expect(page.locator("#bt-breadcrumb")).toBeHidden();
+
+  // The tree stops: bt-start takes the monitor down and the tab goes away.
+  runtime = { available: false };
+  await expect(page.locator("#control-tab-bt")).toBeHidden();
+  await expect(page.locator("#motion-panel")).toBeVisible();
+});
+
+test("shows every node of a tree that is not the control router", async ({ page }) => {
+  await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: moveRuntime }));
+  await page.goto("/");
+  await page.locator("#control-tab-bt").click();
+  await expect(page.locator("#bt-root-status")).toHaveText("SUCCESS");
+  await expect(page.locator("#bt-tree-id")).toContainText("整棵树");
+  await expect(page.locator("#bt-scope-toggle")).toBeHidden();
+  await expect(page.locator("#bt-tree .bt-node")).toHaveCount(3);
+  await expect(page.locator("#bt-tree")).toContainText("work_pose");
+});
+
 test("reports a WebGL renderer failure when WebGL is unavailable", async ({ page }) => {
   await page.addInitScript(() => {
     const originalGetContext = HTMLCanvasElement.prototype.getContext;

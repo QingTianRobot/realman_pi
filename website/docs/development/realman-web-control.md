@@ -163,7 +163,8 @@ Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`s
 - 左列 \`visualization-column\`（只看不操作）：上方是 WebGL 三臂展示；中间 \`status-row\` 并排放
   “当前坐标”和“运行反馈”，切换右侧标签页时它们始终可见；下方是 \`velocity-telemetry-panel\`。
 - 右列 \`controls\`（操作）：顶部是全局“输入模式”卡片，其下是 \`control-tabs\` 标签栏——
-  运动（一次性 MOVEJ/MOVEL/MOVEP 与关节记录）、速度（末端速度 Action）、夹爪、键盘（仅在发现键盘模式时出现）。
+  运动（一次性 MOVEJ/MOVEL/MOVEP 与关节记录）、速度（末端速度 Action）、夹爪、键盘（仅在发现键盘模式时出现）、
+  行为树（仅在有行为树运行时出现，见下文“行为树视图”）。
   一次只显示一个操作面板，所选标签保存在该浏览器的 \`localStorage\` 中，刷新后恢复；存储不可用时默认“运动”。
   桌面端右列 sticky 跟随滚动，超出视口高度时在列内滚动。
 - 窄屏和手机端（≤980px）按 WebGL 展示、状态面板、控制卡片（输入模式 + 标签页）、速度遥测的顺序单列排列，
@@ -248,6 +249,28 @@ RM65_DRY_RUN=1 ./rm65 bt control
 ```
 
 第二条仅输出持久 router 的容器执行计划；默认 `REALMAN_BT_DRY_RUN=true` 不会发送 Action goal。
+
+### 行为树视图
+
+`./rm65 bt <tree>` 运行期间，`bt-start` 在宿主网络 :8080 启动只读监视器 `bt_server`，执行器每个 tick
+原子重写一份运行快照（每个节点的 path、类型、名称和 `IDLE/RUNNING/SUCCESS/FAILURE` 状态及失败原因）。
+Web 服务把它代理为同源只读接口 `GET /api/bt/runtime`（`bt_runtime.py`）：去掉事件日志，只保留树结构和状态；
+监视器不可达、快照为空、或超过 `stale_after_sec` 未更新时返回 `{"available": false}`。树退出时
+`bt-start` 会停掉 :8080，所以“可达且有节点”就等价于“有树在运行”。地址和超时在
+`config/ros/realman_web_control.yaml` 的 `behavior_tree_monitor` 中配置，`url` 置空即关闭该视图。
+
+页面每 0.5 s 轮询一次（页面不可见时暂停）：
+
+- **出现时机**：只有接口 `available` 时，标签栏才出现“行为树”标签；新出现时标签短暂高亮提示，但不会抢走当前面板。
+  树停止后标签消失，若正停在该标签则回到“运动”。标签上的圆点随根状态变色，RUNNING 时闪烁。
+- **control 路由树**：识别方式是某个 Fallback/ReactiveFallback 的每个子节点都以 `InputModeGuard` 开头
+  （即 `input_router`）。默认只显示当前输入模式对应的分支（`<active_mode>_branch`，找不到时取 guard
+  成功或正在运行的分支），上方用面包屑列出从根到路由器的祖先及其状态；“显示整棵树”可切换到完整树，此时未使用的
+  输入分支变灰并默认折叠，因为它们的 guard `FAILURE` 是正常路由而不是错误。
+- **其它树**（如 `move.xml`、`three.xml`）：没有路由结构，直接显示整棵树。
+- **折叠**：有子节点的节点可点击三角折叠/展开；IDLE 子树默认折叠，手动选择按节点 path 记住，不会被下一帧快照覆盖。
+  每个节点显示类型图标、节点名（与注册名不同时附注册名）、状态标签，失败节点下方显示 `failure_reason`；
+  根节点的失败原因显示在树上方。
 
 ## WebSocket 协议
 

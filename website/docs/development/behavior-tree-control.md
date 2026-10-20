@@ -188,6 +188,7 @@ Action 或夹爪 command，需要真实 Pika 运动必须显式设置 `REALMAN_B
 `./rm65 up` 只拥有长期 driver 和 :8765 Web 服务；它不启动行为树。只要 Docker 中已经有一个运行中的
 `realman_bringup_remote` 容器，就可以显式执行 `./rm65 bt control`；该命令使用
 `control_router.launch.py` 和 `exit_on_terminal=false`，连同 :8080 只读监视器持续到 Ctrl-C。
+运行期间 :8765 控制页会出现“行为树”标签，显示当前输入分支的实时状态（见 Web 控制页的“行为树视图”）。
 启动器按 Docker 的 `com.docker.compose.service=realman_bringup_remote` 标签查找唯一运行中的 driver
 容器，再通过容器 ID 执行 `bt-start`，因此不依赖 `./rm65 up` 或当前 Compose project；没有或多于一个匹配
 bringup 时会拒绝启动，避免把控制树接入错误的驱动图。Ctrl-C 不停止 driver；`./rm65 down` 才停止统一运行时。

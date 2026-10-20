@@ -126,6 +126,9 @@ catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返
 先运行一 tick 的 `none` 中性分支，下一 tick 才激活目标模式；重选 active 模式直接返回已有 request ID，
 没有中性 tick，`epoch` 不变。路由仅拦截 `execute_motion`、`execute_trajectory` 和
 `start_cartesian_velocity`：这些浏览器运动先请求 `web`，只在同一请求的 `ACTIVE/web` 状态到达后才会转发。
+若 `web` 已经 ACTIVE，router 回复 `already active` 并沿用当前 request ID、不发布新状态；此时桥以缓存中
+request ID 相同的 `ACTIVE/web` 状态作为确认立即转发，否则 web 模式下的第二条运动会在
+`web_override_timeout_sec` 后以 `input_mode_timeout` 被丢弃。
 `software_stop` 绕过路由；夹爪、恢复、标定、运动学、位姿和记录操作均是 mode-neutral（包括
 `gripper_command`、`recover_motion`、`capture_calibration_sample`、`solve_calibration`、
 `get_current_pose`、`solve_ik`、`list_joint_records`、`save_joint_record`、`delete_joint_record` 与
@@ -367,7 +370,10 @@ Web 后端的 URDF 关节限位检查，再只更新当前 arm 的关节滑条�
 滑轨，但仍可直接发送 `MOVEJ_P` Action。
 
 对于配置的 WORK/TOOL，驱动会在连接时自动将可读的激活坐标失配修复为配置值，并仍要求 `reference_type`/`reference_name` 与已验证的激活坐标
-完全一致。对于任意 TF frame，Web 节点先把位姿转换到 `/{arm}/base_link`，再以
+完全一致。Web 节点接受 manifest 中的默认 WORK/TOOL，以及 `coordinate_state` 中 `work_matched`/`tool_matched`
+为 true 的当前激活坐标：Pika 模式会把控制器切到 `pikabase` 等其他已配置工作坐标，之后网页仍按该激活坐标发送 MoveJ
+和速度命令。都不匹配时返回 `coordinate_mismatch`，并带上原请求的 `request_id`，页面据此解除发送按钮的禁用。
+对于任意 TF frame，Web 节点先把位姿转换到 `/{arm}/base_link`，再以
 `BASE/base` 调用驱动；它不会把任意 TF 名称伪装成 RealMan controller 的 WORK/TOOL。
 TF 查询失败、坐标验证失败、控制器状态不可读、目标不可达、SDK API2 非零或结果超限都会
 返回失败消息。服务边界的单位固定为：关节 degree、位置 m、四元数 WXYZ；SDK 算法内部的

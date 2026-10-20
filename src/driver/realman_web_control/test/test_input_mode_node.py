@@ -839,6 +839,45 @@ def test_selection_transport_exception_discards_motion(node):
     assert any(event.get("code") == "input_mode_rejected" for event, _ in node._server.events)
 
 
+def dispatch_with_reference(node, reference_type, reference_name, kind="execute_motion"):
+    message = motion(kind)
+    message["goal"]["reference_type"] = reference_type
+    message["goal"]["reference_name"] = reference_name
+    node._input_modes.update_catalog(CATALOG)
+    node._dispatch("browser", message)
+    node._mode_select_client.calls[-1][1].set_result(SelectInputMode.Response(accepted=True, request_id=41))
+    node._input_mode_state(state())
+
+
+def live_work(node, name, matched=True):
+    node._robots["l"]["frames"]["work"] = {"type": 1, "name": "cell", "frame_id": "l/work/cell"}
+    node._coordinate_state["l"] = {
+        "motion_allowed": True, "work_matched": matched, "current_work": name, "expected_work": name,
+        "preferred_reference": {"type": 1, "name": name, "frame_id": f"l/work/{name}"},
+        "work": {"type": 1, "name": name, "frame_id": f"l/work/{name}"},
+    }
+
+
+@pytest.mark.parametrize("kind", ["execute_motion", "start_cartesian_velocity"])
+def test_motion_follows_the_live_work_frame_after_pika_switches_it(node, kind):
+    # Pika modes select l/work/pikabase on the controller; the manifest only
+    # knows the default cell frame, but the driver checks the live frame.
+    live_work(node, "pikabase")
+    dispatch_with_reference(node, 1, "pikabase", kind)
+    assert len(sent(node)) == 1
+    assert sent(node)[0].reference_type == 1
+    assert sent(node)[0].reference_name == "pikabase"
+
+
+@pytest.mark.parametrize("reference,matched", [((1, "other"), True), ((1, "pikabase"), False), ((0, "cell"), True)])
+def test_reference_mismatch_error_is_correlated_with_the_request(node, reference, matched):
+    live_work(node, "pikabase", matched)
+    dispatch_with_reference(node, *reference)
+    assert sent(node) == []
+    assert any(event.get("code") == "coordinate_mismatch" and event.get("request_id") == "move-1"
+               and owner == "browser" for event, owner in node._server.events)
+
+
 def test_real_node_discovers_services_and_transient_state_using_loaded_timing(monkeypatch, tmp_path):
     import yaml
     from rclpy.executors import SingleThreadedExecutor

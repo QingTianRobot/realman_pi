@@ -1032,7 +1032,7 @@ class WebControlNode(Node):
         if reference_type == 3:
             return 0, "base", self._tf_reference_frame(arm, reference_name, request_id)
         goal = {"reference_type": reference_type, "reference_name": reference_name}
-        self._validate_reference(arm, goal)
+        self._validate_reference(arm, goal, request_id)
         return reference_type, reference_name, None
 
     def _transform_pose(
@@ -1578,7 +1578,7 @@ class WebControlNode(Node):
         reference_type, reference_name = self._default_reference(arm)
         goal_values["reference_type"] = reference_type
         goal_values["reference_name"] = reference_name
-        frame = self._validate_reference(arm, goal_values)
+        frame = self._validate_reference(arm, goal_values, message["request_id"])
         settings = self._robots[arm]["motion"]
         exact_fields = (
             "velocity_control_period_ms",
@@ -1630,19 +1630,33 @@ class WebControlNode(Node):
         goal = assign_fields(CartesianVelocity.Goal(), goal_values)
         self._send_goal(client, goal, record)
 
-    def _validate_reference(self, arm: str, goal: dict[str, Any]) -> dict[str, Any]:
+    def _validate_reference(
+        self, arm: str, goal: dict[str, Any], request_id: str = ""
+    ) -> dict[str, Any]:
+        candidates = [
+            value
+            for value in self._robots[arm]["frames"].values()
+            if value["type"] == goal["reference_type"]
+        ]
+        # Pika modes switch the controller to another configured work frame
+        # (e.g. pikabase); the driver checks against that live frame, so a
+        # verified live work/tool frame is as valid as the manifest default.
+        state = self._coordinate_state.get(arm, {})
+        for key in ("work", "tool"):
+            live = state.get(key)
+            if (isinstance(live, dict) and live.get("type") == goal["reference_type"]
+                    and state.get(f"{key}_matched") is True
+                    and isinstance(live.get("name"), str) and isinstance(live.get("frame_id"), str)):
+                candidates.append({"type": live["type"], "name": live["name"], "frame_id": live["frame_id"]})
         frame = next(
-            (
-                value
-                for value in self._robots[arm]["frames"].values()
-                if value["type"] == goal["reference_type"]
-            ),
+            (value for value in candidates if value["name"] == goal["reference_name"]),
             None,
         )
-        if frame is None or frame["name"] != goal["reference_name"]:
+        if frame is None:
             raise ProtocolError(
                 "coordinate_mismatch",
                 "reference type/name must match the configured active frame",
+                request_id,
             )
         return frame
 

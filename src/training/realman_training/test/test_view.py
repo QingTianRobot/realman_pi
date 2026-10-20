@@ -115,3 +115,38 @@ def test_default_dst(tmp_path):
 def test_uid_is_used_for_the_container(clean, tmp_path):
     argv = view.view_command(load_config().openpi, clean, tmp_path / "data" / "v", "r", {"a": "b"})
     assert argv[argv.index("--user") + 1] == f"{os.getuid()}:{os.getgid()}"
+
+
+def test_partial_dir_is_refused_early(clean, tmp_path):
+    """<dst>.partial already exists → refuse before calling docker."""
+    partial = tmp_path / "data" / "v.partial"
+    partial.mkdir(parents=True)
+    runner = FakeRunner()
+    with pytest.raises(StepFailed, match=r"\.partial.*exists"):
+        view.run({"src": str(clean), "dst": str(tmp_path / "data" / "v")}, RecordingLog(), runner=runner)
+    assert runner.calls == []
+
+
+def test_failing_script_removes_partial_not_dst(clean, tmp_path):
+    """make_realman_view failure → .partial is cleaned up; dst is not created."""
+    dst = tmp_path / "data" / "v"
+
+    def fail_and_create_partial(argv, input):
+        inner = shlex.split(argv[-1].split("make_realman_view.py", 1)[1])
+        partial_path = inner[inner.index("--dst") + 1]
+        Path(partial_path).mkdir(parents=True, exist_ok=True)
+
+    runner = FakeRunner().on("make_realman_view.py", returncode=1, action=fail_and_create_partial)
+    with pytest.raises(StepFailed, match="exited 1"):
+        view.run({"src": str(clean), "dst": str(dst)}, RecordingLog(), runner=runner)
+    assert not dst.exists() and not (dst.parent / f"{dst.name}.partial").exists()
+
+
+def test_wrong_gripper_labels_rename_partial_to_dst_before_failing(clean, tmp_path):
+    """Even on label failure, dst is created (renamed from .partial)."""
+    runner = fake_make_view([GOOD_PICK, GOOD_PICK])
+    dst = tmp_path / "data" / "v"
+    with pytest.raises(StepFailed, match=r"1 episode"):
+        view.run({"src": str(clean), "dst": str(dst)}, RecordingLog(), runner=runner)
+    assert dst.exists() and (dst / "label_check.json").exists()
+    assert not (dst.parent / f"{dst.name}.partial").exists()

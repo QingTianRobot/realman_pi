@@ -66,6 +66,21 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     dst = Path(params["dst"]).expanduser().absolute()
     if dst.exists():
         raise StepFailed(f"refusing: {dst} exists (view never overwrites)")
+    partial = dst.parent / f"{dst.name}.partial"
+    if partial.exists():
+        raise StepFailed(f"refusing: {partial} exists (a previous interrupted run?); remove it by hand")
+    # Refuse when src and dst.parent are on different devices or share only the root "/"
+    try:
+        dst.parent.mkdir(parents=True, exist_ok=True)
+        src_dev = os.stat(src).st_dev
+        dst_dev = os.stat(dst.parent).st_dev
+    except OSError:
+        src_dev = dst_dev = None
+    if src_dev is not None and dst_dev is not None and src_dev != dst_dev:
+        raise StepFailed(f"must be on the same filesystem as {src}; {dst.parent} is on a different device")
+    common = os.path.commonpath([str(src), str(dst.parent)])
+    if common == "/":
+        raise StepFailed(f"must be on the same filesystem as {src}; {dst.parent} shares only '/' with it")
     summary = summarize(src)
     if summary.kind == "view":
         raise StepFailed(f"{src} is already a training view; build views from a raw or cleaned recording")
@@ -74,17 +89,22 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     if missing:
         raise StepFailed(f"no prompt for task(s) {missing}: add them to prompts in the config or pass task=prompt")
     prompts = {task: prompts[task] for task in summary.tasks}
-    argv = view_command(config.openpi, src, dst, params.get("arm") or config.quality.arm, prompts)
+    # Pass partial as --dst so make_realman_view writes there; rename to dst at the end.
+    argv = view_command(config.openpi, src, partial, params.get("arm") or config.quality.arm, prompts)
     log("$ " + shlex.join(argv))
     if params.get("dry_run"):
         return {"dry_run": True, "command": argv}
     code = runner.stream(argv, lambda line: log(compact(line)))
     if code:
+        if partial.exists():
+            import shutil
+            shutil.rmtree(partial, ignore_errors=True)
         raise StepFailed(f"make_realman_view.py exited {code}")
-    failures = check_gripper_labels(dst, config.quality.release_tasks)
-    (dst / "label_check.json").write_text(
+    failures = check_gripper_labels(partial, config.quality.release_tasks)
+    (partial / "label_check.json").write_text(
         json.dumps({"checked": now(), "failures": failures}, indent=2, ensure_ascii=False), encoding="utf-8"
     )
+    partial.rename(dst)
     if failures:
         listed = ", ".join(f"{f['episode']} ({f['task']}: {f['found']})" for f in failures[:10])
         raise StepFailed(f"view written to {dst}, but {len(failures)} episode(s) have wrong gripper labels: {listed}")

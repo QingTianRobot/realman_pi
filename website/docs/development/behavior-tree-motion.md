@@ -422,6 +422,7 @@ ROS timer，因此应在可用时让 cancel 提交完成并确认运行快照；
 
     ros2 service call /realman_bt_executor/start std_srvs/srv/Trigger '{}'
     ros2 service call /realman_bt_executor/stop std_srvs/srv/Trigger '{}'
+    ros2 service call /realman_bt_executor/shutdown std_srvs/srv/Trigger '{}'  # halt、排空取消后退出进程
 
 launch 每次运行都会在 REALMAN_LOG_ROOT（未设置时为当前目录下的 logs/）创建
 YYYYMMDD_HHMMSS/，并启用彩色 ROS 2 日志。设置 REALMAN_CONFIG_ROOT 后，若其中存在

@@ -241,7 +241,8 @@ app.innerHTML = `
       <section id="velocity-panel" class="panel panel-section" role="tabpanel" aria-labelledby="control-tab-velocity" data-control-panel="velocity"><div class="panel-heading compact"><div><span class="eyebrow">CARTESIAN</span><h2>末端速度</h2></div><span id="velocity-state" class="mini-state">IDLE</span></div><div class="form-grid"><label>参考系<select id="velocity-frame"></select></label><label>周期 (ms)<input id="velocity-period" type="number" min="1" step="1" /></label><label>看门狗 (ms)<input id="velocity-watchdog" type="number" min="1" step="1" /></label><label>线加速度<input id="linear-accel" type="number" min="0.001" step="0.01" /></label><label>角加速度<input id="angular-accel" type="number" min="0.001" step="0.01" /></label></div><div id="velocity-inputs" class="velocity-inputs"></div><div class="inline-actions"><button id="start-velocity" class="button secondary" type="button" disabled>启动速度 Action</button><button id="cancel-velocity" class="button ghost" type="button" disabled>取消</button></div></section>
       <section id="gripper-panel" class="panel panel-section" role="tabpanel" aria-labelledby="control-tab-gripper" data-control-panel="gripper"><div class="panel-heading compact"><div><span class="eyebrow">GRIPPER</span><h2>夹爪控制</h2></div><span id="gripper-state" class="mini-state">WAIT</span></div><div class="form-grid"><label>设备<select id="gripper-select"></select></label><label>开合度 (0=闭合)<input id="gripper-percentage" type="range" min="0" max="1" step="0.01" value="1" /></label></div><div class="inline-actions"><button id="gripper-open" class="button secondary" type="button">打开</button><button id="gripper-close" class="button secondary" type="button">闭合</button><button id="gripper-enable" class="button ghost" type="button">使能</button><button id="gripper-reset" class="button danger" type="button">复位</button></div><div id="gripper-feedback" class="feedback">等待夹爪状态</div><details id="gripper-limits" class="gripper-limits"><summary>行程设置</summary><div class="gripper-limits-body"><div class="form-grid"><label>开位<input id="gripper-open-position" type="number" step="1" /></label><label>闭位<input id="gripper-close-position" type="number" step="1" /></label></div><div class="inline-actions"><button id="gripper-teach-open" class="button ghost" type="button">开位=当前位置</button><button id="gripper-teach-close" class="button ghost" type="button">闭位=当前位置</button></div><label class="gripper-raw">原始位置 <output id="gripper-raw-value">0</output><input id="gripper-raw-position" type="range" min="0" max="1" step="1" value="0" /></label><button id="gripper-limits-apply" class="button primary full" type="button">应用行程</button><div id="gripper-limits-range" class="feedback"></div><div id="gripper-limits-status" class="feedback" role="status" aria-live="polite"></div></div></details></section>
       <section id="bt-panel" class="panel panel-section bt-panel" role="tabpanel" aria-labelledby="control-tab-bt" data-control-panel="bt" hidden>
-        <div class="panel-heading compact"><div><span class="eyebrow">BEHAVIOR TREE</span><h2>行为树</h2></div><span id="bt-root-status" class="bt-status bt-idle">IDLE</span></div>
+        <div class="panel-heading compact"><div><span class="eyebrow">BEHAVIOR TREE</span><h2>行为树</h2></div><div class="panel-actions"><span id="bt-root-status" class="bt-status bt-idle">IDLE</span><button id="bt-stop" class="button danger" type="button">终止行为树</button></div></div>
+        <div id="bt-stop-status" class="bt-stop-status" role="status" aria-live="polite" hidden></div>
         <div class="bt-meta"><span id="bt-tree-id"></span><button id="bt-scope-toggle" class="text-button" type="button" hidden>显示整棵树</button></div>
         <div id="bt-breadcrumb" class="bt-breadcrumb" hidden></div>
         <div id="bt-failure" class="bt-reason bt-root-reason" hidden></div>
@@ -1870,6 +1871,17 @@ function handleMessage(message: Message) {
     result.textContent = `${arm.toUpperCase()} ${status} / ${message.message || "unknown error"}`;
     if (arm === selectedArm) actionState.textContent = status.toUpperCase();
     updateButtons();
+  } else if (message.type === "behavior_tree_stop_result") {
+    if (message.request_id !== btStopRequest) return;
+    setBtStopStatus(message.success
+      ? `已请求终止（${message.message}），等待行为树取消动作并退出…`
+      : `终止失败：${message.message}`, !message.success);
+    if (!message.success) btStopRequest = "";
+    renderBtStopButton();
+  } else if (message.type === "error" && message.request_id && message.request_id === btStopRequest) {
+    btStopRequest = "";
+    setBtStopStatus(`终止失败：${message.message}`, true);
+    renderBtStopButton();
   } else if (message.type === "error") {
     if (message.code === "keyboard_lease" || message.code === "keyboard_inactive") {
       keyboardLeaseOwned = false;
@@ -2269,7 +2281,15 @@ function renderBehaviorTree() {
       window.setTimeout(() => btTab.classList.remove("tab-attention"), 4000);
     }
   }
-  if (!btRuntime.available) return;
+  if (!btRuntime.available) {
+    // The tree is gone (stopped from here, Ctrl-C or a terminal exit): forget any stop in flight.
+    if (btStopRequest) setBtStopStatus("", false);
+    btStopRequest = "";
+    btStopArmedUntil = 0;
+    renderBtStopButton();
+    return;
+  }
+  renderBtStopButton();
   const root = buildBtTree(btRuntime.nodes);
   btRootStatus.textContent = btRuntime.root_status;
   btRootStatus.className = `bt-status bt-${btRuntime.root_status.toLowerCase()}`;
@@ -2302,6 +2322,37 @@ btTreeHost.addEventListener("click", (event) => {
   if (!toggle) return;
   btToggled.set(toggle.dataset.btToggle!, toggle.getAttribute("aria-expanded") === "true");
   renderBehaviorTree();
+});
+// Stopping the tree is the Web equivalent of Ctrl-C on `./rm65 bt`: a first click arms the
+// button, a second click within a few seconds sends it.
+const btStopButton = $("#bt-stop") as HTMLButtonElement;
+const btStopStatus = $("#bt-stop-status") as HTMLElement;
+let btStopRequest = "";
+let btStopArmedUntil = 0;
+function setBtStopStatus(text: string, error: boolean) {
+  btStopStatus.hidden = !text;
+  btStopStatus.textContent = text;
+  btStopStatus.classList.toggle("error", error);
+}
+function renderBtStopButton() {
+  const armed = btStopArmedUntil > Date.now();
+  btStopButton.disabled = !canWrite() || Boolean(btStopRequest);
+  btStopButton.textContent = btStopRequest ? "正在终止…" : armed ? "确认终止？" : "终止行为树";
+  btStopButton.classList.toggle("armed", armed && !btStopRequest);
+}
+btStopButton.addEventListener("click", () => {
+  if (!canWrite() || btStopRequest) return;
+  if (btStopArmedUntil <= Date.now()) {
+    btStopArmedUntil = Date.now() + 4000;
+    renderBtStopButton();
+    window.setTimeout(renderBtStopButton, 4100);
+    return;
+  }
+  btStopArmedUntil = 0;
+  btStopRequest = requestId("bt-stop");
+  send({ type: "stop_behavior_tree", request_id: btStopRequest });
+  setBtStopStatus("已发送终止请求…", false);
+  renderBtStopButton();
 });
 btScopeToggle.addEventListener("click", () => {
   btShowWholeTree = !btShowWholeTree;

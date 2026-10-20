@@ -120,6 +120,7 @@ catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返
 | `input_mode_list` | `available`、`modes[]`，每项为 `id`、`label`、`selectable` |
 | `input_mode_result` | `request_id`、`executor_request_id`、`accepted`、`message` |
 | `input_mode_state` | `requested_mode`、`selected_mode`、`active_mode`、`phase`（`ACTIVE`/`SWITCHING`/`FAILED`）、`request_id`、`epoch`、`detail` |
+| `behavior_tree_stop_result` | `request_id`、`success`、`message`（回复浏览器的 `stop_behavior_tree`） |
 
 对非 Web picker 选择，桥总是先取消它持有的 Web Action，再请求 router。切换到不同模式时，router
 先运行一 tick 的 `none` 中性分支，下一 tick 才激活目标模式；重选 active 模式直接返回已有 request ID，
@@ -271,6 +272,11 @@ Web 服务把它代理为同源只读接口 `GET /api/bt/runtime`（`bt_runtime.
 - **折叠**：有子节点的节点可点击三角折叠/展开；IDLE 子树默认折叠，手动选择按节点 path 记住，不会被下一帧快照覆盖。
   每个节点显示类型图标、节点名（与注册名不同时附注册名）、状态标签，失败节点下方显示 `failure_reason`；
   根节点的失败原因显示在树上方。
+- **终止行为树**：面板右上角“终止行为树”按钮第一次点击只变为红色“确认终止？”，4 s 内再点一次才发送
+  `{"type":"stop_behavior_tree","request_id":...}`。Web 节点调用 `/realman_bt_executor/shutdown`，等同在终端对
+  `./rm65 bt` 按 Ctrl-C：halt 树、等运动取消排空、executor 退出、router 随 launch 关闭、`bt-start` 归档并关掉
+  :8080，标签随之消失。成功时回 `behavior_tree_stop_result`（`request_id`、`success`、`message`）；没有行为树时
+  回错误 `behavior_tree_unavailable`。机械臂 driver、Web 服务和其它容器不受影响。
 
 ## WebSocket 协议
 

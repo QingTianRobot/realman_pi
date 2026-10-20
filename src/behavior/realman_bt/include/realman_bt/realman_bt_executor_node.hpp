@@ -1,5 +1,6 @@
 #pragma once
 
+#include <chrono>
 #include <memory>
 #include <cstdint>
 #include <optional>
@@ -52,6 +53,9 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
                    std::shared_ptr<Trigger::Response> response);
   void handleStop(const std::shared_ptr<Trigger::Request>,
                   std::shared_ptr<Trigger::Response> response);
+  void handleShutdown(const std::shared_ptr<Trigger::Request>,
+                      std::shared_ptr<Trigger::Response> response);
+  void exitAfterShutdownDrain();
   void publishInputModeState();
   void handleListInputModes(const std::shared_ptr<ListInputModes::Request>,
                            std::shared_ptr<ListInputModes::Response> response);
@@ -82,6 +86,11 @@ class RealmanBtExecutorNode final : public rclcpp::Node {
   rclcpp::Service<SelectInputMode>::SharedPtr select_input_mode_service_;
   rclcpp::Service<Trigger>::SharedPtr start_service_;
   rclcpp::Service<Trigger>::SharedPtr stop_service_;
+  rclcpp::Service<Trigger>::SharedPtr shutdown_service_;
+  rclcpp::TimerBase::SharedPtr shutdown_timer_;
+  std::chrono::steady_clock::time_point shutdown_deadline_;
+  double shutdown_drain_timeout_sec_{10.0};
+  bool shutdown_requested_{false};
   rclcpp::Subscription<rcl_interfaces::msg::Log>::SharedPtr rosout_sub_;
   rclcpp::TimerBase::SharedPtr cancellation_drain_timer_;
   std::vector<std::shared_ptr<MoveJCancellationDrain>> cancellation_drains_;

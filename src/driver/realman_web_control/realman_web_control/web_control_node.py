@@ -272,6 +272,10 @@ class WebControlNode(Node):
             )
             for arm in ARMS
         }
+        # Remote Ctrl-C for `./rm65 bt`: the executor halts, drains cancels, then exits.
+        self._bt_shutdown_client = self.create_client(
+            Trigger, "/realman_bt_executor/shutdown", callback_group=self._callback_group,
+        )
         self._recovery_clients = {
             arm: self.create_client(
                 RecoverMotion,
@@ -466,6 +470,8 @@ class WebControlNode(Node):
             self._software_stop(client_id, message)
         elif message_type == "recover_motion":
             self._recover_motion(client_id, message)
+        elif message_type == "stop_behavior_tree":
+            self._stop_behavior_tree(client_id, message)
         elif message_type == "capture_calibration_sample":
             self._capture_calibration_sample(client_id, message)
         elif message_type == "solve_calibration":
@@ -1895,6 +1901,29 @@ class WebControlNode(Node):
                 "message": str(error),
             }
         self._server.send_event(event, client_id)
+
+    def _stop_behavior_tree(self, client_id: str, message: dict[str, Any]) -> None:
+        request_id = message["request_id"]
+        if not self._bt_shutdown_client.service_is_ready():
+            raise ProtocolError(
+                "behavior_tree_unavailable",
+                "/realman_bt_executor/shutdown is not available; no behavior tree is running",
+                request_id,
+            )
+        self.get_logger().warning(f"Web client {client_id} requested behavior-tree shutdown")
+
+        def done(completed: Any) -> None:
+            try:
+                response = completed.result()
+                event = {"type": "behavior_tree_stop_result", "request_id": request_id,
+                         "success": bool(response.success), "message": response.message}
+            except Exception as error:
+                self.get_logger().error(f"Web behavior-tree shutdown failed: {error}")
+                event = {"type": "behavior_tree_stop_result", "request_id": request_id,
+                         "success": False, "message": str(error)}
+            self._server.send_event(event, client_id)
+
+        self._bt_shutdown_client.call_async(Trigger.Request()).add_done_callback(done)
 
     def _recover_motion(self, client_id: str, message: dict[str, Any]) -> None:
         arm = message["arm"]

@@ -75,6 +75,10 @@ canvas { display: block; width: 100%; height: 100%; }
 .bt-status.bt-success { background: var(--ok-bg); color: var(--ok); }
 .bt-status.bt-failure { background: var(--danger-bg); color: var(--danger); }
 .bt-status.bt-skipped { background: var(--card-sub); color: var(--text-3); }
+#bt-stop { padding: 6px 10px; }
+#bt-stop.armed { background: var(--danger); color: #fff; box-shadow: 0 0 0 3px oklch(0.58 0.19 25 / 0.25); }
+.bt-stop-status { margin: -4px 0 10px; padding: 6px 8px; border-radius: 8px; background: var(--warn-bg); color: var(--warn); font-size: 10px; line-height: 1.45; }
+.bt-stop-status.error { background: var(--danger-bg); color: var(--danger); }
 .bt-meta { display: flex; justify-content: space-between; align-items: center; gap: 8px; margin: -4px 0 8px; color: var(--text-3); font-size: 10px; }
 .bt-breadcrumb { display: flex; flex-wrap: wrap; align-items: center; gap: 4px 6px; margin-bottom: 8px; padding: 6px 8px; border-radius: 10px; background: var(--card-sub); font-size: 10px; }
 .bt-crumb { display: inline-flex; align-items: center; gap: 5px; }

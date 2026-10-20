@@ -543,6 +543,52 @@ test("shows the behavior-tree tab only while a tree runs and focuses the active 
   await expect(page.locator("#motion-panel")).toBeVisible();
 });
 
+test("stops the running behavior tree after a confirming second click", async ({ page }) => {
+  let runtime: Record<string, unknown> = controlRuntime;
+  await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: runtime }));
+  await page.goto("/");
+  await page.locator("#control-tab-bt").click();
+  const stopRequests = () => page.evaluate(() => ((window as any).__webMessages as string[])
+    .map((value) => JSON.parse(value)).filter((item) => item.type === "stop_behavior_tree"));
+
+  // First click only arms the button.
+  await page.locator("#bt-stop").click();
+  await expect(page.locator("#bt-stop")).toHaveText("确认终止？");
+  expect(await stopRequests()).toHaveLength(0);
+  await page.locator("#bt-stop").click();
+  await expect.poll(stopRequests).toHaveLength(1);
+  const [request] = await stopRequests();
+  expect(Object.keys(request).sort()).toEqual(["request_id", "type"]);
+  await expect(page.locator("#bt-stop")).toHaveText("正在终止…");
+  await expect(page.locator("#bt-stop")).toBeDisabled();
+
+  await emitWebSocketEvent(page, {
+    type: "behavior_tree_stop_result", request_id: request.request_id, success: true,
+    message: "shutting down after 0 pending cancellation(s)",
+  });
+  await expect(page.locator("#bt-stop-status")).toContainText("等待行为树取消动作并退出");
+
+  // The executor exits, bt-start stops the monitor: tab and in-flight state go away.
+  runtime = { available: false };
+  await expect(page.locator("#control-tab-bt")).toBeHidden();
+  await expect(page.locator("#motion-panel")).toBeVisible();
+
+  // A later tree starts clean; a refused request is reported and the button re-enabled.
+  runtime = controlRuntime;
+  await page.locator("#control-tab-bt").click();
+  await expect(page.locator("#bt-stop")).toHaveText("终止行为树");
+  await page.locator("#bt-stop").click();
+  await page.locator("#bt-stop").click();
+  await expect.poll(stopRequests).toHaveLength(2);
+  const second = (await stopRequests())[1];
+  await emitWebSocketEvent(page, {
+    type: "error", code: "behavior_tree_unavailable", request_id: second.request_id,
+    message: "/realman_bt_executor/shutdown is not available; no behavior tree is running",
+  });
+  await expect(page.locator("#bt-stop-status")).toContainText("终止失败");
+  await expect(page.locator("#bt-stop")).toBeEnabled();
+});
+
 test("shows every node of a tree that is not the control router", async ({ page }) => {
   await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: moveRuntime }));
   await page.goto("/");

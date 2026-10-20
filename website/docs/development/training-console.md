@@ -1,6 +1,6 @@
 ---
 title: 训练控制平台（命令行）
-description: realman-train 命令行：数据检查、拉取、清洗、训练视图、norm、训练、评估、登记，全部作为后台任务运行。
+description: realman-train 命令行：数据检查、拉取、清洗、训练视图、norm、训练、评估、登记，推理服务启停与链路检测，全部作为后台任务运行。
 ---
 
 # 训练控制平台（命令行）
@@ -65,12 +65,47 @@ PYTHONPATH=. python -m realman_training cancel <id>
 
 如果同一种任务已在运行，再次启动会报 `JobConflict`；锁由刚结束的任务持有时，最多等 5 秒再报错。`cancel` 对正在启动的任务同样有效；取消 `train` 任务会停止对应容器 `openpi-console-train-<实验名>`。
 
+## 推理服务与链路检测
+
+推理链路两端：server5090 上的 `openpi-serve`（compose 项目 `openpi-serve`，`~/organization/openpi/compose.yaml` + `~/data/realman/compose.serve.yaml`）和 realman_ts 上的 `policy_bridge` 容器。在 server5090 上：
+
+```bash
+PYTHONPATH=. python -m realman_training serve status
+PYTHONPATH=. python -m realman_training serve start --dry-run                  # 只做检查、打印命令
+PYTHONPATH=. python -m realman_training serve start --task pick_only --yes     # 默认模型、GPU 2、端口 18000
+PYTHONPATH=. python -m realman_training serve stop --yes
+PYTHONPATH=. python -m realman_training linkcheck [--only pika,link,inference,bridge] [--json]
+```
+
+`serve start`（后台任务，种类 `serve`，与 `stop` 互斥）：
+
+1. 检查：行为树的 `requested/selected/active_mode` 是 `policy` 就拒绝；`openpi-serve` 已在运行、端口已被占用、GPU 显存超过 `openpi.gpu_busy_mib`（2000 MiB）、端口与机器人 `config/ros/policy_bridge.yaml` 的 `network.server_port` 不同（桥接的端口只能在那里改）都拒绝；模型必须有任务 prompt（`model_card.json` 的 `tasks`，否则训练视图的 `contract.json`），`--task` 只能选模型训练过的任务。
+2. 用 `SERVE_CONFIG`/`SERVE_CHECKPOINT`/`SERVE_GPU`/`OPENPI_POLICY_PORT` 执行 `docker compose up -d`（`runtime: nvidia`，不用 `gpus:`），等端口监听（加载 checkpoint，最多 `start_timeout_sec`）。
+3. 在服务容器里发 2 次真实尺寸的推理预热：重启后第一次推理要 JIT 编译约 26 s，会让桥接的 1.5 s 请求超时、连续 5 次失败后暂停。
+4. 在 realman_ts 的 `~/realman_pi` 执行 `POLICY_WS_HOST=<server5090 地址> docker compose up -d --no-deps --no-build policy_bridge`（地址取 realman_ts 看到的 `$SSH_CLIENT`，不写进配置）；不调用 `./rm65`，不碰 bringup、web、录制容器和行为树。
+5. 等 `/policy/stats` 出现，在 `/policy/prompt` 发所选任务的 prompt 并等桥接确认；桥接必须是非激活状态（`allow_publish=0`）。机械臂运动仍然只由行为树和 `/policy/activate` 决定。
+6. 运行链路检测；检测失败不让启动失败，但会在日志里标出来。
+
+启动记录在 `<data_root>/_console/serving.json`（模型、checkpoint、GPU、端口、任务、prompt、预热耗时）。`serve stop`（需要 realman_ts 可达以检查行为树模式）：同样在 `policy` 模式下拒绝，先停桥接（`docker compose stop policy_bridge`），再停并删除 `openpi-serve-openpi-1`。`serve status`：两端容器、镜像、启动时间、GPU 显存、模型、桥接 prompt/paused/allow_publish、行为树模式；realman_ts 不可达时只报告原因。
+
+| 检测项 | 判断 | 阈值（`linkcheck` 段） |
+|---|---|---|
+| `pika_nodes` | 机器人 ROS 图里的 `pika_*` 节点：Pika 定位器在 Wi-Fi 上发大量小 DDS 包（2026-10-14 实测 ~2.6 MB/s、>18000 包/s），批量 TCP 会掉到 0.1 MB/s 而 ping 正常 | 0 个 |
+| `wifi_load` | realman_ts 的 Wi-Fi 接口 5 s 收发字节 | < 600 KB/s |
+| `bulk_throughput` | realman_ts → server5090 经 ssh 传 16 MiB，从收到第一块开始计时 | ≥ 2 MB/s |
+| `ping` | 1400 字节的 ping（小包在链路塌掉时也能通） | 平均 ≤ 50 ms，丢包 ≤ 5 % |
+| `inference_round_trip` | 在桥接容器里向它实际使用的地址和端口发 1 + 5 次请求（两张 224×224 + 7 维状态 + prompt），第一次不计 | 中位数 < 200 ms |
+| `bridge_prompt` / `bridge_paused` / `bridge_errors` | `/policy/stats`：prompt 等于所服务任务的 prompt（没有启动记录时等于配置里任一 prompt）、`paused=0`、没有 error/fail 计数 | 见左 |
+
+每次检测写一份 `<data_root>/_console/linkcheck/<时间>.json`；某项无法执行（如 realman_ts 不可达）时该项判失败并给出原因，其余项照常执行。
+
 ## 安全规则
 
 - 拉取、清洗、视图都写新目录，目标已存在就拒绝；只会删除本任务自己没写完的 `<目标>.partial`。
 - 只读录制容器（`docker exec … tar/du/cat`），不碰 bringup、web、录制容器的启停和行为树。
 - 训练和评估拒绝被别人占用的 GPU；容器用 `runtime: nvidia` + `NVIDIA_VISIBLE_DEVICES`（服务器上的 CDI 规格过期，`gpus:` 会失败）。
-- 配置在 `config/training/training_console.yaml`（`remote`、`openpi`、`prompts` 段）和 `config/training/openpi-console.compose.yaml`；主机只写 ssh 别名。
+- 推理服务：启停都在行为树为 `policy` 模式时拒绝；机器人侧只执行 `docker compose up -d --no-deps --no-build policy_bridge`、`docker compose stop policy_bridge` 和发布 prompt，从不调用 `./rm65`、不改行为树模式、不调用 `/policy/activate`。
+- 配置在 `config/training/training_console.yaml`（`remote`、`openpi`、`serving`、`linkcheck`、`prompts` 段）和 `config/training/openpi-console.compose.yaml`；主机只写 ssh 别名。
 
 ## 质检规则
 

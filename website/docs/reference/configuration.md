@@ -61,7 +61,7 @@ description: 仓库根目录 config/ 下每个配置文件的职责、消费者�
 
 | 文件 | 管什么 | 消费者 | 生效方式 | 专题页 |
 | --- | --- | --- | --- | --- |
-| `training/training_console.yaml` | `data_root`（数据集搜索根目录）和逐条质检阈值（`quality` 段，数值来自 2026-10-13/10-16 人工清洗） | `realman-train` / `realman_training` | 下次执行 `realman-train` 时生效 | [训练控制平台](../development/training-console) |
+| `training/training_console.yaml` | `data_root`、逐条质检阈值（`quality`）、realman_ts 录制（`remote`）、openpi（`openpi`）、推理服务（`serving`：模型、GPU、端口、两端容器）和链路检测阈值（`linkcheck`）、任务 prompt（`prompts`） | `realman-train` / `realman_training` | 下次执行 `realman-train` 时生效 | [训练控制平台](../development/training-console) |
 
 ## 其它
 

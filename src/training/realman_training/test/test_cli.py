@@ -200,3 +200,68 @@ def test_background_returns_the_job_id(setup, tmp_path, capsys):
     job_id = capsys.readouterr().out.strip()
     store = JobStore(load_config(config_path).console_dir)
     assert store.wait(job_id, lambda line: None)["state"] == "succeeded"
+
+
+def test_serve_start_needs_yes(setup, capsys):
+    _, _, config = setup
+    assert main(["--config", str(config), "serve", "start"]) == 2
+    assert "--yes" in capsys.readouterr().err
+
+
+def test_serve_stop_needs_yes(setup, capsys):
+    _, _, config = setup
+    assert main(["--config", str(config), "serve", "stop"]) == 2
+    assert "--yes" in capsys.readouterr().err
+
+
+def test_serve_start_runs_a_serve_job_with_the_options(setup, monkeypatch):
+    _, _, config = setup
+    seen = {}
+
+    def fake_run_job(kind, params, args, cfg):
+        seen.update(kind=kind, params=params)
+        return 0
+
+    monkeypatch.setattr("realman_training.cli._run_job", fake_run_job)
+    assert main(["--config", str(config), "serve", "start", "--gpu", "3", "--task", "pick_only", "--dry-run"]) == 0
+    assert seen["kind"] == "serve"
+    assert seen["params"]["action"] == "start" and seen["params"]["gpu"] == 3 and seen["params"]["task"] == "pick_only"
+    assert seen["params"]["dry_run"] is True and "port" not in seen["params"]
+
+
+def test_serve_status_prints_json(setup, monkeypatch, capsys):
+    _, _, config = setup
+    data = {"serve": {"running": False}, "gpu": {"index": 2}, "bridge": {"error": "realman_ts unreachable"},
+            "bt_mode": None, "record": {}}
+    monkeypatch.setattr("realman_training.serving.status", lambda cfg: data)
+    assert main(["--config", str(config), "serve", "status", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out) == data
+    assert main(["--config", str(config), "serve", "status"]) == 0
+    out = capsys.readouterr().out
+    assert "openpi-serve: not running" in out and "policy_bridge: realman_ts unreachable" in out
+
+
+def test_linkcheck_exit_code_follows_the_checks(setup, monkeypatch, capsys):
+    from realman_training.linkcheck import Check
+
+    _, _, config = setup
+    results = [Check("pika", "pika_nodes", True, "0", "0"), Check("link", "ping", False, "avg 80 ms", "avg <= 50 ms")]
+    seen = {}
+
+    def fake_checks(cfg, runner=None, only=None, **kw):
+        seen["only"] = only
+        return results
+
+    monkeypatch.setattr("realman_training.linkcheck.run_checks", fake_checks)
+    assert main(["--config", str(config), "linkcheck", "--only", "pika,link"]) == 1
+    out = capsys.readouterr().out
+    assert "PASS  pika_nodes" in out and "FAIL  ping" in out
+    assert seen["only"] == ["pika", "link"]
+    assert main(["--config", str(config), "linkcheck", "--json"]) == 1
+    assert json.loads(capsys.readouterr().out)["ok"] is False
+
+
+def test_linkcheck_refuses_unknown_items(setup, capsys):
+    _, _, config = setup
+    assert main(["--config", str(config), "linkcheck", "--only", "wifi"]) == 2
+    assert "pika, link, inference, bridge" in capsys.readouterr().err

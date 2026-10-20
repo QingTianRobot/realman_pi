@@ -10,9 +10,10 @@ from pathlib import Path
 import pyarrow
 import yaml
 
+from . import linkcheck, serving
 from .config import load_config
 from .datasets import DatasetSummary, discover, summarize
-from .jobs import JobConflict, JobStore
+from .jobs import JobConflict, JobStore, StepFailed
 from .lerobot_io import NotALeRobotDataset
 from .quality import QualityUnavailable, inspect_dataset, suggested_drops
 from .steps import clean as clean_step
@@ -137,6 +138,10 @@ def _run_step(args, config) -> int:
         print("error: training occupies GPUs for hours; check the command with --dry-run, then add --yes", file=sys.stderr)
         return 2
     kind, params = build_params(args, config)
+    return _run_job(kind, params, args, config)
+
+
+def _run_job(kind: str, params: dict, args, config) -> int:
     store = JobStore(config.console_dir)
     store.recover()
     try:
@@ -160,6 +165,69 @@ def _run_step(args, config) -> int:
     if args.json:
         print(json.dumps(status.get("result"), ensure_ascii=False, indent=2))
     return 0
+
+
+SERVE_CONFIRM = {
+    "start": "starting takes a GPU on server5090 and (re)creates policy_bridge on realman_ts",
+    "stop": "stopping takes the policy server and policy_bridge down",
+}
+
+
+def _serve_status_text(data: dict) -> list[str]:
+    serve, bridge, record, gpu = data["serve"], data["bridge"], data.get("record") or {}, data.get("gpu") or {}
+    lines = []
+    if serve.get("running"):
+        lines.append(f"openpi-serve: running since {serve.get('started')} · {serve.get('image')} {serve.get('image_id', '')}")
+    else:
+        lines.append("openpi-serve: not running")
+    if record:
+        lines.append(f"  model {record.get('model')} @ {record.get('step')} · GPU {record.get('gpu')} · port {record.get('port')}"
+                     f" · task {record.get('task')}" + (f" · stopped {record['stopped']}" if record.get("stopped") else ""))
+    if "used_mib" in gpu:
+        lines.append(f"  GPU {gpu['index']}: {gpu['used_mib']} / {gpu['total_mib']} MiB")
+    if "error" in bridge:
+        lines.append(f"policy_bridge: {bridge['error']}")
+    else:
+        state = f"running since {bridge.get('started')}" if bridge.get("running") else "not running"
+        lines.append(f"policy_bridge: {state} · {bridge.get('image', '')} · server {bridge.get('server') or '-'}")
+        lines.append(f"  prompt {bridge.get('prompt')!r} · paused {bridge.get('paused')} · allow_publish {bridge.get('allow_publish')}")
+    mode = data.get("bt_mode")
+    lines.append(f"behaviour tree: {mode.get('active_mode') if mode else 'no input_mode_state (not running?)'}")
+    return lines
+
+
+def _cmd_serve(args, config) -> int:
+    if args.serve_command == "status":
+        data = serving.status(config)
+        print(json.dumps(data, ensure_ascii=False, indent=2) if args.json else "\n".join(_serve_status_text(data)))
+        return 0
+    if not (args.yes or args.dry_run):
+        print(f"error: {SERVE_CONFIRM[args.serve_command]}; check with --dry-run, then add --yes", file=sys.stderr)
+        return 2
+    params = {"config": str(config.source), "action": args.serve_command, "dry_run": args.dry_run}
+    if args.serve_command == "start":
+        for key in ("model", "checkpoint", "gpu", "port", "task"):
+            value = getattr(args, key)
+            if value is not None:
+                params[key] = value
+    return _run_job("serve", params, args, config)
+
+
+def _cmd_linkcheck(args, config) -> int:
+    only = [part.strip() for part in args.only.split(",") if part.strip()] if args.only else None
+    unknown = sorted(set(only or ()) - set(linkcheck.ITEMS))
+    if unknown:
+        print(f"error: unknown items {unknown}; choose from {', '.join(linkcheck.ITEMS)}", file=sys.stderr)
+        return 2
+    checks = linkcheck.run_checks(config, only=only)
+    history = linkcheck.save_history(config, checks)
+    ok = all(c.ok for c in checks)
+    if args.json:
+        print(json.dumps({"ok": ok, "checks": [c.to_dict() for c in checks], "history": str(history)}, ensure_ascii=False, indent=2))
+    else:
+        print("\n".join(linkcheck.format_table(checks)))
+        print(f"{'all checks passed' if ok else 'some checks FAILED'} · {history}")
+    return 0 if ok else 1
 
 
 def _job_row(job) -> dict:
@@ -317,6 +385,28 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--status")
     p.add_argument("--method")
     p.add_argument("--force", action="store_true", help="replace a hand-written card (kept as a backup)")
+    serve = sub.add_parser("serve", help="start/stop/status of the inference chain (openpi-serve + policy_bridge)")
+    serve_sub = serve.add_subparsers(dest="serve_command", required=True)
+    p = serve_sub.add_parser("start", help="openpi-serve with a registered model, warm-up, policy_bridge (inactive), link checks")
+    p.add_argument("--model", help="<openpi config>/<exp> (default: serving.model)")
+    p.add_argument("--checkpoint", help="checkpoint step (default: the latest)")
+    p.add_argument("--gpu", type=int)
+    p.add_argument("--port", type=int)
+    p.add_argument("--task", help="task whose prompt the bridge gets (default: the model's first task)")
+    p.add_argument("--dry-run", action="store_true", help="run the checks and print the commands only")
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--background", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p = serve_sub.add_parser("stop", help="stop policy_bridge, then openpi-serve (refused in policy mode)")
+    p.add_argument("--dry-run", action="store_true")
+    p.add_argument("--yes", action="store_true")
+    p.add_argument("--background", action="store_true")
+    p.add_argument("--json", action="store_true")
+    p = serve_sub.add_parser("status", help="both containers, model, GPU memory, bridge prompt")
+    p.add_argument("--json", action="store_true")
+    check = sub.add_parser("linkcheck", help="the four data-path checks (Pika/Wi-Fi, bulk + ping, inference, bridge)")
+    check.add_argument("--only", help="comma list of pika, link, inference, bridge")
+    check.add_argument("--json", action="store_true")
     jobs = sub.add_parser("jobs", help="list jobs")
     jobs.add_argument("--kind")
     jobs.add_argument("--limit", type=int, default=20)
@@ -345,9 +435,13 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_list(args, config)
         if args.command == "inspect":
             return _cmd_inspect(args, config)
+        if args.command == "serve":
+            return _cmd_serve(args, config)
+        if args.command == "linkcheck":
+            return _cmd_linkcheck(args, config)
         if args.command in STEP_COMMANDS:
             return _run_step(args, config)
         return _cmd_jobs(args, config)
-    except (NotALeRobotDataset, FileNotFoundError, OSError, ValueError, KeyError, yaml.YAMLError) as error:
+    except (NotALeRobotDataset, FileNotFoundError, OSError, ValueError, KeyError, yaml.YAMLError, StepFailed) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

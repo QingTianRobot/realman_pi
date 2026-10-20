@@ -68,6 +68,8 @@ def test_the_environment_variable_picks_the_file(tmp_path, monkeypatch):
         ("training_console:\n  quality:\n    release_tasks: pick_and_place\n", "release_tasks"),
         ("training_console:\n  remote:\n    ssh: x\n", "ssh"),
         ("training_console:\n  prompts: [a]\n", "prompts"),
+        ("training_console:\n  unknown_key: 1\n", "unknown_key"),
+        ("training_console:\n  data_root: /x\n  extra_section: {}\n", "extra_section"),
     ],
 )
 def test_bad_values_name_the_key(tmp_path, body, fragment):

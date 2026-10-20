@@ -95,12 +95,18 @@ def _path(value: object) -> Path:
     return Path(str(value)).expanduser()
 
 
+_ALLOWED_TOP_KEYS = {"data_root", "state_dir", "quality", "remote", "openpi", "prompts"}
+
+
 def load_config(path: str | Path | None = None) -> ConsoleConfig:
     source = (Path(path) if path else default_config_path()).resolve()
     document = yaml.safe_load(source.read_text(encoding="utf-8")) or {}
     section = document.get("training_console") if isinstance(document, dict) else None
     if not isinstance(section, dict):
         raise ValueError(f"{source}: missing the training_console section")
+    unknown = sorted(set(section) - _ALLOWED_TOP_KEYS)
+    if unknown:
+        raise ValueError(f"{source}: unknown training_console keys {unknown}; allowed: {sorted(_ALLOWED_TOP_KEYS)}")
     quality = _parse(QualityConfig, section.get("quality") or {}, source, "quality")
     _validate(quality, source)
     remote = _parse(RemoteConfig, section.get("remote") or {}, source, "remote")

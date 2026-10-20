@@ -1,0 +1,22 @@
+# Training console (src/training/realman_training, design docs/superpowers/specs/2026-10-20-training-console-design.md).
+# Every key is optional; a missing key keeps the default in realman_training/config.py.
+training_console:
+  # Where the pulled recordings, cleaned sets and training views live on server5090.
+  data_root: ~/data/realman
+
+  # Per-episode quality rules. The numbers reproduce the 2026-10-13 and 2026-10-16 manual cleanings.
+  quality:
+    arm: r                        # whose gripper and joints are judged (l, m, r)
+    gripper_open_raw: 50          # right gripper reading fully open (config/ros/gripper.yaml)
+    gripper_close_raw: 8500       # fully closed
+    closed_threshold_raw: 4275    # above = closed; halfway between open and closed
+    start_closed_sec: 1.0         # closed anywhere in this first span = "starts closed"
+    glitch_max_frames: 2          # an open run this short inside a closed run = reading glitch
+    plateau_window_sec: 3.0       # end of the last closed run that is judged for "closed on nothing"
+    # Recordings have no torque signal: held plateaus reached 7904 on 2026-10-16 (kept), empty grasps
+    # 8414-8550 (dropped). The behaviour tree's 7800 relies on torque and does not apply here.
+    empty_position_min: 8300
+    start_partial_raw: 300        # first reading above this but not closed = warning only
+    release_tasks: [pick_and_place]   # tasks that must end with the gripper open again
+    start_pose_deg: [-9.89, 18.04, 79.08, 15.51, 79.60, -6.20]  # right arm training start pose
+    start_pose_tol_deg: 2.0       # first frame further than this from the start pose = warning only

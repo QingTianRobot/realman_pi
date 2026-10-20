@@ -31,6 +31,9 @@ Validate bounds independently. Current motion nodes establish these examples:
 | --- | --- |
 | `MoveJ` | `arm_id` is `l/m/r`; six finite `joint_degrees`; velocity `[1,100]`; blend `[0,100]`; positive finite timeout; `dry_run=true` default. |
 | `ThreeArmMoveJ` | Six finite joint values for each `l/m/r`; no `arm_id`; common velocity/blend/timeout; all values validated before any client is created. |
+| `RotateJoint` | `arm_id` is `l/m/r`; `joint` in `[1,6]`; `direction` is `cw`/`ccw`; `angle_degrees` in `(0,180]`; velocity `[1,100]`; positive timeout; strict `dry_run` literal. Reads `/<arm>/get_current_pose`, then delegates to an internal `MoveJNode` so cancellation and drains are MoveJ's. |
+| `MoveJointTo` | Same ports and implementation as `RotateJoint`, with `target_degrees` in `[-360,360]` instead of direction/angle; sets one joint to an absolute angle. |
+| `WhiteObjectsRemain` | `dry_run` (strict literal) and output `table_clear`; thresholds from `policy_task.object_detection`. SUCCESS = objects remain; FAILURE + `table_clear=true` = clear; FAILURE + reason = no usable image. Dry run reads no topic and reports clear. |
 | `CartesianVelocityForDuration` | `arm_id`, configured logical `reference`, two finite three-value vectors, and positive duration; speed, acceleration, watchdog, goal timeout, and stop timeout come from the per-arm runtime profile. |
 
 ## Stateful Asynchronous Leaf Pattern

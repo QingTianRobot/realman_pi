@@ -61,6 +61,20 @@ class Reader {
     return value.get<std::vector<std::string>>();
   }
 
+  std::array<int, 4> fourIntegers(const std::string& key, const std::array<int, 4>& fallback) {
+    const auto value = declare(
+        key, rclcpp::ParameterValue(std::vector<int64_t>(fallback.begin(), fallback.end())));
+    if (value.get_type() != rclcpp::ParameterType::PARAMETER_INTEGER_ARRAY) {
+      throw std::invalid_argument(key + " must be a list of four integers");
+    }
+    const auto numbers = value.get<std::vector<int64_t>>();
+    if (numbers.size() != 4) throw std::invalid_argument(key + " must contain exactly four integers");
+    std::array<int, 4> result{};
+    std::transform(numbers.begin(), numbers.end(), result.begin(),
+                   [](int64_t item) { return static_cast<int>(item); });
+    return result;
+  }
+
   std::array<double, 6> sixNumbers(const std::string& key, const std::array<double, 6>& fallback) {
     const auto value = declare(key, rclcpp::ParameterValue(std::vector<double>(fallback.begin(), fallback.end())));
     std::vector<double> numbers;
@@ -162,6 +176,28 @@ PolicyTaskConfig declareAndLoadPolicyTaskConfig(rclcpp::Node& node) {
       read.number(p + "gripper_ready.timeout_sec", defaults.gripper_ready.timeout_sec);
   config.gripper_ready.position_stale_sec =
       read.number(p + "gripper_ready.position_stale_sec", defaults.gripper_ready.position_stale_sec);
+  config.pick_cycle.lift_joint_degrees =
+      read.sixNumbers(p + "pick_cycle.lift_joint_degrees", defaults.pick_cycle.lift_joint_degrees);
+  config.pick_cycle.release_joint =
+      read.integer(p + "pick_cycle.release_joint", defaults.pick_cycle.release_joint);
+  config.pick_cycle.release_joint_deg =
+      read.number(p + "pick_cycle.release_joint_deg", defaults.pick_cycle.release_joint_deg);
+  const auto& detection = defaults.object_detection;
+  config.object_detection.image_topic =
+      read.text(p + "object_detection.image_topic", detection.image_topic);
+  config.object_detection.roi_xywh =
+      read.fourIntegers(p + "object_detection.roi_xywh", detection.roi_xywh);
+  config.object_detection.min_channel =
+      read.integer(p + "object_detection.min_channel", detection.min_channel);
+  config.object_detection.max_chroma =
+      read.integer(p + "object_detection.max_chroma", detection.max_chroma);
+  config.object_detection.erode_px = read.integer(p + "object_detection.erode_px", detection.erode_px);
+  config.object_detection.min_pixels =
+      read.integer(p + "object_detection.min_pixels", detection.min_pixels);
+  config.object_detection.settle_sec =
+      read.number(p + "object_detection.settle_sec", detection.settle_sec);
+  config.object_detection.timeout_sec =
+      read.number(p + "object_detection.timeout_sec", detection.timeout_sec);
   config.router_release_sec = read.number(p + "router_release_sec", defaults.router_release_sec);
   config.trace.enabled = read.boolean(p + "trace.enabled", defaults.trace.enabled);
   config.trace.dir = read.text(p + "trace.dir", defaults.trace.dir);

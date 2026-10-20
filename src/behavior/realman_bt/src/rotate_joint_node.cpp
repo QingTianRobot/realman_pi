@@ -68,7 +68,7 @@ bt_core::PortsList SingleJointMoveNode::commonPorts() {
 }
 
 bt_core::PortsList RotateJointNode::providedPorts() {
-  auto ports = commonPorts();
+  auto ports = SingleJointMoveNode::commonPorts();
   ports.merge(bt_core::makePorts(
       bt_core::InputPort<std::string>("direction", "ccw",
                                       "cw (clockwise, angle decreases) or ccw (counterclockwise, angle increases), right-hand rule about the joint +Z axis"),
@@ -101,7 +101,7 @@ std::string RotateJointNode::describe() const {
 }
 
 bt_core::PortsList MoveJointToNode::providedPorts() {
-  auto ports = commonPorts();
+  auto ports = SingleJointMoveNode::commonPorts();
   ports.merge(bt_core::makePorts(bt_core::InputPort<double>(
       "target_degrees", "0", "Absolute angle for the joint in RealMan degrees, [-360, 360]")));
   return ports;

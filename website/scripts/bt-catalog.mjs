@@ -91,14 +91,29 @@ function portsIn(body) {
   return ports;
 }
 
-// Class name -> { ports, source } for every providedPorts() definition in `files`.
+// Class name -> { ports, source } for every providedPorts() definition in `files`. A providedPorts() that starts
+// from a shared helper (`auto ports = Base::commonPorts();`, any other `PortsList Class::name()` definition) gets
+// that helper's ports first.
 async function portDefinitions(files, repositoryDirectory) {
   const definitions = {};
+  const helpers = {};
+  for (const file of files) {
+    const text = await readFile(file, "utf8");
+    for (const match of text.matchAll(/PortsList\s+(\w+)::(\w+)\(\)\s*\{/g)) {
+      if (match[2] !== "providedPorts") {
+        helpers[`${match[1]}::${match[2]}`] = portsIn(braceBody(text, match.index + match[0].length - 1));
+      }
+    }
+  }
+  const withHelpers = (body) => [
+    ...[...body.matchAll(/\b(\w+::\w+)\(\)/g)].flatMap((call) => helpers[call[1]] ?? []),
+    ...portsIn(body),
+  ];
   for (const file of files) {
     const text = await readFile(file, "utf8");
     const source = relative(repositoryDirectory, file);
     for (const match of text.matchAll(/(\w+)::providedPorts\(\)\s*\{/g)) {
-      definitions[match[1]] = { ports: portsIn(braceBody(text, match.index + match[0].length - 1)), source };
+      definitions[match[1]] = { ports: withHelpers(braceBody(text, match.index + match[0].length - 1)), source };
     }
     for (const match of text.matchAll(/static\s+(?:bt_core::)?PortsList\s+providedPorts\(\)\s*\{/g)) {
       const owner = [...text.slice(0, match.index).matchAll(/\b(?:class|struct)\s+(\w+)/g)].pop();

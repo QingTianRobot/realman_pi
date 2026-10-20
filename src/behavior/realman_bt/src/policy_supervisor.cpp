@@ -41,6 +41,8 @@ const char* outcomeName(AttemptOutcome outcome) {
       return "dropped";
     case AttemptOutcome::kWrongTask:
       return "wrong_task";
+    case AttemptOutcome::kWrongSideEmpty:
+      return "wrong_side_empty";
     case AttemptOutcome::kTimeout:
       return "timeout";
     case AttemptOutcome::kStall:
@@ -373,6 +375,20 @@ void PolicySupervisor::evaluateLift(double now, bool closed) {
   if (!lift_reference_deg_) return;  // the policy has not tried to grasp yet
 
   if (arm[lift.wrong_side_joint_index] < lift.wrong_side_below_deg) {
+    // With the jaws met nothing is carried to the bin; the policy missed and wanders, so another
+    // attempt (open, go home, start again) can fix it. Holding something, or no gripper reading,
+    // stays a fault: then it really is carrying the object away under the pick prompt.
+    const bool jaws_met = std::isfinite(last_gripper_position_) &&
+                          last_gripper_position_ >= config_.verdict.empty_position_min;
+    if (jaws_met) {
+      finish(now, AttemptOutcome::kWrongSideEmpty,
+             "the arm turned to the bin side (J" + std::to_string(lift.wrong_side_joint_index + 1) + " = " +
+                 number(arm[lift.wrong_side_joint_index], 1) + " deg, limit " +
+                 number(lift.wrong_side_below_deg, 1) + ") with empty jaws (gripper position " +
+                 number(last_gripper_position_, 0) + "): the grasp missed",
+             "empty");
+      return;
+    }
     finish(now, AttemptOutcome::kWrongTask,
            "the arm turned to the bin side (J" + std::to_string(lift.wrong_side_joint_index + 1) + " = " +
                number(arm[lift.wrong_side_joint_index], 1) + " deg, limit " +

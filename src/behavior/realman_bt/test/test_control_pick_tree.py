@@ -40,7 +40,11 @@ def test_policy_branch_picks_lifts_turns_releases_and_checks_the_table():
     assert [child.tag for child in entry] == ["ThreeArmMoveJ", "ActivateInputMode", "Fallback"]
     task_ok, fail = list(entry.find("Fallback[@name='pick_task']"))
     assert fail.tag == "FailInputMode" and fail.attrib["reason"] == "{policy_failure_reason}"
-    assert [child.tag for child in task_ok] == ["SetBool", "Fallback", "PolicyInputStub"]
+    assert [child.tag for child in task_ok] == ["SetBool", "Fallback", "ThreeArmMoveJ", "PolicyInputStub"]
+    home = task_ok.find("ThreeArmMoveJ")
+    assert home.attrib["name"] == "pick_done_home"
+    assert home.attrib["r_joint_degrees"] == "{pika_r_joint_degrees}"
+    assert home.attrib["dry_run"] == "{dry_run}"
     reset = task_ok.find("SetBool")
     assert reset.attrib == {"key": "pick_table_clear", "value": "false"}
 

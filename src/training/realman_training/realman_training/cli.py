@@ -103,6 +103,11 @@ def _cmd_inspect(args, config) -> int:
 
 
 def main(argv: list[str] | None = None) -> int:
+    argv = sys.argv[1:] if argv is None else argv
+    if argv[:1] == ["_job-run"]:
+        from .jobs import run_job
+
+        return run_job(argv[1])
     parser = argparse.ArgumentParser(prog="realman-train", description=__doc__)
     parser.add_argument("--config", help="console config (default: config/training/training_console.yaml)")
     sub = parser.add_subparsers(dest="command", required=True)
@@ -113,7 +118,7 @@ def main(argv: list[str] | None = None) -> int:
     inspecting.add_argument("path")
     inspecting.add_argument("--json", action="store_true")
     inspecting.add_argument("--no-quality", action="store_true", help="summary only")
-    args = parser.parse_args(argv)
+    args = parser.parse_args(argv)  # argv is always a list at this point
     try:
         config = load_config(args.config)
         return _cmd_list(args, config) if args.command == "list" else _cmd_inspect(args, config)

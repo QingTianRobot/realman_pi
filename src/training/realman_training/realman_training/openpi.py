@@ -82,9 +82,14 @@ class Compose:
             "-f", str(self.config.compose_overlay),
         ]
 
-    def run(self, command: str, *, env: dict[str, str] | None = None, name: str | None = None) -> list[str]:
+    def run(self, command: str, *, env: dict[str, str] | None = None, name: str | None = None, detach: bool = False) -> list[str]:
         argv = [*self.base(), "run", "-T", "--no-deps"]
-        argv += ["-d", "--name", name] if name else ["--rm"]
+        if detach:
+            argv += ["-d"]
+        if name:
+            argv += ["--name", name]
+        if not detach:
+            argv += ["--rm"]
         for key, value in (env or {}).items():
             argv += ["-e", f"{key}={value}"]
         return [*argv, "openpi", "zsh", "-lc", CONTAINER_PREFIX + command]

@@ -37,6 +37,11 @@ def base_runner():
     return FakeRunner().on("python -", stdout=json.dumps(INFO)).on("nvidia-smi", stdout="1, 3\n2, 5\n")
 
 
+def norm_runner():
+    """base_runner with container-inspect returning 1 (no existing norm container)."""
+    return base_runner().on("container inspect", returncode=1)
+
+
 def stats_path(env):
     return env["docker_data"] / "assets/pi05_x/local/v/norm_stats.json"
 
@@ -46,7 +51,7 @@ def test_norm_computes_missing_stats_once(env):
         stats_path(env).parent.mkdir(parents=True)
         stats_path(env).write_text("{}")
 
-    runner = base_runner().on("opic-norm", action=write_stats, lines=["Computing stats: 100%"])
+    runner = norm_runner().on("opic-norm", action=write_stats, lines=["Computing stats: 100%"])
     params = {"config_name": "pi05_x", "view": str(env["view"]), "config": env["config"]}
     assert norm.run(params, RecordingLog(), runner=runner) == {"norm_stats": str(stats_path(env)), "computed": True}
     assert runner.envs[-1]["OPENPI_REALMAN_DATASET_DIR"] == str(env["view"])
@@ -56,7 +61,7 @@ def test_norm_computes_missing_stats_once(env):
 
 
 def test_norm_fails_when_the_stats_do_not_appear(env):
-    runner = base_runner().on("opic-norm", returncode=0)
+    runner = norm_runner().on("opic-norm", returncode=0)
     with pytest.raises(StepFailed, match="norm_stats.json"):
         norm.run({"config_name": "pi05_x", "view": str(env["view"]), "config": env["config"]}, RecordingLog(), runner=runner)
 
@@ -64,6 +69,38 @@ def test_norm_fails_when_the_stats_do_not_appear(env):
 def test_norm_bad_config_name_refused(env):
     with pytest.raises(StepFailed, match="config_name"):
         norm.run({"config_name": "bad name!", "view": str(env["view"]), "config": env["config"]}, RecordingLog(), runner=base_runner())
+
+
+def test_norm_uses_predictable_container_name(env):
+    """norm container is named <project>-norm-<config> and --rm is used."""
+    def write_stats(argv, input):
+        stats_path(env).parent.mkdir(parents=True)
+        stats_path(env).write_text("{}")
+
+    runner = norm_runner().on("opic-norm", action=write_stats)
+    norm.run({"config_name": "pi05_x", "view": str(env["view"]), "config": env["config"]}, RecordingLog(), runner=runner)
+    cmd = runner.commands("opic-norm")[0]
+    assert "--name" in cmd and "openpi-console-norm-pi05_x" in cmd
+    assert "--rm" in cmd and "-d" not in cmd
+
+
+def test_norm_refuses_when_container_already_exists(env):
+    runner = base_runner().on("container inspect", returncode=0)  # container exists
+    with pytest.raises(StepFailed, match="already exists"):
+        norm.run({"config_name": "pi05_x", "view": str(env["view"]), "config": env["config"]}, RecordingLog(), runner=runner)
+
+
+def test_norm_cancel_stops_the_container(env):
+    from realman_training.jobs import JobCancelled as _JobCancelled
+
+    def raise_cancel(argv, input):
+        raise _JobCancelled()
+
+    runner = norm_runner().on("opic-norm", action=raise_cancel)
+    with pytest.raises(_JobCancelled):
+        norm.run({"config_name": "pi05_x", "view": str(env["view"]), "config": env["config"]}, RecordingLog(), runner=runner)
+    stops = runner.commands("docker stop")
+    assert stops and "openpi-console-norm-pi05_x" in " ".join(stops[0])
 
 
 def train_params(env, **extra):

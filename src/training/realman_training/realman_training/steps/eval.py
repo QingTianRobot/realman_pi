@@ -8,7 +8,7 @@ import shlex
 from pathlib import Path
 
 from ..config import load_config
-from ..jobs import StepFailed, write_json
+from ..jobs import JobCancelled, StepFailed, write_json
 from ..lerobot_io import read_episodes
 from ..openpi import (
     Compose,
@@ -73,23 +73,50 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     inside = f"/workspace/checkpoints/{name}/{exp}"
     if not params.get("dry_run"):
         (folder / "eval").mkdir(exist_ok=True)
+    def _run_container(cname: str, argv: list[str], on_line, **kwargs) -> int:
+        exists = runner.run(["docker", "container", "inspect", cname]).returncode == 0
+        if exists:
+            raise StepFailed(f"container {cname} already exists; remove it by hand or wait for it to finish")
+        last: list[str] = []
+
+        def capture(line: str) -> None:
+            last.append(compact(line))
+            on_line(line)
+
+        try:
+            return runner.stream(argv, capture, **kwargs)
+        except JobCancelled:
+            log(f"cancelled: stopping {cname}")
+            result = runner.run(["docker", "stop", "-t", "30", cname])
+            if result.returncode:
+                log(f"could not stop {cname}: {result.stderr}")
+            raise
+        finally:
+            _run_container._last = last  # type: ignore[attr-defined]
+
+    _run_container._last = []  # type: ignore[attr-defined]
+
     commands, results = [], {}
     total = len(steps) * (len(tasks) + int(swap))
     done = 0
     for step in steps:
         checkpoint = f"checkpoints/{name}/{exp}/{step}"
         for task, held_out in tasks.items():
+            cname = f"{oc.compose_project}-eval-{exp}-{step}"
             args = ["--config-name", name, "--checkpoint-dir", checkpoint, "--episodes", *map(str, held_out["episodes"]),
                     "--stride", str(stride), "--output", f"{inside}/eval/{step}_{task}.json"]
-            argv = compose.run("uv run --no-sync scripts/eval_open_loop.py " + shlex.join(args), env=ENV)
+            argv = compose.run("uv run --no-sync scripts/eval_open_loop.py " + shlex.join(args), env=ENV, name=cname)
             commands.append(argv)
             log(f"checkpoint {step}, task {task}: episodes {held_out['episodes']}")
             if params.get("dry_run"):
                 log("$ " + shlex.join(argv))
                 continue
-            code = runner.stream(argv, lambda line: log(compact(line)) if "MAE" in line or "Error" in line else None,
-                                 env=compose.env())
+            code = _run_container(cname, argv,
+                                  lambda line: log(compact(line)) if "MAE" in line or "Error" in line else None,
+                                  env=compose.env())
             if code:
+                for line in _run_container._last[-15:]:  # type: ignore[attr-defined]
+                    log(line)
                 raise StepFailed(f"eval of {step}/{task} exited {code}")
             data = json.loads((folder / "eval" / f"{step}_{task}.json").read_text(encoding="utf-8"))
             results.setdefault(str(step), {})[task] = {
@@ -98,14 +125,18 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
             done += 1
             log.progress(done, total, f"{step} {task}: MAE {data['mae']:.4f}")
         if swap:
+            cname_swap = f"{oc.compose_project}-eval-{exp}-{step}-swap"
             args = [name, checkpoint, f"{inside}/eval/prompt_swap_{step}.json", json.dumps(tasks), str(stride)]
-            argv = compose.run("uv run --no-sync python - " + shlex.join(args), env=ENV)
+            argv = compose.run("uv run --no-sync python - " + shlex.join(args), env=ENV, name=cname_swap)
             commands.append(argv)
             if params.get("dry_run"):
                 log("$ " + shlex.join(argv))
                 continue
-            code = runner.stream(argv, lambda line: log(compact(line)), input=script("prompt_swap"), env=compose.env())
+            code = _run_container(cname_swap, argv, lambda line: log(compact(line)),
+                                  input=script("prompt_swap"), env=compose.env())
             if code:
+                for line in _run_container._last[-15:]:  # type: ignore[attr-defined]
+                    log(line)
                 raise StepFailed(f"prompt swap of {step} exited {code}")
             data = json.loads((folder / "eval" / f"prompt_swap_{step}.json").read_text(encoding="utf-8"))
             results[str(step)]["prompt_swap"] = {t: {o: v["mae"] for o, v in row.items()} for t, row in data.items()}

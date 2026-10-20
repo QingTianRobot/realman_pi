@@ -118,6 +118,11 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
         if not exists:
             raise StepFailed(f"no container {container} to attach to")
         log(f"attaching to {container}")
+        try:
+            started_raw = runner.check(["docker", "inspect", "-f", "{{.State.StartedAt}}", container]).strip()
+            record["started"] = started_raw
+        except Exception:  # noqa: BLE001
+            pass  # keep record without "started" rather than failing
     else:
         if folder.exists() and not params.get("resume"):
             raise StepFailed(f"{folder} exists: pass resume to continue it, or pick another exp name")
@@ -147,7 +152,7 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
         if params.get("resume"):
             args.append("--resume")
         command = f"opic-train {shlex.quote(name)} {shlex.join(args)} >> /workspace/wandb/{exp}.log 2>&1"
-        argv = compose.run(command, env=train_env(gpus), name=container)
+        argv = compose.run(command, env=train_env(gpus), name=container, detach=True)
         log("$ " + shlex.join(argv))
         if params.get("dry_run"):
             return {"dry_run": True, "command": argv, "container": container, "norm": norm_result}
@@ -183,6 +188,10 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
     record.update(ended=now(), exit_code=exit_code, last_step=last)
     write_json(folder / "console_train.json", record)
     if exit_code:
+        if host_log.exists():
+            tail = host_log.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
+            for line in tail:
+                log(compact(line))
         raise StepFailed(f"training exited {exit_code}; see {host_log}")
     log(f"training finished at step {last}: {folder}")
     return {"run_dir": str(folder), "container": container, "last_step": last, "exit_code": exit_code}

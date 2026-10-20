@@ -47,6 +47,7 @@ def fake_eval(env):
 
     return (
         FakeRunner()
+        .on("container inspect", returncode=1)
         .on("eval_open_loop.py", action=write_eval)
         .on("python - pi05_x checkpoints", action=write_swap)
         .on("python -", stdout=json.dumps(INFO))
@@ -104,3 +105,49 @@ def test_eval_dry_run_lists_the_commands_only(env):
     result = eval_step.run(params, RecordingLog(), runner=runner)
     assert result["dry_run"] is True and len(result["commands"]) == 3
     assert not (env["run"] / "eval" / "summary.json").exists()
+
+
+def test_eval_uses_predictable_container_names_with_rm(env):
+    """Containers for eval/swap use <project>-eval-<exp>-<step>[-swap] and --rm, not -d."""
+    runner = fake_eval(env)
+    params = {"config_name": "pi05_x", "exp": "e1", "view": str(env["view"]), "gpu": 2, "config": env["config"]}
+    eval_step.run(params, RecordingLog(), runner=runner)
+    eval_cmds = runner.commands("eval_open_loop.py")
+    assert any("openpi-console-eval-e1-2000" in " ".join(c) for c in eval_cmds)
+    swap_cmds = runner.commands("python - pi05_x checkpoints")
+    assert any("openpi-console-eval-e1-2000-swap" in " ".join(c) for c in swap_cmds)
+    for c in eval_cmds + swap_cmds:
+        assert "--rm" in c and "-d" not in c
+
+
+def test_eval_refuses_when_container_already_exists(env):
+    runner = (
+        FakeRunner()
+        .on("container inspect", returncode=0)  # container exists
+        .on("eval_open_loop.py")
+        .on("python -", stdout=json.dumps(INFO))
+        .on("nvidia-smi", stdout="2, 4\n")
+    )
+    params = {"config_name": "pi05_x", "exp": "e1", "view": str(env["view"]), "gpu": 2, "config": env["config"]}
+    with pytest.raises(eval_step.StepFailed, match="already exists"):
+        eval_step.run(params, RecordingLog(), runner=runner)
+
+
+def test_eval_cancel_stops_the_container(env):
+    from realman_training.jobs import JobCancelled as _JobCancelled
+
+    def raise_cancel(argv, input):
+        raise _JobCancelled()
+
+    runner = (
+        FakeRunner()
+        .on("container inspect", returncode=1)
+        .on("eval_open_loop.py", action=raise_cancel)
+        .on("python -", stdout=json.dumps(INFO))
+        .on("nvidia-smi", stdout="2, 4\n")
+    )
+    params = {"config_name": "pi05_x", "exp": "e1", "view": str(env["view"]), "gpu": 2, "config": env["config"]}
+    with pytest.raises(_JobCancelled):
+        eval_step.run(params, RecordingLog(), runner=runner)
+    stops = runner.commands("docker stop")
+    assert stops and "openpi-console-eval-e1" in " ".join(stops[0])

@@ -64,8 +64,10 @@ def test_compose_run_uses_the_repo_files_the_overlay_and_the_view():
     assert "/o/openpi/compose.realman.yaml" in argv and "/cfg/overlay.yaml" in argv
     assert argv[argv.index("run") :][:5] == ["run", "-T", "--no-deps", "--rm", "-e"]
     assert argv[-4:] == ["openpi", "zsh", "-lc", CONTAINER_PREFIX + "opic-norm --config-name x"]
-    detached = compose.run("x", name="openpi-console-train-e")
+    detached = compose.run("x", name="openpi-console-train-e", detach=True)
     assert "--rm" not in detached and detached[detached.index("-d") + 1 : detached.index("-d") + 3] == ["--name", "openpi-console-train-e"]
+    named_rm = compose.run("x", name="openpi-console-norm-pi05_x")
+    assert "--rm" in named_rm and "-d" not in named_rm and "--name" in named_rm
     assert Compose(OC, Path("/d")).env()["CONSOLE_GPUS"] == "none"
 
 

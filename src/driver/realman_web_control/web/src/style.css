@@ -1,7 +1,6 @@
 /* Control page layout; colors and shared primitives come from theme.css. */
 .topbar { position: sticky; top: 0; z-index: 20; min-height: 64px; margin: 0 auto; padding: 10px clamp(16px, 3vw, 42px); display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); background: oklch(1 0 0 / 0.86); backdrop-filter: blur(12px); }
-.brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
-.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--btn-bg); color: var(--primary-strong); font-size: 11px; font-weight: 800; letter-spacing: .08em; }
+.brand { margin-right: auto; }
 .brand strong, .brand small { display: block; }
 .brand strong { font-size: 15px; letter-spacing: .01em; }
 .brand small { color: var(--text-3); font-size: 10px; margin-top: 2px; }
@@ -79,6 +78,12 @@ canvas { display: block; width: 100%; height: 100%; }
 #bt-stop.armed { background: var(--danger); color: #fff; box-shadow: 0 0 0 3px oklch(0.58 0.19 25 / 0.25); }
 .bt-stop-status { margin: -4px 0 10px; padding: 6px 8px; border-radius: 8px; background: var(--warn-bg); color: var(--warn); font-size: 10px; line-height: 1.45; }
 .bt-stop-status.error { background: var(--danger-bg); color: var(--danger); }
+.bt-panel { transition: border-color .2s ease, box-shadow .2s ease; }
+.bt-panel.bt-attention { border-color: var(--primary); box-shadow: 0 0 0 3px var(--focus-ring), var(--shadow-card-hover); }
+.bt-panel h2 .tab-dot { margin-left: 8px; }
+.bt-collapse { display: grid; place-items: center; width: 26px; height: 26px; padding: 0; border: 1px solid var(--line); border-radius: 8px; background: var(--card-bg); color: var(--text-2); font-size: 12px; }
+.bt-collapse:hover { background: var(--btn-bg-hover); color: var(--btn-content); border-color: var(--accent-bar); }
+.bt-panel:has(#bt-body[hidden]) .panel-heading.compact { padding-bottom: 0; }
 .bt-launcher { margin-bottom: 4px; }
 .bt-launcher-row { display: grid; grid-template-columns: minmax(0, 1fr) auto auto; gap: 8px; align-items: start; }
 .bt-picker { position: relative; min-width: 0; }

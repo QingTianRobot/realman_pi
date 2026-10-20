@@ -61,6 +61,20 @@ def parse_episodes(text: str) -> list[int]:
     return episodes
 
 
+def parse_checkpoints(text: str) -> list[int]:
+    """Parse --checkpoints: plain comma-separated ints only; ranges are not allowed."""
+    checkpoints: list[int] = []
+    for part in str(text).split(","):
+        part = part.strip()
+        if not part:
+            continue
+        try:
+            checkpoints.append(int(part))
+        except ValueError:
+            raise ValueError(f"--checkpoints expects plain integers, got {part!r} (no ranges allowed)") from None
+    return checkpoints
+
+
 def _task_prompts(pairs: list[str] | None) -> dict[str, str]:
     prompts = {}
     for pair in pairs or []:
@@ -109,7 +123,7 @@ def build_params(args, config) -> tuple[str, dict]:
     if command == "eval":
         return "eval", {**base, "config_name": args.config_name, "exp": args.exp,
                         "view": str(Path(args.view).expanduser().resolve()), "gpu": args.gpu,
-                        "checkpoints": parse_episodes(args.checkpoints) if args.checkpoints else None,
+                        "checkpoints": parse_checkpoints(args.checkpoints) if args.checkpoints else None,
                         "stride": args.stride, "prompt_swap": False if args.no_prompt_swap else None,
                         "dry_run": args.dry_run}
     if command == "register":

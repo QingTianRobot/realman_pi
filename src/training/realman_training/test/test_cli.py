@@ -118,7 +118,7 @@ def test_nonexistent_config_path_exits_2(tmp_path, capsys):
     assert "error:" in capsys.readouterr().err
 
 
-from realman_training.cli import build_params, parse_episodes
+from realman_training.cli import build_params, parse_checkpoints, parse_episodes
 from realman_training.config import load_config
 from realman_training.jobs import JobStore
 
@@ -128,6 +128,15 @@ def test_parse_episodes():
     assert parse_episodes(" 3 ") == [3]
     with pytest.raises(ValueError):
         parse_episodes("7-5")
+
+
+def test_parse_checkpoints_rejects_ranges():
+    assert parse_checkpoints("1000,2000") == [1000, 2000]
+    assert parse_checkpoints(" 500 ") == [500]
+    with pytest.raises(ValueError, match="integers"):
+        parse_checkpoints("1000-2000")
+    with pytest.raises(ValueError, match="integers"):
+        parse_checkpoints("abc")
 
 
 def cli_args(argv):

@@ -142,3 +142,20 @@ def test_generated_model_card_json_is_overwritten_without_force(env):
     register.run(params(env, status="已部署"), RecordingLog())
     card = json.loads((env["run"] / "model_card.json").read_text())
     assert card["status"] == "已部署" and not list(env["run"].glob("model_card.json.bak-*"))
+
+
+def test_span_falls_back_to_raw_strings_for_docker_nanosecond_timestamps(env, tmp_path):
+    """register must not crash when train --attach stored a Docker nanosecond Z timestamp."""
+    import json as _json
+
+    nano_ts = "2026-10-20T08:12:34.123456789Z"
+    (env["run"] / "console_train.json").write_text(_json.dumps({
+        "config": "pi05_x", "exp": "e1", "view": str(env["view"]), "gpus": [1], "batch_size": 16,
+        "num_train_steps": 2000, "holdout": [1, 2], "weights": "/w", "openpi_commit": "abc",
+        "started": nano_ts, "ended": "2026-10-21T16:09:40+08:00", "exit_code": 0,
+    }))
+    result = register.run(params(env), RecordingLog())
+    card = _json.loads((env["run"] / "model_card.json").read_text())
+    # Must complete without raising; the training time column must contain something from the raw value
+    assert "2026-10-20" in card.get("trained_start", "") or nano_ts in str(card.get("trained_start", ""))
+    assert result["card"]

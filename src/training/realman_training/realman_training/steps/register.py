@@ -32,10 +32,16 @@ REGISTRY_HEADER = """# 模型登记表（server5090 openpi checkpoints）
 def _span(start: str | None, end: str | None) -> str:
     if not start:
         return "-"
-    a = datetime.datetime.fromisoformat(start)
+    try:
+        a = datetime.datetime.fromisoformat(start)
+    except ValueError:
+        return f"{start}–{end}" if end else f"{start}–"
     if not end:
         return f"{a:%Y-%m-%d %H:%M}–"
-    b = datetime.datetime.fromisoformat(end)
+    try:
+        b = datetime.datetime.fromisoformat(end)
+    except ValueError:
+        return f"{a:%Y-%m-%d %H:%M}–{end}"
     return f"{a:%Y-%m-%d %H:%M}–{b:%H:%M}" if a.date() == b.date() else f"{a:%Y-%m-%d %H:%M}–{b:%Y-%m-%d %H:%M}"
 
 

@@ -304,3 +304,28 @@ def test_bad_experiment_names_are_refused(env):
 def test_train_bad_config_name_refused(env):
     with pytest.raises(StepFailed, match="config_name"):
         train.run(train_params(env, config_name="bad name!"), RecordingLog(), runner=base_runner())
+
+
+def test_attach_normalises_docker_nanosecond_z_timestamp(env):
+    """Docker returns StartedAt with nanoseconds and Z; Python 3.10 fromisoformat can't parse that."""
+    import json as _json
+    import datetime as _dt
+
+    log_path = env["docker_data"] / "wandb/e1.log"
+    log_path.write_text(LOG)
+    run_dir = env["docker_data"] / "checkpoints/pi05_x/e1"
+    run_dir.mkdir(parents=True)
+    runner = (
+        base_runner()
+        .on("{{.State.StartedAt}}", stdout="2026-10-20T08:12:34.123456789Z\n")
+        .on("{{.State.Running}}", stdout="false\n")
+        .on("{{.State.ExitCode}}", stdout="0\n")
+        .on("container inspect", returncode=0)
+        .on("git -C", stdout="abc\n")
+    )
+    result = train.run(train_params(env, attach=True), RecordingLog(), runner=runner)
+    record = _json.loads((run_dir / "console_train.json").read_text())
+    # Must be parseable as isoformat — no nanoseconds, no bare Z
+    started = _dt.datetime.fromisoformat(record["started"])
+    assert started.utcoffset() is not None  # has timezone
+    assert result["last_step"] == 200

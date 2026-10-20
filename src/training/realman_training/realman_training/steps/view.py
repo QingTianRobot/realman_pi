@@ -10,6 +10,7 @@ from __future__ import annotations
 import json
 import os
 import shlex
+import shutil
 from pathlib import Path
 
 from ..config import OpenpiConfig, load_config
@@ -70,10 +71,13 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     if partial.exists():
         raise StepFailed(f"refusing: {partial} exists (a previous interrupted run?); remove it by hand")
     # Refuse when src and dst.parent are on different devices or share only the root "/"
+    # Stat the nearest existing ancestor to avoid creating directories before the device check.
     try:
-        dst.parent.mkdir(parents=True, exist_ok=True)
+        ancestor = dst.parent
+        while not ancestor.exists() and ancestor != ancestor.parent:
+            ancestor = ancestor.parent
         src_dev = os.stat(src).st_dev
-        dst_dev = os.stat(dst.parent).st_dev
+        dst_dev = os.stat(ancestor).st_dev
     except OSError:
         src_dev = dst_dev = None
     if src_dev is not None and dst_dev is not None and src_dev != dst_dev:
@@ -94,17 +98,20 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     log("$ " + shlex.join(argv))
     if params.get("dry_run"):
         return {"dry_run": True, "command": argv}
-    code = runner.stream(argv, lambda line: log(compact(line)))
-    if code:
+    dst.parent.mkdir(parents=True, exist_ok=True)
+    try:
+        code = runner.stream(argv, lambda line: log(compact(line)))
+        if code:
+            raise StepFailed(f"make_realman_view.py exited {code}")
+        failures = check_gripper_labels(partial, config.quality.release_tasks)
+        (partial / "label_check.json").write_text(
+            json.dumps({"checked": now(), "failures": failures}, indent=2, ensure_ascii=False), encoding="utf-8"
+        )
+        partial.rename(dst)
+    except BaseException:
         if partial.exists():
-            import shutil
             shutil.rmtree(partial, ignore_errors=True)
-        raise StepFailed(f"make_realman_view.py exited {code}")
-    failures = check_gripper_labels(partial, config.quality.release_tasks)
-    (partial / "label_check.json").write_text(
-        json.dumps({"checked": now(), "failures": failures}, indent=2, ensure_ascii=False), encoding="utf-8"
-    )
-    partial.rename(dst)
+        raise
     if failures:
         listed = ", ".join(f"{f['episode']} ({f['task']}: {f['found']})" for f in failures[:10])
         raise StepFailed(f"view written to {dst}, but {len(failures)} episode(s) have wrong gripper labels: {listed}")

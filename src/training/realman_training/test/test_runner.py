@@ -50,6 +50,21 @@ def test_compact_keeps_the_last_progress_segment():
     assert compact("plain") == "plain"
 
 
+def test_pipe_reports_producer_when_it_fails_while_consumer_also_fails(tmp_path):
+    """When the consumer fails and the producer also exited non-zero, the error should name the producer."""
+    seen = []
+    with pytest.raises(CommandFailed) as exc_info:
+        Runner().pipe(
+            [PY, "-c", "import sys; print('hello'); sys.stderr.write('prod err\\n'); sys.stderr.flush(); sys.exit(3)"],
+            [PY, "-c", "import sys; sys.stdin.read(); sys.exit(4)"],
+            seen.append,
+        )
+    err = exc_info.value
+    # The producer exited 3; it should be reported as the root cause
+    assert err.returncode == 3
+    assert "prod err" in err.output or "exited 3" in str(err)
+
+
 def test_stream_finally_kills_sigterm_ignorer_and_preserves_original_exception():
     """A child that ignores SIGTERM must be killed; the caller's exception must propagate."""
 

@@ -9,6 +9,7 @@ first when missing. Cancelling the job stops the container. `attach` follows a c
 from __future__ import annotations
 
 import csv
+import datetime
 import re
 import shlex
 import time
@@ -33,6 +34,23 @@ from ..runner import Runner, compact
 from . import norm
 
 STEP_LINE = re.compile(r"Step (\d+): (.*?)(?: \(\d+:train\.py:\d+\))?$")
+
+
+def _normalize_docker_time(raw: str) -> str:
+    """Convert Docker's nanosecond Z timestamp (2026-10-20T08:12:34.123456789Z) to a local isoformat string.
+
+    Python 3.10 fromisoformat cannot parse nanoseconds or a bare 'Z' suffix, so we strip them first.
+    Falls back to the raw string on any parse error.
+    """
+    try:
+        s = raw.rstrip("Z")
+        # Drop the sub-second part if present
+        if "." in s:
+            s = s[:s.index(".")]
+        parsed = datetime.datetime.fromisoformat(s).replace(tzinfo=datetime.timezone.utc)
+        return parsed.astimezone().isoformat(timespec="seconds")
+    except (ValueError, OverflowError):
+        return raw
 
 
 def container_name(project: str, exp: str) -> str:
@@ -120,7 +138,7 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
         log(f"attaching to {container}")
         try:
             started_raw = runner.check(["docker", "inspect", "-f", "{{.State.StartedAt}}", container]).strip()
-            record["started"] = started_raw
+            record["started"] = _normalize_docker_time(started_raw)
         except Exception:  # noqa: BLE001
             pass  # keep record without "started" rather than failing
     else:

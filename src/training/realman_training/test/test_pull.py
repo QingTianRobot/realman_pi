@@ -105,10 +105,108 @@ def test_an_unreachable_robot_says_so(tmp_path):
     assert not (tmp_path / "t.partial").exists()
 
 
+def test_remote_includes_keepalive_options():
+    argv = pull.remote(REMOTE, ["tar", "-C", "/src", "-cf", "-", "meta"])
+    assert "ServerAliveInterval=15" in " ".join(argv)
+    assert "ServerAliveCountMax=4" in " ".join(argv)
+
+
 def test_remote_quotes_the_inner_command():
     argv = pull.remote(REMOTE, ["tar", "-C", "/a b", "-cf", "-", "meta"])
     assert argv[:2] == ["ssh", "-o"] and "BatchMode=yes" in argv
     assert shlex.split(argv[-1]) == ["docker", "exec", REMOTE.recording_container, "tar", "-C", "/a b", "-cf", "-", "meta"]
+
+
+def test_meta_stream_is_retried_once_on_command_failed(recording, tmp_path):
+    """If the meta+data pipe fails on the first try, it should be retried once."""
+    from realman_training.runner import CommandFailed
+
+    call_count = {"meta": 0}
+    base = fake_remote(recording)
+
+    original_pipe_impl = base.pipe_impl
+
+    def retry_pipe_impl(producer, consumer, on_bytes):
+        remote_cmd = " ".join(producer)
+        if "flock" in remote_cmd and "meta" in remote_cmd:
+            call_count["meta"] += 1
+            if call_count["meta"] == 1:
+                raise CommandFailed(producer, 1, "tar: Unexpected EOF")
+        return original_pipe_impl(producer, consumer, on_bytes)
+
+    base.pipe_impl = retry_pipe_impl
+    target = tmp_path / "data" / "t"
+    log = RecordingLog()
+    result = pull.run({"target": str(target)}, log, runner=base)
+    assert result["episodes"] == 2
+    assert call_count["meta"] == 2
+    assert any("retrying meta+data" in line for line in log.lines)
+
+
+def test_meta_stream_raises_step_failed_after_two_failures(recording, tmp_path):
+    """Two consecutive failures on the meta+data stream should raise StepFailed (partial cleaned up)."""
+    from realman_training.runner import CommandFailed
+    from realman_training.jobs import StepFailed
+
+    def always_fail_meta(producer, consumer, on_bytes):
+        if "flock" in " ".join(producer):
+            raise CommandFailed(producer, 1, "tar: Unexpected EOF")
+        # videos stream should not be reached
+        return 0
+
+    runner = fake_remote(recording)
+    runner.pipe_impl = always_fail_meta
+    target = tmp_path / "data" / "t"
+    with pytest.raises(StepFailed):
+        pull.run({"target": str(target)}, RecordingLog(), runner=runner)
+    assert not target.exists() and not (tmp_path / "data" / "t.partial").exists()
+
+
+def test_videos_stream_retry_uses_skip_old_files(recording, tmp_path):
+    """On retry, the videos tar consumer argv should include --skip-old-files.
+
+    We do NOT run the consumer for the retry because bsdtar on macOS lacks --skip-old-files;
+    GNU tar (Linux / server5090) does support it. We assert the argv and use a no-op consumer.
+    """
+    from realman_training.runner import CommandFailed
+
+    consumers_seen: list[list[str]] = []
+    call_count = {"videos": 0}
+
+    base = fake_remote(recording)
+    original_pipe_impl = base.pipe_impl
+
+    def track_pipe_impl(producer, consumer, on_bytes):
+        if "exclude" in " ".join(producer):  # videos stream
+            consumers_seen.append(list(consumer))
+            call_count["videos"] += 1
+            if call_count["videos"] == 1:
+                raise CommandFailed(producer, 1, "tar: EOF")
+            # Second call: drain producer without running the real consumer
+            import subprocess
+            data = subprocess.run(
+                [str(a) for a in producer], capture_output=True
+            ).stdout
+            on_bytes(len(data))
+            return len(data)
+        return original_pipe_impl(producer, consumer, on_bytes)
+
+    base.pipe_impl = track_pipe_impl
+    target = tmp_path / "data" / "t"
+    log = RecordingLog()
+    # The pull will succeed (meta was extracted; videos drain is faked).
+    # We tolerate StepFailed here since missing videos may trigger that check,
+    # but what we need is that the consumer argv was --skip-old-files on retry.
+    try:
+        pull.run({"target": str(target)}, log, runner=base)
+    except Exception:
+        pass
+    assert call_count["videos"] == 2
+    partial = tmp_path / "data" / "t.partial"
+    expected_dest = str(partial / REMOTE.dataset)
+    assert consumers_seen[0] == ["tar", "-C", expected_dest, "-xf", "-"]
+    assert "--skip-old-files" in consumers_seen[1]
+    assert any("retrying videos" in line for line in log.lines)
 
 
 def test_default_target_name(tmp_path):

@@ -28,10 +28,10 @@ def default_target(data_root: str | Path) -> Path:
 def remote(config: RemoteConfig, argv: list[str]) -> list[str]:
     return [
         "ssh",
-        "-o",
-        "BatchMode=yes",
-        "-o",
-        f"ConnectTimeout={config.connect_timeout_sec}",
+        "-o", "BatchMode=yes",
+        "-o", f"ConnectTimeout={config.connect_timeout_sec}",
+        "-o", "ServerAliveInterval=15",
+        "-o", "ServerAliveCountMax=4",
         config.ssh_host,
         shlex.join(["docker", "exec", config.recording_container, *argv]),
     ]
@@ -68,10 +68,24 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
         log(f"meta + data under a shared lock on {lock}")
         flock = ["flock", "-s", "-w", str(config.lock_wait_sec), lock]
         extract = ["tar", "-C", str(dest), "-xf", "-"]
-        copied += runner.pipe(remote(config, [*flock, "tar", "-C", source, "-cf", "-", "meta", "data"]), extract, progress(0))
+        meta_argv = remote(config, [*flock, "tar", "-C", source, "-cf", "-", "meta", "data"])
+        try:
+            copied += runner.pipe(meta_argv, extract, progress(0))
+        except CommandFailed as first_error:
+            log(f"retrying meta+data after: {first_error}")
+            for d in ("meta", "data"):
+                shutil.rmtree(dest / d, ignore_errors=True)
+            copied += runner.pipe(meta_argv, extract, progress(0))
+
         log("videos and the rest")
         rest = ["tar", "-C", source, "-cf", "-", "--exclude=./meta", "--exclude=./data", "."]
-        copied += runner.pipe(remote(config, rest), extract, progress(copied))
+        videos_argv = remote(config, rest)
+        extract_skip = ["tar", "-C", str(dest), "-xf", "-", "--skip-old-files"]
+        try:
+            copied += runner.pipe(videos_argv, extract, progress(copied))
+        except CommandFailed as first_error:
+            log(f"retrying videos after: {first_error}")
+            copied += runner.pipe(videos_argv, extract_skip, progress(copied))
 
         try:
             summary = summarize(dest)

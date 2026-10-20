@@ -6,9 +6,12 @@ import dataclasses
 import os
 import shlex
 import subprocess
+import threading
 from typing import Callable, Sequence
 
 _STREAM_TERMINATE_TIMEOUT = 10  # seconds; tests may patch this
+_PROD_WAIT_AFTER_CONS_FAIL = 5.0  # seconds to wait for producer when consumer fails
+_STDERR_BUF_BYTES = 65536  # bounded stderr capture for the producer
 
 
 @dataclasses.dataclass(frozen=True)
@@ -78,6 +81,25 @@ class Runner:
         """producer | consumer through this process, so the bytes in flight can be counted."""
         prod = subprocess.Popen(list(producer), stdin=subprocess.DEVNULL, stdout=subprocess.PIPE, stderr=subprocess.PIPE)
         cons = subprocess.Popen(list(consumer), stdin=subprocess.PIPE, stdout=subprocess.DEVNULL, stderr=subprocess.PIPE)
+
+        # Drain producer stderr in a background thread so a chatty producer cannot fill the pipe and block.
+        prod_stderr_chunks: list[bytes] = []
+        prod_stderr_total = 0
+
+        def _drain_stderr() -> None:
+            nonlocal prod_stderr_total
+            while True:
+                chunk = prod.stderr.read(4096)
+                if not chunk:
+                    break
+                remaining = _STDERR_BUF_BYTES - prod_stderr_total
+                if remaining > 0:
+                    prod_stderr_chunks.append(chunk[:remaining])
+                    prod_stderr_total += len(prod_stderr_chunks[-1])
+
+        stderr_thread = threading.Thread(target=_drain_stderr, daemon=True)
+        stderr_thread.start()
+
         total = 0
         try:
             while chunk := prod.stdout.read(chunk_size):
@@ -93,12 +115,26 @@ class Runner:
                 pass
             cons_code = cons.wait()
             if cons_code:
-                prod.kill()
-                prod.wait()
-                raise CommandFailed(consumer, cons_code, cons.stderr.read().decode(errors="replace"))
+                # Close producer stdout so it can exit if it blocked on a full pipe.
+                prod.stdout.close()
+                try:
+                    prod.wait(timeout=_PROD_WAIT_AFTER_CONS_FAIL)
+                except subprocess.TimeoutExpired:
+                    prod.kill()
+                    prod.wait()
+                stderr_thread.join(timeout=2.0)
+                prod_stderr = b"".join(prod_stderr_chunks).decode(errors="replace")
+                cons_stderr = cons.stderr.read().decode(errors="replace")
+                prod_code = prod.returncode
+                if prod_code:
+                    # Producer is the root cause; mention the consumer's error too.
+                    extra = f"; consumer: {cons_stderr.strip()[:200]}" if cons_stderr.strip() else ""
+                    raise CommandFailed(producer, prod_code, prod_stderr + extra)
+                raise CommandFailed(consumer, cons_code, cons_stderr)
             prod_code = prod.wait()
             if prod_code:
-                raise CommandFailed(producer, prod_code, prod.stderr.read().decode(errors="replace"))
+                stderr_thread.join(timeout=2.0)
+                raise CommandFailed(producer, prod_code, b"".join(prod_stderr_chunks).decode(errors="replace"))
             return total
         finally:
             for proc in (prod, cons):

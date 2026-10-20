@@ -73,7 +73,7 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     inside = f"/workspace/checkpoints/{name}/{exp}"
     if not params.get("dry_run"):
         (folder / "eval").mkdir(exist_ok=True)
-    def _run_container(cname: str, argv: list[str], on_line, **kwargs) -> int:
+    def _run_container(cname: str, argv: list[str], on_line, **kwargs) -> tuple[int, list[str]]:
         exists = runner.run(["docker", "container", "inspect", cname]).returncode == 0
         if exists:
             raise StepFailed(f"container {cname} already exists; remove it by hand or wait for it to finish")
@@ -84,17 +84,14 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
             on_line(line)
 
         try:
-            return runner.stream(argv, capture, **kwargs)
+            code = runner.stream(argv, capture, **kwargs)
         except JobCancelled:
             log(f"cancelled: stopping {cname}")
             result = runner.run(["docker", "stop", "-t", "30", cname])
             if result.returncode:
                 log(f"could not stop {cname}: {result.stderr}")
             raise
-        finally:
-            _run_container._last = last  # type: ignore[attr-defined]
-
-    _run_container._last = []  # type: ignore[attr-defined]
+        return code, last
 
     commands, results = [], {}
     total = len(steps) * (len(tasks) + int(swap))
@@ -111,11 +108,11 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
             if params.get("dry_run"):
                 log("$ " + shlex.join(argv))
                 continue
-            code = _run_container(cname, argv,
-                                  lambda line: log(compact(line)) if "MAE" in line or "Error" in line else None,
-                                  env=compose.env())
+            code, last_lines = _run_container(cname, argv,
+                                              lambda line: log(compact(line)) if "MAE" in line or "Error" in line else None,
+                                              env=compose.env())
             if code:
-                for line in _run_container._last[-15:]:  # type: ignore[attr-defined]
+                for line in last_lines[-15:]:
                     log(line)
                 raise StepFailed(f"eval of {step}/{task} exited {code}")
             data = json.loads((folder / "eval" / f"{step}_{task}.json").read_text(encoding="utf-8"))
@@ -132,10 +129,10 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
             if params.get("dry_run"):
                 log("$ " + shlex.join(argv))
                 continue
-            code = _run_container(cname_swap, argv, lambda line: log(compact(line)),
-                                  input=script("prompt_swap"), env=compose.env())
+            code, last_lines = _run_container(cname_swap, argv, lambda line: log(compact(line)),
+                                              input=script("prompt_swap"), env=compose.env())
             if code:
-                for line in _run_container._last[-15:]:  # type: ignore[attr-defined]
+                for line in last_lines[-15:]:
                     log(line)
                 raise StepFailed(f"prompt swap of {step} exited {code}")
             data = json.loads((folder / "eval" / f"prompt_swap_{step}.json").read_text(encoding="utf-8"))

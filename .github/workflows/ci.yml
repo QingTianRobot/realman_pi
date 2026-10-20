@@ -54,6 +54,7 @@ jobs:
             src/driver/realman_msgs:test \
             src/gripper/gripper_ros2:test \
             src/behavior/realman_bt_mock:test \
+            src/behavior/realman_bt:test/test_bt_launcher.py \
             src/sensor/realman_camera_calibration:test/test_config.py \
             tools/velocity_follow:tests; do
             dir="${suite%%:*}"; target="${suite#*:}"

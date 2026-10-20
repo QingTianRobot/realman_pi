@@ -29,6 +29,7 @@ rm65_project_help
 ./rm65 up model           # 离线三臂模型 + RViz，不连接真机
 ./rm65 bt <tree-name>    # 按 config/behavior-trees/<tree-name>[.xml] 启动行为树
 ./rm65 bt control         # 显式启动持久输入路由器；Ctrl-C 前保持运行
+# 也可以不开终端：:8765 控制页“行为树”标签选文件并点“启动”（bringup 容器内的 bt_launcher 代为运行 bt-start）
 ./rm65 status
 ./rm65 logs
 ./rm65 down

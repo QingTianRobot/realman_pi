@@ -102,6 +102,12 @@ function devApiPlugin() {
             response.end(JSON.stringify(await devManifest()));
             return;
           }
+          if (url === "/api/bt/trees") {
+            // No bt_launcher locally: the start menu stays hidden in dev.
+            response.setHeader("Content-Type", "application/json");
+            response.end(JSON.stringify({ available: false }));
+            return;
+          }
           if (url === "/api/bt/runtime") {
             // Local UI development has no executor; production proxies bt_server's snapshot.
             response.setHeader("Content-Type", "application/json");

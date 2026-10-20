@@ -589,6 +589,101 @@ test("stops the running behavior tree after a confirming second click", async ({
   await expect(page.locator("#bt-stop")).toBeEnabled();
 });
 
+function libraryTree(name: string, launch = "arm_move", arms = ["r"]) {
+  return { name, main_tree: "MainTree", launch, arms, valid: true, favorite: false };
+}
+async function mockLauncher(page: any) {
+  const state = {
+    favorites: [] as string[],
+    starts: [] as Record<string, unknown>[],
+    launcher: { running: false, launched_here: false } as Record<string, unknown>,
+    runtime: { available: false } as Record<string, unknown>,
+  };
+  const trees = () => {
+    const all = [libraryTree("control.xml", "control_router", ["l", "m", "r"]), libraryTree("move.xml"), libraryTree("three.xml", "arm_move", ["l", "m", "r"])];
+    const pinned = state.favorites.map((name) => ({ ...all.find((tree) => tree.name === name)!, favorite: true }));
+    return [...pinned, ...all.filter((tree) => !state.favorites.includes(tree.name))];
+  };
+  await page.route("**/api/bt/trees", (route: any) => route.fulfill({ json: { available: true, launcher: state.launcher, trees: trees() } }));
+  await page.route("**/api/bt/runtime", (route: any) => route.fulfill({ json: state.runtime }));
+  await page.route("**/api/bt/favorites", async (route: any) => {
+    const body = route.request().postDataJSON();
+    state.favorites = body.favorite ? [...state.favorites, body.name] : state.favorites.filter((name) => name !== body.name);
+    await route.fulfill({ json: { ok: true, trees: trees() } });
+  });
+  await page.route("**/api/bt/start", async (route: any) => {
+    const body = route.request().postDataJSON();
+    state.starts.push(body);
+    state.launcher = { running: true, launched_here: true, tree: body.tree, dry_run: body.dry_run, started_at_ms: 1000 + state.starts.length, log: "/opt/rm65_ws/logs/bt-launcher/x.log" };
+    await route.fulfill({ json: { ok: true, ...state.launcher } });
+  });
+  return state;
+}
+
+test("starts a behavior tree picked from the file list, with shared favorites pinned first", async ({ page }) => {
+  const state = await mockLauncher(page);
+  await page.goto("/");
+  // The tab is there before any tree runs, because trees can be started from it.
+  await page.locator("#control-tab-bt").click();
+  await expect(page.locator("#bt-launcher")).toBeVisible();
+  await expect(page.locator("#bt-running")).toBeHidden();
+  await expect(page.locator("#bt-stop")).toBeHidden();
+  await expect(page.locator("#bt-root-status")).toHaveText("未运行");
+
+  await page.locator("#bt-picker-button").click();
+  await expect(page.locator("#bt-picker-list .bt-option")).toHaveCount(3);
+  await page.locator('[data-favorite-toggle="three.xml"]').click();
+  await expect(page.locator("#bt-picker-list .bt-option").first()).toHaveAttribute("data-tree", "three.xml");
+  await expect(page.locator("#bt-picker-list .bt-option-group").first()).toHaveText("收藏");
+  expect(state.favorites).toEqual(["three.xml"]);
+  await page.locator('#bt-picker-list [data-tree="control.xml"]').click();
+  await expect(page.locator("#bt-picker-list")).toBeHidden();
+  await expect(page.locator("#bt-picker-label")).toHaveText("control");
+  await expect(page.locator("#bt-picker-meta")).toHaveText("control_router · l,m,r");
+
+  // Real motion is the default; the first click only arms the start.
+  await expect(page.locator("#bt-real-motion")).toBeChecked();
+  await page.locator("#bt-start").click();
+  await expect(page.locator("#bt-start")).toHaveText("确认启动（真实运动）？");
+  expect(state.starts).toHaveLength(0);
+  await page.locator("#bt-start").click();
+  await expect.poll(() => state.starts.length).toBe(1);
+  expect(state.starts[0]).toEqual({ tree: "control.xml", dry_run: false });
+  await expect(page.locator("#bt-start-status")).toContainText("正在启动 control.xml（真实运动）");
+  await expect(page.locator("#bt-start")).toBeDisabled();
+
+  // The tree comes up: the launcher gives way to the live tree and its stop button.
+  state.runtime = controlRuntime;
+  await expect(page.locator("#bt-running")).toBeVisible();
+  await expect(page.locator("#bt-launcher")).toBeHidden();
+  await expect(page.locator("#bt-stop")).toBeVisible();
+  await expect(page.locator("#bt-root-status")).toHaveText("RUNNING");
+
+  // It stops again: the start menu is back, and the pin is still there.
+  state.runtime = { available: false };
+  state.launcher = { ...state.launcher, running: false, launched_here: false, exit_code: 0 };
+  await expect(page.locator("#bt-launcher")).toBeVisible();
+  await expect(page.locator("#bt-start")).toBeEnabled();
+});
+
+test("starts in dry-run when real motion is unticked and reports a bt-start that exits", async ({ page }) => {
+  const state = await mockLauncher(page);
+  await page.goto("/");
+  await page.locator("#control-tab-bt").click();
+  await page.locator("#bt-real-motion").uncheck();
+  await page.locator("#bt-start").click();
+  await expect(page.locator("#bt-start")).toHaveText("确认启动（dry-run）？");
+  await page.locator("#bt-start").click();
+  await expect.poll(() => state.starts.length).toBe(1);
+  expect(state.starts[0]).toEqual({ tree: "control.xml", dry_run: true });
+  // bt-start gives up (e.g. an arm Action is not ready) and exits without a monitor.
+  state.launcher = { ...state.launcher, running: false, launched_here: false, exit_code: 1,
+    log_tail: ["[bt-start] Action /l/execute_motion is not ready; behavior tree not started"] };
+  await expect(page.locator("#bt-start-status")).toContainText("启动失败：bt-start 退出码 1");
+  await expect(page.locator("#bt-start-log")).toContainText("/l/execute_motion is not ready");
+  await expect(page.locator("#bt-start")).toBeEnabled();
+});
+
 test("shows every node of a tree that is not the control router", async ({ page }) => {
   await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: moveRuntime }));
   await page.goto("/");

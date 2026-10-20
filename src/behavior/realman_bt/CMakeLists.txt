@@ -120,6 +120,9 @@ install(PROGRAMS scripts/keyboard_control_router.py
 install(PROGRAMS scripts/policy_control_router.py
   DESTINATION lib/${PROJECT_NAME}
   RENAME policy_control_router)
+install(PROGRAMS scripts/bt_launcher.py
+  DESTINATION lib/${PROJECT_NAME}
+  RENAME bt_launcher)
 # Imported by the routers as `router_common`; it must sit next to them.
 install(PROGRAMS scripts/router_common.py
   DESTINATION lib/${PROJECT_NAME})
@@ -282,6 +285,7 @@ if(BUILD_TESTING)
   add_test(NAME test_retry_unless_fault_node COMMAND test_retry_unless_fault_node)
 
   ament_add_pytest_test(test_tree_contract test/test_tree_contract.py)
+  ament_add_pytest_test(test_bt_launcher test/test_bt_launcher.py)
   ament_add_pytest_test(test_control_router_tree test/test_control_router_tree.py)
   ament_add_pytest_test(test_pika_control_router test/test_pika_control_router.py)
   ament_add_pytest_test(test_policy_control_router test/test_policy_control_router.py)

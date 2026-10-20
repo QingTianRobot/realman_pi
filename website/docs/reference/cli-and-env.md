@@ -79,3 +79,18 @@ Web control 不做任何身份校验：`:8765` 能被访问的浏览器就能发
 | `8554`、`8100–8103` | 旧 RTSP/TCP 相机推流 | 已弃用 |
 
 日志：每次 launch 在 `logs/YYYYMMDD_HHMMSS/` 下写 ROS 官方节点日志（彩色 `RCUTILS_COLORIZED_OUTPUT=1`）；相机在 `logs/rm65-camera.log`，PID 在 `logs/.rm65-camera.pid`；行为树终态归档在 `logs/behavior-trees/<时间>_<PID>/`。
+
+## `realman-train`（训练数据检查）
+
+从源码树运行（`PYTHONPATH=.`，或 `pip install -e` 安装后直接调用），详见[训练控制平台](../development/training-console)。
+
+```bash
+# 在 src/training/realman_training 目录下：
+PYTHONPATH=. python -m realman_training list [--root DIR] [--json]
+PYTHONPATH=. python -m realman_training inspect <dir> [--json] [--no-quality]
+```
+
+| 环境变量 | 作用 |
+| --- | --- |
+| `REALMAN_TRAINING_CONFIG` | 指定备用配置文件，优先于 `config/training/training_console.yaml` |
+| `REALMAN_TRAINING_RAW_20261016` | 设置为 10-16 原始录制目录路径，可解锁 `test_real_data.py` 中的真实数据测试 |

@@ -9,6 +9,8 @@ description: realman-train 命令行：列出训练数据集，查看条数、�
 
 ## 用法
 
+`realman_training` 包从源码树使用，默认配置路径相对于仓库根目录解析；运行前在 `src/training/realman_training` 目录下设置 `PYTHONPATH=.`，或在仓库根目录执行 `pip install -e src/training/realman_training`。
+
 在 server5090 上（数据在 `~/data/realman`）：
 
 ```bash

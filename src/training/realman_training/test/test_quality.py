@@ -5,7 +5,7 @@ import pytest
 from lerobot_fixture import FPS, HOME_DEG, Episode, build_dataset, build_view, gripper
 
 from realman_training.config import QualityConfig
-from realman_training.quality import QualityUnavailable, check_episode, inspect, suggested_drops
+from realman_training.quality import QualityUnavailable, check_episode, inspect_dataset, suggested_drops
 
 CONFIG = QualityConfig()
 
@@ -106,7 +106,7 @@ def test_inspect_gives_one_verdict_per_episode_and_the_drop_list(tmp_path):
             Episode("pick_and_place", gripper((50, 60), (5700, 100))),
         ],
     )
-    results = inspect(root, CONFIG)
+    results = inspect_dataset(root, CONFIG)
     assert [(r.episode, r.task, r.verdict) for r in results] == [
         (0, "pick_and_place", "ok"),
         (1, "pick_only", "suggest_drop"),
@@ -121,4 +121,19 @@ def test_inspect_gives_one_verdict_per_episode_and_the_drop_list(tmp_path):
 def test_a_training_view_has_no_raw_gripper_readings(tmp_path):
     view = build_view(tmp_path / "view", source="x", prompts={"a": "do a"}, lengths=[30])
     with pytest.raises(QualityUnavailable, match="observation.gripper_position"):
-        inspect(view, CONFIG)
+        inspect_dataset(view, CONFIG)
+
+
+def test_wrong_gripper_shape_raises_quality_unavailable(tmp_path):
+    import json
+
+    root = build_dataset(
+        tmp_path / "raw_badshape",
+        [Episode("pick_only", gripper((50, 60), (5700, 100)))],
+    )
+    info_path = root / "meta" / "info.json"
+    info = json.loads(info_path.read_text())
+    info["features"]["observation.gripper_position"]["shape"] = [1]
+    info_path.write_text(json.dumps(info))
+    with pytest.raises(QualityUnavailable, match="observation.gripper_position"):
+        inspect_dataset(root, CONFIG)

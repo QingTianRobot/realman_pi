@@ -38,7 +38,7 @@ class DatasetSummary:
     features: dict[str, dict]  # non-video features: name -> {"dtype", "shape"}
     cameras: tuple[Camera, ...]
     disk_bytes: int
-    first_file_time: str | None  # oldest / newest episode data file, local time, ISO 8601
+    first_file_time: str | None  # oldest / newest episode data file, local time with UTC offset, ISO 8601
     last_file_time: str | None
     source: str | None
     removed_episodes: int | None
@@ -66,11 +66,11 @@ def _disk_bytes(root: Path) -> int:
 
 
 def _iso(timestamp: float) -> str:
-    return datetime.fromtimestamp(timestamp).isoformat(timespec="seconds")
+    return datetime.fromtimestamp(timestamp).astimezone().isoformat(timespec="seconds")
 
 
 def summarize(root: str | Path) -> DatasetSummary:
-    root = Path(root)
+    root = Path(root).resolve()
     info = read_info(root)
     episodes = read_episodes(root)
     fps = float(info.get("fps", 0) or 0)

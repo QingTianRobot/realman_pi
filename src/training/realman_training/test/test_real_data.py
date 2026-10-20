@@ -12,7 +12,7 @@ import pytest
 
 from realman_training.config import QualityConfig
 from realman_training.datasets import summarize
-from realman_training.quality import inspect, suggested_drops
+from realman_training.quality import inspect_dataset, suggested_drops
 
 RAW = os.environ.get("REALMAN_TRAINING_RAW_20261016")
 MANUAL_DROPS_20261016 = [13, 28, 44, 61, 69, 78, 120, 121, 130, 181, 189, 209, 216]
@@ -27,5 +27,5 @@ def test_the_summary_matches_the_copy():
 
 
 def test_the_rules_suggest_exactly_the_manual_drops():
-    results = inspect(Path(RAW).expanduser(), QualityConfig())
+    results = inspect_dataset(Path(RAW).expanduser(), QualityConfig())
     assert suggested_drops(results) == MANUAL_DROPS_20261016

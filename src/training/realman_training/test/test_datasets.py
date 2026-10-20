@@ -78,3 +78,23 @@ def test_discover_finds_nested_datasets_and_skips_everything_else(tmp_path):
 def test_a_non_dataset_is_rejected(tmp_path):
     with pytest.raises(NotALeRobotDataset):
         summarize(tmp_path)
+
+
+def test_first_file_time_is_timezone_aware(tmp_path):
+    from datetime import datetime
+
+    summary = summarize(_raw(tmp_path / "d"))
+    assert summary.first_file_time is not None
+    dt = datetime.fromisoformat(summary.first_file_time)
+    assert dt.tzinfo is not None
+
+
+def test_summarize_via_relative_path_returns_absolute_and_finds_sibling_manifest(tmp_path, monkeypatch):
+    from pathlib import Path as _Path
+
+    root = _raw(tmp_path / "raw_realman_ts_20261016" / "realman__pi05-three-arm")
+    write_clean_manifest(root, source="raw_realman_ts_20261016", removed={13: "starts closed"})
+    monkeypatch.chdir(tmp_path / "raw_realman_ts_20261016")
+    summary = summarize(_Path("realman__pi05-three-arm"))
+    assert _Path(summary.path).is_absolute()
+    assert summary.kind == "clean"

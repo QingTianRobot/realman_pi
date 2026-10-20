@@ -113,12 +113,19 @@ def _verdict(findings: tuple[Finding, ...]) -> str:
     return "warn" if findings else "ok"
 
 
-def inspect(root: str | Path, config: QualityConfig) -> list[EpisodeQuality]:
+def inspect_dataset(root: str | Path, config: QualityConfig) -> list[EpisodeQuality]:
     info = read_info(root)
     for column in (GRIPPER_COLUMN, JOINT_COLUMN):
         if column not in info.get("features", {}):
             raise QualityUnavailable(
                 f"{root}: no {column}; a training view has no raw gripper readings, inspect its cleaned source"
+            )
+    _EXPECTED_SHAPES = {GRIPPER_COLUMN: [3], JOINT_COLUMN: [18]}
+    for column, expected in _EXPECTED_SHAPES.items():
+        found = info["features"][column].get("shape")
+        if found != expected:
+            raise QualityUnavailable(
+                f"{column} has shape {found}, expected {expected} (three-arm recording)"
             )
     fps = float(info["fps"])
     arm = ARM_INDEX[config.arm]

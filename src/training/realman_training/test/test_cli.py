@@ -74,3 +74,45 @@ def test_a_bad_path_is_an_error_not_a_traceback(setup, capsys, tmp_path):
     _, _, config = setup
     assert main(["--config", str(config), "inspect", str(tmp_path / "missing")]) == 2
     assert "error:" in capsys.readouterr().err
+
+
+def test_one_bad_dataset_does_not_break_list(tmp_path, capsys):
+    import json as _json
+
+    good = build_dataset(
+        tmp_path / "data" / "good",
+        [Episode("pick_only", gripper((50, 60), (5700, 100)))],
+    )
+    bad = tmp_path / "data" / "bad"
+    bad.mkdir(parents=True)
+    (bad / "meta").mkdir()
+    (bad / "meta" / "info.json").write_text('{"codebase_version": "v2.1", "fps": 30, "features": {}}')
+    (bad / "meta" / "tasks.parquet").write_bytes(b"")  # not a valid parquet -> ArrowInvalid or similar
+    config = tmp_path / "console.yaml"
+    config.write_text(f"training_console:\n  data_root: {tmp_path / 'data'}\n")
+    code = main(["--config", str(config), "list", "--json"])
+    assert code == 0
+    rows = _json.loads(capsys.readouterr().out)
+    kinds = {r["path"]: r["kind"] for r in rows}
+    assert kinds[str(good)] != "error"
+    assert kinds[str(bad)] == "error"
+
+
+def test_config_with_unknown_quality_key_exits_2(tmp_path, capsys):
+    config = tmp_path / "bad.yaml"
+    config.write_text("training_console:\n  quality:\n    unknown_key_xyz: 1\n")
+    ds = build_dataset(
+        tmp_path / "ds",
+        [Episode("pick_only", gripper((50, 60), (5700, 100)))],
+    )
+    code = main(["--config", str(config), "inspect", str(ds)])
+    assert code == 2
+    err = capsys.readouterr().err
+    assert "unknown_key_xyz" in err
+    assert "Traceback" not in err
+
+
+def test_nonexistent_config_path_exits_2(tmp_path, capsys):
+    code = main(["--config", str(tmp_path / "nosuchfile.yaml"), "list"])
+    assert code == 2
+    assert "error:" in capsys.readouterr().err

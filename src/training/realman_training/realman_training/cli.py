@@ -7,10 +7,13 @@ import json
 import sys
 from pathlib import Path
 
+import pyarrow
+import yaml
+
 from .config import load_config
 from .datasets import DatasetSummary, discover, summarize
 from .lerobot_io import NotALeRobotDataset
-from .quality import QualityUnavailable, inspect, suggested_drops
+from .quality import QualityUnavailable, inspect_dataset, suggested_drops
 
 
 def _size(n: int) -> str:
@@ -38,14 +41,25 @@ def _summary_text(s: DatasetSummary) -> list[str]:
 
 def _cmd_list(args, config) -> int:
     root = Path(args.root).expanduser() if args.root else config.data_root
-    summaries = [summarize(path) for path in discover(root)]
+    results = []
+    errors = []
+    for path in discover(root):
+        try:
+            results.append(summarize(path))
+        except (NotALeRobotDataset, OSError, ValueError, pyarrow.ArrowInvalid) as exc:
+            errors.append((path, str(exc)))
     if args.json:
-        print(json.dumps([s.to_dict() for s in summaries], ensure_ascii=False, indent=2))
+        rows = [s.to_dict() for s in results]
+        rows += [{"path": str(p), "kind": "error", "error": msg} for p, msg in errors]
+        print(json.dumps(rows, ensure_ascii=False, indent=2))
         return 0
     print(f"{'dataset':60} {'kind':5} {'episodes':>8} {'frames':>8}  updated")
-    for s in summaries:
+    for s in results:
         name = str(Path(s.path).relative_to(root)) if Path(s.path).is_relative_to(root) else s.path
         print(f"{name:60} {s.kind:5} {s.episodes:>8} {s.frames:>8}  {s.last_file_time or '-'}")
+    for path, msg in errors:
+        name = str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
+        print(f"{name:60} {'error':5}  {msg}")
     return 0
 
 
@@ -56,7 +70,7 @@ def _cmd_inspect(args, config) -> int:
         unavailable = "skipped"
     else:
         try:
-            quality = inspect(summary.path, config.quality)
+            quality = inspect_dataset(summary.path, config.quality)
         except QualityUnavailable as error:
             unavailable = str(error)
     drops = suggested_drops(quality) if quality is not None else []
@@ -100,9 +114,9 @@ def main(argv: list[str] | None = None) -> int:
     inspecting.add_argument("--json", action="store_true")
     inspecting.add_argument("--no-quality", action="store_true", help="summary only")
     args = parser.parse_args(argv)
-    config = load_config(args.config)
     try:
+        config = load_config(args.config)
         return _cmd_list(args, config) if args.command == "list" else _cmd_inspect(args, config)
-    except (NotALeRobotDataset, FileNotFoundError) as error:
+    except (NotALeRobotDataset, FileNotFoundError, OSError, ValueError, yaml.YAMLError) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 import shlex
 from pathlib import Path
 
@@ -16,6 +17,14 @@ from .config import OpenpiConfig
 from .datasets import DatasetSummary, summarize
 from .jobs import StepFailed
 from .runner import Runner
+
+SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+
+
+def check_name(label: str, value: str) -> str:
+    if not SAFE_NAME.match(value):
+        raise StepFailed(f"{label} {value!r}: use letters, digits, '_', '-', '.'")
+    return value
 
 CONTAINER_PREFIX = "source /usr/local/share/openpi/functions.zsh && cd /workspace && "
 # Verified on 2 and 4 RTX 5090s (no NVLink, P2P unsupported), 2026-10-14/16: without these the first collective

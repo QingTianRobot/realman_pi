@@ -20,6 +20,7 @@ from ..openpi import (
     Compose,
     busy_gpus,
     check_holdout,
+    check_name,
     config_info,
     norm_stats_path,
     parse_gpus,
@@ -32,7 +33,6 @@ from ..runner import Runner, compact
 from . import norm
 
 STEP_LINE = re.compile(r"Step (\d+): (.*?)(?: \(\d+:train\.py:\d+\))?$")
-SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 def container_name(project: str, exp: str) -> str:
@@ -84,12 +84,8 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
     runner = runner or Runner()
     config = load_config(params.get("config"))
     oc = config.openpi
-    exp = str(params["exp"])
-    if not SAFE_NAME.match(exp):
-        raise StepFailed(f"exp name {exp!r}: use letters, digits, '_', '-', '.'")
-    name = params["config_name"]
-    if not SAFE_NAME.match(name):
-        raise StepFailed(f"config_name {name!r}: use letters, digits, '_', '-', '.'")
+    exp = check_name("exp name", str(params["exp"]))
+    name = check_name("config_name", params["config_name"])
     view = Path(params["view"]).expanduser().resolve()
     gpus = parse_gpus(params["gpus"])
     container = container_name(oc.compose_project, exp)

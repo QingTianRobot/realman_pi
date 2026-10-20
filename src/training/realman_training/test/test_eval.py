@@ -90,6 +90,14 @@ def test_eval_refuses_a_busy_gpu_a_missing_checkpoint_and_several_gpus(env):
         eval_step.run({**params, "gpu": "1,2"}, RecordingLog(), runner=fake_eval(env))
 
 
+def test_eval_refuses_bad_names(env):
+    runner = fake_eval(env)
+    params = {"config_name": "../../evil", "exp": "e1", "view": str(env["view"]), "gpu": 2, "config": env["config"]}
+    with pytest.raises(StepFailed, match="config_name"):
+        eval_step.run(params, RecordingLog(), runner=runner)
+    assert not runner.calls  # no runner calls before the check
+
+
 def test_eval_dry_run_lists_the_commands_only(env):
     runner = fake_eval(env)
     params = {"config_name": "pi05_x", "exp": "e1", "view": str(env["view"]), "gpu": 2, "config": env["config"], "dry_run": True}

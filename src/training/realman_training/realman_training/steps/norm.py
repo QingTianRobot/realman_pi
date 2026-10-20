@@ -2,25 +2,20 @@
 
 from __future__ import annotations
 
-import re
 import shlex
 from pathlib import Path
 
 from ..config import load_config
 from ..jobs import StepFailed
-from ..openpi import Compose, check_holdout, config_info, norm_stats_path, require_view
+from ..openpi import Compose, check_holdout, check_name, config_info, norm_stats_path, require_view
 from ..runner import Runner, compact
-
-SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
 
 
 def run(params: dict, log, runner: Runner | None = None) -> dict:
     runner = runner or Runner()
     config = load_config(params.get("config"))
     view = Path(params["view"]).expanduser().resolve()
-    name = params["config_name"]
-    if not SAFE_NAME.match(name):
-        raise StepFailed(f"config_name {name!r}: use letters, digits, '_', '-', '.'")
+    name = check_name("config_name", params["config_name"])
     summary = require_view(view)
     compose = Compose(config.openpi, view)
     info = config_info(runner, compose, name)

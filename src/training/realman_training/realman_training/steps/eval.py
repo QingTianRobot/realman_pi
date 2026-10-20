@@ -14,6 +14,7 @@ from ..openpi import (
     Compose,
     busy_gpus,
     check_holdout,
+    check_name,
     config_info,
     parse_gpus,
     require_view,
@@ -41,7 +42,8 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     runner = runner or Runner()
     config = load_config(params.get("config"))
     oc = config.openpi
-    name, exp = params["config_name"], str(params["exp"])
+    name = check_name("config_name", params["config_name"])
+    exp = check_name("exp", str(params["exp"]))
     view = Path(params["view"]).expanduser().resolve()
     gpus = parse_gpus(params["gpu"])
     if len(gpus) != 1:

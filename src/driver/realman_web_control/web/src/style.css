@@ -1,6 +1,7 @@
 /* Control page layout; colors and shared primitives come from theme.css. */
 .topbar { position: sticky; top: 0; z-index: 20; min-height: 64px; margin: 0 auto; padding: 10px clamp(16px, 3vw, 42px); display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); background: oklch(1 0 0 / 0.86); backdrop-filter: blur(12px); }
-.brand { margin-right: auto; }
+.brand { display: flex; align-items: center; gap: 10px; margin-right: auto; }
+.brand-mark { display: grid; place-items: center; width: 34px; height: 34px; border-radius: 10px; background: var(--btn-bg); color: var(--primary-strong); font-size: 11px; font-weight: 800; letter-spacing: .08em; }
 .brand strong, .brand small { display: block; }
 .brand strong { font-size: 15px; letter-spacing: .01em; }
 .brand small { color: var(--text-3); font-size: 10px; margin-top: 2px; }

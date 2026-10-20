@@ -498,17 +498,16 @@ const moveRuntime = {
   ],
 };
 
-test("shows the behavior-tree tab only while a tree runs and focuses the active router branch", async ({ page }) => {
+test("shows the behavior-tree card only while a tree runs and focuses the active router branch", async ({ page }) => {
   let runtime: Record<string, unknown> = { available: false };
   await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: runtime }));
   await page.goto("/");
-  await expect(page.locator("#control-tab-bt")).toBeHidden();
+  await expect(page.locator("#bt-panel")).toBeHidden();
 
   runtime = controlRuntime;
-  await expect(page.locator("#control-tab-bt")).toBeVisible();
+  await expect(page.locator("#bt-panel")).toBeVisible();
   // Appearing does not take over the panel the operator is using.
   await expect(page.locator("#motion-panel")).toBeVisible();
-  await page.locator("#control-tab-bt").click();
   await expect(page.locator("#bt-root-status")).toHaveText("RUNNING");
   await expect(page.locator("#bt-tree-id")).toContainText("输入路由 policy_branch");
   await expect(page.locator("#bt-breadcrumb")).toContainText("input_control");
@@ -539,7 +538,7 @@ test("shows the behavior-tree tab only while a tree runs and focuses the active 
 
   // The tree stops: bt-start takes the monitor down and the tab goes away.
   runtime = { available: false };
-  await expect(page.locator("#control-tab-bt")).toBeHidden();
+  await expect(page.locator("#bt-panel")).toBeHidden();
   await expect(page.locator("#motion-panel")).toBeVisible();
 });
 
@@ -547,7 +546,6 @@ test("stops the running behavior tree after a confirming second click", async ({
   let runtime: Record<string, unknown> = controlRuntime;
   await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: runtime }));
   await page.goto("/");
-  await page.locator("#control-tab-bt").click();
   const stopRequests = () => page.evaluate(() => ((window as any).__webMessages as string[])
     .map((value) => JSON.parse(value)).filter((item) => item.type === "stop_behavior_tree"));
 
@@ -570,12 +568,11 @@ test("stops the running behavior tree after a confirming second click", async ({
 
   // The executor exits, bt-start stops the monitor: tab and in-flight state go away.
   runtime = { available: false };
-  await expect(page.locator("#control-tab-bt")).toBeHidden();
+  await expect(page.locator("#bt-panel")).toBeHidden();
   await expect(page.locator("#motion-panel")).toBeVisible();
 
   // A later tree starts clean; a refused request is reported and the button re-enabled.
   runtime = controlRuntime;
-  await page.locator("#control-tab-bt").click();
   await expect(page.locator("#bt-stop")).toHaveText("终止行为树");
   await page.locator("#bt-stop").click();
   await page.locator("#bt-stop").click();
@@ -623,8 +620,7 @@ async function mockLauncher(page: any) {
 test("starts a behavior tree picked from the file list, with shared favorites pinned first", async ({ page }) => {
   const state = await mockLauncher(page);
   await page.goto("/");
-  // The tab is there before any tree runs, because trees can be started from it.
-  await page.locator("#control-tab-bt").click();
+  // The card is there before any tree runs, because trees can be started from it.
   await expect(page.locator("#bt-launcher")).toBeVisible();
   await expect(page.locator("#bt-running")).toBeHidden();
   await expect(page.locator("#bt-stop")).toBeHidden();
@@ -669,7 +665,6 @@ test("starts a behavior tree picked from the file list, with shared favorites pi
 test("starts in dry-run when real motion is unticked and reports a bt-start that exits", async ({ page }) => {
   const state = await mockLauncher(page);
   await page.goto("/");
-  await page.locator("#control-tab-bt").click();
   await page.locator("#bt-real-motion").uncheck();
   await page.locator("#bt-start").click();
   await expect(page.locator("#bt-start")).toHaveText("确认启动（dry-run）？");
@@ -684,10 +679,29 @@ test("starts in dry-run when real motion is unticked and reports a bt-start that
   await expect(page.locator("#bt-start")).toBeEnabled();
 });
 
+test("keeps the behavior-tree card outside the control tabs, foldable per browser", async ({ page }) => {
+  await mockLauncher(page);
+  await page.goto("/");
+  await expect(page.locator("#bt-panel")).toBeVisible();
+  // Its own card under the input mode card, not a fifth tab.
+  await expect(page.locator("[data-control-tab]")).toHaveCount(4);
+  await expect(page.locator("#bt-panel")).not.toHaveAttribute("data-control-panel", /.*/);
+  for (const tab of ["velocity", "gripper", "motion"]) {
+    await page.locator(`#control-tab-${tab}`).click();
+    await expect(page.locator("#bt-panel")).toBeVisible();
+  }
+  await page.locator("#bt-collapse").click();
+  await expect(page.locator("#bt-body")).toBeHidden();
+  await page.reload();
+  await expect(page.locator("#bt-panel")).toBeVisible();
+  await expect(page.locator("#bt-body")).toBeHidden();
+  await page.locator("#bt-collapse").click();
+  await expect(page.locator("#bt-launcher")).toBeVisible();
+});
+
 test("shows every node of a tree that is not the control router", async ({ page }) => {
   await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: moveRuntime }));
   await page.goto("/");
-  await page.locator("#control-tab-bt").click();
   await expect(page.locator("#bt-root-status")).toHaveText("SUCCESS");
   await expect(page.locator("#bt-tree-id")).toContainText("整棵树");
   await expect(page.locator("#bt-scope-toggle")).toBeHidden();

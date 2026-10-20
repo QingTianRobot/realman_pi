@@ -1,13 +1,12 @@
 import "./theme.css";
 import "./calibration.css";
-import { ARM_ICON_SVG } from "./arm_icon";
 
 type EventMessage = Record<string, any> & { type: string };
 
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><span class="brand-mark">${ARM_ICON_SVG}</span><div><span class="eyebrow">REALMAN / CALIBRATION</span><h1>ChArUco 手眼标定</h1><p>三臂原子采样 · 手眼求解 · 相对位姿</p></div></div>
+    <div><span class="eyebrow">REALMAN / CALIBRATION</span><h1>ChArUco 手眼标定</h1><p>三臂原子采样 · 手眼求解 · 相对位姿</p></div>
     <div class="top-actions"><a href="/" class="button ghost">返回控制界面</a><span id="connection" class="status offline">OFFLINE</span></div>
   </header>
   <main class="grid">

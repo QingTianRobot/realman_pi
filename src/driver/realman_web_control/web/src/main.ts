@@ -3,7 +3,6 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import URDFLoader from "urdf-loader";
 import "./theme.css";
 import "./style.css";
-import { ARM_ICON_SVG } from "./arm_icon";
 import { AXIS_COLORS, VelocityTrace } from "./velocity_trace";
 import { activeRouterBranch, ancestors, buildBtTree, findInputRouter, renderBreadcrumb, renderBtNode, type BtRuntime } from "./bt_tree";
 
@@ -136,7 +135,7 @@ type CartesianVelocityTelemetry = {
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><span class="brand-mark">${ARM_ICON_SVG}</span><div><strong>RealMan Web Control</strong><small>ROS 2 action console</small></div></div>
+    <div class="brand"><span class="brand-mark">RM</span><div><strong>RealMan Web Control</strong><small>ROS 2 action console</small></div></div>
     <label class="arm-picker">ARM <select id="arm-select"><option value="l">LEFT / 123</option><option value="m">MIDDLE / 125</option><option value="r">RIGHT / 124</option></select></label>
     <span id="connection" class="status-pill offline">OFFLINE</span>
     <span id="mode" class="status-pill ready">CONTROL READY</span>

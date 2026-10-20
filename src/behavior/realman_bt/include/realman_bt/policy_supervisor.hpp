@@ -67,6 +67,9 @@ struct SupervisorSnapshot {
   bool stats_allow_publish{false};
   bool stats_paused{false};
   double closed_total_sec{0.0};
+  // The supervised arm's joint currents (mA, from /<arm>/joint_currents), recorded in the trace.
+  bool currents_valid{false};
+  Joints currents_ma{};
 };
 
 // The decisions of PolicyRun, with no ROS in it: it is fed the sensor readings as they arrive and
@@ -93,6 +96,8 @@ class PolicySupervisor {
   void onPolicyGripperCommand(double value, double time);  // 0 = closed, 1 = open
   void onDriverCommand(double linear_mps, double angular_radps, double time);
   void onGripperReading(double position, bool torque_reached, double time);
+  // Joint currents in mA. Only the supervised arm's are kept; for now they are only recorded.
+  void onJointCurrents(const std::string& arm, const Joints& milliamps);
 
   // Starts an attempt of task `task_name` (a key of config.tasks; throws std::invalid_argument for
   // an unknown one). The task decides how a successful attempt ends.
@@ -139,6 +144,8 @@ class PolicySupervisor {
   std::deque<GripperSample> gripper_samples_;  // this attempt only: the grasp verdict looks back over it
   double last_gripper_position_{std::nan("")};  // the latest reading, kept across reset() for the snapshot
   bool last_torque_reached_{false};
+  bool currents_valid_{false};  // like the gripper reading, kept across reset() for the snapshot
+  Joints currents_ma_{};
 
   bool started_{false};
   double start_time_{0.0};

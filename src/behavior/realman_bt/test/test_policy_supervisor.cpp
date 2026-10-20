@@ -486,6 +486,25 @@ void testSnapshotBeforeStartIsNotStarted() {
   assert(snapshot.elapsed_sec == 0.0);
 }
 
+// Currents are only recorded: the supervised arm's latest reading reaches the snapshot, another
+// arm's or a non-finite one does not, and none of them ends the attempt.
+void testJointCurrentsOfTheSupervisedArmReachTheSnapshot() {
+  Rig rig;
+  rig.start();
+  assert(!rig.sup.snapshot(rig.t).currents_valid);
+  rig.sup.onJointCurrents("l", {1, 2, 3, 4, 5, 6});
+  assert(!rig.sup.snapshot(rig.t).currents_valid);
+  rig.sup.onJointCurrents("r", {800, -2400, 1500, 90, -300, 12});
+  auto snapshot = rig.sup.snapshot(rig.t);
+  assert(snapshot.currents_valid && snapshot.currents_ma[1] == -2400 && snapshot.currents_ma[5] == 12);
+  rig.sup.onJointCurrents("r", {9e9, 9e9, 9e9, 9e9, 9e9, std::nan("")});
+  snapshot = rig.sup.snapshot(rig.t);
+  assert(snapshot.currents_ma[1] == -2400);  // the non-finite reading was ignored
+  rig.sup.onJointCurrents("r", {9e9, 9e9, 9e9, 9e9, 9e9, 9e9});
+  rig.run(1.0);
+  assert(!rig.verdict.finished);  // recording only: no current ends an attempt yet
+}
+
 void testSnapshotReportsTheLatestReadings() {
   Rig rig;
   rig.arm[1] = 30.0;  // already there when the attempt starts, so no jump for the speed check
@@ -854,6 +873,7 @@ int main() {
   testRestartingClearsTheLatchedState();
   testSnapshotBeforeStartIsNotStarted();
   testSnapshotReportsTheLatestReadings();
+  testJointCurrentsOfTheSupervisedArmReachTheSnapshot();
   testSnapshotShowsHowFarTheOtherArmsMoved();
   testSnapshotCountsClosedTime();
   testSnapshotKeepsTheLatestGripperReadingAcrossAReset();

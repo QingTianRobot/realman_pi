@@ -560,6 +560,31 @@ class RealManSdkAdapter:
     def current_arm_state(self) -> Any:
         return self._query("rm_get_current_arm_state", "SDK arm state query failed")
 
+    def joint_currents(self) -> tuple[float, ...] | None:
+        """Joint currents in mA for monitoring, or None when they cannot be read.
+
+        A side read next to the joint state: a failure here never changes the connection or the
+        recorded error, so a controller that rejects the query cannot take joint states down.
+        """
+        with self._lock:
+            if not self._connected:
+                return None
+            if self.mock_mode:
+                return (0.0,) * 6
+        result, _token, error, _current, readiness_status = self._invoke_vendor(
+            "rm_get_current_joint_current", ()
+        )
+        if readiness_status is not None or error is not None:
+            return None
+        try:
+            status, data = _unpack_result(result)
+            values = tuple(float(value) for value in data)
+        except Exception:
+            return None
+        if status != 0 or not values or not all(math.isfinite(value) for value in values):
+            return None
+        return values
+
     def controller_info(self) -> dict[str, dict[str, Any]]:
         """Read version and parameter getters, one entry per query.
 

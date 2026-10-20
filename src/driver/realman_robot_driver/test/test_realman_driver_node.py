@@ -1464,6 +1464,82 @@ def test_vendor_degrees_are_published_as_ros_radians():
         _destroy_ros_nodes_and_shutdown(listener, node)
 
 @requires_ros_action_runtime
+@pytest.mark.parametrize("enabled", [True, False])
+def test_joint_currents_are_published_next_to_joint_states_unless_disabled(enabled):
+    rclpy.init()
+    node = None
+    listener = None
+    try:
+        node = RealManDriverNode(
+            namespace="l",
+            parameter_overrides=[
+                rclpy.parameter.Parameter("robot_ip", value="192.0.2.123"),
+                rclpy.parameter.Parameter("mock_mode", value=True),
+                rclpy.parameter.Parameter("auto_connect", value=False),
+                rclpy.parameter.Parameter("publish_joint_currents", value=enabled),
+            ]
+        )
+        listener = rclpy.create_node("joint_current_test_listener")
+        received = []
+        listener.create_subscription(JointState, "/l/joint_currents", received.append, 10)
+        node.adapter.get_state = lambda: RobotState((0.0,) * 6, True, "RM65-B", 0)
+        node.adapter.joint_currents = lambda: (812.0, -2440.0, 1503.0, 95.0, -310.0, 12.0)
+
+        for _ in range(10):
+            node._publish_state()
+            rclpy.spin_once(listener, timeout_sec=0.1)
+            if received:
+                break
+
+        if enabled:
+            assert received
+            assert received[0].name == [f"joint_{index}" for index in range(1, 7)]
+            assert list(received[0].effort) == [812.0, -2440.0, 1503.0, 95.0, -310.0, 12.0]
+            assert list(received[0].position) == []
+        else:
+            assert received == []
+    finally:
+        _destroy_ros_nodes_and_shutdown(listener, node)
+
+
+@requires_ros_action_runtime
+def test_unreadable_joint_currents_do_not_stop_joint_states():
+    rclpy.init()
+    node = None
+    listener = None
+    try:
+        node = RealManDriverNode(
+            namespace="l",
+            parameter_overrides=[
+                rclpy.parameter.Parameter("robot_ip", value="192.0.2.123"),
+                rclpy.parameter.Parameter("mock_mode", value=True),
+                rclpy.parameter.Parameter("auto_connect", value=False),
+            ]
+        )
+        listener = rclpy.create_node("joint_current_failure_listener")
+        states = []
+        currents = []
+        listener.create_subscription(JointState, "/l/joint_states", states.append, 10)
+        listener.create_subscription(JointState, "/l/joint_currents", currents.append, 10)
+        node.adapter.get_state = lambda: RobotState((0.0,) * 6, True, "RM65-B", 0)
+
+        def unreadable():
+            raise RuntimeError("vendor exception")
+
+        node.adapter.joint_currents = unreadable
+        for _ in range(10):
+            node._publish_state()
+            rclpy.spin_once(listener, timeout_sec=0.1)
+            if states:
+                break
+
+        assert states
+        assert currents == []
+    finally:
+        _destroy_ros_nodes_and_shutdown(listener, node)
+
+
+@requires_ros_action_runtime
 def test_auto_connect_mock_mode_publishes_zero_state():
     rclpy.init()
     node = None

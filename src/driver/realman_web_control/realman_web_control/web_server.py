@@ -43,6 +43,10 @@ class WebServerConfig:
     bt_launcher_timeout_sec: float = 2.0
     bt_tree_dir: Path | None = None
     bt_favorites_file: Path | None = None
+    # Host-side docker_restart_helper restarts this Compose service; empty URL hides the button.
+    docker_restart_url: str = ""
+    docker_restart_timeout_sec: float = 2.0
+    docker_restart_service: str = ""
 
 
 def load_server_config(path: str | Path) -> WebServerConfig:
@@ -95,6 +99,21 @@ def load_server_config(path: str | Path) -> WebServerConfig:
         if launcher_url and (not isinstance(value, str) or not value):
             raise ValueError(f"behavior_tree_launcher.{field} must be a path")
         launcher_paths[field] = (config_root / value) if isinstance(value, str) and value else None
+    restart = document.get("docker_restart", {})
+    if not isinstance(restart, dict):
+        raise ValueError("docker_restart must be a mapping")
+    restart_url = restart.get("url", "")
+    if not isinstance(restart_url, str) or (
+        restart_url and urlsplit(restart_url).scheme not in ("http", "https")
+    ):
+        raise ValueError("docker_restart.url must be an http(s) URL or empty")
+    restart_timeout = restart.get("timeout_sec", 2.0)
+    if (isinstance(restart_timeout, bool) or not isinstance(restart_timeout, (int, float))
+            or not math.isfinite(restart_timeout) or restart_timeout <= 0):
+        raise ValueError("docker_restart.timeout_sec must be finite and positive")
+    restart_service = restart.get("service", "")
+    if restart_url and (not isinstance(restart_service, str) or not restart_service):
+        raise ValueError("docker_restart.service must name a Compose service")
     bind_host = server.get("bind_host")
     origins = server.get("allowed_origins")
     if not isinstance(bind_host, str) or not bind_host:
@@ -114,6 +133,9 @@ def load_server_config(path: str | Path) -> WebServerConfig:
         bt_launcher_timeout_sec=float(launcher_timeout),
         bt_tree_dir=launcher_paths["tree_dir"],
         bt_favorites_file=launcher_paths["favorites_file"],
+        docker_restart_url=restart_url.rstrip("/"),
+        docker_restart_timeout_sec=float(restart_timeout),
+        docker_restart_service=restart_service if isinstance(restart_service, str) else "",
         **timing,
     )
     if not 1 <= config.port <= 65535:
@@ -228,6 +250,8 @@ class WebControlServer:
         app.router.add_get("/api/bt/trees", self._bt_trees)
         app.router.add_post("/api/bt/favorites", self._bt_favorite)
         app.router.add_post("/api/bt/start", self._bt_start)
+        app.router.add_get("/api/docker/restart", self._docker_restart_status)
+        app.router.add_post("/api/docker/restart", self._docker_restart)
         app.router.add_get("/api/calibration", self._calibration)
         app.router.add_get("/api/calibration/sessions", self._calibration_sessions)
         app.router.add_delete(
@@ -336,21 +360,29 @@ class WebControlServer:
         return bool(self.config.bt_launcher_url and self.config.bt_tree_dir and self.config.bt_favorites_file)
 
     async def _bt_launcher_call(self, method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+        return await self._helper_call(
+            f"{self.config.bt_launcher_url}{path}", method, self.config.bt_launcher_timeout_sec, body,
+            "behavior-tree launcher is not reachable",
+        )
+
+    async def _helper_call(
+        self, url: str, method: str, timeout_sec: float, body: dict[str, Any] | None, unreachable: str,
+    ) -> tuple[int, dict[str, Any]]:
+        """JSON request to a localhost helper; an unreachable helper becomes 503."""
         import aiohttp
 
         if self._bt_session is None:
             self._bt_session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self.config.bt_monitor_timeout_sec)
             )
-        timeout = aiohttp.ClientTimeout(total=self.config.bt_launcher_timeout_sec)
         try:
             async with self._bt_session.request(
-                method, f"{self.config.bt_launcher_url}{path}", json=body, timeout=timeout,
+                method, url, json=body, timeout=aiohttp.ClientTimeout(total=timeout_sec),
             ) as response:
                 payload = await response.json(content_type=None)
                 return response.status, payload if isinstance(payload, dict) else {}
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
-            return 503, {"ok": False, "error": "behavior-tree launcher is not reachable"}
+            return 503, {"ok": False, "error": unreachable}
 
     async def _bt_trees(self, _request: Any) -> Any:
         """Startable tree files (favorites first) and what the launcher is doing."""
@@ -407,6 +439,40 @@ class WebControlServer:
         status_code, payload = await self._bt_launcher_call("POST", "/start", {"tree": tree, "dry_run": dry_run})
         log = getattr(self.logger, "warning", None) or self.logger.error
         log(f"Web start of behavior tree {tree!r} (dry_run={dry_run}) -> {status_code} {payload.get('error', '')}")
+        return web.json_response(payload, status=status_code)
+
+    async def _docker_restart_call(self, method: str, path: str, body: dict[str, Any] | None = None) -> tuple[int, dict[str, Any]]:
+        return await self._helper_call(
+            f"{self.config.docker_restart_url}{path}", method, self.config.docker_restart_timeout_sec, body,
+            "host restart helper is not reachable (./rm65 restart-helper install)",
+        )
+
+    async def _docker_restart_status(self, _request: Any) -> Any:
+        """Whether the restart button can work and what the last restart did."""
+        from aiohttp import web
+
+        headers = {"Cache-Control": "no-store"}
+        if not self.config.docker_restart_url:
+            return web.json_response({"available": False}, headers=headers)
+        status_code, status = await self._docker_restart_call("GET", "/status")
+        return web.json_response({
+            "available": status_code == 200,
+            "service": self.config.docker_restart_service,
+            **({"helper": status} if status_code == 200 else {"error": status.get("error", "")}),
+        }, headers=headers)
+
+    async def _docker_restart(self, request: Any) -> Any:
+        """Restart the configured Compose service; the browser cannot pick another one."""
+        from aiohttp import web
+
+        if not self._origin_allowed(request):
+            raise web.HTTPForbidden(text="origin is not allowed")
+        if not self.config.docker_restart_url:
+            raise web.HTTPNotFound(text="docker restart is disabled")
+        service = self.config.docker_restart_service
+        status_code, payload = await self._docker_restart_call("POST", "/restart", {"service": service})
+        log = getattr(self.logger, "warning", None) or self.logger.error
+        log(f"Web restart of Docker service {service!r} from {request.remote} -> {status_code} {payload.get('error', '')}")
         return web.json_response(payload, status=status_code)
 
     async def _calibration(self, _request: Any) -> Any:

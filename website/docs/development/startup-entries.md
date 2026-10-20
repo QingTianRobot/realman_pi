@@ -34,6 +34,7 @@ rm65_project_help
 ./rm65 logs
 ./rm65 down
 ./rm65 sync               # 校验 main 后同步生产端
+./rm65 restart-helper install  # 宿主机一次性安装 :8765“重启 Docker”按钮背后的 systemd helper
 ```
 
 默认相机链路是 `rm65_camera_ros2 color`，用 ROS2 节点发布三路 Orbbec（`/camera_left|middle|right`）

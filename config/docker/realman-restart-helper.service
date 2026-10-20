@@ -1,0 +1,18 @@
+# Host-side helper behind the :8765 "重启 Docker" button.
+# Installed by `./rm65 restart-helper install`, which fills in @ROOT@ and @USER@.
+# @USER@ must be able to run docker (docker group); the helper binds 127.0.0.1 only.
+[Unit]
+Description=RealMan Docker restart helper for the :8765 Web page
+After=docker.service
+Wants=docker.service
+
+[Service]
+Type=simple
+User=@USER@
+WorkingDirectory=@ROOT@
+ExecStart=/usr/bin/python3 @ROOT@/scripts/docker_restart_helper.py --config @ROOT@/config/docker/restart_helper.json
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=multi-user.target

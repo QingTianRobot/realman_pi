@@ -313,6 +313,35 @@ Web 服务读取它并压缩成树视图（`bt_runtime.py`）：去掉事件日�
 launcher 从不终止任何进程，停止仍走“终止行为树”。`realman_bringup_remote` 默认 `start_bt_launcher:=true`
 （`REALMAN_START_BT_LAUNCHER=false` 可关闭）；`realman_web_control.yaml` 的 `behavior_tree_launcher.url` 置空则隐藏启动菜单。
 
+### 重启 Docker（驱动容器）
+
+顶栏的“重启 Docker”按钮重启 `realman_bringup_remote`（三臂驱动、夹爪、相机健康、`bt_launcher` 都在这个容器里），
+用于驱动卡死、夹爪串口掉线等需要重启容器才能恢复的情况。控制页本身运行在独立的 `realman_web_control` 容器，
+重启期间页面不断开，可以看到进度和结果。
+
+- 第一次点击只变为“确认重启？”，4 s 内再点才发送 `POST /api/docker/restart`（同源校验，请求体为空）。
+  要重启的服务只来自 `realman_web_control.yaml` 的 `docker_restart.service`，浏览器不能指定其它服务。
+- 重启中按钮显示“重启中…”并禁用，旁边的状态胶囊显示 `RESTARTING <秒>`；完成后显示 `RESTARTED <时间>`，
+  失败显示 `RESTART FAILED <退出码>`，悬停可看 `docker compose` 输出末尾若干行。
+- 重启会中断该容器内正在执行的 Action 和行为树，机械臂驱动约 10–30 s 不可用。
+
+容器内没有 Docker socket（挂载它等于给容器宿主机 root），所以重启由宿主机上的 `scripts/docker_restart_helper.py`
+执行：它只用标准库、只监听 `127.0.0.1:8782`，提供 `GET /status` 与 `POST /restart {"service"}`，只接受
+`config/docker/restart_helper.json` 中 `services` 白名单里的服务，一次只跑一个重启，执行的就是
+`docker compose -f docker-compose.yml restart <service>`（不重建容器，镜像和环境保持不变，默认 120 s 超时）。
+Web 服务（`network_mode: host`）代理它，`GET /api/docker/restart` 返回 `available` 和 helper 状态。
+
+在机器人宿主机上安装一次（systemd 服务 `realman-restart-helper`，以当前用户运行，该用户需能执行 `docker`）：
+
+```bash
+./rm65 restart-helper install    # 写入 /etc/systemd/system 并 enable --now；需要 sudo
+./rm65 restart-helper status
+./rm65 restart-helper uninstall
+./rm65 restart-helper run        # 前台运行，调试用
+```
+
+helper 未运行时按钮灰显，悬停提示需要安装；`docker_restart.url` 置空则隐藏按钮。
+
 ## WebSocket 协议
 
 连接 `/ws` 后首先收到 `hello`，其中包含 `read_only=false`、`client_id` 和完整的 `layout`。

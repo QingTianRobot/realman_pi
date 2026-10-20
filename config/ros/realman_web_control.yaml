@@ -34,3 +34,11 @@ behavior_tree_launcher:
   timeout_sec: 2.0
   tree_dir: behavior-trees  # Every *.xml here is offered.
   favorites_file: web-control/behavior-trees/favorites.yaml  # Shared pins; needs the rw mount.
+
+# "重启 Docker" button on :8765. scripts/docker_restart_helper.py runs on the robot host
+# (./rm65 restart-helper install) and only restarts services whitelisted in
+# config/docker/restart_helper.json. The browser cannot choose the service.
+docker_restart:
+  url: http://127.0.0.1:8782  # Empty string hides the button.
+  timeout_sec: 2.0  # Per-request limit; the restart itself runs in the helper.
+  service: realman_bringup_remote

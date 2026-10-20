@@ -108,6 +108,12 @@ function devApiPlugin() {
             response.end(JSON.stringify({ available: false }));
             return;
           }
+          if (url === "/api/docker/restart" && request.method === "GET") {
+            // No host restart helper locally: the restart button stays hidden in dev.
+            response.setHeader("Content-Type", "application/json");
+            response.end(JSON.stringify({ available: false }));
+            return;
+          }
           if (url === "/api/calibration") {
             const calibration = YAML.parse(
               await readFile(resolve(repositoryDirectory, "config/ros/camera_calibration.yaml"), "utf8"),

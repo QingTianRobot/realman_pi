@@ -322,18 +322,28 @@ def run_job(folder: str | Path) -> int:
             raise JobCancelled()
         module, function = spec["target"].split(":")
         step = getattr(importlib.import_module(module), function)
-        status.update(state="succeeded", result=step(spec["params"], StepLog(line, progress)))
+        result = step(spec["params"], StepLog(line, progress))
+        # Ignore signals the moment the step is done so finalisation always runs.
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
+        status.update(state="succeeded", result=result)
     except JobCancelled:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         line("cancelled")
         status.update(state="cancelled", error="cancelled")
     except StepFailed as error:
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         line(f"FAILED: {error}")
         status.update(state="failed", error=str(error))
     except Exception as error:  # noqa: BLE001 - every crash must end as a failed status
+        signal.signal(signal.SIGTERM, signal.SIG_IGN)
+        signal.signal(signal.SIGINT, signal.SIG_IGN)
         traceback.print_exc()
         sys.stdout.flush()
         status.update(state="failed", error=f"{type(error).__name__}: {error}")
-    # Ignore late signals so a second cancel cannot corrupt the final status write.
+    # (Signals already ignored above; this is a belt-and-suspenders guard for any missed path.)
     signal.signal(signal.SIGTERM, signal.SIG_IGN)
     signal.signal(signal.SIGINT, signal.SIG_IGN)
     status["ended"] = now()

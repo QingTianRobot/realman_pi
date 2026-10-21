@@ -169,3 +169,48 @@ test("train: evaluate and register a run", async ({ page, request }) => {
   await page.locator("#confirm-start").click();
   await expect(page.locator("#drawer-log")).toContainText("fake register done");
 });
+
+test("serve: both ends, link checks with history and bridge stats", async ({ page }) => {
+  await page.goto("/#/serve");
+  await expect(page.locator("#serve-end")).toContainText("运行中");
+  await expect(page.locator("#serve-end")).toContainText("openpi:dev");
+  await expect(page.locator("#bridge-end")).toContainText("空闲");
+  await expect(page.locator("#linkcheck-latest")).toContainText("bulk_throughput");
+  await expect(page.locator("#linkcheck-latest")).toContainText("FAIL");
+  await expect(page.locator("#linkcheck-history .item")).toHaveCount(2);
+  await page.locator("#linkcheck-history .item").nth(1).click();
+  await expect(page.locator("#linkcheck-latest")).toContainText("7.91 MB/s");
+  await expect(page.locator("#bridge-stats")).toContainText("pick up the power adapter and put it in the blue bin");
+  await expect(page.locator("#bridge-stats")).toContainText("26012");
+});
+
+test("serve: settings are saved with the token and start asks first", async ({ page, request }) => {
+  await page.goto("/#/serve");
+  const form = page.locator("#serve-form");
+  await expect(form.locator('select[name="model"]')).toHaveValue(MODEL);
+  await form.locator('select[name="task"]').selectOption("pick_only");
+  await form.locator('select[name="gpu"]').selectOption("3");
+  await page.locator("#token").fill("wrong-token");
+  await page.locator("#token").dispatchEvent("change");
+  await page.locator("#save-settings").click();
+  await expect(page.locator("#settings-message")).toContainText("wrong or missing token");
+  await page.locator("#token").fill(TOKEN);
+  await page.locator("#token").dispatchEvent("change");
+  await page.locator("#save-settings").click();
+  await expect(page.locator("#settings-message")).toContainText("已保存");
+  const saved = await (await request.get("/api/serve/settings")).json();
+  expect(saved.saved).toMatchObject({ gpu: 3, task: "pick_only" });
+  await page.locator("#serve-start").click();
+  await expect(page.locator("#confirm-dialog")).toContainText("GPU 3");
+  await expect(page.locator("#confirm-dialog")).toContainText("pick up the power adapter");
+  await page.locator("#confirm-start").click();
+  await expect(page.locator("#drawer-log")).toContainText("fake serve done");
+  await expect(page.locator("#drawer-job-head")).toContainText("成功");
+  await page.waitForTimeout(500); // the page reloads itself when the job ends
+  const jobs = await (await request.get("/api/jobs?kind=serve")).json();
+  expect(jobs.jobs[0].params).toMatchObject({ action: "start", gpu: 3, task: "pick_only", model: MODEL });
+  await page.locator("#serve-stop").click();
+  await expect(page.locator("#confirm-dialog")).toContainText("先停桥接");
+  await page.locator("#confirm-cancel").click();
+  await expect(page.locator("#confirm-dialog")).toHaveCount(0);
+});

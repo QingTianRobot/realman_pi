@@ -122,3 +122,5 @@ dialog.confirm .actions { justify-content: flex-end; margin-top: 12px; }
   .brand small { display: none; }
   .token-field input { width: 96px; }
 }
+body.drawer-open .page { padding-bottom: calc(min(60vh, 520px) + 24px); }
+html:has(body.drawer-open) { scroll-padding-bottom: calc(min(60vh, 520px) + 16px); }

@@ -33,6 +33,7 @@ export class JobDrawer {
 
   async open(jobId?: string): Promise<void> {
     this.el.hidden = false;
+    document.body.classList.add("drawer-open");
     await this.refresh(jobId);
     window.clearInterval(this.timer);
     this.timer = window.setInterval(() => void this.refresh(), 5000);
@@ -40,6 +41,7 @@ export class JobDrawer {
 
   close(): void {
     this.el.hidden = true;
+    document.body.classList.remove("drawer-open");
     window.clearInterval(this.timer);
     this.socket?.close();
     this.socket = null;

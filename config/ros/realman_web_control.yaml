@@ -19,12 +19,13 @@ input_mode:
   web_override_timeout_sec: 5.0  # No Web Action is sent after this wait expires.
 
 # Read-only behavior-tree view on :8765. bt-start runs the executor's monitor on
-# this port (BT_SERVER_PORT) while a tree is loaded; the Web server proxies its
-# /api/runtime so the page shows the tree only while one is running.
+# this port (BT_SERVER_PORT) while a tree is loaded; the Web server reads its
+# /api/runtime and pushes each change to open pages as a bt_runtime /ws event.
 behavior_tree_monitor:
   url: http://127.0.0.1:8080  # Empty string disables the tree view.
   timeout_sec: 0.5  # Per-request limit; an unreachable monitor reads as "no tree".
   stale_after_sec: 5.0  # Hide snapshots the executor has not rewritten for this long.
+  poll_period_sec: 0.05  # Re-read the monitor this often while a page is open; changes are pushed over /ws.
 
 # Start menu on :8765. bt_launcher (realman_bringup_remote, start_bt_launcher:=true)
 # runs bt-start like ./scripts/bt.sh; paths are relative to the config root.

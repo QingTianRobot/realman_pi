@@ -258,12 +258,20 @@ RM65_DRY_RUN=1 ./rm65 bt control
 
 `./rm65 bt <tree>` 运行期间，`bt-start` 在宿主网络 :8080 启动只读监视器 `bt_server`，执行器每个 tick
 原子重写一份运行快照（每个节点的 path、类型、名称和 `IDLE/RUNNING/SUCCESS/FAILURE` 状态及失败原因）。
-Web 服务把它代理为同源只读接口 `GET /api/bt/runtime`（`bt_runtime.py`）：去掉事件日志，只保留树结构和状态；
-监视器不可达、快照为空、或超过 `stale_after_sec` 未更新时返回 `{"available": false}`。树退出时
-`bt-start` 会停掉 :8080，所以“可达且有节点”就等价于“有树在运行”。地址和超时在
+Web 服务读取它并压缩成树视图（`bt_runtime.py`）：去掉事件日志，只保留树结构和状态；
+监视器不可达、快照为空、或超过 `stale_after_sec` 未更新时视为 `{"available": false}`。树退出时
+`bt-start` 会停掉 :8080，所以“可达且有节点”就等价于“有树在运行”。
+
+树视图是**推送**的，不再由页面轮询：只要有浏览器连着 `/ws`，Web 服务每 `poll_period_sec`（默认 50 ms）
+在本机读一次 :8080，树视图有可见变化时才向所有页面广播 `{"type": "bt_runtime", "runtime": {...}}`。
+执行器每个 tick 都会改写 `timestamp_ms` 和 `sequence`，这两个字段不算变化，所以树不动时没有流量。
+新页面在 `hello` 之后立即收到一份当前视图；没有页面连接时不读监视器。WebSocket 断开时页面立刻隐藏
+运行中的树，重连后由下一份推送恢复。从 tick 到页面变色的延迟约为一个 tick 加 `poll_period_sec`
+（10 Hz 树约 0.1 s 以内），以前 0.5 s 轮询时最多会晚半秒，短命节点常常看不到 RUNNING。
+`GET /api/bt/runtime` 仍返回同样的单次视图，供 curl 排查使用。地址、超时和读取周期在
 `config/ros/realman_web_control.yaml` 的 `behavior_tree_monitor` 中配置，`url` 置空即关闭该视图。
 
-页面每 0.5 s 轮询一次（页面不可见时暂停）：
+页面行为：
 
 - **独立卡片**：“行为树”是右列输入模式卡片下方的独立卡片，不在“运动/速度/夹爪/键盘”标签里，切换标签时始终可见。
   可以从本页启动行为树（见下文“启动行为树”）或有树在运行时卡片出现，两者都不可用时隐藏。树开始运行时卡片短暂高亮，

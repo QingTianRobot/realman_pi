@@ -21,6 +21,11 @@ async function emitWebSocketEvent(page: any, message: Record<string, unknown>) {
   }, message);
 }
 
+// The server pushes the behavior-tree view over /ws on every visible change.
+async function pushBtRuntime(page: any, runtime: Record<string, unknown>) {
+  await emitWebSocketEvent(page, { type: "bt_runtime", runtime });
+}
+
 test.beforeEach(async ({ page }) => {
   await page.addInitScript(() => {
     class FakeWebSocket {
@@ -499,12 +504,11 @@ const moveRuntime = {
 };
 
 test("shows the behavior-tree card only while a tree runs and focuses the active router branch", async ({ page }) => {
-  let runtime: Record<string, unknown> = { available: false };
-  await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: runtime }));
   await page.goto("/");
+  await pushBtRuntime(page, { available: false });
   await expect(page.locator("#bt-panel")).toBeHidden();
 
-  runtime = controlRuntime;
+  await pushBtRuntime(page, controlRuntime);
   await expect(page.locator("#bt-panel")).toBeVisible();
   // Appearing does not take over the panel the operator is using.
   await expect(page.locator("#motion-panel")).toBeVisible();
@@ -520,7 +524,7 @@ test("shows the behavior-tree card only while a tree runs and focuses the active
   // Collapse and expand a subtree; the choice survives the next snapshot.
   await page.locator('[data-bt-toggle="0/1/1/1"]').click();
   await expect(page.locator('#bt-tree [data-path="0/1/1/1/0"]')).toHaveCount(0);
-  await page.waitForTimeout(700);
+  await pushBtRuntime(page, { ...controlRuntime, sequence: 43 });
   await expect(page.locator('#bt-tree [data-path="0/1/1/1/0"]')).toHaveCount(0);
   await page.locator('[data-bt-toggle="0/1/1/1"]').click();
   await expect(page.locator('#bt-tree [data-path="0/1/1/1/0"]')).toHaveCount(1);
@@ -537,15 +541,28 @@ test("shows the behavior-tree card only while a tree runs and focuses the active
   await expect(page.locator("#bt-breadcrumb")).toBeHidden();
 
   // The tree stops: bt-start takes the monitor down and the tab goes away.
-  runtime = { available: false };
+  await pushBtRuntime(page, { available: false });
   await expect(page.locator("#bt-panel")).toBeHidden();
   await expect(page.locator("#motion-panel")).toBeVisible();
 });
 
-test("stops the running behavior tree after a confirming second click", async ({ page }) => {
-  let runtime: Record<string, unknown> = controlRuntime;
-  await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: runtime }));
+test("updates the behavior tree from pushes and hides it when the socket drops", async ({ page }) => {
   await page.goto("/");
+  await pushBtRuntime(page, controlRuntime);
+  await expect(page.locator('#bt-tree [data-path="0/1/1/1/1/0"]')).toHaveAttribute("data-status", "FAILURE");
+  const nodes = (controlRuntime.nodes as Record<string, unknown>[]).map((node) =>
+    node.path === "0/1/1/1/1/0" ? { ...node, status: "RUNNING", failure_reason: "" } : node);
+  await pushBtRuntime(page, { ...controlRuntime, sequence: 43, nodes });
+  await expect(page.locator('#bt-tree [data-path="0/1/1/1/1/0"]')).toHaveAttribute("data-status", "RUNNING");
+
+  // No socket, no tree states: a frozen tree would look like a stuck robot.
+  await page.evaluate(() => (window as any).__webSocket.emit("close", {}));
+  await expect(page.locator("#bt-running")).toBeHidden();
+});
+
+test("stops the running behavior tree after a confirming second click", async ({ page }) => {
+  await page.goto("/");
+  await pushBtRuntime(page, controlRuntime);
   const stopRequests = () => page.evaluate(() => ((window as any).__webMessages as string[])
     .map((value) => JSON.parse(value)).filter((item) => item.type === "stop_behavior_tree"));
 
@@ -567,12 +584,12 @@ test("stops the running behavior tree after a confirming second click", async ({
   await expect(page.locator("#bt-stop-status")).toContainText("等待行为树取消动作并退出");
 
   // The executor exits, bt-start stops the monitor: tab and in-flight state go away.
-  runtime = { available: false };
+  await pushBtRuntime(page, { available: false });
   await expect(page.locator("#bt-panel")).toBeHidden();
   await expect(page.locator("#motion-panel")).toBeVisible();
 
   // A later tree starts clean; a refused request is reported and the button re-enabled.
-  runtime = controlRuntime;
+  await pushBtRuntime(page, controlRuntime);
   await expect(page.locator("#bt-stop")).toHaveText("终止行为树");
   await page.locator("#bt-stop").click();
   await page.locator("#bt-stop").click();
@@ -594,7 +611,6 @@ async function mockLauncher(page: any) {
     favorites: [] as string[],
     starts: [] as Record<string, unknown>[],
     launcher: { running: false, launched_here: false } as Record<string, unknown>,
-    runtime: { available: false } as Record<string, unknown>,
   };
   const trees = () => {
     const all = [libraryTree("control.xml", "control_router", ["l", "m", "r"]), libraryTree("move.xml"), libraryTree("three.xml", "arm_move", ["l", "m", "r"])];
@@ -602,7 +618,6 @@ async function mockLauncher(page: any) {
     return [...pinned, ...all.filter((tree) => !state.favorites.includes(tree.name))];
   };
   await page.route("**/api/bt/trees", (route: any) => route.fulfill({ json: { available: true, launcher: state.launcher, trees: trees() } }));
-  await page.route("**/api/bt/runtime", (route: any) => route.fulfill({ json: state.runtime }));
   await page.route("**/api/bt/favorites", async (route: any) => {
     const body = route.request().postDataJSON();
     state.favorites = body.favorite ? [...state.favorites, body.name] : state.favorites.filter((name) => name !== body.name);
@@ -649,14 +664,14 @@ test("starts a behavior tree picked from the file list, with shared favorites pi
   await expect(page.locator("#bt-start")).toBeDisabled();
 
   // The tree comes up: the launcher gives way to the live tree and its stop button.
-  state.runtime = controlRuntime;
+  await pushBtRuntime(page, controlRuntime);
   await expect(page.locator("#bt-running")).toBeVisible();
   await expect(page.locator("#bt-launcher")).toBeHidden();
   await expect(page.locator("#bt-stop")).toBeVisible();
   await expect(page.locator("#bt-root-status")).toHaveText("RUNNING");
 
   // It stops again: the start menu is back, and the pin is still there.
-  state.runtime = { available: false };
+  await pushBtRuntime(page, { available: false });
   state.launcher = { ...state.launcher, running: false, launched_here: false, exit_code: 0 };
   await expect(page.locator("#bt-launcher")).toBeVisible();
   await expect(page.locator("#bt-start")).toBeEnabled();
@@ -700,8 +715,8 @@ test("keeps the behavior-tree card outside the control tabs, foldable per browse
 });
 
 test("shows every node of a tree that is not the control router", async ({ page }) => {
-  await page.route("**/api/bt/runtime", (route) => route.fulfill({ json: moveRuntime }));
   await page.goto("/");
+  await pushBtRuntime(page, moveRuntime);
   await expect(page.locator("#bt-root-status")).toHaveText("SUCCESS");
   await expect(page.locator("#bt-tree-id")).toContainText("整棵树");
   await expect(page.locator("#bt-scope-toggle")).toBeHidden();

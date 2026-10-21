@@ -116,6 +116,7 @@ export default withMermaid(defineConfig({
           { text: "Policy 任务（行为树监督）", link: "/development/policy-task" },
           { text: "独立数据录制平台", link: "/development/recording-platform" },
           { text: "训练控制平台（命令行）", link: "/development/training-console" },
+          { text: "训练控制平台（网页）", link: "/development/training-console-web" },
         ],
       },
       {

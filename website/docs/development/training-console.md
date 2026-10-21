@@ -7,6 +7,8 @@ description: realman-train 命令行：数据检查、拉取、清洗、训练�
 
 训练流程（拉取 → 检查 → 清洗 → 训练视图 → norm → 训练 → 评估 → 登记 → 部署）已做成 `realman_training` 包，命令行 `realman-train` 覆盖全流程；设计见 [`2026-10-20-training-console-design.md`](https://github.com/QingTianRobot/realman_pi/blob/main/docs/superpowers/specs/2026-10-20-training-console-design.md)。
 
+网页界面（server5090:8780）见 [训练控制平台（网页）](./training-console-web.md)。
+
 ## 用法
 
 `realman_training` 包从源码树使用，默认配置路径相对于仓库根目录解析；运行前在 `src/training/realman_training` 目录下设置 `PYTHONPATH=.`，或在仓库根目录执行 `pip install -e src/training/realman_training`。

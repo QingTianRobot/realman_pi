@@ -149,6 +149,7 @@ test("documentation routes render", async ({ page }) => {
     "development/policy-bridge",
     "development/policy-task",
     "development/training-console",
+    "development/training-console-web",
     "development/velocity-follow-test",
     "troubleshooting",
   ]) {

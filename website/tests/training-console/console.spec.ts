@@ -118,3 +118,54 @@ test("data: a training view says why it has no quality table", async ({ page }) 
   await expect(page.locator("#make-clean")).toHaveCount(0);
   await expect(page.locator("#dataset-detail")).toContainText("pick up the power adapter and put it in the blue bin");
 });
+
+const MODEL = "pi05_realman_multitask_action_only/m_multitask_b16_2gpu";
+
+test("train: curves, per-task eval and the prompt swap of a run", async ({ page }) => {
+  await page.goto(`/#/train?run=${encodeURIComponent(MODEL)}`);
+  await expect(page.locator("#run-list .item.selected")).toContainText("m_multitask_b16_2gpu");
+  await expect(page.locator("#chart-loss path.line")).toHaveCount(1);
+  await expect(page.locator("#chart-grad path.line")).toHaveCount(1);
+  await expect(page.locator("#eval-table")).toContainText("0.096");
+  await expect(page.locator("#eval-table")).toContainText("零动作基线");
+  await expect(page.locator("#swap-table")).toContainText("0.187");
+  await expect(page.locator("#run-detail .gpu-row")).toHaveCount(2);
+});
+
+test("train: a new run needs GPUs and goes through the confirm dialog", async ({ page, request }) => {
+  await page.goto("/#/train");
+  const form = page.locator("#train-form");
+  await form.locator('input[name="config_name"]').fill("pi05_realman_multitask_action_only");
+  await form.locator('select[name="view"]').selectOption("realman_right_arm_multitask_view");
+  await form.locator('input[name="exp"]').fill("e2e_run");
+  await page.locator("#start-train").click();
+  await expect(page.locator("#train-error")).toContainText("GPU");
+  await form.locator('input.gpu[data-gpu="1"]').check();
+  await form.locator('input.gpu[data-gpu="3"]').check();
+  await form.locator('input[name="batch"]').fill("16");
+  await form.locator('input[name="dry_run"]').check();
+  await page.locator("#start-train").click();
+  await expect(page.locator("#confirm-dialog")).toContainText("GPU 1,3");
+  await page.locator("#confirm-token").fill(TOKEN);
+  await page.locator("#confirm-start").click();
+  await expect(page.locator("#drawer-log")).toContainText("fake train done");
+  const jobs = await (await request.get("/api/jobs?kind=train")).json();
+  expect(jobs.jobs[0].params).toMatchObject({ exp: "e2e_run", gpus: "1,3", batch: 16, dry_run: true });
+});
+
+test("train: evaluate and register a run", async ({ page, request }) => {
+  await page.goto(`/#/train?run=${encodeURIComponent(MODEL)}`);
+  await page.locator('#eval-form select[name="gpu"]').selectOption("3");
+  await page.locator("#start-eval").click();
+  await page.locator("#confirm-token").fill(TOKEN);
+  await page.locator("#confirm-start").click();
+  await expect(page.locator("#drawer-log")).toContainText("fake eval done");
+  await expect(page.locator("#drawer-job-head")).toContainText("成功");
+  await page.waitForTimeout(500); // the page reloads itself when the job ends
+  const evals = await (await request.get("/api/jobs?kind=eval")).json();
+  expect(evals.jobs[0].params).toMatchObject({ gpu: "3", checkpoints: [29999], prompt_swap: null });
+  await page.locator('#register-form input[name="status"]').fill("e2e");
+  await page.locator("#start-register").click();
+  await page.locator("#confirm-start").click();
+  await expect(page.locator("#drawer-log")).toContainText("fake register done");
+});

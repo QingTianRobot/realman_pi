@@ -407,6 +407,9 @@ def make_parser() -> argparse.ArgumentParser:
     check = sub.add_parser("linkcheck", help="the four data-path checks (Pika/Wi-Fi, bulk + ping, inference, bridge)")
     check.add_argument("--only", help="comma list of pika, link, inference, bridge")
     check.add_argument("--json", action="store_true")
+    web_cmd = sub.add_parser("web", help="the web console on web.host:web.port (writes need $REALMAN_TRAINING_TOKEN)")
+    web_cmd.add_argument("--host")
+    web_cmd.add_argument("--port", type=int)
     jobs = sub.add_parser("jobs", help="list jobs")
     jobs.add_argument("--kind")
     jobs.add_argument("--limit", type=int, default=20)
@@ -439,6 +442,14 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_serve(args, config)
         if args.command == "linkcheck":
             return _cmd_linkcheck(args, config)
+        if args.command == "web":
+            import os
+
+            from . import web_server
+
+            web_server.serve(config, args.host or config.web.host, args.port or config.web.port,
+                             os.environ.get(web_server.TOKEN_ENV, ""))
+            return 0
         if args.command in STEP_COMMANDS:
             return _run_step(args, config)
         return _cmd_jobs(args, config)

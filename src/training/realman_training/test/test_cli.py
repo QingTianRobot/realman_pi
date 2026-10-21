@@ -265,3 +265,10 @@ def test_linkcheck_refuses_unknown_items(setup, capsys):
     _, _, config = setup
     assert main(["--config", str(config), "linkcheck", "--only", "wifi"]) == 2
     assert "pika, link, inference, bridge" in capsys.readouterr().err
+
+
+def test_web_is_a_subcommand():
+    from realman_training.cli import make_parser
+
+    args = make_parser().parse_args(["web", "--port", "9999"])
+    assert (args.command, args.port, args.host) == ("web", 9999, None)

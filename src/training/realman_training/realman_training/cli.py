@@ -120,7 +120,8 @@ def build_params(args, config) -> tuple[str, dict]:
     if command == "train":
         return "train", {**base, "config_name": args.config_name, "view": str(Path(args.view).expanduser().resolve()),
                          "exp": args.exp, "gpus": args.gpus, "batch": args.batch, "steps": args.steps,
-                         "resume": args.resume, "attach": args.attach, "dry_run": args.dry_run}
+                         "resume": args.resume, "attach": args.attach, "dry_run": args.dry_run,
+                         "init_from": args.init_from, "share_gpus": args.share_gpus}
     if command == "eval":
         return "eval", {**base, "config_name": args.config_name, "exp": args.exp,
                         "view": str(Path(args.view).expanduser().resolve()), "gpu": args.gpu,
@@ -367,6 +368,10 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--batch", type=int)
     p.add_argument("--steps", type=int)
     p.add_argument("--resume", action="store_true")
+    p.add_argument("--init-from", metavar="CONFIG/EXP/STEP",
+                   help="start from an earlier run's checkpoint instead of openpi.weights (pi05_base)")
+    p.add_argument("--share-gpus", action="store_true",
+                   help="train on GPUs that already hold memory when openpi.train_need_mib is still free")
     p.add_argument("--attach", action="store_true", help="follow an already running training container")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--yes", action="store_true")

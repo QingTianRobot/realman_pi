@@ -60,6 +60,7 @@ class OpenpiConfig:
     compose_overlay: Path | None = None  # None = openpi-console.compose.yaml next to the config file
     weights: str = "/home/openpi/.cache/openpi/openpi-assets/checkpoints/pi05_base_from_mac/params"
     gpu_busy_mib: int = 2000
+    train_need_mib: int = 18000  # free memory a shared GPU needs for one action-only training process (peak ~17.3 GiB)
     num_workers: int = 6
     eval_stride: int = 10
 

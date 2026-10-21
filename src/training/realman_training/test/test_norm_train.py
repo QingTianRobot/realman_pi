@@ -141,6 +141,34 @@ def test_train_refuses_gpus_held_by_someone_else(env):
     assert not [c for c in runner.calls if "-d" in c]
 
 
+def test_train_init_from_an_earlier_checkpoint(env):
+    stats_path(env).parent.mkdir(parents=True)
+    stats_path(env).write_text("{}")
+    with pytest.raises(StepFailed, match="no checkpoint params"):
+        train.run(train_params(env, init_from="pi05_old/e0/29999", dry_run=True), RecordingLog(),
+                  runner=base_runner().on("container inspect", returncode=1))
+    with pytest.raises(StepFailed, match="<config>/<exp>/<step>"):
+        train.run(train_params(env, init_from="pi05_old/e0", dry_run=True), RecordingLog(),
+                  runner=base_runner().on("container inspect", returncode=1))
+    (env["docker_data"] / "checkpoints/pi05_old/e0/29999/params").mkdir(parents=True)
+    result = train.run(train_params(env, init_from="pi05_old/e0/29999", dry_run=True), RecordingLog(),
+                       runner=base_runner().on("container inspect", returncode=1))
+    assert "--weight-loader.params-path=/workspace/checkpoints/pi05_old/e0/29999/params" in result["command"][-1]
+
+
+def test_train_share_gpus_checks_free_memory_instead_of_use(env):
+    stats_path(env).parent.mkdir(parents=True)
+    stats_path(env).write_text("{}")
+    runner = FakeRunner().on("python -", stdout=json.dumps(INFO)).on("container inspect", returncode=1)
+    runner.on("memory.total", stdout="2, 8850, 32607\n")
+    result = train.run(train_params(env, gpus="2", share_gpus=True, dry_run=True), RecordingLog(), runner=runner)
+    assert result["dry_run"] is True
+    runner = FakeRunner().on("python -", stdout=json.dumps(INFO)).on("container inspect", returncode=1)
+    runner.on("memory.total", stdout="3, 15278, 32607\n")
+    with pytest.raises(StepFailed, match="gpu3=17329MiB free"):
+        train.run(train_params(env, gpus="3", share_gpus=True, dry_run=True), RecordingLog(), runner=runner)
+
+
 def test_train_refuses_an_existing_run_or_container(env):
     run_dir = env["docker_data"] / "checkpoints/pi05_x/e1"
     run_dir.mkdir(parents=True)

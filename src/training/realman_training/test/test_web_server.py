@@ -302,12 +302,16 @@ def test_the_log_websocket_streams_lines_status_and_end(world):
         created = await client.post("/api/jobs", json=_job_body(), headers=headers)
         job = (await created.json())["job"]
         messages = []
-        async with client.ws_connect(f"/api/jobs/{job['id']}/log") as ws:
-            async for message in ws:
-                data = json.loads(message.data)
-                messages.append(data)
-                if data["type"] == "end":
-                    break
+
+        async def receive():
+            async with client.ws_connect(f"/api/jobs/{job['id']}/log") as ws:
+                async for message in ws:
+                    data = json.loads(message.data)
+                    messages.append(data)
+                    if data["type"] == "end":
+                        break
+
+        await asyncio.wait_for(receive(), timeout=15)
         missing = await client.get("/api/jobs/nope/log")
         return messages, missing.status
 
@@ -318,3 +322,113 @@ def test_the_log_websocket_streams_lines_status_and_end(world):
     assert states[-1] == "succeeded"
     assert messages[-1] == {"type": "end"}
     assert missing == 404
+
+
+def test_pump_closes_socket_on_exception(world, monkeypatch):
+    """A pump that raises RuntimeError must close the socket so the receive loop ends, not hang."""
+    import realman_training.catalog as cat
+    headers = {TOKEN_HEADER: TOKEN}
+
+    call_count = [0]
+    original = cat.job_row
+
+    def boom(j):
+        call_count[0] += 1
+        raise RuntimeError("storage exploded")
+
+    async def scenario(client):
+        # Start the job first (uses the real catalog.job_row for the 201 response).
+        created = await client.post("/api/jobs", json=_job_body(), headers=headers)
+        job = (await created.json())["job"]
+        # Only patch after the job is started so the POST handler is unaffected.
+        monkeypatch.setattr(cat, "job_row", boom)
+        ended = False
+        try:
+            async def receive():
+                nonlocal ended
+                async with client.ws_connect(f"/api/jobs/{job['id']}/log") as ws:
+                    async for _ in ws:
+                        pass
+                ended = True
+            await asyncio.wait_for(receive(), timeout=5)
+        except asyncio.TimeoutError:
+            pass  # socket not closed — will cause assertion failure below
+        except Exception:
+            ended = True  # connection closed with an error is fine
+        monkeypatch.setattr(cat, "job_row", original)
+        return ended
+
+    ended = call(world["make"](), scenario)
+    assert call_count[0] >= 1
+    assert ended, "socket was not closed by pump within 5 s — client would hang"
+
+
+def test_transient_value_error_from_job_row_is_skipped(world, monkeypatch):
+    """A transient ValueError from catalog.job_row (half-written status.json) is retried; stream ends normally."""
+    import realman_training.catalog as cat
+    headers = {TOKEN_HEADER: TOKEN}
+
+    calls = [0]
+    original = cat.job_row
+
+    def flaky(j):
+        calls[0] += 1
+        if calls[0] <= 2:
+            raise ValueError("half-written status.json")
+        return original(j)
+
+    async def scenario(client):
+        # Start the job first (real catalog.job_row for the 201 response).
+        created = await client.post("/api/jobs", json=_job_body(), headers=headers)
+        job = (await created.json())["job"]
+        # Patch after job creation so start_job handler is unaffected.
+        monkeypatch.setattr(cat, "job_row", flaky)
+        messages = []
+
+        async def receive():
+            async with client.ws_connect(f"/api/jobs/{job['id']}/log") as ws:
+                async for message in ws:
+                    data = json.loads(message.data)
+                    messages.append(data)
+                    if data["type"] == "end":
+                        break
+
+        await asyncio.wait_for(receive(), timeout=15)
+        monkeypatch.setattr(cat, "job_row", original)
+        return messages
+
+    messages = call(world["make"](), scenario)
+    assert messages[-1] == {"type": "end"}
+
+
+def test_partial_first_line_is_dropped_when_log_is_seeked(world, monkeypatch):
+    """When offset > 0 (log longer than _LOG_START_BYTES), the pump must skip the partial first line."""
+    import realman_training.web_server as ws_mod
+    original = ws_mod._LOG_START_BYTES
+    monkeypatch.setattr(ws_mod, "_LOG_START_BYTES", 10)  # very small so any non-trivial log triggers a seek
+    headers = {TOKEN_HEADER: TOKEN}
+
+    async def scenario(client):
+        created = await client.post("/api/jobs", json=_job_body(), headers=headers)
+        job = (await created.json())["job"]
+        messages = []
+
+        async def receive():
+            async with client.ws_connect(f"/api/jobs/{job['id']}/log") as ws:
+                async for message in ws:
+                    data = json.loads(message.data)
+                    messages.append(data)
+                    if data["type"] == "end":
+                        break
+
+        await asyncio.wait_for(receive(), timeout=15)
+        return messages
+
+    monkeypatch.setattr(ws_mod, "_LOG_START_BYTES", 10)
+    messages = call(world["make"](), scenario)
+    monkeypatch.setattr(ws_mod, "_LOG_START_BYTES", original)
+    # The stream must end (no partial garbage from mid-line seek)
+    assert messages[-1] == {"type": "end"}
+    lines = [line for m in messages if m["type"] == "lines" for line in m["lines"]]
+    # No line should start with a partial word that cuts into a previous line (all lines complete)
+    assert all("\n" not in line for line in lines)

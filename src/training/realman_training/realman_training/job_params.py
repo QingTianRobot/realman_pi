@@ -85,17 +85,20 @@ def _new_dir(config: ConsoleConfig, raw: dict, key: str, default: Path) -> str:
     return str(target)
 
 
-def _summarize(path: Path) -> object:
+def _summarize(path: Path, config: ConsoleConfig | None = None) -> object:
     """Wrap summarize() so dataset errors become BadRequest."""
     try:
         return summarize(path)
-    except (NotALeRobotDataset, OSError, ValueError, KeyError, pyarrow.ArrowInvalid) as error:
-        raise BadRequest(f"{path.name}: {error}") from None
+    except (NotALeRobotDataset, OSError, ValueError, KeyError, pyarrow.ArrowInvalid,
+            TypeError, AttributeError) as error:
+        from . import catalog as _catalog
+        label = _catalog.relative(config, path) if config is not None else path.name
+        raise BadRequest(f"{label}: {error}") from None
 
 
 def _view(config: ConsoleConfig, raw: dict) -> str:
     path = _dataset(config, raw, "view")
-    if _summarize(path).kind != "view":
+    if _summarize(path, config).kind != "view":
         raise BadRequest(f"{raw['view']} is not a training view (no contract.json)")
     return str(path)
 
@@ -133,7 +136,7 @@ def validate_settings(raw: dict, config: ConsoleConfig) -> dict:
         value = raw["checkpoint"]
         if value in (None, ""):
             clean["checkpoint"] = ""
-        elif isinstance(value, bool) or not isinstance(value, (int, str)):
+        elif isinstance(value, bool) or not isinstance(value, (int, str)) or (isinstance(value, int) and value < 0):
             raise BadRequest("checkpoint must be a step number or empty (= the latest)")
         elif isinstance(value, str) and not (value.isascii() and value.isdigit()):
             raise BadRequest("checkpoint must be a step number or empty (= the latest)")
@@ -154,7 +157,7 @@ def validate_settings(raw: dict, config: ConsoleConfig) -> dict:
 
 
 def build(kind: str, raw: dict, config: ConsoleConfig, settings: dict | None = None) -> dict:
-    if kind not in ALLOWED or kind not in STEPS:
+    if not isinstance(kind, str) or kind not in ALLOWED or kind not in STEPS:
         raise BadRequest(f"unknown job kind {kind!r}; one of {sorted(ALLOWED)}")
     raw = raw or {}
     _check_keys(raw, ALLOWED[kind], f"{kind} params")
@@ -183,7 +186,7 @@ def build(kind: str, raw: dict, config: ConsoleConfig, settings: dict | None = N
         return params
     if kind == "view":
         src = _dataset(config, raw, "src")
-        if _summarize(src).kind == "view":
+        if _summarize(src, config).kind == "view":
             raise BadRequest(f"{raw['src']} is already a training view: build a view from a raw or cleaned set")
         prompts = raw.get("task_prompts") or {}
         if not isinstance(prompts, dict) or any(not isinstance(k, str) or not isinstance(v, str) or not v.strip()

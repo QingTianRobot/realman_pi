@@ -278,40 +278,56 @@ class Console:
                 pass
         finally:
             pump.cancel()
-            with contextlib.suppress(asyncio.CancelledError):
+            with contextlib.suppress(Exception):
                 await pump
         return ws
 
     async def _pump_log(self, ws, job) -> None:
         path = job.dir / "log.txt"
         offset = max(0, path.stat().st_size - _LOG_START_BYTES) if path.exists() else 0
+        if offset > 0:
+            # Seek past a partial first line so we don't deliver a torn line to the client.
+            with path.open("rb") as handle:
+                handle.seek(offset)
+                head = handle.read(4096)
+            nl = head.find(b"\n")
+            offset += (nl + 1) if nl >= 0 else len(head)
         pending = b""
         last_state = None
         polls = 0
-        while not ws.closed:
-            if path.exists():
-                with path.open("rb") as handle:
-                    handle.seek(offset)
-                    chunk = handle.read()
-                offset += len(chunk)
-                pending += chunk
-                *complete, pending = pending.split(b"\n")
-                if complete:
-                    await ws.send_json({"type": "lines", "lines": [line.decode(errors="replace") for line in complete]})
-            row = catalog.job_row(job)
-            if row["state"] != last_state:
-                last_state = row["state"]
-                await ws.send_json({"type": "status", "job": row})
-            if row["state"] in FINAL:
-                if pending:
-                    await ws.send_json({"type": "lines", "lines": [pending.decode(errors="replace")]})
-                await ws.send_json({"type": "end"})
+        try:
+            while not ws.closed:
+                if path.exists():
+                    with path.open("rb") as handle:
+                        handle.seek(offset)
+                        chunk = handle.read()
+                    offset += len(chunk)
+                    pending += chunk
+                    *complete, pending = pending.split(b"\n")
+                    if complete:
+                        await ws.send_json({"type": "lines",
+                                            "lines": [line.decode(errors="replace") for line in complete]})
+                try:
+                    row = catalog.job_row(job)
+                except ValueError:
+                    await asyncio.sleep(_POLL_SEC)
+                    continue
+                if row["state"] != last_state:
+                    last_state = row["state"]
+                    await ws.send_json({"type": "status", "job": row})
+                if row["state"] in FINAL:
+                    if pending:
+                        await ws.send_json({"type": "lines", "lines": [pending.decode(errors="replace")]})
+                    await ws.send_json({"type": "end"})
+                    await ws.close()
+                    return
+                polls += 1
+                if polls % 10 == 0:
+                    await self._blocking(self.store.recover)  # a dead child becomes "interrupted"
+                await asyncio.sleep(_POLL_SEC)
+        except Exception:
+            with contextlib.suppress(Exception):
                 await ws.close()
-                return
-            polls += 1
-            if polls % 10 == 0:
-                await self._blocking(self.store.recover)  # a dead child becomes "interrupted"
-            await asyncio.sleep(_POLL_SEC)
 
 
 def serve(config: ConsoleConfig, host: str, port: int, token: str) -> None:

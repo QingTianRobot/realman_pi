@@ -128,14 +128,35 @@ def test_non_ascii_digit_checkpoint_raises_bad_request(world):
         job_params.validate_settings({"checkpoint": "²"}, config)
 
 
+def test_negative_checkpoint_raises_bad_request(world):
+    """Negative step numbers are not valid checkpoints."""
+    _, config = world
+    with pytest.raises(BadRequest, match="checkpoint"):
+        job_params.validate_settings({"checkpoint": -1}, config)
+    with pytest.raises(BadRequest, match="checkpoint"):
+        job_params.validate_settings({"checkpoint": -100}, config)
+
+
+def test_non_string_kind_is_400_not_500(world):
+    """A list or other non-string kind must raise BadRequest (400), not TypeError (500)."""
+    _, config = world
+    with pytest.raises(BadRequest, match="kind"):
+        job_params.build(["x"], {}, config)
+    with pytest.raises(BadRequest, match="kind"):
+        job_params.build(None, {}, config)
+    with pytest.raises(BadRequest, match="kind"):
+        job_params.build(42, {}, config)
+
+
 def test_summarize_on_broken_dataset_raises_bad_request(world, tmp_path):
-    """A corrupt dataset folder causes summarize() to raise; the view and _view paths must wrap it as BadRequest."""
+    """A corrupt dataset folder causes summarize() to raise; the view and _view paths must wrap it as BadRequest.
+    Error messages should use the dataset path relative to data_root, and TypeError/AttributeError are also caught."""
     paths, config = world
     # broken_src has meta/info.json (passes is_dataset) but wrong codebase_version (summarize raises)
     broken_src = paths["data"] / "broken_raw"
     (broken_src / "meta").mkdir(parents=True)
     (broken_src / "meta" / "info.json").write_text('{"codebase_version": "v1.0"}')
-    # build("view") calls summarize(src) to check if src is already a view
+    # build("view") calls summarize(src) to check if src is already a view; error names the relative path
     with pytest.raises(BadRequest, match="broken_raw"):
         job_params.build("view", {"src": "broken_raw", "dst": "out_view",
                                   "task_prompts": {"pick_only": "pick"}}, config)
@@ -145,3 +166,12 @@ def test_summarize_on_broken_dataset_raises_bad_request(world, tmp_path):
     (broken_view / "meta" / "info.json").write_text('{"codebase_version": "v1.0"}')
     with pytest.raises(BadRequest, match="broken_view"):
         job_params.build("norm", {"config_name": CONFIG_NAME, "view": "broken_view"}, config)
+    # TypeError and AttributeError from malformed metadata are also caught
+    from realman_training import job_params as jp
+    from unittest.mock import patch
+    with patch("realman_training.job_params.summarize", side_effect=TypeError("bad type")):
+        with pytest.raises(BadRequest, match="broken_raw"):
+            jp._summarize(broken_src, config)
+    with patch("realman_training.job_params.summarize", side_effect=AttributeError("missing attr")):
+        with pytest.raises(BadRequest, match="broken_raw"):
+            jp._summarize(broken_src, config)

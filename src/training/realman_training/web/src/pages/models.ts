@@ -1,6 +1,61 @@
+import { api, type ModelRow } from "../api";
 import type { Ctx } from "../ctx";
-import { h } from "../dom";
+import { errorText, fmtMae, fmtTime, h } from "../dom";
+import { chip, kv, panel, panelHead, table } from "../widgets";
 
-export async function renderModels(root: HTMLElement, _ctx: Ctx): Promise<void> {
-  root.replaceChildren(h("section", { class: "panel" }, h("h2", {}, "模型")));
+function maeText(model: ModelRow): string {
+  if (!model.open_loop) return "未评估";
+  return Object.entries(model.open_loop.tasks).map(([task, mae]) => `${task} ${fmtMae(mae)}`).join(" · ");
+}
+
+async function renderCard(el: HTMLElement, model: ModelRow, ctx: Ctx): Promise<void> {
+  const deploy = h("button", { class: "button primary", id: "deploy", type: "button" }, "部署到推理服务");
+  deploy.addEventListener("click", () => ctx.navigate("serve", { model: model.name }));
+  const tasks = Object.entries(model.tasks);
+  const loop = model.open_loop;
+  const markdown = h("pre", { class: "card", id: "model-card-markdown" }, "加载中…");
+  el.replaceChildren(h("section", { class: "panel", id: "model-card" },
+    panelHead(model.name, model.serving ? chip("服务中", "ok") : null, deploy),
+    kv([["方法", model.method ?? "–"], ["训练时间", `${fmtTime(model.trained_start)} → ${fmtTime(model.trained_end)}`],
+      ["数据集", model.dataset ?? model.dataset_dir ?? "–"], ["条数", model.episodes ?? "–"],
+      ["留出集", model.holdout_episodes.join(", ") || "–"], ["checkpoints", model.checkpoints.join(", ") || "–"],
+      ["状态", model.status ?? "–"]]),
+    h("h3", {}, "任务与 prompt"),
+    table(["任务", "prompt", "条数"], tasks.map(([task, info]) => [task, info.prompt ?? "–", info.episodes ?? "–"])),
+    loop ? h("h3", {}, `开环评估（checkpoint ${loop.step}）`) : null,
+    loop ? table(["任务", "MAE", "零动作基线"], Object.keys(loop.tasks).map((t) => [t, fmtMae(loop.tasks[t]), fmtMae(loop.zero_baseline[t])]),
+      { numeric: [1, 2] }) : null,
+    h("h3", {}, "MODEL_CARD.md"), markdown));
+  try {
+    const run = await api.run(model.config, model.exp);
+    markdown.textContent = run.card_markdown ?? "没有 MODEL_CARD.md";
+  } catch (error) {
+    markdown.textContent = errorText(error);
+  }
+}
+
+export async function renderModels(root: HTMLElement, ctx: Ctx): Promise<void> {
+  const { models, registry_markdown } = await api.models();
+  const selected = models.find((m) => m.name === ctx.query.get("model")) ?? models[0] ?? null;
+  const card = h("div", { class: "stack" });
+  const body = h("tbody", {}, models.map((model) => {
+    const tr = h("tr", { class: `clickable${model === selected ? " selected" : ""}`, "data-model": model.name },
+      h("td", {}, model.name, " ", model.serving ? chip("服务中", "ok") : null), h("td", {}, model.method ?? "–"),
+      h("td", {}, `${fmtTime(model.trained_start)} → ${fmtTime(model.trained_end)}`), h("td", {}, model.dataset ?? "–"),
+      h("td", {}, maeText(model)), h("td", {}, model.status ?? "–"));
+    tr.addEventListener("click", () => {
+      for (const row of body.querySelectorAll("tr")) row.classList.toggle("selected", row === tr);
+      void renderCard(card, model, ctx);
+    });
+    return tr;
+  }));
+  root.replaceChildren(
+    panel("模型登记表",
+      models.length ? h("div", { class: "table-wrap" }, h("table", { id: "model-table" },
+        h("thead", {}, h("tr", {}, ["run", "方法", "训练时间", "数据集", "开环 MAE", "状态"].map((t) => h("th", {}, t)))), body))
+        : h("p", { class: "muted" }, "还没有登记的模型（训练页的“登记”会写模型卡）"),
+      registry_markdown ? h("details", {}, h("summary", {}, "checkpoints/MODELS.md"),
+        h("pre", { class: "card", id: "registry-markdown" }, registry_markdown)) : null),
+    card);
+  if (selected) await renderCard(card, selected, ctx);
 }

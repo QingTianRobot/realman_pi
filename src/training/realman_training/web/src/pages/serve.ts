@@ -2,7 +2,7 @@ import { api, type Gpus, type LinkcheckPayload, type LinkRun, type ServeStatus, 
 import type { Ctx } from "../ctx";
 import { confirmJob } from "../dialog";
 import { errorText, fmtTime, h } from "../dom";
-import { checksTable, chip, kv, panel, panelHead } from "../widgets";
+import { checksTable, chip, kv, pageHead, panel, panelHead } from "../widgets";
 
 function serveEnd(status: ServeStatus): HTMLElement {
   const serve = status.serve || {};
@@ -10,7 +10,7 @@ function serveEnd(status: ServeStatus): HTMLElement {
   const gpu = status.gpu || {};
   const el = panel("server5090 · openpi-serve",
     status.error ? h("p", { class: "notice" }, status.error) : null,
-    h("p", { class: "big" }, serve.running ? "运行中" : "已停止"),
+    h("p", { class: `big state ${serve.running ? "ok" : "off"}` }, serve.running ? "运行中" : "已停止"),
     kv([["启动于", fmtTime(serve.started)], ["镜像", `${serve.image ?? "–"} ${serve.image_id ?? ""}`],
       ["模型", record.model ? `${record.model} @ ${record.step}` : "–"], ["端口", record.port ? `:${record.port}` : "–"],
       ["GPU", gpu.used_mib !== undefined ? `GPU ${gpu.index}: ${gpu.used_mib} / ${gpu.total_mib} MiB` : `GPU ${gpu.index ?? "–"}`],
@@ -25,7 +25,7 @@ function bridgeEnd(status: ServeStatus): HTMLElement {
   const state = bridge.error ? "不可达" : !bridge.running ? "已停止" : Number(bridge.allow_publish) ? "发布中" : "空闲（未激活）";
   const el = panel("realman_ts · policy_bridge",
     bridge.error ? h("p", { class: "notice" }, bridge.error) : null,
-    h("p", { class: "big" }, state),
+    h("p", { class: `big state ${bridge.error ? "bad" : bridge.running ? "ok" : "off"}` }, state),
     kv([["启动于", fmtTime(bridge.started)], ["镜像", bridge.image ?? "–"], ["服务地址", bridge.server ? "已设置" : "–"],
       ["行为树模式", mode ? mode.active_mode ?? "–" : "没有 input_mode_state（行为树未运行？）"]]),
     h("p", { class: "muted" }, "平台只启停桥接，不激活；机械臂运动仍由行为树和 /policy/activate 决定。"));
@@ -153,8 +153,7 @@ export async function renderServe(root: HTMLElement, ctx: Ctx): Promise<() => vo
     }
   });
   root.replaceChildren(
-    h("section", { class: "panel" }, panelHead("推理链路", refresh),
-      h("p", { class: "muted" }, "server5090 的 openpi-serve 和 realman_ts 的 policy_bridge；不碰 bringup 和行为树。")),
+    pageHead("推理服务", "server5090 的 openpi-serve 和 realman_ts 的 policy_bridge；不碰 bringup 和行为树。", refresh),
     ...errors,
     ...(status ? [h("section", { class: "two" }, serveEnd(status), bridgeEnd(status))] : []),
     ...(settings ? [h("section", { class: "two" }, settingsForm(settings, gpus, ctx.query.get("model"), ctx),

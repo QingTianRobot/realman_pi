@@ -3,7 +3,7 @@ import { sparkline } from "../charts";
 import type { Ctx } from "../ctx";
 import { confirmJob } from "../dialog";
 import { DATASET_KIND, errorText, fmtBytes, fmtCount, fmtDay, fmtDuration, fmtTime, h } from "../dom";
-import { chip, kv, panel, panelHead, stat } from "../widgets";
+import { chip, kv, pageHead, panel, panelHead, stat } from "../widgets";
 
 const VERDICT: Record<EpisodeQuality["verdict"], [string, "ok" | "warn" | "bad"]> = {
   ok: ["正常", "ok"], warn: ["提示", "warn"], suggest_drop: ["建议剔除", "bad"],
@@ -20,7 +20,7 @@ function datasetItem(row: DatasetRow, rows: DatasetRow[], selected: boolean, new
   const quality = row.quality_counts;
   const title = datasetTitle(row, rows);
   const item = h("button", { class: `item${selected ? " selected" : ""}`, type: "button", "data-path": row.path },
-    h("strong", {}, title, " ", chip(DATASET_KIND[row.kind] ?? row.kind, row.kind === "error" ? "bad" : ""),
+    h("strong", {}, h("span", { class: "mono" }, title), " ", chip(DATASET_KIND[row.kind] ?? row.kind, row.kind === "error" ? "bad" : ""),
       newest ? [" ", chip("最新", "ok")] : null),
     row.kind === "error"
       ? h("small", {}, row.error ?? "")
@@ -107,7 +107,7 @@ function qualitySection(detail: DatasetDetail, options: Options, ctx: Ctx): HTML
     const box = h("input", { type: "checkbox", class: "drop", checked: suggested.has(q.episode), "aria-label": `剔除 ${q.episode}` });
     box.addEventListener("change", update);
     return h("tr", { "data-episode": q.episode },
-      h("td", {}, box), h("td", { class: "num" }, q.episode), h("td", {}, q.task),
+      h("td", {}, box), h("td", { class: "num" }, q.episode), h("td", { class: "nowrap" }, q.task),
       h("td", { class: "num" }, `${q.frames} · ${fmtDuration(q.frames / fps)}`),
       h("td", {}, sparkline(detail.traces[String(q.episode)])), h("td", {}, chip(label, tone)),
       h("td", {}, q.findings.map((f) => f.message).join("；")));
@@ -173,7 +173,7 @@ async function renderDetail(el: HTMLElement, path: string, options: Options, ctx
 export async function renderData(root: HTMLElement, ctx: Ctx): Promise<() => void> {
   const [{ datasets }, options] = await Promise.all([api.datasets(), api.options()]);
   const selected = ctx.query.get("path") ?? datasets.find((d) => d.kind !== "error")?.path ?? null;
-  const pull = h("button", { class: "button secondary", id: "pull", type: "button" }, "从 realman_ts 拉取");
+  const pull = h("button", { class: "button primary", id: "pull", type: "button" }, "从 realman_ts 拉取");
   pull.addEventListener("click", () => void confirmJob(ctx, {
     title: "从 realman_ts 拉取录制", kind: "pull", params: {},
     lines: ["通过 ssh realman_local 从录制容器打包当前录制", `写入 ${ctx.health.data_root}/raw_realman_ts_<日期时间>（新目录，不覆盖）`,
@@ -185,8 +185,10 @@ export async function renderData(root: HTMLElement, ctx: Ctx): Promise<() => voi
     datasets.map((row) => datasetItem(row, datasets, row.path === selected, newest.has(row.path), ctx)));
   if (!datasets.length) list.append(h("p", { class: "muted" }, `${ctx.health.data_root} 下还没有数据集`));
   const detail = h("div", { class: "stack", id: "dataset-detail" }, h("p", { class: "loading" }, "加载中…"));
-  root.replaceChildren(h("section", { class: "split" },
-    h("section", { class: "panel" }, panelHead("数据集", pull), list), detail));
+  root.replaceChildren(
+    pageHead("数据", "从 realman_ts 拉取录制 → 逐条质检 → 生成清洗版 → 生成训练视图。", pull),
+    h("section", { class: "split" },
+      h("section", { class: "panel sticky-list" }, panelHead(`数据集 · ${datasets.length}`), list), detail));
   if (selected) await renderDetail(detail, selected, options, ctx);
   else detail.replaceChildren();
   const onEnded = (event: Event) => {

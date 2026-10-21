@@ -9,6 +9,21 @@ export function panelHead(title: string, ...actions: Child[]): HTMLElement {
   return h("div", { class: "panel-head" }, h("h2", {}, title), h("div", { class: "actions" }, ...actions));
 }
 
+/** The title row of a page: what the page is for, and its main actions. */
+export function pageHead(title: string, description: string, ...actions: Child[]): HTMLElement {
+  return h("header", { class: "page-head" },
+    h("div", {}, h("h1", {}, title), h("p", {}, description)),
+    h("div", { class: "actions" }, ...actions));
+}
+
+/** Pass/fail rows for link checks: one line per item, the failing ones first. */
+export function checkList(checks: Check[]): HTMLElement {
+  const ordered = [...checks].sort((a, b) => Number(a.ok) - Number(b.ok));
+  return h("ul", { class: "check-list" }, ordered.map((c) =>
+    h("li", { class: c.ok ? "ok" : "bad" }, h("span", { class: "mark", "aria-label": c.ok ? "通过" : "未通过" }, c.ok ? "✓" : "✕"),
+      h("span", {}, c.name), h("span", { class: "mono" }, c.value || "–"))));
+}
+
 export function stat(label: string, value: Child): HTMLElement {
   return h("div", { class: "stat" }, h("span", {}, label), h("b", {}, value));
 }

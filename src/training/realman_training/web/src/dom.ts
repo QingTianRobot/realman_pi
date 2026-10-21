@@ -91,6 +91,13 @@ export function fmtDay(iso: string | null | undefined): string {
   return p ? `${p[1]}-${p[2]}` : "–";
 }
 
+/** Episode ranges come as [first, last] pairs from model cards. */
+export function fmtEpisodes(value: unknown): string {
+  if (Array.isArray(value) && value.length === 2) return `${value[0]}–${value[1]}`;
+  if (Array.isArray(value)) return value.join(", ");
+  return value === null || value === undefined ? "–" : String(value);
+}
+
 export function fmtMae(n: number | null | undefined): string {
   return n === null || n === undefined ? "–" : n.toFixed(3);
 }

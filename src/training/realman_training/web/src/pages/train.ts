@@ -3,7 +3,7 @@ import { lineChart } from "../charts";
 import type { Ctx } from "../ctx";
 import { confirmJob } from "../dialog";
 import { DATASET_KIND, errorText, fmtCount, fmtMae, fmtMiB, fmtTime, h } from "../dom";
-import { chip, evalTable, gpuList, kv, panel, panelHead, swapTable } from "../widgets";
+import { chip, evalTable, gpuList, kv, pageHead, panel, panelHead, stat, swapTable } from "../widgets";
 import { datasetTitle } from "./data";
 
 function runState(run: RunRow): HTMLElement {
@@ -77,7 +77,7 @@ function newRunForm(options: Options, datasets: DatasetRow[], gpus: Gpus | null,
         "训练会占用所选 GPU 数小时；GPU 被他人占用时会被拒绝", ...(dryRun.checked ? ["试运行：只打印命令"] : [])],
     });
   });
-  return h("section", { class: "panel" }, h("h2", {}, "新建训练"),
+  return h("section", { class: "panel new-run", id: "new-run" }, h("h2", {}, "新建训练"),
     h("div", { class: "form", id: "train-form" },
       h("label", {}, "openpi 配置", configName, configs), h("label", { class: "span2" }, "训练数据集", view), h("label", {}, "实验名", exp), info,
       h("div", { class: "wide checks" }, gpuBoxes), h("label", {}, "batch", batch), h("label", {}, "steps", steps),
@@ -133,23 +133,28 @@ async function renderRun(el: HTMLElement, name: string, gpus: Gpus | null, ctx: 
   }
   const m = run.metrics;
   const progress = run.job?.progress;
+  const share = progress?.total ? Math.min(100, (100 * progress.done) / progress.total) : null;
   el.replaceChildren(
-    h("section", { class: "two" },
-      h("section", { class: "panel" },
-        panelHead(run.name, runState(run), run.job ? (() => {
-          const b = h("button", { class: "button ghost", type: "button" }, "打开日志");
-          b.addEventListener("click", () => ctx.openDrawer(run.job!.id));
-          return b;
-        })() : null),
-        progress ? h("p", { class: "muted" }, progress.text) : null,
-        kv([["训练视图", run.view ?? "–"], ["GPU", run.gpus?.join(",") ?? "–"], ["batch · steps", `${run.batch_size ?? "–"} · ${run.num_train_steps ?? "–"}`],
-          ["时间", `${fmtTime(run.started)} → ${fmtTime(run.ended)}`], ["最后 step · loss", `${run.last_step ?? "–"} · ${fmtMae(run.last_loss)}`],
-          ["checkpoints", run.checkpoints.join(", ") || "–"]])),
-      panel("GPU", gpuList(gpus, run.gpus ?? []), evalForm(run, gpus, ctx), registerForm(run, ctx))),
-    h("section", { class: "two" },
-      panel("loss", lineChart(m.step ?? [], m.loss ?? [], { label: "loss", id: "chart-loss" })),
-      panel("grad norm", lineChart(m.step ?? [], m.grad_norm ?? [], { label: "grad_norm", id: "chart-grad" }))),
-    panel("各 checkpoint 按任务评估", evalTable(run.eval), swapTable(run.eval)));
+    h("section", { class: "panel" },
+      panelHead(run.name, runState(run), run.job ? (() => {
+        const b = h("button", { class: "button ghost", type: "button" }, "打开日志");
+        b.addEventListener("click", () => ctx.openDrawer(run.job!.id));
+        return b;
+      })() : null),
+      share !== null ? h("div", { class: "bar" }, h("i", { style: `width:${share.toFixed(1)}%` })) : null,
+      progress ? h("p", { class: "muted mono" }, progress.text) : null,
+      h("div", { class: "stats" },
+        stat("step", `${run.last_step ?? "–"} / ${run.num_train_steps ?? "–"}`), stat("loss", fmtMae(run.last_loss)),
+        stat("batch · GPU", `${run.batch_size ?? "–"} · ${run.gpus?.join(",") ?? "–"}`),
+        stat("时间", `${fmtTime(run.started)} → ${fmtTime(run.ended).slice(-5)}`),
+        stat("checkpoints", run.checkpoints.length ? `${run.checkpoints.length} 个 · 最新 ${run.checkpoints[run.checkpoints.length - 1]}` : "–")),
+      kv([["训练视图", h("span", { class: "mono" }, run.view ?? "–")], ["checkpoints", h("span", { class: "mono" }, run.checkpoints.join(", ") || "–")]])),
+    h("section", { class: "two side" },
+      h("div", { class: "stack" },
+        panel("loss", lineChart(m.step ?? [], m.loss ?? [], { label: "loss", id: "chart-loss" })),
+        panel("grad norm", lineChart(m.step ?? [], m.grad_norm ?? [], { label: "grad_norm", id: "chart-grad" })),
+        panel("各 checkpoint 按任务评估", evalTable(run.eval), swapTable(run.eval))),
+      panel("评估与登记", gpuList(gpus, run.gpus ?? []), evalForm(run, gpus, ctx), registerForm(run, ctx))));
 }
 
 export async function renderTrain(root: HTMLElement, ctx: Ctx): Promise<() => void> {
@@ -158,7 +163,8 @@ export async function renderTrain(root: HTMLElement, ctx: Ctx): Promise<() => vo
   const selected = ctx.query.get("run") ?? runs[0]?.name ?? null;
   const list = h("div", { class: "list", id: "run-list" }, runs.map((run) => {
     const item = h("button", { class: `item${run.name === selected ? " selected" : ""}`, type: "button", "data-run": run.name },
-      h("strong", {}, run.name, " ", runState(run)),
+      h("strong", {}, h("span", { class: "mono" }, run.exp), " ", runState(run)),
+      h("small", { class: "mono" }, run.config),
       h("small", {}, `${fmtTime(run.started)} · step ${run.last_step ?? "–"} · loss ${fmtMae(run.last_loss)}`),
       run.eval_latest ? h("small", {}, Object.entries(run.eval_latest.tasks).map(([t, v]) => `${t} ${fmtMae(v)}`).join(" · ")) : null);
     item.addEventListener("click", () => ctx.navigate("train", { run: run.name }));
@@ -166,8 +172,19 @@ export async function renderTrain(root: HTMLElement, ctx: Ctx): Promise<() => vo
   }));
   if (!runs.length) list.append(h("p", { class: "muted" }, "还没有训练"));
   const detail = h("div", { class: "stack", id: "run-detail" });
-  root.replaceChildren(newRunForm(options, datasets, gpus, ctx),
-    h("section", { class: "split" }, h("section", { class: "panel" }, h("h2", {}, "训练列表"), list), detail));
+  const form = newRunForm(options, datasets, gpus, ctx);
+  // The form stays folded unless the user came here to start a run (a view picked on the data page) or there is none yet.
+  form.hidden = !(ctx.query.get("view") || ctx.query.get("new") || !runs.length);
+  const toggle = h("button", { class: "button primary", id: "new-run-toggle", type: "button" }, form.hidden ? "新建训练" : "收起新建训练");
+  toggle.addEventListener("click", () => {
+    form.hidden = !form.hidden;
+    toggle.textContent = form.hidden ? "新建训练" : "收起新建训练";
+    if (!form.hidden) form.scrollIntoView({ block: "nearest", behavior: "smooth" });
+  });
+  root.replaceChildren(
+    pageHead("训练", "在 server5090 上用训练视图微调 pi0.5；看曲线、按任务评估各 checkpoint，再登记成模型。", toggle),
+    form,
+    h("section", { class: "split" }, h("section", { class: "panel sticky-list" }, panelHead(`训练列表 · ${runs.length}`), list), detail));
   if (selected) await renderRun(detail, selected, gpus, ctx);
   const onEnded = (event: Event) => {
     const job = (event as CustomEvent).detail;

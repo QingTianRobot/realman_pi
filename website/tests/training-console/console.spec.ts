@@ -1,7 +1,7 @@
 import { expect, test, type Page } from "@playwright/test";
 
 export const TOKEN = "e2e-token";
-const PAGES = ["overview", "serve", "data", "train", "models"];
+const PAGES = ["overview", "data", "train", "models", "serve"];
 
 async function noHorizontalScroll(page: Page) {
   const [scroll, inner] = await page.evaluate(() => [document.documentElement.scrollWidth, window.innerWidth]);
@@ -10,7 +10,10 @@ async function noHorizontalScroll(page: Page) {
 
 test("the shell shows five tabs and the chain pills @mobile", async ({ page }) => {
   await page.goto("/");
-  await expect(page.locator("nav.tabs a")).toHaveText(["总览", "服务", "数据", "训练", "模型"]);
+  // 总览, then the pipeline in working order; each step carries a live status line.
+  await expect(page.locator("nav.tabs a .tab-label")).toHaveText(["总览", "数据", "训练", "模型", "服务"]);
+  await expect(page.locator("#meta-serve")).toHaveText("运行中");
+  await expect(page.locator("#meta-models")).toContainText("已登记");
   await expect(page.locator("main#page")).toHaveAttribute("data-page", "overview");
   await expect(page.locator("#pill-serve")).toHaveText("推理 ● 运行中");
   await expect(page.locator("#pill-bridge")).toHaveText("桥接 ● 空闲");
@@ -134,6 +137,8 @@ test("train: curves, per-task eval and the prompt swap of a run", async ({ page 
 
 test("train: a new run needs GPUs and goes through the confirm dialog", async ({ page, request }) => {
   await page.goto("/#/train");
+  await expect(page.locator("#new-run")).toBeHidden();
+  await page.locator("#new-run-toggle").click();
   const form = page.locator("#train-form");
   await form.locator('input[name="config_name"]').fill("pi05_realman_multitask_action_only");
   await form.locator('select[name="view"]').selectOption("realman_right_arm_multitask_view");

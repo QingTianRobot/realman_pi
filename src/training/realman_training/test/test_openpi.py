@@ -112,7 +112,7 @@ def test_require_view_and_check_holdout(tmp_path):
 
 
 def test_check_name_rejects_trailing_newline():
-    """SAFE_NAME must not match names with a trailing newline ($ matches before \n, \Z does not)."""
+    """SAFE_NAME must not match names with a trailing newline ($ matches before a newline, \\Z does not)."""
     # Valid names must pass
     assert check_name("label", "good_name-1.0") == "good_name-1.0"
     # A trailing newline must be refused

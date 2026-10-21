@@ -127,7 +127,7 @@ def build_params(args, config) -> tuple[str, dict]:
                         "view": str(Path(args.view).expanduser().resolve()), "gpu": args.gpu,
                         "checkpoints": parse_checkpoints(args.checkpoints) if args.checkpoints else None,
                         "stride": args.stride, "prompt_swap": False if args.no_prompt_swap else None,
-                        "dry_run": args.dry_run}
+                        "dry_run": args.dry_run, "share_gpus": args.share_gpus}
     if command == "register":
         return "register", {**base, "config_name": args.config_name, "exp": args.exp, "status": args.status,
                             "method": args.method, "force": args.force}
@@ -383,6 +383,8 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--checkpoints", help="e.g. 10000,29999 (default: the latest)")
     p.add_argument("--stride", type=int)
     p.add_argument("--no-prompt-swap", action="store_true")
+    p.add_argument("--share-gpus", action="store_true",
+                   help="evaluate on a GPU that already holds memory when openpi.eval_need_mib is still free")
     p.add_argument("--dry-run", action="store_true")
     p = step("register", "write the model card and the registry row")
     p.add_argument("config_name")

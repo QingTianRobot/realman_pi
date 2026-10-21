@@ -96,10 +96,22 @@ def test_eval_refuses_a_busy_gpu_a_missing_checkpoint_and_several_gpus(env):
     busy = FakeRunner().on("python -", stdout=json.dumps(INFO)).on("nvidia-smi", stdout="2, 20000\n")
     with pytest.raises(StepFailed, match="gpu2=20000"):
         eval_step.run(params, RecordingLog(), runner=busy)
+    shared = FakeRunner().on("python -", stdout=json.dumps(INFO)).on("memory.total", stdout="2, 25000, 32607\n")
+    with pytest.raises(StepFailed, match="gpu2=7607MiB free"):
+        eval_step.run({**params, "share_gpus": True}, RecordingLog(), runner=shared)
     with pytest.raises(StepFailed, match="checkpoint 5000"):
         eval_step.run({**params, "checkpoints": [5000]}, RecordingLog(), runner=fake_eval(env))
     with pytest.raises(StepFailed, match="one GPU"):
         eval_step.run({**params, "gpu": "1,2"}, RecordingLog(), runner=fake_eval(env))
+
+
+def test_eval_share_gpus_runs_next_to_the_policy_server(env):
+    runner = fake_eval(env)
+    runner._rules.insert(0, ("memory.total", "2, 8850, 32607\n", 0, (), None))
+    params = {"config_name": "pi05_x", "exp": "e1", "view": str(env["view"]), "gpu": 2, "config": env["config"],
+              "share_gpus": True, "prompt_swap": False}
+    result = eval_step.run(params, RecordingLog(), runner=runner)
+    assert result["results"]["2000"]["pick_only"]["mae"] == 0.09
 
 
 def test_eval_refuses_bad_names(env):

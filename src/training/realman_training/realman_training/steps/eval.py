@@ -18,6 +18,7 @@ from ..openpi import (
     config_info,
     parse_gpus,
     require_view,
+    short_gpus,
     run_dir,
     script,
 )
@@ -69,10 +70,16 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     compose = Compose(oc, view, gpus)
     info = config_info(runner, compose, name)
     check_holdout(info, summary)
-    busy = busy_gpus(runner, gpus, oc.gpu_busy_mib)
-    if busy:
-        held = " ".join(f"gpu{g}={mib}MiB" for g, mib in sorted(busy.items()))
-        raise StepFailed(f"GPU in use by someone else ({held}); pick a free GPU")
+    if params.get("share_gpus"):
+        short = short_gpus(runner, gpus, oc.eval_need_mib)
+        if short:
+            free = " ".join(f"gpu{g}={mib}MiB free" for g, mib in sorted(short.items()))
+            raise StepFailed(f"not enough free memory to share ({free}, need {oc.eval_need_mib} MiB)")
+    else:
+        busy = busy_gpus(runner, gpus, oc.gpu_busy_mib)
+        if busy:
+            held = " ".join(f"gpu{g}={mib}MiB" for g, mib in sorted(busy.items()))
+            raise StepFailed(f"GPU in use by someone else ({held}); pick a free GPU or pass share_gpus")
     tasks = holdout_by_task(view, info.holdout)
     if not tasks:
         raise StepFailed(f"config {name} has no held-out episodes in {view.name}")

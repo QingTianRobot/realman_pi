@@ -181,6 +181,32 @@ sync_repo() {
   zsh -lc 'source "$1/functions.zsh" && rm65_deploy_sync' _ "$ROOT"
 }
 
+restart_helper() {
+  # Host-side helper behind the :8765 "重启 Docker" button (scripts/docker_restart_helper.py).
+  local unit=/etc/systemd/system/realman-restart-helper.service
+  case "${1:-}" in
+    run) exec python3 "$ROOT/scripts/docker_restart_helper.py" --config "$ROOT/config/docker/restart_helper.json" ;;
+    install)
+      if [[ "$DRY_RUN" == "1" ]]; then
+        printf '+ install %s for %s\n' "$unit" "$(id -un)"
+        return 0
+      fi
+      sed -e "s#@ROOT@#$ROOT#g" -e "s#@USER@#$(id -un)#g" \
+        "$ROOT/config/docker/realman-restart-helper.service" | sudo tee "$unit" >/dev/null
+      sudo systemctl daemon-reload
+      sudo systemctl enable --now realman-restart-helper.service
+      systemctl --no-pager status realman-restart-helper.service | head -n 5
+      ;;
+    uninstall)
+      run sudo systemctl disable --now realman-restart-helper.service || true
+      run sudo rm -f "$unit"
+      run sudo systemctl daemon-reload
+      ;;
+    status) run systemctl --no-pager status realman-restart-helper.service ;;
+    *) printf 'usage: rm65 restart-helper install|uninstall|status|run\n' >&2; return 2 ;;
+  esac
+}
+
 usage() {
   cat <<'EOF'
 Usage: ./rm65 <command> [profile]
@@ -196,6 +222,7 @@ Commands:
   bt [tree-name|l|m|r|three|control]  Run a behavior tree from config/behavior-trees; .xml may be omitted.
   bt control          Run the persistent input router and :8080 monitor until Ctrl-C.
   sync                Synchronize the clean main branch to production.
+  restart-helper install|uninstall|status|run  Host service behind the :8765 "重启 Docker" button.
 EOF
 }
 
@@ -211,6 +238,7 @@ case "$command_name" in
   bt) exec "$ROOT/scripts/bt.sh" "$@" ;;
   camera) exec zsh -lc 'source "$1/functions.zsh" && rm65_camera_start' _ "$ROOT" ;;
   sync) sync_repo "$@" ;;
+  restart-helper) restart_helper "$@" ;;
   help|-h|--help) usage ;;
   *) printf 'rm65: unknown command: %s\n' "$command_name" >&2; usage >&2; exit 2 ;;
 esac

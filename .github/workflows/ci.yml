@@ -57,6 +57,7 @@ jobs:
             src/behavior/realman_bt:test/test_bt_launcher.py \
             src/sensor/realman_camera_calibration:test/test_config.py \
             src/training/realman_training:test \
+            .:tests/test_docker_restart_helper.py \
             tools/velocity_follow:tests; do
             dir="${suite%%:*}"; target="${suite#*:}"
             echo "== $dir"

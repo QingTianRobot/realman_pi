@@ -1723,3 +1723,39 @@ test("gripper travel limits are disabled while the socket is closed and re-enabl
   await expect(page.locator("#gripper-limits-apply")).toBeEnabled({ timeout: 8_000 });
   await expect(page.locator("#gripper-open-position")).toBeEnabled();
 });
+
+test("restarts the bringup container after a confirming second click and shows the result", async ({ page }) => {
+  const state = { helper: { services: ["realman_bringup_remote"], restarting: false } as Record<string, unknown>, posts: 0 };
+  await page.route("**/api/docker/restart", async (route: any) => {
+    if (route.request().method() === "POST") {
+      state.posts += 1;
+      state.helper = { ...state.helper, restarting: true, service: "realman_bringup_remote", started_at_ms: Date.now() };
+      return route.fulfill({ json: { ok: true, service: "realman_bringup_remote", started_at_ms: Date.now() } });
+    }
+    return route.fulfill({ json: { available: true, service: "realman_bringup_remote", helper: state.helper } });
+  });
+  await page.goto("/");
+  const button = page.locator("#docker-restart");
+  await expect(button).toHaveText("重启 Docker");
+  await button.click();
+  await expect(button).toHaveText("确认重启？");
+  expect(state.posts).toBe(0);
+  await button.click();
+  await expect(button).toHaveText("重启中…");
+  await expect(button).toBeDisabled();
+  await expect(page.locator("#docker-restart-state")).toContainText("RESTARTING");
+  expect(state.posts).toBe(1);
+
+  state.helper = { ...state.helper, restarting: false, finished_at_ms: Date.now(), exit_code: 0, output_tail: [] };
+  await expect(page.locator("#docker-restart-state")).toContainText("RESTARTED");
+  await expect(button).toBeEnabled();
+});
+
+test("disables the restart button while the host helper is not running", async ({ page }) => {
+  await page.route("**/api/docker/restart", (route: any) => route.fulfill({
+    json: { available: false, error: "host restart helper is not reachable (./rm65 restart-helper install)" },
+  }));
+  await page.goto("/");
+  await expect(page.locator("#docker-restart")).toBeDisabled();
+  await expect(page.locator("#docker-restart")).toHaveAttribute("title", /restart-helper install/);
+});

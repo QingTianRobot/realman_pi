@@ -1,0 +1,6 @@
+{
+  "bind_host": "127.0.0.1",
+  "port": 8782,
+  "services": ["realman_bringup_remote"],
+  "timeout_sec": 120
+}

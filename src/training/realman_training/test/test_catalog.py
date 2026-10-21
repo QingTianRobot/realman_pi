@@ -161,3 +161,18 @@ def test_a_hand_evaluated_run_shows_the_eval_from_its_card(world):
     assert evals["29999"]["pick_only"] == {"mae": 0.092, "zero_baseline": 0.39}
     assert evals["10000"]["pick_and_place"]["mae"] == 0.121
     assert evals["29999"]["prompt_swap"]["pick_only"] == {"pick_only": 0.0923, "其他任务的 prompt": 0.1164}
+
+
+def test_a_hand_trained_run_takes_its_facts_from_the_card(world, monkeypatch):
+    paths, config, _ = world
+    monkeypatch.setenv("HOME", str(paths["root"]))
+    (paths["run"] / "console_train.json").unlink()
+    card = json.loads((paths["run"] / "model_card.json").read_text())
+    card["dataset_dir"] = "server5090:~/data/realman_right_arm_multitask_view"
+    card["gpus"] = "2x RTX 5090 (server5090 GPU 1,2), data parallel"
+    (paths["run"] / "model_card.json").write_text(json.dumps(card))
+    row = catalog.run_detail(config, CONFIG_NAME, EXP)
+    assert (row["view"], row["gpus"], row["batch_size"]) == ("realman_right_arm_multitask_view", [1, 2], 16)
+    assert row["started"] == "2026-10-16T09:54:38+08:00" and row["ended"] == "2026-10-16T16:09:40+08:00"
+    assert catalog.list_models(config)["models"][0]["dataset"] == "realman_right_arm_multitask_view"
+    assert catalog.card_path("/abs/x") == "/abs/x" and catalog.card_path(None) is None

@@ -6,6 +6,7 @@ from __future__ import annotations
 
 import csv
 import json
+import re
 from pathlib import Path
 
 import pyarrow
@@ -122,9 +123,30 @@ def _checkpoints(folder: Path) -> list[int]:
     return sorted(int(p.name) for p in folder.iterdir() if p.is_dir() and p.name.isdigit())
 
 
+def card_path(text: str | None) -> str | None:
+    """A hand-written card's dataset_dir may read `server5090:~/data/...`: drop the host and expand ~."""
+    if not text:
+        return None
+    host, sep, rest = text.partition(":")
+    if sep and "/" not in host and rest.startswith(("/", "~")):
+        text = rest
+    return str(Path(text).expanduser())
+
+
+def _record_from_card(card: dict | None) -> dict:
+    """What console_train.json would hold, for a run trained by hand (it has only a model card)."""
+    if not card:
+        return {}
+    match = re.search(r"GPU ([0-9][0-9,]*)", str(card.get("gpus") or ""))
+    return {"view": card_path(card.get("dataset_dir")), "started": card.get("trained_start"),
+            "ended": card.get("trained_end"), "batch_size": card.get("batch_size"),
+            "num_train_steps": card.get("num_train_steps"),
+            "gpus": [int(g) for g in match.group(1).split(",") if g] if match else None}
+
+
 def _run_row(config: ConsoleConfig, folder: Path, metrics: list[dict]) -> dict:
-    record = _read_json(folder / "console_train.json") or {}
     card = _read_json(folder / "model_card.json")
+    record = _read_json(folder / "console_train.json") or _record_from_card(card)
     losses = [row["loss"] for row in metrics if "loss" in row]
     view = record.get("view")
     return {
@@ -143,7 +165,7 @@ def _run_row(config: ConsoleConfig, folder: Path, metrics: list[dict]) -> dict:
         "registered": card is not None,
         "status": (card or {}).get("status"),
         "last_loss": losses[-1] if losses else None,
-        "eval_latest": _eval_latest(_read_json(folder / "eval" / "summary.json")),
+        "eval_latest": _eval_latest(_read_json(folder / "eval" / "summary.json") or _eval_from_card(card)),
     }
 
 
@@ -236,7 +258,7 @@ def list_models(config: ConsoleConfig, serving_name: str | None | object = _FROM
         open_loop = None
         if steps:
             open_loop = {"step": steps[0], "tasks": loops[str(steps[0])], "zero_baseline": loops.get("zero_baseline") or {}}
-        dataset_dir = card.get("dataset_dir")
+        dataset_dir = card_path(card.get("dataset_dir"))
         models.append({
             "name": name, "config": folder.parent.name, "exp": folder.name,
             "method": card.get("method"), "trained_start": card.get("trained_start"), "trained_end": card.get("trained_end"),

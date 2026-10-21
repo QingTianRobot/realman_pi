@@ -1,5 +1,7 @@
 from __future__ import annotations
 
+import json
+
 import pytest
 from console_fixture import CONFIG_NAME, EXP, MODEL, PICK, PLACE, TRAINING, build_world
 
@@ -146,3 +148,16 @@ def test_dataset_detail_on_broken_dataset_raises_bad_request(world):
     (broken / "meta" / "info.json").write_text('{"codebase_version": "v2.1"}', encoding="utf-8")
     with pytest.raises(catalog.BadRequest):
         catalog.dataset_detail(config, cache, "broken_detail")
+
+
+def test_a_hand_evaluated_run_shows_the_eval_from_its_card(world):
+    paths, config, _ = world
+    (paths["run"] / "eval" / "summary.json").unlink()
+    card = json.loads((paths["run"] / "model_card.json").read_text())
+    card["prompt_swap_29999"] = {"pick_and_place_correct": 0.0962, "pick_and_place_swapped": 0.1121,
+                                 "pick_only_correct": 0.0923, "pick_only_swapped": 0.1164}
+    (paths["run"] / "model_card.json").write_text(json.dumps(card))
+    evals = catalog.run_detail(config, CONFIG_NAME, EXP)["eval"]
+    assert evals["29999"]["pick_only"] == {"mae": 0.092, "zero_baseline": 0.39}
+    assert evals["10000"]["pick_and_place"]["mae"] == 0.121
+    assert evals["29999"]["prompt_swap"]["pick_only"] == {"pick_only": 0.0923, "其他任务的 prompt": 0.1164}

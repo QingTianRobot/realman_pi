@@ -184,6 +184,21 @@ def _run_folder(config: ConsoleConfig, config_name: str, exp: str) -> Path:
     return folder
 
 
+def _eval_from_card(card: dict | None) -> dict | None:
+    """Eval results of a run evaluated by hand: only its model card has them (no eval/summary.json)."""
+    loops = (card or {}).get("open_loop_eval") or {}
+    baseline = loops.get("zero_baseline") or {}
+    evals = {str(step): {task: {"mae": mae, "zero_baseline": baseline.get(task)} for task, mae in tasks.items()}
+             for step, tasks in loops.items() if str(step).isdigit() and isinstance(tasks, dict)}
+    for key, swap in (card or {}).items():
+        step = key.removeprefix("prompt_swap_")
+        if key.startswith("prompt_swap_") and step in evals and isinstance(swap, dict):
+            tasks = sorted({k.rsplit("_", 1)[0] for k in swap if k.endswith(("_correct", "_swapped"))})
+            evals[step]["prompt_swap"] = {t: {t: swap.get(f"{t}_correct"), "其他任务的 prompt": swap.get(f"{t}_swapped")}
+                                          for t in tasks}
+    return evals or None
+
+
 def run_detail(config: ConsoleConfig, config_name: str, exp: str, max_points: int = 1000) -> dict:
     folder = _run_folder(config, config_name, exp)
     metrics = _metrics(folder, exp, config.openpi.docker_data)
@@ -191,12 +206,13 @@ def run_detail(config: ConsoleConfig, config_name: str, exp: str, max_points: in
     keys = list(dict.fromkeys(k for row in picked for k in row))
     series = {key: [row.get(key) for row in picked] for key in keys} if picked else {"step": []}
     markdown = folder / "MODEL_CARD.md"
+    card = _read_json(folder / "model_card.json")
     return {
         **_run_row(config, folder, metrics),
         "record": _read_json(folder / "console_train.json"),
         "metrics": series,
-        "eval": _read_json(folder / "eval" / "summary.json"),
-        "card": _read_json(folder / "model_card.json"),
+        "eval": _read_json(folder / "eval" / "summary.json") or _eval_from_card(card),
+        "card": card,
         "card_markdown": markdown.read_text(encoding="utf-8") if markdown.is_file() else None,
     }
 

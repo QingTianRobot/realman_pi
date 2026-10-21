@@ -21,7 +21,7 @@ description: server5090:8780 上的训练控制平台网页：数据集与质检
 
 ## 安全规则
 
-- 所有写操作需要令牌：服务器端 `REALMAN_TRAINING_TOKEN`（仓库根 `.env`），网页顶栏输入，只存在浏览器本页会话里；没有设置令牌时平台是只读的。
+- 所有写操作需要令牌：服务器端 `REALMAN_TRAINING_TOKEN`（仓库外的 env 文件，见下），网页顶栏输入，只存在浏览器本页会话里；没有设置令牌时平台是只读的。
 - 每个启动任务的按钮都先弹出确认框，列出会发生什么。同一类任务同一时间只能有一个；训练前检查所选 GPU，有他人进程就拒绝。
 - 不提供删除；清洗版、训练视图写新目录，目标已存在就拒绝。
 - 关闭或启动推理链路前检查行为树模式，`policy` 时拒绝；平台只启停桥接，不激活，机械臂运动仍由行为树和 `/policy/activate` 决定。
@@ -31,15 +31,15 @@ description: server5090:8780 上的训练控制平台网页：数据集与质检
 
 容器定义在 `config/docker/compose.yaml` 的 `realman_training` 服务（profile `training`，机器人侧任何命令都不会构建或启动它），镜像 `config/docker/training-console.Dockerfile`，配置 `config/training/training_console.yaml` 的 `web` 段。平台要把主机路径交给主机的 docker（openpi 容器）和 ssh（`realman_local`），所以这些路径在容器里挂载到同样的绝对路径，容器以主机用户身份运行。
 
-在 server5090 的部署工作区里，`.env` 写入：
+仓库根的 `.env` 是受版本管理的模板，令牌不能写进去。在仓库外建一个只有自己可读的 env 文件，例如 `~/.config/realman-training/console.env`（目录 700、文件 600）：
 
 ```bash
-REALMAN_TRAINING_TOKEN=<随机令牌>
+REALMAN_TRAINING_TOKEN=<随机令牌，例如 python3 -c "import secrets; print(secrets.token_urlsafe(24))">
 TRAINING_HOME=/home/<用户>
 TRAINING_REPO=<部署工作区的绝对路径>
 TRAINING_DOCKER_GID=<getent group docker 的 gid>
-TRAINING_UID=$(id -u)
-TRAINING_GID=$(id -g)
+TRAINING_UID=<id -u 的值>
+TRAINING_GID=<id -g 的值>
 # 可选：绑定地址（默认 0.0.0.0；读操作含 WebSocket 日志不需要令牌，建议绑到受信任网段）
 # TRAINING_BIND=127.0.0.1
 # 可选：PyPI 镜像（中国大陆加速）
@@ -48,18 +48,18 @@ TRAINING_GID=$(id -g)
 # TRAINING_APT_MIRROR=mirrors.aliyun.com
 ```
 
-然后：
+然后在部署工作区里（`E=~/.config/realman-training/console.env`）：
 
 ```bash
-docker compose -p realman-training --profile training build realman_training
-docker compose -p realman-training --profile training up -d realman_training
-docker compose -p realman-training --profile training logs --tail=50 realman_training
+docker compose -p realman-training --env-file .env --env-file "$E" --profile training build realman_training
+docker compose -p realman-training --env-file .env --env-file "$E" --profile training up -d realman_training
+docker compose -p realman-training --env-file .env --env-file "$E" --profile training logs --tail=50 realman_training
 ```
 
 浏览器打开 `http://server5090:8780`（或 `ssh -N -L 8780:127.0.0.1:8780 server5090` 后打开 `http://127.0.0.1:8780`）。重启容器会中断它启动的任务：任务被标记为"中断"；训练容器本身不受影响，用以下命令接管：
 
 ```bash
-docker compose -p realman-training --profile training exec realman_training python -m realman_training train <config_name> <view> --exp <exp> --gpus <gpus> --attach
+docker compose -p realman-training --env-file .env --env-file "$E" --profile training exec realman_training python -m realman_training train <config_name> <view> --exp <exp> --gpus <gpus> --attach
 ```
 
 ## 开发

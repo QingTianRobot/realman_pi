@@ -98,7 +98,7 @@ training_console:
     stats_timeout_sec: 5
 
   # The web console (realman-train web; compose service realman_training on server5090, port 8780).
-  # Writes need REALMAN_TRAINING_TOKEN from the repo-root .env; an empty token makes the console read-only.
+  # Writes need REALMAN_TRAINING_TOKEN (from the untracked env file passed with --env-file); empty = read-only.
   web:
     host: 0.0.0.0
     port: 8780

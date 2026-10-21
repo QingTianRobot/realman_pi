@@ -370,12 +370,14 @@ services:
   # see website/docs/development/training-console-web.md. Opt-in profile, so no robot command builds or
   # starts it: `docker compose --profile training up -d realman_training`. The console hands host paths to
   # the host's docker daemon (openpi containers) and to ssh (realman_local), so they are mounted at the same
-  # absolute path and the container runs as the host user with the host's HOME. Values come from .env.
+  # absolute path and the container runs as the host user with the host's HOME. Values come from an untracked env
+  # file outside the repo (the repo-root .env is a tracked template), passed with --env-file.
   realman_training:
     profiles: [training]
     build:
-      context: ../..
+      context: .  # the root docker-compose.yml include sets project_directory to the repo root
       dockerfile: config/docker/training-console.Dockerfile
+      network: host  # same as the robot images: a bridge build container may not reach the host resolver
       args:
         PIP_INDEX_URL: ${TRAINING_PIP_INDEX_URL:-https://pypi.org/simple}
         APT_MIRROR: ${TRAINING_APT_MIRROR:-}

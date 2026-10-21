@@ -5,7 +5,7 @@ import shlex
 
 import pytest
 from fake_runner import FakeRunner, RecordingLog
-from lerobot_fixture import build_view
+from lerobot_fixture import Episode, build_dataset, build_view
 
 from realman_training.jobs import StepFailed
 from realman_training.steps import eval as eval_step
@@ -59,6 +59,17 @@ def test_holdout_by_task_splits_the_configs_holdout(env):
     assert eval_step.holdout_by_task(env["view"], (1, 2, 3)) == {
         "pick_and_place": {"prompt": PLACE, "episodes": [1]},
         "pick_only": {"prompt": PICK, "episodes": [2, 3]},
+    }
+
+
+def test_holdout_by_task_tells_tasks_with_one_prompt_apart_by_the_source(tmp_path):
+    names = ["pick_and_place", "pick_only", "pick_only", "pick_only_dark", "pick_only_dark"]
+    source = build_dataset(tmp_path / "clean", [Episode(task=n, gripper=[50.0] * 10) for n in names])
+    prompts = {"pick_and_place": PLACE, "pick_only": PICK, "pick_only_dark": PICK}
+    view = build_view(tmp_path / "v", source=str(source), prompts=prompts, lengths=[10] * 5, tasks=names)
+    assert eval_step.holdout_by_task(view, (1, 2, 3, 4)) == {
+        "pick_only": {"prompt": PICK, "episodes": [1, 2]},
+        "pick_only_dark": {"prompt": PICK, "episodes": [3, 4]},
     }
 
 

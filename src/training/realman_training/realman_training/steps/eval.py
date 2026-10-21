@@ -30,10 +30,19 @@ def holdout_by_task(view: str | Path, holdout: tuple[int, ...]) -> dict[str, dic
     view = Path(view)
     contract = json.loads((view / "contract.json").read_text(encoding="utf-8"))
     task_of_prompt = {prompt: task for task, prompt in (contract.get("prompts") or {}).items()}
+    episodes = read_episodes(view)
+    # Tasks that share a prompt (pick_only and pick_only_light-weak_1021) are told apart by the source's task names;
+    # the view keeps the source's episode numbering.
+    source_task: dict[int, str] = {}
+    source = Path(str(contract.get("source") or ""))
+    if source.name and (source / "meta" / "info.json").is_file():
+        rows = read_episodes(source)
+        if len(rows) == len(episodes):
+            source_task = {row.index: row.task for row in rows}
     tasks: dict[str, dict] = {}
-    for episode in read_episodes(view):
+    for episode in episodes:
         if episode.index in holdout:
-            task = task_of_prompt.get(episode.task, episode.task)
+            task = source_task.get(episode.index) or task_of_prompt.get(episode.task, episode.task)
             tasks.setdefault(task, {"prompt": episode.task, "episodes": []})["episodes"].append(episode.index)
     return dict(sorted(tasks.items()))
 

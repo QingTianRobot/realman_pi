@@ -23,7 +23,7 @@ from . import linkcheck, serving_state
 from .config import ConsoleConfig, ServingConfig, load_config
 from .jobs import StepFailed, now
 from .openpi import CONTAINER_PREFIX, busy_gpus, check_name, run_dir
-from .robot import Robot, container_facts, script
+from .robot import Robot, container_facts, redact, script
 from .runner import CommandFailed, Runner
 
 
@@ -184,10 +184,10 @@ def start(params: dict, log, runner: Runner | None = None, *, port_open=port_ope
     up = compose_argv(sc, "up", "-d", sc.service)
     bridge_cmd = robot.compose_command("up", "-d", "--no-deps", "--no-build", sc.bridge_service, env={"POLICY_WS_HOST": server})
     log("$ " + " ".join(f"{k}={v}" for k, v in env.items()) + " " + shlex.join(up))
-    log(f"$ ssh {config.remote.ssh_host} {bridge_cmd}")
+    log(f"$ ssh {config.remote.ssh_host} {redact(bridge_cmd)}")
     if params.get("dry_run"):
-        return {"dry_run": True, "serve_command": up, "serve_env": env, "bridge_command": bridge_cmd,
-                "model": model.name, "step": model.step, "prompt": prompt, "server": server}
+        return {"dry_run": True, "serve_command": up, "serve_env": env, "bridge_command": redact(bridge_cmd),
+                "model": model.name, "step": model.step, "prompt": prompt}
 
     try:
         runner.check(up, env=env)
@@ -212,15 +212,19 @@ def start(params: dict, log, runner: Runner | None = None, *, port_open=port_ope
                            timeout=sc.warmup_timeout_sec)
     except CommandFailed as error:
         raise StepFailed(f"warm-up failed: {error}") from None
-    warm = json.loads([line for line in out.splitlines() if line.startswith("{")][-1])
+    warm_lines = [line for line in out.splitlines() if line.startswith("{")]
+    if not warm_lines:
+        raise StepFailed(f"warm-up printed no result: {out.strip()[-300:]}")
+    warm = json.loads(warm_lines[-1])
     for i, ms in enumerate(warm["ms"], 1):
         log(f"warm-up {i}: {ms:.0f} ms")
 
     record = {"model": model.name, "config": model.config_name, "exp": model.exp, "step": model.step,
               "checkpoint": model.checkpoint, "gpu": gpu, "port": port, "task": task, "prompt": prompt,
-              "server": server, "started": now(), "warmup_ms": warm["ms"]}
+              "started": now(), "warmup_ms": warm["ms"]}
     serving_state.save(config, record)
 
+    _guard_bt(robot, sc, log)
     robot.check(bridge_cmd, timeout=300)
     log("policy_bridge up; waiting for /policy/stats")
     deadline = clock() + sc.bridge_start_timeout_sec
@@ -231,7 +235,14 @@ def start(params: dict, log, runner: Runner | None = None, *, port_open=port_ope
     if not answer.get("confirmed"):
         raise StepFailed(f"the bridge did not confirm the prompt {prompt!r} (published={answer.get('published')})")
     stats = answer.get("stats") or {}
-    if float(stats.get("allow_publish", "0") or 0):
+    ap_raw = stats.get("allow_publish")
+    if ap_raw is None or ap_raw == "":
+        raise StepFailed("allow_publish is missing from bridge stats after start; check the bridge config")
+    try:
+        ap_val = float(ap_raw)
+    except (ValueError, TypeError):
+        raise StepFailed(f"allow_publish is not numeric after start: {ap_raw!r}")
+    if ap_val:
         raise StepFailed("the bridge reports allow_publish=1 right after start: call /policy/deactivate and check the BT")
     log(f"bridge prompt set to {prompt!r}; bridge inactive")
 
@@ -284,15 +295,18 @@ def status(config: ConsoleConfig, runner: Runner | None = None) -> dict:
     done = runner.run(["nvidia-smi", "-i", str(gpu_index), "--query-gpu=index,memory.used,memory.total",
                        "--format=csv,noheader,nounits"])
     if done.returncode == 0 and done.stdout.strip():
-        _, used, total = (int(x) for x in done.stdout.strip().splitlines()[0].split(","))
-        gpu.update(used_mib=used, total_mib=total)
+        try:
+            _, used, total = (int(x.strip()) for x in done.stdout.strip().splitlines()[0].split(","))
+            gpu.update(used_mib=used, total_mib=total)
+        except (ValueError, TypeError):
+            pass  # e.g. [N/A] values from nvidia-smi when GPU info is unavailable
     robot = Robot(config.remote, sc, runner)
     bridge: dict
     bt_mode = None
     try:
         facts = robot.container(sc.bridge_container) or {"running": False}
         bridge = {k: facts[k] for k in ("running", "status", "image", "image_id", "started") if k in facts}
-        bridge["server"] = (facts.get("env") or {}).get("POLICY_WS_HOST")
+        bridge["server"] = "set" if (facts.get("env") or {}).get("POLICY_WS_HOST") else None
         probe = robot.ros_probe(f"stats={config.linkcheck.stats_timeout_sec}", "mode=3")
         stats = probe.get("stats") or {}
         bridge.update({k: stats.get(k) for k in ("prompt", "paused", "allow_publish", "mode_active")})

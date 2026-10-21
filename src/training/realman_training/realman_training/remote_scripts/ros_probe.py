@@ -9,6 +9,7 @@ usage: python3 - REQUEST... < ros_probe.py
 """
 
 import json
+import os
 import sys
 import time
 
@@ -98,7 +99,7 @@ def prompt(node, text):
 
 def main():
     rclpy.init()
-    node = Node("realman_training_probe")
+    node = Node(f"realman_training_probe_{os.getpid()}")
     result = {}
     try:
         for request in sys.argv[1:]:

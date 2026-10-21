@@ -7,6 +7,7 @@ probe only reads the ROS graph otherwise. Hosts by ssh alias only.
 from __future__ import annotations
 
 import json
+import re
 import shlex
 import subprocess
 from pathlib import Path
@@ -19,6 +20,13 @@ from .runner import Completed, Runner
 from .steps.train import _normalize_docker_time
 
 SCRIPTS = Path(__file__).resolve().parent / "remote_scripts"
+
+_ADDR_RE = re.compile(r'\b\d{1,3}(?:\.\d{1,3}){3}\b')
+
+
+def redact(text: str) -> str:
+    """Replace IPv4 address literals with <addr> so they are not logged or stored."""
+    return _ADDR_RE.sub('<addr>', text)
 
 
 def script(name: str) -> str:
@@ -69,17 +77,17 @@ class Robot:
         try:
             done = self.runner.run(self.ssh_argv(command), input=input, timeout=timeout)
         except subprocess.TimeoutExpired:
-            raise StepFailed(f"realman_ts ({self.remote.ssh_host}): {command[:120]} timed out after {timeout:g} s") from None
+            raise StepFailed(f"realman_ts ({self.remote.ssh_host}): {redact(command[:120])} timed out after {timeout:g} s") from None
         if done.returncode == 255:
             tail = (done.stderr or done.stdout).strip().splitlines()[-1:] or [""]
-            raise StepFailed(f"realman_ts ({self.remote.ssh_host}) unreachable: {tail[0]}")
+            raise StepFailed(f"realman_ts ({self.remote.ssh_host}) unreachable: {redact(tail[0])}")
         return done
 
     def check(self, command: str, *, input: str | None = None, timeout: float | None = None) -> str:
         done = self.run(command, input=input, timeout=timeout)
         if done.returncode:
             tail = "\n".join((done.stderr or done.stdout).strip().splitlines()[-10:])
-            raise StepFailed(f"realman_ts ({self.remote.ssh_host}): {command[:120]} exited {done.returncode}: {tail}")
+            raise StepFailed(f"realman_ts ({self.remote.ssh_host}): {redact(command[:120])} exited {done.returncode}: {redact(tail)}")
         return done.stdout
 
     def container(self, name: str) -> dict | None:

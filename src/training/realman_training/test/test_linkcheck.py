@@ -139,6 +139,18 @@ def test_an_unreachable_robot_fails_every_item_with_the_reason(config):
     assert all("unreachable" in c.detail for c in checks)
 
 
+def test_run_checks_leaves_no_private_ip_in_history(config):
+    chain = FakeChain()
+    fake = bulk(chain.runner())
+    checks = linkcheck.run_checks(config, fake, clock=Clock(), expected_prompt=PLACE)
+    history = linkcheck.save_history(config, checks)
+    text = history.read_text(encoding="utf-8")
+    assert SERVER_ADDR not in text, f"IP found in history: {text}"
+    for c in checks:
+        assert SERVER_ADDR not in c.value, f"IP in check value: {c}"
+        assert SERVER_ADDR not in c.detail, f"IP in check detail: {c}"
+
+
 def test_the_job_entry_logs_a_table_and_keeps_history(config, monkeypatch):
     chain = FakeChain()
     monkeypatch.setattr(linkcheck, "Runner", lambda: bulk(chain.runner()))

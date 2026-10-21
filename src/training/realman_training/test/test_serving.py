@@ -3,7 +3,7 @@ from __future__ import annotations
 import json
 
 import pytest
-from fake_runner import RecordingLog
+from fake_runner import FakeRunner, RecordingLog
 from robot_fakes import PLACE, SERVER_ADDR, SERVE_CONTAINER, FakeChain
 
 from realman_training import serving, serving_state
@@ -277,7 +277,7 @@ def test_status_reports_both_ends(config):
     data = serving.status(config, chain.runner())
     assert data["serve"]["running"] is True and data["serve"]["image"] == "img:tag"
     assert data["gpu"] == {"index": 2, "used_mib": 500, "total_mib": 32607}
-    assert data["bridge"]["running"] is True and data["bridge"]["server"] == SERVER_ADDR
+    assert data["bridge"]["running"] is True and data["bridge"]["server"] == "set"
     assert data["bridge"]["prompt"] == PLACE and data["bridge"]["paused"] == "0.0"
     assert data["bt_mode"]["active_mode"] == "none"
     assert data["record"]["step"] == 29999
@@ -289,6 +289,85 @@ def test_status_survives_an_unreachable_robot(config):
     data = serving.status(config, chain.runner())
     assert "unreachable" in data["bridge"]["error"]
     assert data["serve"] == {"running": False}
+
+
+def test_start_leaves_no_private_ip_in_logs_or_state(config):
+    chain = FakeChain()
+    result, fake, log = start(config, chain)
+    assert SERVER_ADDR not in log.text(), f"IP in log: {[l for l in log.lines if SERVER_ADDR in l]}"
+    record_text = (config.console_dir / "serving.json").read_text(encoding="utf-8")
+    assert SERVER_ADDR not in record_text, f"IP in serving.json: {record_text}"
+    history_dir = config.console_dir / "linkcheck"
+    for f in history_dir.glob("*.json"):
+        text = f.read_text(encoding="utf-8")
+        assert SERVER_ADDR not in text, f"IP in history: {text}"
+
+
+def test_dry_run_leaves_no_private_ip(config):
+    result, fake, log = start(config, FakeChain(), dry_run=True)
+    result_str = json.dumps(result)
+    assert SERVER_ADDR not in result_str, f"IP in dry_run result: {result_str}"
+    assert SERVER_ADDR not in log.text(), f"IP in log: {log.text()}"
+    assert "server" not in result, "dry_run result must not include a 'server' key"
+
+
+def test_status_leaves_no_private_ip(config):
+    chain = FakeChain()
+    chain.serve_running = True
+    serving_state.save(config, {"model": f"{CFG}/{EXP}", "step": 29999, "gpu": 2})
+    data = serving.status(config, chain.runner())
+    data_str = json.dumps(data)
+    assert SERVER_ADDR not in data_str, f"IP in status: {data_str}"
+
+
+def test_start_re_guards_bt_after_warmup(config):
+    """BT mode flips to policy between warm-up and the bridge command; start must detect it."""
+    chain = FakeChain()
+    chain.mode_after_warmup = {"requested_mode": "policy", "selected_mode": "policy",
+                               "active_mode": "policy", "phase": 0, "detail": ""}
+    fake = chain.runner()
+    log = RecordingLog()
+    with pytest.raises(StepFailed, match="behaviour tree is in policy mode"):
+        serving.start(params(config), log, fake, port_open=Port(), sleep=lambda s: None,
+                      clock=iter(range(10_000)).__next__, checks=ok_checks)
+    assert not fake.commands("--no-deps"), "bridge compose command must not have been sent"
+
+
+@pytest.mark.parametrize("ap_value", [None, ""])
+def test_start_fails_on_missing_allow_publish(config, ap_value):
+    chain = FakeChain()
+    chain.stats = {**chain.stats, "allow_publish": ap_value}
+    with pytest.raises(StepFailed, match="allow_publish"):
+        start(config, chain)
+
+
+def test_start_fails_on_non_numeric_allow_publish(config):
+    chain = FakeChain()
+    chain.stats = {**chain.stats, "allow_publish": "yes"}
+    with pytest.raises(StepFailed, match="allow_publish"):
+        start(config, chain)
+
+
+def test_start_fails_when_warmup_prints_no_json(config):
+    chain = FakeChain()
+    fake = FakeRunner()
+    fake.on("uv run --no-sync python - ", stdout="ERROR: something failed\n")
+    for rule in chain.runner()._rules:
+        if "uv run" not in rule[0]:
+            fake._rules.append(rule)
+    with pytest.raises(StepFailed, match="warm-up printed no result"):
+        serving.start(params(config), RecordingLog(), fake, port_open=Port(), sleep=lambda s: None,
+                      clock=iter(range(10_000)).__next__, checks=ok_checks)
+
+
+def test_status_survives_nvidia_smi_na(config):
+    chain = FakeChain()
+    chain.serve_running = True
+    chain.gpu_used_mib = "[N/A]"  # causes int() to fail if not handled
+    serving_state.save(config, {"model": f"{CFG}/{EXP}", "gpu": 2})
+    data = serving.status(config, chain.runner())
+    assert "used_mib" not in data["gpu"], "gpu memory must be omitted when smi returns [N/A]"
+    assert data["gpu"]["index"] == 2
 
 
 def test_run_dispatches_on_action(config, monkeypatch):

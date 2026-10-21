@@ -40,6 +40,9 @@ class FakeChain:
         self.serve_dies = False  # the serve container exits while loading
         self.serve_logs = ""
         self.unreachable = False
+        # If set, the BT mode switches to this dict after the first warm-up probe runs
+        self.mode_after_warmup: dict | None = None
+        self._warmed = False
 
     @staticmethod
     def _infer_rounds(argv) -> int:
@@ -55,12 +58,14 @@ class FakeChain:
             if "nodes" in text:
                 out["nodes"] = self.nodes
             if "mode=" in text:
-                out["mode"] = self.mode
+                mode = (self.mode_after_warmup if (self.mode_after_warmup and self._warmed) else self.mode)
+                out["mode"] = mode
             if "stats=" in text:
                 out["stats"] = self.stats
             if "prompt=" in text:
                 out["prompt"] = {"published": True, "confirmed": self.prompt_confirmed, "stats": self.stats}
             return "noise from ros\n" + json.dumps(out)
+        self._warmed = True
         rounds = self._infer_rounds(argv)
         return json.dumps({"ms": self.infer_ms[:rounds], "connect_ms": 12.0, "actions_shape": [16, 7]})
 

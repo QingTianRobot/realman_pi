@@ -116,11 +116,15 @@ def _inference(robot: Robot, config: ConsoleConfig, prompt: str) -> list[Check]:
     args = shlex.join([host, str(port), str(lc.infer_rounds + 1), prompt])
     out = robot.check(robot.in_container(sc.bridge_container, f"python3 - {args}"), input=script("infer_probe"),
                       timeout=120 + lc.infer_rounds * 10)
-    data = json.loads([line for line in out.splitlines() if line.startswith("{")][-1])
+    json_lines = [line for line in out.splitlines() if line.startswith("{")]
+    if not json_lines:
+        raise StepFailed(f"inference probe printed no result: {out.strip()[-300:]}")
+    data = json.loads(json_lines[-1])
     timed = data["ms"][1:]
     median = statistics.median(timed)
     value = f"median {median:.1f} ms (max {max(timed):.1f}, first {data['ms'][0]:.1f})"
-    return [Check("inference", "inference_round_trip", median < lc.infer_max_ms, value, threshold, f"{host}:{port}")]
+    return [Check("inference", "inference_round_trip", median < lc.infer_max_ms, value, threshold,
+                  f"<POLICY_WS_HOST>:{port}")]
 
 
 def _bridge(robot: Robot, config: ConsoleConfig, expected: str | None) -> list[Check]:

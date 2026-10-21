@@ -432,3 +432,26 @@ def test_partial_first_line_is_dropped_when_log_is_seeked(world, monkeypatch):
     lines = [line for m in messages if m["type"] == "lines" for line in m["lines"]]
     # No line should start with a partial word that cuts into a previous line (all lines complete)
     assert all("\n" not in line for line in lines)
+
+
+def test_nan_in_payload_becomes_null_in_json_response(world):
+    """A GET whose underlying data contains NaN must return parseable JSON with null, not the bare NaN token."""
+    import math
+
+    # Inject NaN into the metrics CSV for the registered run
+    run = world["paths"]["run"]
+    csv_path = run / "metrics.csv"
+    csv_path.write_text(csv_path.read_text(encoding="utf-8") + "99999,nan,nan,nan\n", encoding="utf-8")
+
+    async def scenario(client):
+        response = await client.get(f"/api/runs/{CONFIG_NAME}/{EXP}")
+        assert response.status == 200
+        text = await response.text()
+        # Must be parseable — json.loads raises on bare NaN
+        data = json.loads(text)
+        # The NaN loss values must come back as null
+        losses = data["metrics"].get("loss", [])
+        assert all(v is None or (isinstance(v, float) and math.isfinite(v)) for v in losses)
+        return data
+
+    call(world["make"](), scenario)

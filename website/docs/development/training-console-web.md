@@ -38,17 +38,29 @@ REALMAN_TRAINING_TOKEN=<随机令牌>
 TRAINING_HOME=/home/<用户>
 TRAINING_REPO=<部署工作区的绝对路径>
 TRAINING_DOCKER_GID=<getent group docker 的 gid>
+TRAINING_UID=$(id -u)
+TRAINING_GID=$(id -g)
+# 可选：绑定地址（默认 0.0.0.0；读操作含 WebSocket 日志不需要令牌，建议绑到受信任网段）
+# TRAINING_BIND=127.0.0.1
+# 可选：PyPI 镜像（中国大陆加速）
+# TRAINING_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+# 可选：APT 镜像
+# TRAINING_APT_MIRROR=mirrors.aliyun.com
 ```
 
 然后：
 
 ```bash
-docker compose --profile training build realman_training
-docker compose --profile training up -d realman_training
-docker compose --profile training logs --tail=50 realman_training
+docker compose -p realman-training --profile training build realman_training
+docker compose -p realman-training --profile training up -d realman_training
+docker compose -p realman-training --profile training logs --tail=50 realman_training
 ```
 
-浏览器打开 `http://server5090:8780`（或 `ssh -N -L 8780:127.0.0.1:8780 server5090` 后打开 `http://127.0.0.1:8780`）。重启容器会中断它启动的任务：任务被标记为"中断"；训练容器本身不受影响，用命令行 `realman-train train ... --attach` 接管。
+浏览器打开 `http://server5090:8780`（或 `ssh -N -L 8780:127.0.0.1:8780 server5090` 后打开 `http://127.0.0.1:8780`）。重启容器会中断它启动的任务：任务被标记为"中断"；训练容器本身不受影响，用以下命令接管：
+
+```bash
+docker compose -p realman-training --profile training exec realman_training python -m realman_training train <config_name> <view> --exp <exp> --gpus <gpus> --attach
+```
 
 ## 开发
 

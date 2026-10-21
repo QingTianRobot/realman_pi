@@ -67,7 +67,9 @@ def parse_metrics(text: str) -> list[dict]:
         for pair in match.group(2).split(", "):
             key, _, value = pair.partition("=")
             try:
-                row[key.strip()] = float(value)
+                v = float(value)
+                if v == v and v != float("inf") and v != float("-inf"):
+                    row[key.strip()] = v
             except ValueError:
                 pass
         rows.append(row)

@@ -58,7 +58,7 @@ function trainCard(trainJobs: JobRow[] | null, runs: RunRow[] | null): HTMLEleme
     return card("card-train", "当前训练",
       h("p", { class: "big" }, live.name),
       h("p", { class: "muted" }, `step ${live.last_step ?? "–"} / ${live.num_train_steps ?? "–"} · loss ${fmtMae(live.last_loss)}`),
-      h("p", { class: "muted" }, "（没有跟随它的任务：在训练页用 attach 接管）"));
+      h("p", { class: "muted" }, "没有跟随它的任务：在 server5090 上用 realman-train train … --attach 接管（见文档）"));
   }
   return card("card-train", "当前训练", h("p", { class: "muted" }, "没有运行中的训练"));
 }

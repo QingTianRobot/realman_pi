@@ -16,6 +16,7 @@ from realman_training.openpi import (
     ConfigInfo,
     busy_gpus,
     check_holdout,
+    check_name,
     config_info,
     norm_stats_path,
     parse_gpus,
@@ -108,3 +109,19 @@ def test_require_view_and_check_holdout(tmp_path):
     check_holdout(ConfigInfo("n", "r", "r", (0, 2), 8, 10), summary)
     with pytest.raises(StepFailed, match="holdout"):
         check_holdout(ConfigInfo("n", "r", "r", (9,), 8, 10), summary)
+
+
+def test_check_name_rejects_trailing_newline():
+    """SAFE_NAME must not match names with a trailing newline ($ matches before \n, \Z does not)."""
+    # Valid names must pass
+    assert check_name("label", "good_name-1.0") == "good_name-1.0"
+    # A trailing newline must be refused
+    with pytest.raises(StepFailed):
+        check_name("label", "good_name\n")
+    with pytest.raises(StepFailed):
+        check_name("label", "a\n")
+    # Empty and other invalid names still refused
+    with pytest.raises(StepFailed):
+        check_name("label", "")
+    with pytest.raises(StepFailed):
+        check_name("label", "has space")

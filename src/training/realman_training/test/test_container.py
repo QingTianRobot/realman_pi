@@ -41,6 +41,7 @@ def test_the_token_comes_from_the_environment_only():
     env = _service()["environment"]
     assert env["REALMAN_TRAINING_TOKEN"] == "${REALMAN_TRAINING_TOKEN:-}"
     assert env["REALMAN_TRAINING_CONFIG"].endswith("/config/training/training_console.yaml")
+    assert env["DOCKER_CONFIG"] == "/tmp/.docker"
 
 
 def test_the_image_keeps_the_repo_layout_for_config_lookup():

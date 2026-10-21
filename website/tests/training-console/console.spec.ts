@@ -229,3 +229,42 @@ test("models: registry, card and deploy to the serve page", async ({ page }) => 
   await expect(page).toHaveURL(/#\/serve\?model=/);
   await expect(page.locator('#serve-form select[name="model"]')).toHaveValue(MODEL);
 });
+
+test("drawer: re-selecting a finished job reopens its log", async ({ page, request }) => {
+  // Create job1 and wait for it to finish before creating job2
+  const makeJob = async () => {
+    const r = await request.post("/api/jobs", {
+      headers: { "X-Training-Token": TOKEN },
+      data: { kind: "linkcheck", params: { only: ["link"] }, confirm: true },
+    });
+    expect(r.status()).toBe(201);
+    return (await r.json()).job;
+  };
+  const job1 = await makeJob();
+  // Poll until job1 is done before starting job2 (avoid conflict)
+  for (let i = 0; i < 20; i++) {
+    const r = await request.get(`/api/jobs/${job1.id}`);
+    const data = await r.json();
+    if (data.job.state === "succeeded" || data.job.state === "failed") break;
+    await page.waitForTimeout(300);
+  }
+  const job2 = await makeJob();
+
+  await page.goto("/");
+  await page.locator("#jobs-button").click();
+  await expect(page.locator("#drawer")).toBeVisible();
+
+  // Select job1 (already finished) and wait for its log
+  await page.locator(`#drawer-jobs .item[data-job="${job1.id}"]`).click();
+  await expect(page.locator("#drawer-log")).toContainText("fake linkcheck done", { timeout: 10000 });
+  await expect(page.locator("#drawer-job-head")).toContainText("成功");
+
+  // Switch to job2 and wait for its log
+  await page.locator(`#drawer-jobs .item[data-job="${job2.id}"]`).click();
+  await expect(page.locator("#drawer-log")).toContainText("fake linkcheck done", { timeout: 10000 });
+
+  // Re-select job1 — socket was closed and nulled; selecting again must reopen it
+  await page.locator("#drawer-log").evaluate((el) => { el.textContent = ""; });
+  await page.locator(`#drawer-jobs .item[data-job="${job1.id}"]`).click();
+  await expect(page.locator("#drawer-log")).toContainText("fake linkcheck done", { timeout: 10000 });
+});

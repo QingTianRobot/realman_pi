@@ -387,6 +387,7 @@ services:
     group_add: ["${TRAINING_DOCKER_GID:-984}"]
     environment:
       HOME: ${TRAINING_HOME:-/home/server5090}
+      DOCKER_CONFIG: /tmp/.docker
       REALMAN_TRAINING_TOKEN: ${REALMAN_TRAINING_TOKEN:-}
       REALMAN_TRAINING_CONFIG: ${TRAINING_REPO:-/home/server5090/organization/realman_pi}/config/training/training_console.yaml
       NVIDIA_VISIBLE_DEVICES: all

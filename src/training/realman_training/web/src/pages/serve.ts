@@ -128,8 +128,21 @@ function linkcheckPanel(link: LinkcheckPayload): HTMLElement {
   return h("section", { class: "two" }, panel("链路检测", latest), panel("历史", history));
 }
 
+function errorPanel(reason: unknown): HTMLElement {
+  return h("p", { class: "error" }, errorText(reason));
+}
+
 export async function renderServe(root: HTMLElement, ctx: Ctx): Promise<() => void> {
-  const [status, settings, link, gpus] = await Promise.all([api.serve(), api.settings(), api.linkcheck(), api.gpus().catch(() => null)]);
+  const [statusResult, settingsResult, linkResult, gpusResult] = await Promise.allSettled([
+    api.serve(), api.settings(), api.linkcheck(), api.gpus(),
+  ]);
+  const status = statusResult.status === "fulfilled" ? statusResult.value : null;
+  const settings = settingsResult.status === "fulfilled" ? settingsResult.value : null;
+  const link = linkResult.status === "fulfilled" ? linkResult.value : null;
+  const gpus = gpusResult.status === "fulfilled" ? gpusResult.value : null;
+  const errors = [statusResult, settingsResult, linkResult, gpusResult]
+    .filter((r) => r.status === "rejected")
+    .map((r) => errorPanel((r as PromiseRejectedResult).reason));
   const refresh = h("button", { class: "button ghost", id: "serve-refresh", type: "button" }, "刷新状态");
   refresh.addEventListener("click", async () => {
     refresh.disabled = true;
@@ -142,9 +155,11 @@ export async function renderServe(root: HTMLElement, ctx: Ctx): Promise<() => vo
   root.replaceChildren(
     h("section", { class: "panel" }, panelHead("推理链路", refresh),
       h("p", { class: "muted" }, "server5090 的 openpi-serve 和 realman_ts 的 policy_bridge；不碰 bringup 和行为树。")),
-    h("section", { class: "two" }, serveEnd(status), bridgeEnd(status)),
-    h("section", { class: "two" }, settingsForm(settings, gpus, ctx.query.get("model"), ctx), bridgeStats(status)),
-    linkcheckPanel(link));
+    ...errors,
+    ...(status ? [h("section", { class: "two" }, serveEnd(status), bridgeEnd(status))] : []),
+    ...(settings ? [h("section", { class: "two" }, settingsForm(settings, gpus, ctx.query.get("model"), ctx),
+      ...(status ? [bridgeStats(status)] : []))] : []),
+    ...(link ? [linkcheckPanel(link)] : []));
   const onEnded = (event: Event) => {
     const job = (event as CustomEvent).detail;
     if (["serve", "linkcheck"].includes(job.kind)) ctx.reload();

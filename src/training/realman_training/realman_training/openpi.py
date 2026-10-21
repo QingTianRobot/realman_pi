@@ -18,7 +18,7 @@ from .datasets import DatasetSummary, summarize
 from .jobs import StepFailed
 from .runner import Runner
 
-SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*$")
+SAFE_NAME = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_.-]*\Z")
 
 
 def check_name(label: str, value: str) -> str:

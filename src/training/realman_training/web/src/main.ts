@@ -70,6 +70,7 @@ async function boot(): Promise<void> {
     page, drawer.el);
 
   let dispose: void | (() => void);
+  let navCounter = 0;
   const ctx: Ctx = {
     health,
     query: new URLSearchParams(),
@@ -82,6 +83,7 @@ async function boot(): Promise<void> {
   };
 
   async function route(): Promise<void> {
+    const nav = ++navCounter;
     const [path, search = ""] = location.hash.replace(/^#\/?/, "").split("?");
     const current = PAGES.find((p) => p.id === path) ?? PAGES[0];
     for (const a of tabs.querySelectorAll<HTMLElement>("a")) a.classList.toggle("selected", a.dataset.page === current.id);
@@ -90,11 +92,19 @@ async function boot(): Promise<void> {
     ctx.query = new URLSearchParams(search);
     page.dataset.page = current.id;
     page.replaceChildren(h("p", { class: "loading" }, "加载中…"));
+    let result: void | (() => void);
     try {
-      dispose = await current.render(page, ctx);
+      result = await current.render(page, ctx);
     } catch (error) {
+      if (nav !== navCounter) return;
       page.replaceChildren(h("p", { class: "error" }, `页面加载失败：${errorText(error)}`));
+      return;
     }
+    if (nav !== navCounter) {
+      if (typeof result === "function") result();
+      return;
+    }
+    dispose = result;
   }
 
   async function refreshStatus(): Promise<void> {

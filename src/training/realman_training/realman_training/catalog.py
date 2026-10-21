@@ -72,7 +72,10 @@ def list_datasets(config: ConsoleConfig, cache: SummaryCache) -> list[dict]:
 
 
 def dataset_detail(config: ConsoleConfig, cache: SummaryCache, rel: str) -> dict:
-    entry = cache.get(resolve_dataset(config, rel))
+    try:
+        entry = cache.get(resolve_dataset(config, rel))
+    except (NotALeRobotDataset, OSError, ValueError, KeyError, TypeError, pyarrow.ArrowInvalid) as error:
+        raise BadRequest(str(error)) from error
     return {"path": rel, **{k: v for k, v in entry.items() if k not in ("fingerprint", "version")}}
 
 
@@ -96,7 +99,8 @@ def _metrics(folder: Path, exp: str, docker_data: Path) -> list[dict]:
                 row = {}
                 for key, value in raw.items():
                     try:
-                        row[key] = int(value) if key == "step" else float(value)
+                        v = int(value) if key == "step" else float(value)
+                        row[key] = v if key == "step" or (v == v and v != float("inf") and v != float("-inf")) else None
                     except (TypeError, ValueError):
                         pass
                 rows.append(row)

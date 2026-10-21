@@ -48,8 +48,27 @@ class TtlCache:
             return self._value
 
 
+def _sanitize(obj):
+    """Recursively replace non-finite floats (NaN, ±Inf) with None so JSON serialisation never fails."""
+    if isinstance(obj, float):
+        return None if (obj != obj or obj == float("inf") or obj == float("-inf")) else obj
+    if isinstance(obj, dict):
+        return {k: _sanitize(v) for k, v in obj.items()}
+    if isinstance(obj, (list, tuple)):
+        return [_sanitize(v) for v in obj]
+    return obj
+
+
+def _json(data, status: int = 200) -> web.Response:
+    return web.Response(
+        body=json.dumps(_sanitize(data), ensure_ascii=False),
+        status=status,
+        content_type="application/json",
+    )
+
+
 def _error(status: int, message: str) -> web.Response:
-    return web.json_response({"error": message}, status=status)
+    return _json({"error": message}, status=status)
 
 
 @web.middleware
@@ -142,16 +161,16 @@ class Console:
 
     # ---- reads ----------------------------------------------------------------------------------------------
     async def health(self, request):
-        return web.json_response({"ok": True, "read_only": self.read_only, "data_root": str(self.config.data_root),
+        return _json({"ok": True, "read_only": self.read_only, "data_root": str(self.config.data_root),
                                   "console_dir": str(self.config.console_dir), "time": now()})
 
     async def datasets(self, request):
         rows = await self._blocking(catalog.list_datasets, self.config, self.summaries)
-        return web.json_response({"root": str(self.config.data_root), "datasets": rows})
+        return _json({"root": str(self.config.data_root), "datasets": rows})
 
     async def dataset(self, request):
         rel = request.query.get("path", "")
-        return web.json_response(await self._blocking(catalog.dataset_detail, self.config, self.summaries, rel))
+        return _json(await self._blocking(catalog.dataset_detail, self.config, self.summaries, rel))
 
     async def jobs(self, request):
         kind = request.query.get("kind") or None
@@ -164,7 +183,7 @@ class Console:
             self.store.recover()
             return [catalog.job_row(job) for job in self.store.list(kind=kind, limit=limit)]
 
-        return web.json_response({"jobs": await self._blocking(rows)})
+        return _json({"jobs": await self._blocking(rows)})
 
     def _job(self, request):
         try:
@@ -174,22 +193,22 @@ class Console:
 
     async def job(self, request):
         job = self._job(request)
-        return web.json_response({"job": catalog.job_row(job), "log": job.log_text(self.config.web.log_tail_lines)})
+        return _json({"job": catalog.job_row(job), "log": job.log_text(self.config.web.log_tail_lines)})
 
     async def runs(self, request):
-        return web.json_response({"runs": await self._blocking(catalog.list_runs, self.config)})
+        return _json({"runs": await self._blocking(catalog.list_runs, self.config)})
 
     async def run(self, request):
         config_name, exp = request.match_info["config"], request.match_info["exp"]
         detail = await self._blocking(catalog.run_detail, self.config, config_name, exp)
         detail["job"] = self._running("train", lambda p: p.get("exp") == exp and p.get("config_name") == config_name)
-        return web.json_response(detail)
+        return _json(detail)
 
     async def models(self, request):
-        return web.json_response(await self._blocking(catalog.list_models, self.config))
+        return _json(await self._blocking(catalog.list_models, self.config))
 
     async def gpus(self, request):
-        return web.json_response(await self.gpu_cache.get(self._gpu_query, force=request.query.get("refresh") == "1"))
+        return _json(await self.gpu_cache.get(self._gpu_query, force=request.query.get("refresh") == "1"))
 
     def _safe_serve_status(self) -> dict:
         try:
@@ -199,18 +218,18 @@ class Console:
 
     async def serve(self, request):
         data = await self.serve_cache.get(self._safe_serve_status, force=request.query.get("refresh") == "1")
-        return web.json_response({**data, "job": self._running("serve")})
+        return _json({**data, "job": self._running("serve")})
 
     def _settings_payload(self) -> dict:
         return {"defaults": catalog.serve_defaults(self.config), "saved": catalog.load_settings(self.config),
                 "effective": catalog.effective_settings(self.config), "models": catalog.serve_models(self.config)}
 
     async def settings(self, request):
-        return web.json_response(await self._blocking(self._settings_payload))
+        return _json(await self._blocking(self._settings_payload))
 
     async def linkcheck(self, request):
         history = await self._blocking(catalog.linkcheck_history, self.config, self.config.web.history_limit)
-        return web.json_response({"latest": history[0] if history else None, "history": history,
+        return _json({"latest": history[0] if history else None, "history": history,
                                   "job": self._running("linkcheck")})
 
     def _options(self) -> dict:
@@ -223,7 +242,7 @@ class Console:
                 "configs": configs, "linkcheck_items": list(linkcheck.ITEMS), "read_only": self.read_only}
 
     async def options(self, request):
-        return web.json_response(await self._blocking(self._options))
+        return _json(await self._blocking(self._options))
 
     async def static(self, request):
         if request.match_info["path"].startswith("api/"):
@@ -254,19 +273,19 @@ class Console:
         settings = catalog.load_settings(self.config) if kind == "serve" else None
         params = await self._blocking(job_params.build, kind, body.get("params") or {}, self.config, settings)
         job = await self._blocking(lambda: self.store.start(kind, params, target=self.targets.get(kind)))
-        return web.json_response({"job": catalog.job_row(job)}, status=201)
+        return _json({"job": catalog.job_row(job)}, status=201)
 
     async def cancel_job(self, request):
         self._require_token(request)
         job = self._job(request)
-        return web.json_response({"cancelled": await self._blocking(self.store.cancel, job.id)})
+        return _json({"cancelled": await self._blocking(self.store.cancel, job.id)})
 
     async def save_settings(self, request):
         self._require_token(request)
         body = await self._body(request)
         clean = await self._blocking(job_params.validate_settings, body, self.config)
         await self._blocking(catalog.save_settings, self.config, {**catalog.load_settings(self.config), **clean})
-        return web.json_response(await self._blocking(self._settings_payload))
+        return _json(await self._blocking(self._settings_payload))
 
     async def job_log(self, request):
         job = self._job(request)  # 404 before the upgrade

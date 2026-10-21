@@ -121,3 +121,28 @@ def test_job_row_drops_the_config_path(tmp_path):
     (folder / "status.json").write_text('{"id": "20261021-100000-clean-abcd", "kind": "clean", "state": "succeeded", "result": {"dst": "/d/b"}}')
     row = catalog.job_row(store.get("20261021-100000-clean-abcd"))
     assert row["params"] == {"src": "/d/a"} and row["result"] == {"dst": "/d/b"} and row["state"] == "succeeded"
+
+
+def test_run_detail_with_nan_loss_row(world):
+    import math
+    paths, config, _ = world
+    # Append a row with NaN loss to the metrics CSV
+    run = paths["run"]
+    csv_path = run / "metrics.csv"
+    csv_path.write_text(csv_path.read_text(encoding="utf-8") + "99999,nan,nan,nan\n", encoding="utf-8")
+    detail = catalog.run_detail(config, CONFIG_NAME, EXP)
+    # Non-finite floats must become None, never actual NaN/Inf
+    losses = detail["metrics"].get("loss", [])
+    assert all(v is None or (isinstance(v, float) and math.isfinite(v)) for v in losses), losses
+    # The last entry (step 99999) should have None for loss
+    step_idx = detail["metrics"]["step"].index(99999)
+    assert detail["metrics"]["loss"][step_idx] is None
+
+
+def test_dataset_detail_on_broken_dataset_raises_bad_request(world):
+    paths, config, cache = world
+    broken = paths["data"] / "broken_detail"
+    (broken / "meta").mkdir(parents=True)
+    (broken / "meta" / "info.json").write_text('{"codebase_version": "v2.1"}', encoding="utf-8")
+    with pytest.raises(catalog.BadRequest):
+        catalog.dataset_detail(config, cache, "broken_detail")

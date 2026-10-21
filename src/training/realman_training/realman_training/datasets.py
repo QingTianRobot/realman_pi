@@ -141,7 +141,7 @@ def discover(data_root: str | Path, max_depth: int = 2) -> list[Path]:
         if depth == max_depth:
             return
         for child in sorted(folder.iterdir()):
-            if child.is_dir() and not child.name.startswith((".", "_")):
+            if child.is_dir() and not child.name.startswith((".", "_")) and not child.name.endswith(".partial"):
                 walk(child, depth + 1)
 
     walk(Path(data_root), 0)

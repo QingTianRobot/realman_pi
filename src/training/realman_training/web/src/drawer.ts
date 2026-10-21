@@ -71,7 +71,7 @@ export class JobDrawer {
   }
 
   private select(job: JobRow): void {
-    if (this.selected === job.id && this.socket) return;
+    if (this.selected === job.id && this.socket !== null) return;
     this.selected = job.id;
     this.socket?.close();
     this.log.textContent = "";
@@ -88,8 +88,14 @@ export class JobDrawer {
         const row = data.job as JobRow;
         this.showHead(row);
         if (isActive(row.state)) wasActive = true;
-        else if (wasActive) window.dispatchEvent(new CustomEvent("job-ended", { detail: row }));
+        else if (wasActive) {
+          wasActive = false;
+          window.dispatchEvent(new CustomEvent("job-ended", { detail: row }));
+        }
       }
+    });
+    socket.addEventListener("close", () => {
+      if (this.socket === socket) this.socket = null;
     });
   }
 

@@ -240,8 +240,7 @@ class Console:
 
     def _options(self) -> dict:
         rows = catalog.list_datasets(self.config, self.summaries)
-        base = self.config.openpi.docker_data / "checkpoints"
-        configs = sorted(p.name for p in base.iterdir() if p.is_dir()) if base.is_dir() else []
+        configs = catalog.openpi_configs(self.config)
         return {"prompts": self.config.prompts, "arms": list(ARMS), "default_arm": self.config.quality.arm,
                 "views": [r["path"] for r in rows if r["kind"] == "view"],
                 "sources": [r["path"] for r in rows if r["kind"] in ("raw", "clean")],

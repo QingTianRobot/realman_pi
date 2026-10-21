@@ -9,16 +9,25 @@ const VERDICT: Record<EpisodeQuality["verdict"], [string, "ok" | "warn" | "bad"]
   ok: ["正常", "ok"], warn: ["提示", "warn"], suggest_drop: ["建议剔除", "bad"],
 };
 
-function datasetItem(row: DatasetRow, selected: boolean, ctx: Ctx): HTMLElement {
+/** Several pulls share the recording's name: title those by their folder so they can be told apart. */
+export function datasetTitle(row: DatasetRow, rows: DatasetRow[]): string {
+  const clash = rows.filter((r) => r.name === row.name).length > 1;
+  const parent = row.path.includes("/") ? row.path.slice(0, row.path.lastIndexOf("/")) : "";
+  return clash && parent ? parent : row.name;
+}
+
+function datasetItem(row: DatasetRow, rows: DatasetRow[], selected: boolean, newest: boolean, ctx: Ctx): HTMLElement {
   const quality = row.quality_counts;
+  const title = datasetTitle(row, rows);
   const item = h("button", { class: `item${selected ? " selected" : ""}`, type: "button", "data-path": row.path },
-    h("strong", {}, row.name, " ", chip(DATASET_KIND[row.kind] ?? row.kind, row.kind === "error" ? "bad" : "")),
+    h("strong", {}, title, " ", chip(DATASET_KIND[row.kind] ?? row.kind, row.kind === "error" ? "bad" : ""),
+      newest ? [" ", chip("最新", "ok")] : null),
     row.kind === "error"
       ? h("small", {}, row.error ?? "")
       : h("small", {}, `${row.episodes} 条 · ${fmtCount(row.frames)} 帧 · ${fmtTime(row.last_file_time)}`),
     quality?.suggest_drop ? h("small", {}, `建议剔除 ${quality.suggest_drop} 条`) : null,
     row.kind === "clean" && row.removed_episodes ? h("small", {}, `已剔除 ${row.removed_episodes} 条`) : null,
-    row.path !== row.name ? h("small", {}, row.path) : null);
+    row.path !== title ? h("small", {}, row.path) : null);
   item.addEventListener("click", () => ctx.navigate("data", { path: row.path }));
   return item;
 }
@@ -145,9 +154,11 @@ async function renderDetail(el: HTMLElement, path: string, options: Options, ctx
   if (s.source) provenance.push(["来源", s.source]);
   if (s.removed_episodes) provenance.push(["已剔除", `${s.removed_episodes} 条`]);
   for (const [task, prompt] of Object.entries(s.prompts)) provenance.push([`prompt ${task}`, prompt]);
+  const trainButton = s.kind === "view" ? h("button", { class: "button primary", id: "train-from-view", type: "button" }, "用这个视图新建训练") : null;
+  trainButton?.addEventListener("click", () => ctx.navigate("train", { view: detail.path }));
   el.replaceChildren(
     h("section", { class: "panel" },
-      h("h2", {}, s.name),
+      panelHead(s.name, trainButton),
       h("div", { class: "stats", id: "dataset-stats" },
         stat("条数", String(s.episodes)),
         stat("帧数 / 时长", `${fmtCount(s.frames)} · ${fmtDuration(s.duration_sec)}`),
@@ -168,7 +179,10 @@ export async function renderData(root: HTMLElement, ctx: Ctx): Promise<() => voi
     lines: ["通过 ssh realman_local 从录制容器打包当前录制", `写入 ${ctx.health.data_root}/raw_realman_ts_<日期时间>（新目录，不覆盖）`,
       "录制可以继续；拉取期间占用 realman_ts 的上行带宽"],
   }));
-  const list = h("div", { class: "list", id: "dataset-list" }, datasets.map((row) => datasetItem(row, row.path === selected, ctx)));
+  // The API lists newest first: mark the newest of each kind.
+  const newest = new Set(["raw", "clean", "view"].map((kind) => datasets.find((d) => d.kind === kind)?.path));
+  const list = h("div", { class: "list", id: "dataset-list" },
+    datasets.map((row) => datasetItem(row, datasets, row.path === selected, newest.has(row.path), ctx)));
   if (!datasets.length) list.append(h("p", { class: "muted" }, `${ctx.health.data_root} 下还没有数据集`));
   const detail = h("div", { class: "stack", id: "dataset-detail" }, h("p", { class: "loading" }, "加载中…"));
   root.replaceChildren(h("section", { class: "split" },

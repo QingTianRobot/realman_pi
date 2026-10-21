@@ -1,9 +1,10 @@
-import { api, type Gpus, type Options, type RunDetail, type RunRow } from "../api";
+import { api, type DatasetRow, type Gpus, type Options, type RunDetail, type RunRow } from "../api";
 import { lineChart } from "../charts";
 import type { Ctx } from "../ctx";
 import { confirmJob } from "../dialog";
-import { errorText, fmtMae, fmtMiB, fmtTime, h } from "../dom";
+import { DATASET_KIND, errorText, fmtCount, fmtMae, fmtMiB, fmtTime, h } from "../dom";
 import { chip, evalTable, gpuList, kv, panel, panelHead, swapTable } from "../widgets";
+import { datasetTitle } from "./data";
 
 function runState(run: RunRow): HTMLElement {
   if (run.started && !run.ended) return chip("训练中", "run");
@@ -12,11 +13,37 @@ function runState(run: RunRow): HTMLElement {
   return chip(run.registered ? "已登记" : "—");
 }
 
-function newRunForm(options: Options, gpus: Gpus | null, ctx: Ctx): HTMLElement {
+function datasetLabel(row: DatasetRow, rows: DatasetRow[]): string {
+  return `${datasetTitle(row, rows)} · ${row.episodes ?? "?"} 条 · ${fmtTime(row.last_file_time)}`;
+}
+
+/** What the chosen dataset holds, so the right one is picked on purpose. */
+function datasetInfo(row: DatasetRow | undefined, ctx: Ctx): HTMLElement {
+  if (!row) return h("p", { class: "muted" }, "训练用“训练视图”（单臂 + prompt）。原始数据和清洗版要先在数据页生成训练视图。");
+  const tasks = Object.entries(row.tasks ?? {}).map(([task, n]) => `${task} ${n} 条${row.prompts?.[task] ? ` → "${row.prompts[task]}"` : ""}`);
+  const open = h("button", { class: "button ghost", type: "button" }, "在数据页查看");
+  open.addEventListener("click", () => ctx.navigate("data", { path: row.path }));
+  return h("div", { class: "dataset-info" },
+    kv([["路径", row.path], ["条数 · 帧数", `${row.episodes ?? "–"} · ${fmtCount(row.frames)}`], ["时间", fmtTime(row.last_file_time)],
+      ["任务", tasks.join("；") || "–"], ...(row.source ? [["来源", row.source] as [string, string]] : [])]),
+    h("div", { class: "actions" }, open));
+}
+
+function newRunForm(options: Options, datasets: DatasetRow[], gpus: Gpus | null, ctx: Ctx): HTMLElement {
   const configs = h("datalist", { id: "train-configs" }, options.configs.map((c) => h("option", { value: c })));
-  const configName = h("input", { type: "text", name: "config_name", list: "train-configs", placeholder: "openpi 配置名" });
-  const view = h("select", { name: "view" }, h("option", { value: "" }, "选择训练视图"),
-    options.views.map((v) => h("option", { value: v }, v)));
+  const configName = h("input", { type: "text", name: "config_name", list: "train-configs", placeholder: "openpi 配置名（可下拉选择）" });
+  const views = datasets.filter((d) => d.kind === "view");
+  const others = datasets.filter((d) => d.kind === "raw" || d.kind === "clean");
+  const wanted = ctx.query.get("view") ?? "";
+  const view = h("select", { name: "view" }, h("option", { value: "" }, "选择训练数据集"),
+    h("optgroup", { label: "训练视图（可直接训练）" },
+      views.map((v) => h("option", { value: v.path, selected: v.path === wanted }, datasetLabel(v, datasets)))),
+    others.length ? h("optgroup", { label: "原始 / 清洗版（先在数据页生成训练视图）" },
+      others.map((d) => h("option", { value: d.path, disabled: true }, `${DATASET_KIND[d.kind]} · ${datasetLabel(d, datasets)}`))) : null);
+  const info = h("div", { class: "wide", id: "train-dataset-info" });
+  const showInfo = () => info.replaceChildren(datasetInfo(views.find((v) => v.path === view.value), ctx));
+  view.addEventListener("change", showInfo);
+  showInfo();
   const exp = h("input", { type: "text", name: "exp", placeholder: "实验名，例如 m_multitask_b16_2gpu" });
   const indices = gpus?.gpus.map((g) => g.index) ?? [0, 1, 2, 3];
   const gpuBoxes = indices.map((i) => {
@@ -31,7 +58,7 @@ function newRunForm(options: Options, gpus: Gpus | null, ctx: Ctx): HTMLElement 
   const start = h("button", { class: "button primary", id: "start-train", type: "button" }, "开始训练");
   start.addEventListener("click", () => {
     const chosen = gpuBoxes.map((l) => l.querySelector("input")!).filter((b) => b.checked).map((b) => b.dataset.gpu!);
-    const missing = [!configName.value.trim() && "配置名", !view.value && "训练视图", !exp.value.trim() && "实验名", !chosen.length && "GPU"]
+    const missing = [!configName.value.trim() && "配置名", !view.value && "训练数据集", !exp.value.trim() && "实验名", !chosen.length && "GPU"]
       .filter(Boolean);
     if (missing.length) {
       error.textContent = `还缺：${missing.join("、")}`;
@@ -52,7 +79,7 @@ function newRunForm(options: Options, gpus: Gpus | null, ctx: Ctx): HTMLElement 
   });
   return h("section", { class: "panel" }, h("h2", {}, "新建训练"),
     h("div", { class: "form", id: "train-form" },
-      h("label", {}, "openpi 配置", configName, configs), h("label", {}, "训练视图", view), h("label", {}, "实验名", exp),
+      h("label", {}, "openpi 配置", configName, configs), h("label", { class: "span2" }, "训练数据集", view), h("label", {}, "实验名", exp), info,
       h("div", { class: "wide checks" }, gpuBoxes), h("label", {}, "batch", batch), h("label", {}, "steps", steps),
       h("label", { class: "check" }, dryRun, "试运行")),
     error, h("div", { class: "actions" }, start));
@@ -126,7 +153,8 @@ async function renderRun(el: HTMLElement, name: string, gpus: Gpus | null, ctx: 
 }
 
 export async function renderTrain(root: HTMLElement, ctx: Ctx): Promise<() => void> {
-  const [{ runs }, options, gpus] = await Promise.all([api.runs(), api.options(), api.gpus().catch(() => null)]);
+  const [{ runs }, options, { datasets }, gpus] = await Promise.all([api.runs(), api.options(), api.datasets(),
+    api.gpus().catch(() => null)]);
   const selected = ctx.query.get("run") ?? runs[0]?.name ?? null;
   const list = h("div", { class: "list", id: "run-list" }, runs.map((run) => {
     const item = h("button", { class: `item${run.name === selected ? " selected" : ""}`, type: "button", "data-run": run.name },
@@ -138,7 +166,7 @@ export async function renderTrain(root: HTMLElement, ctx: Ctx): Promise<() => vo
   }));
   if (!runs.length) list.append(h("p", { class: "muted" }, "还没有训练"));
   const detail = h("div", { class: "stack", id: "run-detail" });
-  root.replaceChildren(newRunForm(options, gpus, ctx),
+  root.replaceChildren(newRunForm(options, datasets, gpus, ctx),
     h("section", { class: "split" }, h("section", { class: "panel" }, h("h2", {}, "训练列表"), list), detail));
   if (selected) await renderRun(detail, selected, gpus, ctx);
   const onEnded = (event: Event) => {

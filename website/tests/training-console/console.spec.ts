@@ -153,6 +153,17 @@ test("train: a new run needs GPUs and goes through the confirm dialog", async ({
   expect(jobs.jobs[0].params).toMatchObject({ exp: "e2e_run", gpus: "1,3", batch: 16, dry_run: true });
 });
 
+test("train: a dataset picked on the data page arrives in the new-run form", async ({ page }) => {
+  await page.goto("/#/data?path=realman_right_arm_multitask_view");
+  await page.locator("#train-from-view").click();
+  await expect(page).toHaveURL(/#\/train\?view=realman_right_arm_multitask_view/);
+  const view = page.locator('#train-form select[name="view"]');
+  await expect(view).toHaveValue("realman_right_arm_multitask_view");
+  await expect(page.locator("#train-dataset-info")).toContainText("pick up the power adapter 2 条");
+  // Raw and cleaned sets are listed but need a training view first.
+  await expect(view.locator("option[disabled]")).toHaveCount(2);
+});
+
 test("train: evaluate and register a run", async ({ page, request }) => {
   await page.goto(`/#/train?run=${encodeURIComponent(MODEL)}`);
   await page.locator('#eval-form select[name="gpu"]').selectOption("3");

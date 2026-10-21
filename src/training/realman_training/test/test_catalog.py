@@ -33,6 +33,32 @@ def test_datasets_are_listed_with_kind_counts_and_quality(world):
     assert view["prompts"] == {"pick_and_place": PLACE, "pick_only": PICK}
 
 
+def test_datasets_are_listed_newest_first_and_same_named_pulls_stay_apart(world):
+    import os
+    import shutil
+
+    paths, config, cache = world
+    newer = paths["data"] / "raw_realman_ts_20261021_152817" / "realman__pi05-three-arm"
+    shutil.copytree(paths["raw"], newer)
+    later = max(p.stat().st_mtime for p in paths["data"].rglob("*.parquet")) + 3600
+    for path in (newer / "data").rglob("*"):
+        os.utime(path, (later, later))
+    rows = catalog.list_datasets(config, cache)
+    assert rows[0]["path"] == "raw_realman_ts_20261021_152817/realman__pi05-three-arm"
+    times = [row["last_file_time"] for row in rows]
+    assert times == sorted(times, reverse=True)
+
+
+def test_openpi_configs_come_from_the_checkout_and_the_checkpoints(world):
+    paths, config, cache = world
+    source = paths["root"] / "openpi" / "src" / "openpi" / "training" / "config.py"
+    source.parent.mkdir(parents=True)
+    source.write_text('TrainConfig(\n    name="pi05_realman_multitask_v2_action_only",\n)\nTrainConfig(name="pi0_aloha")\n')
+    names = catalog.openpi_configs(config)
+    assert "pi05_realman_multitask_v2_action_only" in names and CONFIG_NAME in names
+    assert "pi0_aloha" not in names
+
+
 def test_a_broken_dataset_is_a_row_not_a_crash(world):
     paths, config, cache = world
     broken = paths["data"] / "broken"

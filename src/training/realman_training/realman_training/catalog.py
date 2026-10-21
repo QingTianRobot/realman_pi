@@ -69,7 +69,27 @@ def list_datasets(config: ConsoleConfig, cache: SummaryCache) -> list[dict]:
             continue
         summary = entry["summary"]
         rows.append({"path": rel, **{k: summary[k] for k in _ROW_KEYS}, "quality_counts": entry["quality_counts"]})
+    # Newest first: several pulls share the recording's name, so the latest one must not hide in the middle.
+    rows.sort(key=lambda row: row["path"])
+    rows.sort(key=lambda row: row.get("last_file_time") or "", reverse=True)
     return rows
+
+
+_CONFIG_NAME = re.compile(r"""\bname\s*=\s*["']([A-Za-z0-9_.-]*realman[A-Za-z0-9_.-]*)["']""")
+
+
+def openpi_configs(config: ConsoleConfig) -> list[str]:
+    """RealMan training configs: those defined in the openpi checkout plus those that already have checkpoints."""
+    names: set[str] = set()
+    source = config.openpi.repo / "src" / "openpi" / "training" / "config.py"
+    try:
+        names.update(_CONFIG_NAME.findall(source.read_text(encoding="utf-8")))
+    except OSError:
+        pass
+    base = config.openpi.docker_data / "checkpoints"
+    if base.is_dir():
+        names.update(p.name for p in base.iterdir() if p.is_dir())
+    return sorted(names)
 
 
 def dataset_detail(config: ConsoleConfig, cache: SummaryCache, rel: str) -> dict:

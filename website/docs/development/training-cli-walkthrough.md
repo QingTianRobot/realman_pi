@@ -68,11 +68,11 @@ openpi 的 norm、训练、评估都只认配置名，所以每个训练视图�
 | `repo_id` | `local/realman_right_arm_multitask_v2` | norm stats 的目录名 |
 | 留出集 | `range(9, 328, 10)`（32 条） | 9..209 正好是 v1 的留出集，v1 从没见过它们；219..319 都是暗光数据 |
 | 初始权重 | v1 的 `29999/params` | 继续训练 |
-| 学习率 | warmup 500，峰值 2.5e-5，余弦到 2.5e-6 | v1 从 pi05_base 训练用 5e-5；已收敛的模型用一半 |
-| 步数 | 15000，batch 16 | 见下 |
-| 保存 | 每 1000 步，保留 2500 的倍数 | 用于选最佳步数 |
+| 学习率 | warmup 1000，峰值 2.5e-5，余弦（100k 步）到 2.5e-6 | v1 从 pi05_base 训练用 5e-5；已收敛的模型用一半 |
+| 步数 | 100000，batch 16 | 见下 |
+| 保存 | 每 1000 步（供续训），保留 10000 的倍数和最后一步 | 留出集评估后选上线的 checkpoint |
 
-**步数怎么定的。** 训练集约 122k 帧（去掉留出集），batch 16 时一个 epoch ≈ 7.6k 步，15k 步 ≈ 2 个 epoch。v1 从 pi05_base 训练 30k 步（≈ 5 epoch），开环 MAE 在 10k → 20k → 30k 是 0.107 → 0.098 → 0.096，20k 之后基本饱和；继续训练时旧数据已经学过，新数据只占约 27 % 的帧，2 个 epoch 足够让新光照条件学进去，又不会在旧数据上过拟合。最后按 5k/10k/15k 的留出集评估选最佳 checkpoint。
+**步数怎么定的。** 训练集约 122k 帧（去掉留出集），batch 16 时一个 epoch ≈ 7.6k 步。v1 从 pi05_base 训练 30k 步（≈ 5 epoch），开环 MAE 在 10k → 20k → 30k 是 0.107 → 0.098 → 0.096，20k 之后基本饱和。本次先按 15k 步（≈ 2 epoch）启动，后改为训练 100k 步（≈ 13 epoch），每 10k 留一个 checkpoint：训练 loss 只会一直下降，看不出过拟合，所以不预先猜步数，而是用留出集（含 v1 从没见过的 21 条和 11 条暗光）逐个评估，取误差最低处作为推理模型。100k 步单卡约 33 h，两卡约 21 h。
 
 ## 6. norm stats
 
@@ -93,20 +93,20 @@ cp $A/pi05_realman_multitask_action_only/local/realman_right_arm_multitask/norm_
 
 ## 7. 训练
 
-先看 GPU：`nvidia-smi`。本次 GPU 0/1/3 被别人的进程各占约 16 GiB（剩下不够 17.3 GiB 的训练峰值），GPU 2 上只有我们自己的 openpi-serve（8.8 GiB），所以用 `--share-gpus` 和服务共用 GPU 2。服务一直开着；训练期间如果真机跑策略，推理会变慢。
+先看 GPU：`nvidia-smi`。本次 GPU 1/3 被别人的进程各占约 16 GiB，GPU 2 上有我们自己的 openpi-serve（8.8 GiB）。训练期间不需要真机推理，所以先停掉服务（`docker stop openpi-serve-openpi-1`），用 GPU 0、2 两卡数据并行（多卡所需的 NCCL/XLA 环境由命令自动加上）。若要在服务旁边训练，可加 `--share-gpus`：它按剩余显存 ≥ 18000 MiB 判断，而不是"已占用 > 2000 MiB 就拒绝"。
 
 ```bash
 rt train pi05_realman_multitask_v2_action_only $D/realman_right_arm_multitask_v2_view \
-  --exp m2_continue_b16_1gpu --gpus 2 --share-gpus \
+  --exp m2_100k_b16_2gpu --gpus 0,2 \
   --init-from pi05_realman_multitask_action_only/m_multitask_b16_2gpu/29999 --dry-run
 # 看过命令后：
 rt train ...（同上，去掉 --dry-run）... --yes --background
 ```
 
-训练在容器 `openpi-console-train-m2_continue_b16_1gpu` 里跑，日志 `openpi-docker-data/wandb/m2_continue_b16_1gpu.log`：
+训练在容器 `openpi-console-train-m2_100k_b16_2gpu` 里跑，日志 `openpi-docker-data/wandb/m2_100k_b16_2gpu.log`：
 
 ```bash
-grep -E "Step [0-9]+:" ~/organization/openpi-docker-data/wandb/m2_continue_b16_1gpu.log | tail -3
+grep -E "Step [0-9]+:" ~/organization/openpi-docker-data/wandb/m2_100k_b16_2gpu.log | tail -3
 rt jobs                     # 任务状态；跟随进度：rt job <id> --log
 rt train ... --attach       # 任务进程丢了而容器还在跑时，重新跟随
 ```
@@ -116,8 +116,8 @@ rt train ... --attach       # 任务进程丢了而容器还在跑时，重新�
 ## 8. 评估
 
 ```bash
-rt eval pi05_realman_multitask_v2_action_only m2_continue_b16_1gpu \
-  --view $D/realman_right_arm_multitask_v2_view --gpu 2 --share-gpus --checkpoints 5000,10000,14999
+rt eval pi05_realman_multitask_v2_action_only m2_100k_b16_2gpu \
+  --view $D/realman_right_arm_multitask_v2_view --gpu 0 --checkpoints 10000,20000,30000,40000,50000,60000,70000,80000,90000,99999
 ```
 
 按任务拆分留出集，对每个 checkpoint 跑开环评估，再做 prompt 交换测试，结果在 `checkpoints/<配置>/<实验名>/eval/summary.json`。共用同一个 prompt 的任务按清洗版里的任务名分开统计，所以暗光数据单独有一项。
@@ -125,8 +125,8 @@ rt eval pi05_realman_multitask_v2_action_only m2_continue_b16_1gpu \
 ## 9. 登记
 
 ```bash
-rt register pi05_realman_multitask_v2_action_only m2_continue_b16_1gpu --status "<状态>" \
+rt register pi05_realman_multitask_v2_action_only m2_100k_b16_2gpu --status "<状态>" \
   --method "pi0.5 action-only，从 m_multitask_b16_2gpu/29999 继续训练"
 ```
 
-写 `MODEL_CARD.md`、`model_card.json` 和登记表 `checkpoints/MODELS.md` 的一行。上线用 `rt serve start --model pi05_realman_multitask_v2_action_only/m2_continue_b16_1gpu --checkpoint <步数>`，会动机器人侧的 policy_bridge，需先确认。
+写 `MODEL_CARD.md`、`model_card.json` 和登记表 `checkpoints/MODELS.md` 的一行。上线用 `rt serve start --model pi05_realman_multitask_v2_action_only/m2_100k_b16_2gpu --checkpoint <步数>`，会动机器人侧的 policy_bridge，需先确认。

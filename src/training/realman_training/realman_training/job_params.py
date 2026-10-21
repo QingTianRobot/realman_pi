@@ -9,11 +9,14 @@ from __future__ import annotations
 
 from pathlib import Path
 
+import pyarrow
+
 from . import linkcheck
 from .catalog import BadRequest, NotFound, resolve_dataset
 from .config import ARMS, ConsoleConfig
 from .datasets import summarize
 from .jobs import STEPS, StepFailed
+from .lerobot_io import NotALeRobotDataset
 from .openpi import SAFE_NAME, parse_gpus
 from .serving import resolve_model
 from .steps import clean as clean_step
@@ -82,9 +85,17 @@ def _new_dir(config: ConsoleConfig, raw: dict, key: str, default: Path) -> str:
     return str(target)
 
 
+def _summarize(path: Path) -> object:
+    """Wrap summarize() so dataset errors become BadRequest."""
+    try:
+        return summarize(path)
+    except (NotALeRobotDataset, OSError, ValueError, KeyError, pyarrow.ArrowInvalid) as error:
+        raise BadRequest(f"{path.name}: {error}") from None
+
+
 def _view(config: ConsoleConfig, raw: dict) -> str:
     path = _dataset(config, raw, "view")
-    if summarize(path).kind != "view":
+    if _summarize(path).kind != "view":
         raise BadRequest(f"{raw['view']} is not a training view (no contract.json)")
     return str(path)
 
@@ -122,10 +133,15 @@ def validate_settings(raw: dict, config: ConsoleConfig) -> dict:
         value = raw["checkpoint"]
         if value in (None, ""):
             clean["checkpoint"] = ""
-        elif isinstance(value, bool) or not isinstance(value, (int, str)) or not str(value).isdigit():
+        elif isinstance(value, bool) or not isinstance(value, (int, str)):
+            raise BadRequest("checkpoint must be a step number or empty (= the latest)")
+        elif isinstance(value, str) and not (value.isascii() and value.isdigit()):
             raise BadRequest("checkpoint must be a step number or empty (= the latest)")
         else:
-            clean["checkpoint"] = str(int(value))
+            try:
+                clean["checkpoint"] = str(int(value))
+            except ValueError:
+                raise BadRequest("checkpoint must be a step number or empty (= the latest)") from None
     for key, low, high in (("gpu", 0, 15), ("port", 1, 65535)):
         value = _int(raw, key, low, high)
         if value is not None:
@@ -167,7 +183,7 @@ def build(kind: str, raw: dict, config: ConsoleConfig, settings: dict | None = N
         return params
     if kind == "view":
         src = _dataset(config, raw, "src")
-        if summarize(src).kind == "view":
+        if _summarize(src).kind == "view":
             raise BadRequest(f"{raw['src']} is already a training view: build a view from a raw or cleaned set")
         prompts = raw.get("task_prompts") or {}
         if not isinstance(prompts, dict) or any(not isinstance(k, str) or not isinstance(v, str) or not v.strip()

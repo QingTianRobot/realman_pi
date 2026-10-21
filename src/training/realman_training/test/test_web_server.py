@@ -1,6 +1,7 @@
 from __future__ import annotations
 
 import asyncio
+import json
 from pathlib import Path
 
 import pytest
@@ -8,7 +9,7 @@ from console_fixture import CONFIG_NAME, EXP, MODEL, build_world
 
 from realman_training.config import load_config
 from realman_training.jobs import JobStore
-from realman_training.web_server import Console, TtlCache
+from realman_training.web_server import Console, TOKEN_HEADER, TtlCache
 
 TEST_DIR = Path(__file__).resolve().parent
 TOKEN = "t0k-for-tests"
@@ -196,3 +197,124 @@ def test_ttl_cache_adds_a_timestamp():
 
     a, b = asyncio.run(scenario())
     assert a["n"] == b["n"] == 1 and "at" in a
+
+
+def _job_body(kind="clean", **params):
+    params = params or {"src": RAW, "drop": [1, 2], "reasons": {"1": "closed on nothing"}}
+    return {"kind": kind, "params": params, "confirm": True}
+
+
+def test_writes_need_the_token(world):
+    async def scenario(client):
+        none = await client.post("/api/jobs", json=_job_body())
+        wrong = await client.post("/api/jobs", json=_job_body(), headers={TOKEN_HEADER: "nope"})
+        settings = await client.put("/api/serve/settings", json={"gpu": 1})
+        cancel = await client.post("/api/jobs/x/cancel")
+        return none.status, (await none.json())["error"], wrong.status, settings.status, cancel.status
+
+    assert call(world["make"](), scenario) == (401, "wrong or missing token", 401, 401, 401)
+
+    async def read_only(client):
+        response = await client.post("/api/jobs", json=_job_body(), headers={TOKEN_HEADER: TOKEN})
+        return response.status, (await response.json())["error"]
+
+    status, message = call(world["make"](token=""), read_only)
+    assert status == 403 and "read-only" in message
+
+
+def test_a_confirmed_job_starts_and_finishes(world):
+    headers = {TOKEN_HEADER: TOKEN}
+
+    async def scenario(client):
+        unconfirmed = await client.post("/api/jobs", json={**_job_body(), "confirm": False}, headers=headers)
+        bad = await client.post("/api/jobs", json=_job_body(src=RAW, drop=[1], rm=True), headers=headers)
+        created = await client.post("/api/jobs", json=_job_body(), headers=headers)
+        job = (await created.json())["job"]
+        for _ in range(100):
+            detail = await get_json(client, f"/api/jobs/{job['id']}")
+            if detail["job"]["state"] in ("succeeded", "failed"):
+                break
+            await asyncio.sleep(0.1)
+        listing = await get_json(client, "/api/jobs?kind=clean")
+        return unconfirmed.status, bad.status, (await bad.json())["error"], created.status, job, detail, listing
+
+    unconfirmed, bad, message, created, job, detail, listing = call(world["make"](), scenario)
+    assert unconfirmed == 400 and bad == 400 and "unknown" in message
+    assert created == 201 and job["kind"] == "clean"
+    assert detail["job"]["state"] == "succeeded" and "hello" in detail["log"]
+    assert detail["job"]["params"]["drop"] == [1, 2] and "config" not in detail["job"]["params"]
+    assert detail["job"]["result"]["echo"]["src"] == str(world["paths"]["raw"])
+    assert [j["id"] for j in listing["jobs"]] == [job["id"]]
+
+
+def test_a_second_job_of_the_same_kind_is_refused_and_can_be_cancelled(world, tmp_path, monkeypatch):
+    import realman_training.job_params as jp
+
+    flag = tmp_path / "started"
+    real = jp.build
+    # fake_steps.sleep needs params["flag"], which the real whitelist refuses: add it after the whitelist.
+    monkeypatch.setattr(jp, "build", lambda kind, raw, config, settings=None: {**real(kind, raw, config, settings),
+                                                                               "flag": str(flag)})
+    console = world["make"](targets={"pull": "fake_steps:sleep"})
+    headers = {TOKEN_HEADER: TOKEN}
+
+    async def scenario(client):
+        first = await client.post("/api/jobs", json={"kind": "pull", "params": {"name": "raw_a"}, "confirm": True},
+                                  headers=headers)
+        job = (await first.json())["job"]
+        second = await client.post("/api/jobs", json={"kind": "pull", "params": {"name": "raw_b"}, "confirm": True},
+                                   headers=headers)
+        cancel = await client.post(f"/api/jobs/{job['id']}/cancel", headers=headers)
+        for _ in range(100):
+            state = (await get_json(client, f"/api/jobs/{job['id']}"))["job"]["state"]
+            if state not in ("starting", "running"):
+                break
+            await asyncio.sleep(0.1)
+        return first.status, second.status, (await second.json())["error"], await cancel.json(), state
+
+    first, second, message, cancel, state = call(console, scenario)
+    assert first == 201 and second == 409 and "already running" in message
+    assert cancel == {"cancelled": True} and state == "cancelled"
+
+
+def test_serve_jobs_take_the_saved_settings(world):
+    headers = {TOKEN_HEADER: TOKEN}
+
+    async def scenario(client):
+        bad = await client.put("/api/serve/settings", json={"model": "pi05_x/none"}, headers=headers)
+        saved = await client.put("/api/serve/settings", json={"gpu": 3, "task": "pick_only"}, headers=headers)
+        created = await client.post("/api/jobs", json={"kind": "serve", "params": {"action": "start", "dry_run": True},
+                                                       "confirm": True}, headers=headers)
+        return bad.status, await saved.json(), (await created.json())["job"]
+
+    bad, saved, job = call(world["make"](), scenario)
+    assert bad == 400
+    assert saved["saved"] == {"gpu": 3, "task": "pick_only"} and saved["effective"]["gpu"] == 3
+    assert job["params"] == {"action": "start", "model": MODEL, "checkpoint": None, "gpu": 3, "port": 18000,
+                             "task": "pick_only", "dry_run": True}
+    assert json.loads((world["config"].console_dir / "serve_settings.json").read_text()) == {"gpu": 3, "task": "pick_only"}
+
+
+def test_the_log_websocket_streams_lines_status_and_end(world):
+    headers = {TOKEN_HEADER: TOKEN}
+
+    async def scenario(client):
+        created = await client.post("/api/jobs", json=_job_body(), headers=headers)
+        job = (await created.json())["job"]
+        messages = []
+        async with client.ws_connect(f"/api/jobs/{job['id']}/log") as ws:
+            async for message in ws:
+                data = json.loads(message.data)
+                messages.append(data)
+                if data["type"] == "end":
+                    break
+        missing = await client.get("/api/jobs/nope/log")
+        return messages, missing.status
+
+    messages, missing = call(world["make"](), scenario)
+    lines = [line for m in messages if m["type"] == "lines" for line in m["lines"]]
+    assert any("hello" in line for line in lines)
+    states = [m["job"]["state"] for m in messages if m["type"] == "status"]
+    assert states[-1] == "succeeded"
+    assert messages[-1] == {"type": "end"}
+    assert missing == 404

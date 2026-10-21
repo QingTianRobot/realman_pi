@@ -119,3 +119,29 @@ def test_unknown_kind(world):
     _, config = world
     with pytest.raises(BadRequest, match="kind"):
         job_params.build("delete", {}, config)
+
+
+def test_non_ascii_digit_checkpoint_raises_bad_request(world):
+    """'²'.isdigit() is True but int('²') raises ValueError — must become BadRequest."""
+    _, config = world
+    with pytest.raises(BadRequest, match="checkpoint"):
+        job_params.validate_settings({"checkpoint": "²"}, config)
+
+
+def test_summarize_on_broken_dataset_raises_bad_request(world, tmp_path):
+    """A corrupt dataset folder causes summarize() to raise; the view and _view paths must wrap it as BadRequest."""
+    paths, config = world
+    # broken_src has meta/info.json (passes is_dataset) but wrong codebase_version (summarize raises)
+    broken_src = paths["data"] / "broken_raw"
+    (broken_src / "meta").mkdir(parents=True)
+    (broken_src / "meta" / "info.json").write_text('{"codebase_version": "v1.0"}')
+    # build("view") calls summarize(src) to check if src is already a view
+    with pytest.raises(BadRequest, match="broken_raw"):
+        job_params.build("view", {"src": "broken_raw", "dst": "out_view",
+                                  "task_prompts": {"pick_only": "pick"}}, config)
+    # _view() calls summarize(path) to check if the view is a view; broken_view also needs meta/info.json
+    broken_view = paths["data"] / "broken_view"
+    (broken_view / "meta").mkdir(parents=True)
+    (broken_view / "meta" / "info.json").write_text('{"codebase_version": "v1.0"}')
+    with pytest.raises(BadRequest, match="broken_view"):
+        job_params.build("norm", {"config_name": CONFIG_NAME, "view": "broken_view"}, config)

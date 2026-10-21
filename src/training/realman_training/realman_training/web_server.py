@@ -9,6 +9,7 @@ build in realman_training/static/ (website: npm run build:training).
 from __future__ import annotations
 
 import asyncio
+import contextlib
 import hmac
 import json
 import time
@@ -17,10 +18,10 @@ from typing import Callable
 
 from aiohttp import web
 
-from . import catalog, gpus as gpu_mod, linkcheck, serving
+from . import catalog, gpus as gpu_mod, job_params, linkcheck, serving
 from .catalog import BadRequest, NotFound
 from .config import ARMS, ConsoleConfig
-from .jobs import ACTIVE, JobConflict, JobStore, now
+from .jobs import ACTIVE, FINAL, JobConflict, JobStore, now
 from .runner import Runner
 from .summary_cache import SummaryCache
 
@@ -240,18 +241,77 @@ class Console:
             return _error(404, "not found")
         return web.FileResponse(index)
 
-    # ---- writes (Task 7) ------------------------------------------------------------------------------------
+    # ---- writes ---------------------------------------------------------------------------------------------
     async def start_job(self, request):
-        raise web.HTTPNotImplemented()
+        self._require_token(request)
+        body = await self._body(request)
+        if body.get("confirm") is not True:
+            raise BadRequest("confirm must be true: the page asks before it starts a job")
+        extra = sorted(set(body) - {"kind", "params", "confirm"})
+        if extra:
+            raise BadRequest(f"unknown keys {extra}")
+        kind = body.get("kind")
+        settings = catalog.load_settings(self.config) if kind == "serve" else None
+        params = await self._blocking(job_params.build, kind, body.get("params") or {}, self.config, settings)
+        job = await self._blocking(lambda: self.store.start(kind, params, target=self.targets.get(kind)))
+        return web.json_response({"job": catalog.job_row(job)}, status=201)
 
     async def cancel_job(self, request):
-        raise web.HTTPNotImplemented()
+        self._require_token(request)
+        job = self._job(request)
+        return web.json_response({"cancelled": await self._blocking(self.store.cancel, job.id)})
 
     async def save_settings(self, request):
-        raise web.HTTPNotImplemented()
+        self._require_token(request)
+        body = await self._body(request)
+        clean = await self._blocking(job_params.validate_settings, body, self.config)
+        await self._blocking(catalog.save_settings, self.config, {**catalog.load_settings(self.config), **clean})
+        return web.json_response(await self._blocking(self._settings_payload))
 
     async def job_log(self, request):
-        raise web.HTTPNotImplemented()
+        job = self._job(request)  # 404 before the upgrade
+        ws = web.WebSocketResponse(heartbeat=20)
+        await ws.prepare(request)
+        pump = asyncio.create_task(self._pump_log(ws, job))
+        try:
+            async for _ in ws:  # nothing to receive; ends when the client closes
+                pass
+        finally:
+            pump.cancel()
+            with contextlib.suppress(asyncio.CancelledError):
+                await pump
+        return ws
+
+    async def _pump_log(self, ws, job) -> None:
+        path = job.dir / "log.txt"
+        offset = max(0, path.stat().st_size - _LOG_START_BYTES) if path.exists() else 0
+        pending = b""
+        last_state = None
+        polls = 0
+        while not ws.closed:
+            if path.exists():
+                with path.open("rb") as handle:
+                    handle.seek(offset)
+                    chunk = handle.read()
+                offset += len(chunk)
+                pending += chunk
+                *complete, pending = pending.split(b"\n")
+                if complete:
+                    await ws.send_json({"type": "lines", "lines": [line.decode(errors="replace") for line in complete]})
+            row = catalog.job_row(job)
+            if row["state"] != last_state:
+                last_state = row["state"]
+                await ws.send_json({"type": "status", "job": row})
+            if row["state"] in FINAL:
+                if pending:
+                    await ws.send_json({"type": "lines", "lines": [pending.decode(errors="replace")]})
+                await ws.send_json({"type": "end"})
+                await ws.close()
+                return
+            polls += 1
+            if polls % 10 == 0:
+                await self._blocking(self.store.recover)  # a dead child becomes "interrupted"
+            await asyncio.sleep(_POLL_SEC)
 
 
 def serve(config: ConsoleConfig, host: str, port: int, token: str) -> None:

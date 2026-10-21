@@ -10,9 +10,12 @@
     "build:web-control": "vite build --config ../config/web-control/vite.config.mjs",
     "dev:recording": "vite --config ../config/recording/vite.config.mjs",
     "build:recording": "vite build --config ../config/recording/vite.config.mjs",
+    "dev:training": "vite --config ../config/training/vite.config.mjs",
+    "build:training": "vite build --config ../config/training/vite.config.mjs",
     "preview": "vitepress preview docs",
     "test:e2e": "playwright test --config ../config/website/playwright.config.mjs",
-    "test:web-control": "playwright test --config ../config/web-control/playwright.config.mjs"
+    "test:web-control": "playwright test --config ../config/web-control/playwright.config.mjs",
+    "test:training": "playwright test --config ../config/training/playwright.config.mjs"
   },
   "dependencies": {
     "gridstack": "^13.3.0",

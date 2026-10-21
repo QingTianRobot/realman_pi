@@ -13,7 +13,8 @@ export default defineConfig({
   testDir: resolve(websiteDirectory, "tests"),
   // The browser action console has its own Vite server and configuration.
   // The recording replay UI is a different app (Vite on :4175) with its own config in config/recording/.
-  testIgnore: ["web-control/**", "recording-replay.spec.ts"],
+  // The training console runs against its own backend (config/training/playwright.config.mjs).
+  testIgnore: ["web-control/**", "recording-replay.spec.ts", "training-console/**"],
   outputDir: resolve(websiteDirectory, "test-results"),
   fullyParallel: false,
   workers: 1,

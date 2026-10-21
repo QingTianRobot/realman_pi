@@ -55,6 +55,9 @@ def container_facts(inspect: dict) -> dict:
         "image_id": str(inspect.get("Image", ""))[:19],
         "started": _normalize_docker_time(str(state.get("StartedAt", ""))),
         "env": env,
+        "args": [str(a) for a in inspect.get("Args") or []],
+        "ports": {str(inner): str((bindings or [{}])[0].get("HostPort", ""))
+                  for inner, bindings in ((inspect.get("HostConfig") or {}).get("PortBindings") or {}).items()},
     }
 
 

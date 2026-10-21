@@ -201,9 +201,14 @@ def run_detail(config: ConsoleConfig, config_name: str, exp: str, max_points: in
     }
 
 
-def list_models(config: ConsoleConfig) -> dict:
-    record = serving_state.load(config)
-    serving_name = record.get("model") if record and not record.get("stopped") else None
+_FROM_RECORD = object()
+
+
+def list_models(config: ConsoleConfig, serving_name: str | None | object = _FROM_RECORD) -> dict:
+    """serving_name: the model the live serve status reports (None = nothing served); default = serving.json."""
+    if serving_name is _FROM_RECORD:
+        record = serving_state.load(config)
+        serving_name = record.get("model") if record and not record.get("stopped") else None
     models = []
     for folder in _run_folders(config):
         card = _read_json(folder / "model_card.json")

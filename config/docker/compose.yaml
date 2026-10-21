@@ -402,6 +402,7 @@ services:
       - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
       - /etc/passwd:/etc/passwd:ro
       - /etc/group:/etc/group:ro
+      - /etc/localtime:/etc/localtime:ro  # job and history times in the host's time zone
       - ${TRAINING_HOME:-/home/server5090}/.ssh:${TRAINING_HOME:-/home/server5090}/.ssh:ro
       - ${TRAINING_HOME:-/home/server5090}/data/realman:${TRAINING_HOME:-/home/server5090}/data/realman
       - ${TRAINING_HOME:-/home/server5090}/organization/openpi:${TRAINING_HOME:-/home/server5090}/organization/openpi:ro

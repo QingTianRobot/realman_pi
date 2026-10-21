@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import re
 import shlex
 import socket
 import time
@@ -285,11 +286,34 @@ def stop(params: dict, log, runner: Runner | None = None) -> dict:
     return result
 
 
+_POLICY_DIR = re.compile(r"--policy\.dir=checkpoints/([A-Za-z0-9][A-Za-z0-9_.-]*)/([A-Za-z0-9][A-Za-z0-9_.-]*)/(\d+)")
+
+
+def record_from_container(facts: dict) -> dict:
+    """What a running openpi-serve serves, read from its command line (for a server started by hand)."""
+    match = _POLICY_DIR.search(" ".join(facts.get("args") or []))
+    if not match:
+        return {}
+    config_name, exp, step = match.groups()
+    record = {"model": f"{config_name}/{exp}", "config": config_name, "exp": exp, "step": int(step)}
+    gpu = (facts.get("env") or {}).get("NVIDIA_VISIBLE_DEVICES", "")
+    if gpu.isdigit():
+        record["gpu"] = int(gpu)
+    ports = [int(p) for p in (facts.get("ports") or {}).values() if str(p).isdigit()]
+    if ports:
+        record["port"] = ports[0]
+    return {**record, "source": "container"}
+
+
 def status(config: ConsoleConfig, runner: Runner | None = None) -> dict:
     runner = runner or Runner()
     sc = config.serving
     record = serving_state.load(config)
     serve = container_inspect(runner, serve_container(sc)) or {"running": False}
+    live = record_from_container(serve) if serve.get("running") else {}
+    if live and (record.get("stopped") or (record.get("model"), record.get("step")) != (live["model"], live["step"])):
+        record = live  # serving.json is missing, stale or about another model: the container is the truth
+    serve = {k: v for k, v in serve.items() if k not in ("env", "args", "ports")}  # never pass its environment on
     gpu_index = record.get("gpu", sc.gpu)
     gpu: dict = {"index": gpu_index}
     done = runner.run(["nvidia-smi", "-i", str(gpu_index), "--query-gpu=index,memory.used,memory.total",

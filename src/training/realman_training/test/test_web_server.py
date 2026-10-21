@@ -455,3 +455,15 @@ def test_nan_in_payload_becomes_null_in_json_response(world):
         return data
 
     call(world["make"](), scenario)
+
+
+def test_models_mark_what_the_live_serve_status_serves(world):
+    (world["config"].console_dir / "serving.json").unlink()  # e.g. openpi-serve started by hand
+
+    async def scenario(client):
+        return await get_json(client, "/api/models")
+
+    assert call(world["make"](), scenario)["models"][0]["serving"] is True
+    stopped = world["make"]()
+    stopped._serve_status = lambda: {"serve": {"running": False}, "record": {"model": MODEL}}
+    assert call(stopped, scenario)["models"][0]["serving"] is False

@@ -205,7 +205,13 @@ class Console:
         return _json(detail)
 
     async def models(self, request):
-        return _json(await self._blocking(catalog.list_models, self.config))
+        status = await self.serve_cache.get(self._safe_serve_status)
+        if status.get("error"):
+            data = await self._blocking(catalog.list_models, self.config)  # serve status unknown: trust serving.json
+        else:
+            served = (status.get("record") or {}).get("model") if (status.get("serve") or {}).get("running") else None
+            data = await self._blocking(catalog.list_models, self.config, served)
+        return _json(data)
 
     async def gpus(self, request):
         return _json(await self.gpu_cache.get(self._gpu_query, force=request.query.get("refresh") == "1"))

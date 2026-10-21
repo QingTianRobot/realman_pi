@@ -30,6 +30,7 @@ def test_the_service_is_opt_in_and_uses_the_nvidia_runtime():
 def test_host_paths_are_mounted_at_the_same_path():
     volumes = _service()["volumes"]
     assert "/var/run/docker.sock:/var/run/docker.sock" in volumes
+    assert "/etc/localtime:/etc/localtime:ro" in volumes
     same = [v for v in volumes if "${TRAINING_HOME" in v or "${TRAINING_REPO" in v]
     assert len(same) >= 5
     for volume in same:

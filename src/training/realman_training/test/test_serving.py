@@ -4,7 +4,7 @@ import json
 
 import pytest
 from fake_runner import FakeRunner, RecordingLog
-from robot_fakes import PLACE, SERVER_ADDR, SERVE_CONTAINER, FakeChain
+from robot_fakes import PLACE, SERVER_ADDR, SERVE_CONTAINER, FakeChain, inspect_json
 
 from realman_training import serving, serving_state
 from realman_training.config import load_config
@@ -377,3 +377,32 @@ def test_run_dispatches_on_action(config, monkeypatch):
     assert seen == ["stop"]
     with pytest.raises(StepFailed, match="action"):
         serving.run({"action": "restart"}, RecordingLog())
+
+
+HAND_STARTED_ARGS = ["-lc", "source /usr/local/share/openpi/functions.zsh && cd /workspace && exec uv run --no-sync "
+                     f"scripts/serve_policy.py --port 8000 policy:checkpoint --policy.config={CFG} "
+                     f"--policy.dir=checkpoints/{CFG}/{EXP}/29999"]
+
+
+def test_record_from_container_reads_the_served_checkpoint():
+    facts = {"args": HAND_STARTED_ARGS, "env": {"NVIDIA_VISIBLE_DEVICES": "2", "SECRET": "x"},
+             "ports": {"8000/tcp": "18000"}}
+    assert serving.record_from_container(facts) == {"model": f"{CFG}/{EXP}", "config": CFG, "exp": EXP, "step": 29999,
+                                                    "gpu": 2, "port": 18000, "source": "container"}
+    assert serving.record_from_container({"args": ["zsh"]}) == {}
+
+
+def test_status_knows_a_hand_started_server_and_hides_its_environment(config, monkeypatch):
+    chain = FakeChain()
+    chain.serve_running = True
+    fake = chain.runner()
+    fake._rules.insert(0, (f"docker inspect {serving.serve_container(config.serving)}",
+                           inspect_json(True, {"NVIDIA_VISIBLE_DEVICES": "2", "WANDB_API_KEY": "secret-value"},
+                                        args=HAND_STARTED_ARGS, ports={"8000/tcp": [{"HostIp": "", "HostPort": "18000"}]}),
+                           0, (), None))
+    data = serving.status(config, fake)
+    assert data["record"]["model"] == f"{CFG}/{EXP}" and data["record"]["source"] == "container"
+    assert data["record"]["step"] == 29999 and data["gpu"]["index"] == 2
+    assert "secret-value" not in json.dumps(data) and "env" not in data["serve"] and "args" not in data["serve"]
+    serving_state.save(config, {"model": f"{CFG}/{EXP}", "step": 29999, "gpu": 2, "prompt": PLACE})
+    assert serving.status(config, fake)["record"]["prompt"] == PLACE  # the console's own record wins when it matches

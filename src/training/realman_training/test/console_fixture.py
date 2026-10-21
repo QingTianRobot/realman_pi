@@ -1,0 +1,121 @@
+"""A whole console world on disk for the catalog/web tests and Plan 5's e2e fake backend: raw, cleaned and view
+datasets, a registered run with metrics/eval/card, a run still training, link-check history and serving.json."""
+
+from __future__ import annotations
+
+import json
+import math
+from pathlib import Path
+
+from lerobot_fixture import Episode, build_dataset, build_view, gripper, write_clean_manifest
+
+PLACE = "pick up the power adapter and put it in the blue bin"
+PICK = "pick up the power adapter"
+CONFIG_NAME = "pi05_realman_multitask_action_only"
+EXP = "m_multitask_b16_2gpu"
+MODEL = f"{CONFIG_NAME}/{EXP}"
+TRAINING = ("pi05_realman_action_only", "a_new_run")
+
+
+def _json(path: Path, data) -> None:
+    path.parent.mkdir(parents=True, exist_ok=True)
+    path.write_text(json.dumps(data, ensure_ascii=False, indent=2), encoding="utf-8")
+
+
+def build_world(root: Path) -> dict[str, Path]:
+    root = Path(root)
+    data = root / "data"
+    raw = build_dataset(data / "raw_realman_ts_20261016" / "realman__pi05-three-arm", [
+        Episode("pick_and_place", gripper((50, 60), (5700, 150), (50, 60))),                    # 0 ok
+        Episode("pick_only", gripper((50, 60), (8450, 100))),                                    # 1 closed on nothing
+        Episode("pick_and_place", gripper((50, 60), (5700, 80), (50, 10), (5700, 80), (50, 40))),  # 2 re-grasp
+        Episode("pick_only", gripper((50, 60), (5600, 120))),                                    # 3 ok
+        Episode("pick_only", gripper((800, 60), (5600, 120))),                                   # 4 starts half closed (warn)
+    ])
+    clean = build_dataset(data / "realman__multitask_clean", [
+        Episode("pick_and_place", gripper((50, 60), (5700, 150), (50, 60))),
+        Episode("pick_only", gripper((50, 60), (5600, 120))),
+        Episode("pick_only", gripper((800, 60), (5600, 120))),
+    ])
+    write_clean_manifest(clean, source=str(raw), removed={1: "closed on nothing", 2: "re-grasp"})
+    view = build_view(data / "realman_right_arm_multitask_view", source=str(clean),
+                      prompts={"pick_and_place": PLACE, "pick_only": PICK}, lengths=[30, 30, 30],
+                      tasks=["pick_and_place", "pick_only", "pick_only"])
+
+    docker_data = root / "openpi-docker-data"
+    run = docker_data / "checkpoints" / CONFIG_NAME / EXP
+    for step in (10000, 29999):
+        (run / str(step)).mkdir(parents=True)
+    rows = ["step,grad_norm,loss,param_norm"]
+    for step in range(0, 30000, 100):
+        rows.append(f"{step},{0.3 * math.exp(-step / 12000) + 0.05:.5f},{0.5 * math.exp(-step / 8000) + 0.02:.5f},1800.0")
+    (run / "metrics.csv").write_text("\n".join(rows) + "\n", encoding="utf-8")
+    record = {"config": CONFIG_NAME, "exp": EXP, "view": str(view), "gpus": [1, 2], "batch_size": 16,
+              "num_train_steps": 30000, "holdout": [1], "weights": "/w", "container": f"openpi-console-train-{EXP}",
+              "openpi_commit": "abc123", "started": "2026-10-16T09:54:38+08:00", "ended": "2026-10-16T16:09:40+08:00",
+              "exit_code": 0, "last_step": 29999}
+    _json(run / "console_train.json", record)
+    evals = {
+        "10000": {"pick_and_place": {"mae": 0.121, "zero_baseline": 0.41, "episodes": [1]},
+                  "pick_only": {"mae": 0.118, "zero_baseline": 0.39, "episodes": [1]}},
+        "29999": {"pick_and_place": {"mae": 0.096, "zero_baseline": 0.41, "episodes": [1]},
+                  "pick_only": {"mae": 0.092, "zero_baseline": 0.39, "episodes": [1]},
+                  "prompt_swap": {"pick_and_place": {"pick_and_place": 0.096, "pick_only": 0.211},
+                                  "pick_only": {"pick_only": 0.092, "pick_and_place": 0.187}}},
+    }
+    _json(run / "eval" / "summary.json", evals)
+    card = {"generated_by": "realman-train register", "exp_name": EXP, "config": CONFIG_NAME,
+            "method": "pi0.5 action-only fine-tune", "trained_start": record["started"], "trained_end": record["ended"],
+            "batch_size": 16, "num_train_steps": 30000, "gpus": "2x GPU (server5090 GPU 1,2)", "openpi_commit": "abc123",
+            "dataset_dir": str(view), "dataset_source": str(clean),
+            "tasks": {"pick_and_place": {"prompt": PLACE, "episodes": 1}, "pick_only": {"prompt": PICK, "episodes": 2}},
+            "episodes": 3, "frames": 90, "holdout_episodes": [1], "cameras": ["d435", "orbbec_right"], "arm": "r",
+            "checkpoints": [10000, 29999],
+            "open_loop_eval": {"10000": {"pick_and_place": 0.121, "pick_only": 0.118},
+                               "29999": {"pick_and_place": 0.096, "pick_only": 0.092},
+                               "zero_baseline": {"pick_and_place": 0.41, "pick_only": 0.39}},
+            "status": "serving since 2026-10-16 17:02", "card_written": "2026-10-16T17:00:00+08:00"}
+    _json(run / "model_card.json", card)
+    (run / "MODEL_CARD.md").write_text(f"# {EXP}\n\n<!-- generated by realman-train register -->\n\npi0.5 action-only.\n",
+                                       encoding="utf-8")
+    (docker_data / "checkpoints" / "MODELS.md").write_text(
+        "# 模型登记表（server5090 openpi checkpoints）\n\n| run | config |\n|---|---|\n"
+        f"| `{MODEL}` | {CONFIG_NAME} |\n", encoding="utf-8")
+
+    training_run = docker_data / "checkpoints" / TRAINING[0] / TRAINING[1]
+    (training_run / "1000").mkdir(parents=True)
+    _json(training_run / "console_train.json", {"config": TRAINING[0], "exp": TRAINING[1], "view": str(view),
+                                                 "gpus": [3], "batch_size": 8, "num_train_steps": 5000,
+                                                 "started": "2026-10-21T08:00:00+08:00"})
+    (docker_data / "wandb").mkdir(parents=True)
+    (docker_data / "wandb" / f"{TRAINING[1]}.log").write_text(
+        "".join(f"Step {s}: grad_norm={0.4 - s / 20000:.4f}, loss={0.6 - s / 10000:.4f}\n" for s in range(0, 1500, 100)),
+        encoding="utf-8")
+
+    console = data / "_console"
+    for stamp, ok, rate in (("20261020-234052-000001", True, "7.91"), ("20261021-091500-000001", False, "1.20")):
+        _json(console / "linkcheck" / f"{stamp}.json", {
+            "at": f"{stamp[:4]}-{stamp[4:6]}-{stamp[6:8]}T{stamp[9:11]}:{stamp[11:13]}:{stamp[13:15]}+08:00", "ok": ok,
+            "checks": [
+                {"item": "pika", "name": "pika_nodes", "ok": True, "value": "0", "threshold": "0", "detail": ""},
+                {"item": "link", "name": "bulk_throughput", "ok": ok, "value": f"{rate} MB/s", "threshold": ">= 2 MB/s",
+                 "detail": ""},
+            ]})
+    _json(console / "serving.json", {"model": MODEL, "config": CONFIG_NAME, "exp": EXP, "step": 29999,
+                                     "checkpoint": f"checkpoints/{MODEL}/29999", "gpu": 2, "port": 18000,
+                                     "task": "pick_and_place", "prompt": PLACE, "started": "2026-10-16T17:02:00+08:00",
+                                     "warmup_ms": [26000.0, 95.0]})
+
+    config = root / "console.yaml"
+    config.write_text(
+        "training_console:\n"
+        f"  data_root: {data}\n"
+        "  openpi:\n"
+        f"    repo: {root / 'openpi'}\n"
+        f"    docker_data: {docker_data}\n"
+        "  serving:\n"
+        f"    model: {MODEL}\n",
+        encoding="utf-8",
+    )
+    return {"root": root, "data": data, "raw": raw, "clean": clean, "view": view, "docker_data": docker_data,
+            "run": run, "training_run": training_run, "console": console, "config": config}

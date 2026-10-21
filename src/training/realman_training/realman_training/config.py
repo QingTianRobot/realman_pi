@@ -111,6 +111,19 @@ class LinkcheckConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class WebConfig:
+    """The web console (realman-train web): bind address and how long cached answers stay fresh."""
+
+    host: str = "0.0.0.0"
+    port: int = 8780
+    serve_status_ttl_sec: float = 20.0  # serve status = docker inspect + ssh + a ROS probe on realman_ts (~5 s)
+    gpu_ttl_sec: float = 3.0
+    log_tail_lines: int = 200
+    history_limit: int = 20  # link-check runs listed on the 服务 page
+    passwd_file: str = "/etc/passwd"  # uid -> name of GPU holders; the container mounts the host's
+
+
+@dataclasses.dataclass(frozen=True)
 class ConsoleConfig:
     data_root: Path = dataclasses.field(default_factory=lambda: Path("~/data/realman").expanduser())
     state_dir: Path | None = None
@@ -119,6 +132,7 @@ class ConsoleConfig:
     openpi: OpenpiConfig = dataclasses.field(default_factory=OpenpiConfig)
     serving: ServingConfig = dataclasses.field(default_factory=ServingConfig)
     linkcheck: LinkcheckConfig = dataclasses.field(default_factory=LinkcheckConfig)
+    web: WebConfig = dataclasses.field(default_factory=WebConfig)
     prompts: dict[str, str] = dataclasses.field(default_factory=lambda: dict(DEFAULT_PROMPTS))
     source: Path | None = None
 
@@ -143,7 +157,7 @@ def _path(value: object) -> Path:
     return Path(str(value)).expanduser()
 
 
-_ALLOWED_TOP_KEYS = {"data_root", "state_dir", "quality", "remote", "openpi", "serving", "linkcheck", "prompts"}
+_ALLOWED_TOP_KEYS = {"data_root", "state_dir", "quality", "remote", "openpi", "serving", "linkcheck", "web", "prompts"}
 
 
 def load_config(path: str | Path | None = None) -> ConsoleConfig:
@@ -164,6 +178,8 @@ def load_config(path: str | Path | None = None) -> ConsoleConfig:
     serving = _parse(ServingConfig, section.get("serving") or {}, source, "serving")
     linkcheck = _parse(LinkcheckConfig, section.get("linkcheck") or {}, source, "linkcheck")
     _validate_serving(serving, linkcheck, source)
+    web = _parse(WebConfig, section.get("web") or {}, source, "web")
+    _validate_web(web, source)
     prompts = section.get("prompts")
     if prompts is None:
         prompts = dict(DEFAULT_PROMPTS)
@@ -179,6 +195,7 @@ def load_config(path: str | Path | None = None) -> ConsoleConfig:
         openpi=openpi,
         serving=serving,
         linkcheck=linkcheck,
+        web=web,
         prompts={str(k): str(v) for k, v in prompts.items()},
         source=source,
     )
@@ -258,3 +275,14 @@ def _validate_serving(s: ServingConfig, lc: LinkcheckConfig, source: Path) -> No
     for key in ("bulk_bytes", "ping_count", "infer_rounds"):
         if getattr(lc, key) < 1:
             fail(f"linkcheck.{key}", "must be at least 1")
+
+
+def _validate_web(w: WebConfig, source: Path) -> None:
+    if not 1 <= w.port <= 65535:
+        raise ValueError(f"{source}: web.port must be in 1..65535")
+    for key in ("serve_status_ttl_sec", "gpu_ttl_sec"):
+        if getattr(w, key) <= 0:
+            raise ValueError(f"{source}: web.{key} must be positive")
+    for key in ("log_tail_lines", "history_limit"):
+        if getattr(w, key) < 1:
+            raise ValueError(f"{source}: web.{key} must be at least 1")

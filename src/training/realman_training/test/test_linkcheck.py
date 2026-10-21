@@ -151,6 +151,14 @@ def test_run_checks_leaves_no_private_ip_in_history(config):
         assert SERVER_ADDR not in c.detail, f"IP in check detail: {c}"
 
 
+def test_a_silent_ping_keeps_its_output_but_not_the_address(config):
+    chain = FakeChain()
+    chain.ping = f"PING {SERVER_ADDR} ({SERVER_ADDR}) 1400(1428) bytes of data.\n--- ping statistics ---"
+    named = by_name(linkcheck.run_checks(config, bulk(chain.runner()), clock=Clock(), only=["link"]))
+    assert not named["ping"].ok and "ping statistics" in named["ping"].detail
+    assert SERVER_ADDR not in named["ping"].detail
+
+
 def test_the_job_entry_logs_a_table_and_keeps_history(config, monkeypatch):
     chain = FakeChain()
     monkeypatch.setattr(linkcheck, "Runner", lambda: bulk(chain.runner()))

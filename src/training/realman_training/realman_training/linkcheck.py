@@ -23,7 +23,7 @@ from pathlib import Path
 from . import serving_state
 from .config import ConsoleConfig, load_config
 from .jobs import StepFailed, now, write_json
-from .robot import Robot, script
+from .robot import Robot, redact, script
 from .runner import CommandFailed, Runner
 
 ITEMS = ("pika", "link", "inference", "bridge")
@@ -175,7 +175,8 @@ def run_checks(config: ConsoleConfig, runner: Runner | None = None, *, robot: Ro
             checks += groups[item]()
         except (StepFailed, CommandFailed, ValueError, KeyError, IndexError) as error:
             checks += [Check(item, name, False, "error", "", str(error)) for name in _NAMES[item]]
-    return checks
+    # Results are logged and kept as history: no addresses (ping's own output names the server).
+    return [dataclasses.replace(c, value=redact(c.value), detail=redact(c.detail)) for c in checks]
 
 
 def format_table(checks: list[Check]) -> list[str]:

@@ -27,3 +27,20 @@ test("no page scrolls sideways @mobile", async ({ page }) => {
     await noHorizontalScroll(page);
   }
 });
+
+test("the jobs button opens the drawer with live logs", async ({ page, request }) => {
+  const created = await request.post("/api/jobs", {
+    headers: { "X-Training-Token": TOKEN },
+    data: { kind: "linkcheck", params: { only: ["link"] }, confirm: true },
+  });
+  expect(created.status()).toBe(201);
+  const { job } = await created.json();
+  await page.goto("/");
+  await page.locator("#jobs-button").click();
+  await expect(page.locator("#drawer")).toBeVisible();
+  await page.locator(`#drawer-jobs .item[data-job="${job.id}"]`).click();
+  await expect(page.locator("#drawer-log")).toContainText("fake linkcheck done");
+  await expect(page.locator("#drawer-job-head")).toContainText("成功");
+  await page.locator("#drawer-close").click();
+  await expect(page.locator("#drawer")).toBeHidden();
+});

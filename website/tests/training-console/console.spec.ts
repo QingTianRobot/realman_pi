@@ -44,3 +44,18 @@ test("the jobs button opens the drawer with live logs", async ({ page, request }
   await page.locator("#drawer-close").click();
   await expect(page.locator("#drawer")).toBeHidden();
 });
+
+test("overview: four status cards and the recent lists @mobile", async ({ page }) => {
+  await page.goto("/#/overview");
+  await expect(page.locator("#card-serve")).toContainText("pi05_realman_multitask_action_only/m_multitask_b16_2gpu");
+  await expect(page.locator("#card-serve")).toContainText("29999");
+  await expect(page.locator("#card-link")).toContainText("未通过");
+  await expect(page.locator("#card-link")).toContainText("bulk_throughput");
+  await expect(page.locator("#card-gpus .gpu-row")).toHaveCount(4);
+  await expect(page.locator("#card-gpus")).toContainText("openpi-serve-openpi-1");
+  await expect(page.locator("#card-train")).toContainText("a_new_run");
+  await expect(page.locator("#recent-datasets tbody tr")).toHaveCount(3);
+  await expect(page.locator("#latest-models")).toContainText("m_multitask_b16_2gpu");
+  await page.locator("#recent-datasets tbody tr", { hasText: "realman__multitask_clean" }).click();
+  await expect(page).toHaveURL(/#\/data\?path=realman__multitask_clean/);
+});

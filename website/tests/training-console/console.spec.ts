@@ -59,3 +59,62 @@ test("overview: four status cards and the recent lists @mobile", async ({ page }
   await page.locator("#recent-datasets tbody tr", { hasText: "realman__multitask_clean" }).click();
   await expect(page).toHaveURL(/#\/data\?path=realman__multitask_clean/);
 });
+
+const RAW = "raw_realman_ts_20261016/realman__pi05-three-arm";
+
+test("data: suggested drops are pre-checked and a cleaned set is requested", async ({ page, request }) => {
+  await page.goto(`/#/data?path=${encodeURIComponent(RAW)}`);
+  await expect(page.locator("#dataset-list .item.selected")).toContainText("realman__pi05-three-arm");
+  await expect(page.locator("#dataset-stats")).toContainText("5");
+  await expect(page.locator("#dataset-stats")).toContainText("LeRobot v3.0");
+  await expect(page.locator("#task-bars")).toContainText("pick_only");
+  await expect(page.locator("#features")).toContainText("observation.gripper_position");
+  const rows = page.locator("#quality-table tbody tr");
+  await expect(rows).toHaveCount(5);
+  const box = (ep: number) => page.locator(`#quality-table tr[data-episode="${ep}"] input.drop`);
+  await expect(box(1)).toBeChecked();
+  await expect(box(2)).toBeChecked();
+  await expect(box(0)).not.toBeChecked();
+  await expect(box(4)).not.toBeChecked();
+  await expect(page.locator(`#quality-table tr[data-episode="4"]`)).toContainText("提示");
+  await expect(page.locator("#quality-table svg.spark").first()).toBeVisible();
+  await box(2).uncheck();
+  await box(4).check();
+  await expect(page.locator("#make-clean")).toHaveText("生成清洗版（剔除 2 条）");
+  await page.locator("#make-clean").click();
+  const dialog = page.locator("#confirm-dialog");
+  await expect(dialog).toContainText("剔除 2 条：1, 4");
+  await page.locator("#confirm-token").fill(TOKEN);
+  await page.locator("#confirm-start").click();
+  await expect(dialog).toHaveCount(0);
+  await expect(page.locator("#drawer")).toBeVisible();
+  await expect(page.locator("#drawer-log")).toContainText("fake clean done");
+  const jobs = await (await request.get("/api/jobs?kind=clean")).json();
+  expect(jobs.jobs[0].params.drop).toEqual([1, 4]);
+  expect(jobs.jobs[0].params.reasons["1"]).toContain("closed plateau");
+  expect(jobs.jobs[0].params.reasons["4"]).toBe("人工剔除");
+});
+
+test("data: a training view request carries the task prompts", async ({ page, request }) => {
+  await page.goto("/#/data?path=realman__multitask_clean");
+  await page.locator("#make-view").click();
+  await expect(page.locator("#view-form")).toBeVisible();
+  await expect(page.locator('#view-form input[data-task="pick_only"]')).toHaveValue("pick up the power adapter");
+  await page.locator('#view-form input[name="dst"]').fill("e2e_view");
+  await page.locator('#view-form input[name="dry_run"]').check();
+  await page.locator("#view-start").click();
+  await page.locator("#confirm-token").fill(TOKEN);
+  await page.locator("#confirm-start").click();
+  await expect(page.locator("#drawer-log")).toContainText("fake view done");
+  const jobs = await (await request.get("/api/jobs?kind=view")).json();
+  expect(jobs.jobs[0].params.task_prompts.pick_only).toBe("pick up the power adapter");
+  expect(jobs.jobs[0].params.dry_run).toBe(true);
+  expect(jobs.jobs[0].params.dst).toMatch(/e2e_view$/);
+});
+
+test("data: a training view says why it has no quality table", async ({ page }) => {
+  await page.goto("/#/data?path=realman_right_arm_multitask_view");
+  await expect(page.locator(".quality-unavailable")).toContainText("training view");
+  await expect(page.locator("#make-clean")).toHaveCount(0);
+  await expect(page.locator("#dataset-detail")).toContainText("pick up the power adapter and put it in the blue bin");
+});

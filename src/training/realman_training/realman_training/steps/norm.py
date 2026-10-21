@@ -31,7 +31,8 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
         log(f"norm stats exist: {path}")
         return {"norm_stats": str(path), "computed": False}
     cname = container_name(config.openpi.compose_project, name)
-    argv = compose.run(f"opic-norm --config-name {shlex.quote(name)}", name=cname)
+    # The container has no GPU (NVIDIA_VISIBLE_DEVICES=none); without this JAX's CUDA plugin aborts at start.
+    argv = compose.run(f"opic-norm --config-name {shlex.quote(name)}", env={"JAX_PLATFORMS": "cpu"}, name=cname)
     log("$ " + shlex.join(argv))
     if params.get("dry_run"):
         return {"norm_stats": str(path), "computed": False, "dry_run": True, "command": argv}

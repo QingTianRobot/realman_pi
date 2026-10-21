@@ -82,6 +82,7 @@ def test_norm_uses_predictable_container_name(env):
     cmd = runner.commands("opic-norm")[0]
     assert "--name" in cmd and "openpi-console-norm-pi05_x" in cmd
     assert "--rm" in cmd and "-d" not in cmd
+    assert "JAX_PLATFORMS=cpu" in cmd  # no GPU in the norm container
 
 
 def test_norm_refuses_when_container_already_exists(env):

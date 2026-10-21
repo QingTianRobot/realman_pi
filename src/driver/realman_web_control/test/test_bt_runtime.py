@@ -140,3 +140,99 @@ def test_runtime_route_proxies_the_monitor_and_reports_a_stopped_tree_as_unavail
     assert [node["path"] for node in live["nodes"]] == ["0", "0/0"]
     assert stopped == {"available": False}
     assert disabled == {"available": False}
+
+
+class FakeSocket:
+    def __init__(self, fail=False):
+        self.closed = False
+        self.fail = fail
+        self.sent: list[dict] = []
+
+    async def send_str(self, payload):
+        if self.fail:
+            raise ConnectionResetError("socket closed mid-send")
+        self.sent.append(json.loads(payload))
+
+
+def _pushing_server(tmp_path: Path, reads: list[dict]) -> tuple[WebControlServer, list[int]]:
+    """Server whose monitor returns ``reads`` in order (the last one repeats)."""
+    server = _server(tmp_path, "http://127.0.0.1:1")
+    server.config = WebServerConfig(**{**server.config.__dict__, "bt_monitor_poll_period_sec": 0.001})
+    calls = [0]
+
+    async def read():
+        calls[0] += 1
+        return reads[min(calls[0], len(reads)) - 1]
+
+    server._read_bt_runtime = read
+    return server, calls
+
+
+def _live(sequence, status="RUNNING"):
+    payload = compact_runtime_snapshot(_snapshot(sequence=sequence), now_ms=10_000, stale_after_ms=5000)
+    payload["nodes"][1]["status"] = status
+    return payload
+
+
+def test_push_sends_only_visible_changes_to_every_socket(tmp_path):
+    reads = [_live(1), _live(2), _live(3), _live(4, "SUCCESS"), _live(5, "SUCCESS"), {"available": False}]
+
+    async def scenario():
+        server, calls = _pushing_server(tmp_path, reads)
+        good, broken, other = FakeSocket(), FakeSocket(fail=True), FakeSocket()
+        server._clients = {"a": good, "b": broken, "c": other}
+        server._bt_clients_present = asyncio.Event()
+        task = asyncio.create_task(server._push_bt_runtime())
+        while calls[0] < len(reads) + 2:
+            await asyncio.sleep(0.001)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return server, good, other
+
+    server, good, other = asyncio.run(scenario())
+    # The sequence changes every tick; only the node status change and the stop are new views.
+    pushed = [event["runtime"] for event in good.sent]
+    assert all(event["type"] == "bt_runtime" for event in good.sent)
+    assert [(item["available"], item.get("sequence")) for item in pushed] == [(True, 1), (True, 4), (False, None)]
+    # A socket that fails mid-send costs the others nothing and does not end the watcher.
+    assert other.sent == good.sent
+    assert server._bt_runtime_latest == {"available": False}
+
+
+def test_push_stops_reading_without_pages_and_forgets_the_last_tree(tmp_path):
+    async def scenario():
+        server, calls = _pushing_server(tmp_path, [_live(1)])
+        socket = FakeSocket()
+        server._clients = {"a": socket}
+        server._bt_clients_present = asyncio.Event()
+        task = asyncio.create_task(server._push_bt_runtime())
+        while not socket.sent:
+            await asyncio.sleep(0.001)
+        assert server._bt_runtime_latest["available"] is True
+        server._clients = {}
+        await asyncio.sleep(0.02)
+        idle_calls = calls[0]
+        await asyncio.sleep(0.02)
+        assert calls[0] == idle_calls  # no monitor reads while nobody is watching
+        assert server._bt_runtime_latest == {"available": False}
+        # The next page gets the current tree again, even though it did not change.
+        server._clients = {"b": (fresh := FakeSocket())}
+        server._bt_clients_present.set()
+        while not fresh.sent:
+            await asyncio.sleep(0.001)
+        task.cancel()
+        await asyncio.gather(task, return_exceptions=True)
+        return fresh
+
+    fresh = asyncio.run(scenario())
+    assert fresh.sent[0]["runtime"]["available"] is True
+
+
+def test_poll_period_comes_from_root_config_and_is_validated(tmp_path):
+    assert 0 < load_server_config(ROOT_CONFIG).bt_monitor_poll_period_sec <= 0.1
+    document = yaml.safe_load(ROOT_CONFIG.read_text())
+    document["behavior_tree_monitor"]["poll_period_sec"] = 0
+    path = tmp_path / "web.yaml"
+    path.write_text(yaml.safe_dump(document))
+    with pytest.raises(ValueError, match="behavior_tree_monitor.poll_period_sec"):
+        load_server_config(path)

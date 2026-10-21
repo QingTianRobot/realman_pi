@@ -108,12 +108,6 @@ function devApiPlugin() {
             response.end(JSON.stringify({ available: false }));
             return;
           }
-          if (url === "/api/bt/runtime") {
-            // Local UI development has no executor; production proxies bt_server's snapshot.
-            response.setHeader("Content-Type", "application/json");
-            response.end(JSON.stringify({ available: false }));
-            return;
-          }
           if (url === "/api/calibration") {
             const calibration = YAML.parse(
               await readFile(resolve(repositoryDirectory, "config/ros/camera_calibration.yaml"), "utf8"),

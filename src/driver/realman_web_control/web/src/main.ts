@@ -1886,6 +1886,10 @@ function handleMessage(message: Message) {
     result.textContent = `${arm.toUpperCase()} ${status} / ${message.message || "unknown error"}`;
     if (arm === selectedArm) actionState.textContent = status.toUpperCase();
     updateButtons();
+  } else if (message.type === "bt_runtime") {
+    // Pushed by the server on every visible change of the executor's snapshot, and once after hello.
+    btRuntime = message.runtime?.available === true ? message.runtime as BtRuntime : { available: false };
+    renderBehaviorTree();
   } else if (message.type === "behavior_tree_stop_result") {
     if (message.request_id !== btStopRequest) return;
     setBtStopStatus(message.success
@@ -1955,6 +1959,9 @@ function connect() {
     activeInputModeRequest = "";
     activeInputModeExecutorRequest = undefined;
     pendingInputModeId = "";
+    // Tree states only arrive over this socket; do not keep showing a frozen tree.
+    btRuntime = { available: false };
+    renderBehaviorTree();
     updateButtons();
     window.setTimeout(connect, 2000);
   });
@@ -2557,19 +2564,3 @@ async function pollBehaviorTreeLibrary() {
 }
 window.setInterval(pollBehaviorTreeLibrary, 2000);
 pollBehaviorTreeLibrary();
-let btPollInFlight = false;
-async function pollBehaviorTree() {
-  if (btPollInFlight || document.hidden) return;
-  btPollInFlight = true;
-  try {
-    const response = await fetch("/api/bt/runtime", { cache: "no-store" });
-    btRuntime = response.ok ? await response.json() as BtRuntime : { available: false };
-  } catch {
-    btRuntime = { available: false };
-  } finally {
-    btPollInFlight = false;
-  }
-  renderBehaviorTree();
-}
-window.setInterval(pollBehaviorTree, 500);
-pollBehaviorTree();

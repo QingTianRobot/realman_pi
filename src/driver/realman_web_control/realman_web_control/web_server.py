@@ -36,6 +36,8 @@ class WebServerConfig:
     bt_monitor_url: str = ""
     bt_monitor_timeout_sec: float = 0.5
     bt_monitor_stale_after_sec: float = 5.0
+    # How often the server re-reads the monitor while a browser is connected; changes go out over /ws.
+    bt_monitor_poll_period_sec: float = 0.05
     # bt_launcher in the bringup container starts trees; empty URL hides the start menu.
     bt_launcher_url: str = ""
     bt_launcher_timeout_sec: float = 2.0
@@ -67,7 +69,7 @@ def load_server_config(path: str | Path) -> WebServerConfig:
         bt_monitor_url and urlsplit(bt_monitor_url).scheme not in ("http", "https")
     ):
         raise ValueError("behavior_tree_monitor.url must be an http(s) URL or empty")
-    for field, default in (("timeout_sec", 0.5), ("stale_after_sec", 5.0)):
+    for field, default in (("timeout_sec", 0.5), ("stale_after_sec", 5.0), ("poll_period_sec", 0.05)):
         value = bt_monitor.get(field, default)
         if (isinstance(value, bool) or not isinstance(value, (int, float))
                 or not math.isfinite(value) or value <= 0):
@@ -155,6 +157,10 @@ class WebControlServer:
         self._clients: dict[str, Any] = {}
         self._runner: Any = None
         self._bt_session: Any = None
+        # Last pushed behavior-tree view; new sockets get it right after hello.
+        self._bt_runtime_latest: dict[str, Any] = dict(BT_RUNTIME_UNAVAILABLE)
+        self._bt_runtime_task: asyncio.Task[None] | None = None
+        self._bt_clients_present: asyncio.Event | None = None
 
     @property
     def read_only(self) -> bool:
@@ -235,8 +241,15 @@ class WebControlServer:
         await self._runner.setup()
         site = web.TCPSite(self._runner, self.config.bind_host, self.config.port)
         await site.start()
+        if self.config.bt_monitor_url:
+            self._bt_clients_present = asyncio.Event()
+            self._bt_runtime_task = asyncio.create_task(self._push_bt_runtime())
 
     async def _shutdown(self) -> None:
+        if self._bt_runtime_task is not None:
+            self._bt_runtime_task.cancel()
+            await asyncio.gather(self._bt_runtime_task, return_exceptions=True)
+            self._bt_runtime_task = None
         clients = list(self._clients.values())
         if clients:
             await asyncio.gather(
@@ -261,15 +274,19 @@ class WebControlServer:
         return web.json_response(self.manifest)
 
     async def _bt_runtime(self, _request: Any) -> Any:
-        """Proxy the executor's runtime snapshot; any failure reads as "no tree running"."""
+        """One-shot read of the tree view; the page itself gets ``bt_runtime`` pushes over /ws."""
+        from aiohttp import web
+
+        return web.json_response(await self._read_bt_runtime(), headers={"Cache-Control": "no-store"})
+
+    async def _read_bt_runtime(self) -> dict[str, Any]:
+        """Fetch and compact the executor's snapshot; any failure reads as "no tree running"."""
         import time
 
         import aiohttp
-        from aiohttp import web
 
-        headers = {"Cache-Control": "no-store"}
         if not self.config.bt_monitor_url:
-            return web.json_response(BT_RUNTIME_UNAVAILABLE, headers=headers)
+            return dict(BT_RUNTIME_UNAVAILABLE)
         if self._bt_session is None:
             self._bt_session = aiohttp.ClientSession(
                 timeout=aiohttp.ClientTimeout(total=self.config.bt_monitor_timeout_sec)
@@ -277,15 +294,43 @@ class WebControlServer:
         try:
             async with self._bt_session.get(f"{self.config.bt_monitor_url}/api/runtime") as response:
                 if response.status != 200:
-                    return web.json_response(BT_RUNTIME_UNAVAILABLE, headers=headers)
+                    return dict(BT_RUNTIME_UNAVAILABLE)
                 document = await response.json(content_type=None)
         except (aiohttp.ClientError, asyncio.TimeoutError, ValueError):
             # bt-start stops the monitor when the tree exits, so a refused connection is normal.
-            return web.json_response(BT_RUNTIME_UNAVAILABLE, headers=headers)
-        payload = compact_runtime_snapshot(
+            return dict(BT_RUNTIME_UNAVAILABLE)
+        return compact_runtime_snapshot(
             document, int(time.time() * 1000), int(self.config.bt_monitor_stale_after_sec * 1000)
         )
-        return web.json_response(payload, headers=headers)
+
+    async def _push_bt_runtime(self) -> None:
+        """Watch the monitor while browsers are connected and push each visible change.
+
+        The executor rewrites its snapshot every tick, so ``timestamp_ms`` and ``sequence``
+        change constantly; only a change in what the tree view draws is sent.
+        """
+        assert self._bt_clients_present is not None
+        last_view: dict[str, Any] | None = None
+        while True:
+            if not self._clients:
+                # Nobody is watching: stop reading, and do not greet the next page with an old tree.
+                self._bt_runtime_latest = dict(BT_RUNTIME_UNAVAILABLE)
+                self._bt_clients_present.clear()
+                await self._bt_clients_present.wait()
+                last_view = None
+            payload = await self._read_bt_runtime()
+            view = {key: value for key, value in payload.items() if key not in ("timestamp_ms", "sequence")}
+            if view != last_view:
+                last_view = view
+                self._bt_runtime_latest = payload
+                message = json.dumps({"type": "bt_runtime", "runtime": payload}, separators=(",", ":"))
+                # Send to each socket on its own: one closing mid-send must not cost the others
+                # this change (it is not resent) nor end the watcher; its handler cleans it up.
+                await asyncio.gather(
+                    *(socket.send_str(message) for socket in list(self._clients.values()) if not socket.closed),
+                    return_exceptions=True,
+                )
+            await asyncio.sleep(self.config.bt_monitor_poll_period_sec)
 
     def _bt_launcher_enabled(self) -> bool:
         return bool(self.config.bt_launcher_url and self.config.bt_tree_dir and self.config.bt_favorites_file)
@@ -518,6 +563,9 @@ class WebControlServer:
                 "layout": self.manifest,
             }
         )
+        await socket.send_json({"type": "bt_runtime", "runtime": self._bt_runtime_latest})
+        if self._bt_clients_present is not None:
+            self._bt_clients_present.set()
         if self.on_client_connected is not None:
             self.on_client_connected(client_id)
         try:

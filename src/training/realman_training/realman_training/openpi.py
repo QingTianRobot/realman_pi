@@ -141,6 +141,33 @@ def busy_gpus(runner: Runner, gpus: tuple[int, ...], threshold_mib: int) -> dict
     return busy
 
 
+def short_gpus(runner: Runner, gpus: tuple[int, ...], need_mib: int) -> dict[int, int]:
+    """GPUs with less than need_mib free, as {index: free MiB} (for training next to another process)."""
+    out = runner.check(
+        ["nvidia-smi", "-i", ",".join(map(str, gpus)), "--query-gpu=index,memory.used,memory.total",
+         "--format=csv,noheader,nounits"]
+    )
+    short = {}
+    for line in out.splitlines():
+        if line.strip():
+            index, used, total = (int(x) for x in line.split(","))
+            if total - used < need_mib:
+                short[index] = total - used
+    return short
+
+
+def init_weights(config: OpenpiConfig, init_from: str) -> str:
+    """`<config>/<exp>/<step>` of an earlier run -> the container path of its params (checked on the host)."""
+    parts = init_from.strip("/").split("/")
+    if len(parts) != 3 or not parts[2].isdigit():
+        raise StepFailed(f"init_from wants <config>/<exp>/<step>, got {init_from!r}")
+    name, exp, step = check_name("config_name", parts[0]), check_name("exp name", parts[1]), parts[2]
+    params = run_dir(config, name, exp) / step / "params"
+    if not params.is_dir():
+        raise StepFailed(f"no checkpoint params at {params}")
+    return f"/workspace/checkpoints/{name}/{exp}/{step}/params"
+
+
 def repo_commit(runner: Runner, repo: Path) -> str:
     head = runner.check(["git", "-C", str(repo), "rev-parse", "HEAD"]).strip()
     dirty = runner.check(["git", "-C", str(repo), "status", "--porcelain"]).strip()

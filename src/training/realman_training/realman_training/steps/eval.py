@@ -18,6 +18,7 @@ from ..openpi import (
     config_info,
     parse_gpus,
     require_view,
+    short_gpus,
     run_dir,
     script,
 )
@@ -30,10 +31,19 @@ def holdout_by_task(view: str | Path, holdout: tuple[int, ...]) -> dict[str, dic
     view = Path(view)
     contract = json.loads((view / "contract.json").read_text(encoding="utf-8"))
     task_of_prompt = {prompt: task for task, prompt in (contract.get("prompts") or {}).items()}
+    episodes = read_episodes(view)
+    # Tasks that share a prompt (pick_only and pick_only_light-weak_1021) are told apart by the source's task names;
+    # the view keeps the source's episode numbering.
+    source_task: dict[int, str] = {}
+    source = Path(str(contract.get("source") or ""))
+    if source.name and (source / "meta" / "info.json").is_file():
+        rows = read_episodes(source)
+        if len(rows) == len(episodes):
+            source_task = {row.index: row.task for row in rows}
     tasks: dict[str, dict] = {}
-    for episode in read_episodes(view):
+    for episode in episodes:
         if episode.index in holdout:
-            task = task_of_prompt.get(episode.task, episode.task)
+            task = source_task.get(episode.index) or task_of_prompt.get(episode.task, episode.task)
             tasks.setdefault(task, {"prompt": episode.task, "episodes": []})["episodes"].append(episode.index)
     return dict(sorted(tasks.items()))
 
@@ -60,10 +70,16 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     compose = Compose(oc, view, gpus)
     info = config_info(runner, compose, name)
     check_holdout(info, summary)
-    busy = busy_gpus(runner, gpus, oc.gpu_busy_mib)
-    if busy:
-        held = " ".join(f"gpu{g}={mib}MiB" for g, mib in sorted(busy.items()))
-        raise StepFailed(f"GPU in use by someone else ({held}); pick a free GPU")
+    if params.get("share_gpus"):
+        short = short_gpus(runner, gpus, oc.eval_need_mib)
+        if short:
+            free = " ".join(f"gpu{g}={mib}MiB free" for g, mib in sorted(short.items()))
+            raise StepFailed(f"not enough free memory to share ({free}, need {oc.eval_need_mib} MiB)")
+    else:
+        busy = busy_gpus(runner, gpus, oc.gpu_busy_mib)
+        if busy:
+            held = " ".join(f"gpu{g}={mib}MiB" for g, mib in sorted(busy.items()))
+            raise StepFailed(f"GPU in use by someone else ({held}); pick a free GPU or pass share_gpus")
     tasks = holdout_by_task(view, info.holdout)
     if not tasks:
         raise StepFailed(f"config {name} has no held-out episodes in {view.name}")

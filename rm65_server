@@ -1,0 +1,180 @@
+#!/usr/bin/env bash
+# Server-side entry (server5090): the training console, compose service realman_training (profile training, :8780).
+# It never touches the robot's services; those stay with ./rm65 on realman_ts.
+# Token, paths and mirrors come from an env file outside the repo, because the repo-root .env is a tracked template:
+# $RM65_SERVER_ENV, default ~/.config/realman-training/console.env (create it with `./rm65_server init-env`).
+set -euo pipefail
+
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+ENV_FILE="${RM65_SERVER_ENV:-$HOME/.config/realman-training/console.env}"
+PROJECT="${RM65_SERVER_PROJECT:-realman-training}"
+SERVICE=realman_training
+PORT=8780
+HEALTH_WAIT_SEC="${RM65_SERVER_HEALTH_WAIT_SEC:-90}"
+DRY_RUN="${RM65_DRY_RUN:-0}"
+
+run() {
+  if [[ "$DRY_RUN" == "1" ]]; then
+    printf '+ '
+    printf '%q ' "$@"
+    printf '\n'
+    return 0
+  fi
+  "$@"
+}
+
+need_env() {
+  if [[ ! -r "$ENV_FILE" ]]; then
+    printf 'rm65_server: no env file %s\n' "$ENV_FILE" >&2
+    printf 'rm65_server: create it with ./rm65_server init-env (token + paths), or point RM65_SERVER_ENV at one\n' >&2
+    exit 1
+  fi
+  if [[ -n "$(find "$ENV_FILE" -perm /077 2>/dev/null)" ]]; then
+    printf 'rm65_server: warning: %s is readable by others; chmod 600 it (it holds the token)\n' "$ENV_FILE" >&2
+  fi
+}
+
+compose() {
+  need_env
+  run docker compose -p "$PROJECT" --project-directory "$ROOT" -f "$ROOT/docker-compose.yml" \
+    --env-file "$ROOT/.env" --env-file "$ENV_FILE" --profile training "$@"
+}
+
+health() {
+  curl -fsS -m 3 "http://127.0.0.1:$PORT/api/health" 2>/dev/null
+}
+
+wait_healthy() {
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  local answer=""
+  for (( i = 0; i < HEALTH_WAIT_SEC; i++ )); do
+    if answer="$(health)"; then
+      if grep -q '"read_only": true' <<<"$answer"; then
+        printf 'rm65_server: console up on :%s, READ-ONLY (REALMAN_TRAINING_TOKEN is empty in %s)\n' "$PORT" "$ENV_FILE"
+      else
+        printf 'rm65_server: console up on :%s (writes need the token from %s)\n' "$PORT" "$ENV_FILE"
+      fi
+      printf 'rm65_server: from a laptop: ssh -N -L %s:127.0.0.1:%s server5090, then open http://127.0.0.1:%s\n' \
+        "$PORT" "$PORT" "$PORT"
+      return 0
+    fi
+    sleep 1
+  done
+  printf 'rm65_server: no answer on :%s after %s s; see ./rm65_server logs\n' "$PORT" "$HEALTH_WAIT_SEC" >&2
+  return 1
+}
+
+warn_active_jobs() {
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  local jobs
+  jobs="$(curl -fsS -m 3 "http://127.0.0.1:$PORT/api/jobs?limit=50" 2>/dev/null)" || return 0
+  local active
+  active="$(grep -oE '"state": "(starting|running)"' <<<"$jobs" | wc -l | tr -d ' ')"
+  if (( active > 0 )); then
+    printf 'rm65_server: %s console job(s) running; they will be marked interrupted (training containers keep going)\n' \
+      "$active" >&2
+  fi
+}
+
+up() {
+  local -a extra=()
+  if [[ "${1:-}" == "--build" ]]; then
+    extra=(--build)
+  elif [[ -n "${1:-}" ]]; then
+    printf 'usage: rm65_server up [--build]\n' >&2
+    return 2
+  fi
+  compose up -d ${extra[@]+"${extra[@]}"} "$SERVICE"
+  wait_healthy
+}
+
+down() {
+  warn_active_jobs
+  compose down
+}
+
+restart() {
+  warn_active_jobs
+  compose restart "$SERVICE"
+  wait_healthy
+}
+
+status() {
+  compose ps "$SERVICE"
+  [[ "$DRY_RUN" == "1" ]] && return 0
+  local answer
+  if answer="$(health)"; then
+    printf 'health: %s\n' "$answer"
+  else
+    printf 'health: no answer on :%s\n' "$PORT"
+  fi
+}
+
+logs() {
+  if [[ "${1:-}" == "-f" ]]; then
+    compose logs --tail=100 -f "$SERVICE"
+  else
+    compose logs --tail=100 "$SERVICE"
+  fi
+}
+
+init_env() {
+  if [[ -e "$ENV_FILE" ]]; then
+    printf 'rm65_server: %s exists; edit it by hand (nothing overwritten)\n' "$ENV_FILE" >&2
+    return 1
+  fi
+  local docker_gid token
+  docker_gid="$(getent group docker 2>/dev/null | cut -d: -f3 || true)"
+  token="$(python3 -c 'import secrets; print(secrets.token_urlsafe(24))')"
+  mkdir -p "$(dirname "$ENV_FILE")"
+  chmod 700 "$(dirname "$ENV_FILE")"
+  (
+    umask 077
+    cat >"$ENV_FILE" <<EOF
+# Training console (./rm65_server): never commit this file.
+REALMAN_TRAINING_TOKEN=$token
+TRAINING_HOME=$HOME
+TRAINING_REPO=$ROOT
+TRAINING_UID=$(id -u)
+TRAINING_GID=$(id -g)
+TRAINING_DOCKER_GID=${docker_gid:-984}
+# Mirrors for the image build (deb.debian.org and pypi.org may be unreachable from the server).
+TRAINING_APT_MIRROR=mirrors.aliyun.com
+TRAINING_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+# TRAINING_BIND=127.0.0.1   # reads (incl. job logs) need no token: bind to a trusted network
+EOF
+  )
+  printf 'rm65_server: wrote %s (token: grep REALMAN_TRAINING_TOKEN %s)\n' "$ENV_FILE" "$ENV_FILE"
+}
+
+usage() {
+  cat <<'EOF'
+Usage: ./rm65_server <command>   (server5090: the training console on :8780)
+
+Commands:
+  up [--build]   Start the console (rebuild the image first with --build) and wait until it answers.
+  down           Stop and remove the console container (console jobs are marked interrupted).
+  restart        Restart the console container.
+  build          Rebuild the console image only.
+  status         Container state and /api/health.
+  logs [-f]      Last 100 log lines (-f follows).
+  exec <cmd...>  Run a command in the console container, e.g. exec python -m realman_training jobs.
+  init-env       Write the env file (token, paths, mirrors) to $RM65_SERVER_ENV
+                 (default ~/.config/realman-training/console.env); never overwrites.
+EOF
+}
+
+command_name="${1:-help}"
+shift || true
+case "$command_name" in
+  up) up "$@" ;;
+  down) down "$@" ;;
+  restart) restart "$@" ;;
+  build) compose build "$SERVICE" ;;
+  status) status "$@" ;;
+  logs) logs "$@" ;;
+  exec) compose exec "$SERVICE" "$@" ;;
+  init-env) init_env ;;
+  help|-h|--help) usage ;;
+  *) printf 'rm65_server: unknown command: %s\n' "$command_name" >&2; usage >&2; exit 2 ;;
+esac

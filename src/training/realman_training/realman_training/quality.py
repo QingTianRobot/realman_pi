@@ -119,7 +119,19 @@ def _verdict(findings: tuple[Finding, ...]) -> str:
     return "warn" if findings else "ok"
 
 
-def inspect_dataset(root: str | Path, config: QualityConfig) -> list[EpisodeQuality]:
+def gripper_trace(gripper: np.ndarray, config: QualityConfig, points: int) -> list[float]:
+    """Downsampled gripper readings for the console's thumbnail: 0 = fully open, 1 = fully closed."""
+    if not len(gripper):
+        return []
+    picks = np.linspace(0, len(gripper) - 1, num=min(points, len(gripper))).round().astype(int)
+    span = config.gripper_close_raw - config.gripper_open_raw
+    values = np.clip((gripper[picks] - config.gripper_open_raw) / span, 0.0, 1.0)
+    return [round(float(v), 3) for v in values]
+
+
+def inspect_dataset(
+    root: str | Path, config: QualityConfig, *, traces: dict[int, list[float]] | None = None, trace_points: int = 60
+) -> list[EpisodeQuality]:
     info = read_info(root)
     for column in (GRIPPER_COLUMN, JOINT_COLUMN):
         if column not in info.get("features", {}):
@@ -144,6 +156,8 @@ def inspect_dataset(root: str | Path, config: QualityConfig) -> list[EpisodeQual
             np.degrees(data[JOINT_COLUMN][:, arm * 6 : arm * 6 + 6]) if len(data[JOINT_COLUMN]) else np.zeros((0, 6))
         )
         findings = check_episode(episode.task, gripper, joints, fps, config)
+        if traces is not None:
+            traces[episode.index] = gripper_trace(gripper, config, trace_points)
         results.append(EpisodeQuality(episode.index, episode.task, episode.length, _verdict(findings), findings))
     return results
 

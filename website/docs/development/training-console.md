@@ -7,6 +7,8 @@ description: realman-train 命令行：数据检查、拉取、清洗、训练�
 
 训练流程（拉取 → 检查 → 清洗 → 训练视图 → norm → 训练 → 评估 → 登记 → 部署）已做成 `realman_training` 包，命令行 `realman-train` 覆盖全流程；设计见 [`2026-10-20-training-console-design.md`](https://github.com/QingTianRobot/realman_pi/blob/main/docs/superpowers/specs/2026-10-20-training-console-design.md)。
 
+网页界面（server5090:8780）见 [训练控制平台（网页）](./training-console-web.md)；一次真实的从已有模型继续训练的完整命令记录见 [命令行训练全流程](./training-cli-walkthrough.md)。
+
 ## 用法
 
 `realman_training` 包从源码树使用，默认配置路径相对于仓库根目录解析；运行前在 `src/training/realman_training` 目录下设置 `PYTHONPATH=.`，或在仓库根目录执行 `pip install -e src/training/realman_training`。
@@ -35,6 +37,8 @@ PYTHONPATH=. python -m realman_training clean <原始目录> --drop 13,28 --reas
 PYTHONPATH=. python -m realman_training view <清洗版目录>                      # → <清洗版>_view，并检查夹爪标签
 PYTHONPATH=. python -m realman_training norm <openpi 配置名> <视图目录>
 PYTHONPATH=. python -m realman_training train <openpi 配置名> <视图目录> --exp <实验名> --gpus 1,2 --batch 16 --dry-run
+PYTHONPATH=. python -m realman_training train <openpi 配置名> <视图目录> --exp <实验名> --gpus 2 --share-gpus \
+  --init-from <旧配置>/<旧实验名>/<步数> --dry-run                                # 从已有模型继续训练
 PYTHONPATH=. python -m realman_training eval <openpi 配置名> <实验名> --view <视图目录> --gpu 2
 PYTHONPATH=. python -m realman_training register <openpi 配置名> <实验名>
 ```
@@ -44,9 +48,9 @@ PYTHONPATH=. python -m realman_training register <openpi 配置名> <实验名>
 | `pull` | 经 `ssh realman_local` 在录制容器里 `tar`：先在录制锁（`.<数据集>.lock`，`flock -s`）下拷 `meta`、`data`，再拷视频；拷完校验每条的视频都在 | 新目录 `raw_realman_ts_<时间>/<数据集>/` + `pull.json`（来源、条数、字节数）；目标已存在就拒绝 |
 | `clean` | 剔除条目、重新编号、视频硬链接、按 LeRobot 方法重算 `stats.json`；没写原因的条目用质检结论当原因 | 新目录 + `<目录>.clean_manifest.json`（剔除清单、原因、旧→新编号） |
 | `view` | 在 `openpi:dev` 镜像里跑 `make_realman_view.py --task-prompt`（prompt 取配置 `prompts` 段，可用 `--task-prompt task=prompt` 覆盖），再检查夹爪目标：`pick_and_place` 必须 开→闭→开，`pick_only` 开→闭 | `<清洗版>_view/` + `label_check.json`；有问题的条目让任务失败并列出 |
-| `norm` | `opic-norm`（norm stats 已存在就跳过，`--force` 重算） | `openpi-docker-data/assets/<配置>/<asset_id>/norm_stats.json`（`asset_id` 取自配置，通常与 `repo_id` 相同） |
-| `train` | 检查 GPU（被别人占用超过 2000 MiB 就拒绝）、缺 norm 就先算、在独立容器 `openpi-console-train-<实验名>` 里训练，多卡自动加 NCCL/XLA 环境；跟随 `Step N:` 日志显示进度；取消任务会停容器；`--attach` 重新跟随仍在跑的容器；训练结束后从整个（追加模式）日志文件解析 `metrics.csv`，所以重跑时历史步数也保留在 csv 里。必须加 `--yes`（先用 `--dry-run` 看命令） | `openpi-docker-data/wandb/<实验名>.log`（追加，重跑保留历史日志）、`checkpoints/<配置>/<实验名>/metrics.csv`（从整个日志解析）、`console_train.json` |
-| `eval` | 把配置的留出集按任务拆开，逐个 checkpoint 跑 `eval_open_loop.py`；多任务时再做 prompt 交换测试；对同一 checkpoint/任务重跑会替换那项结果文件，`summary.json` 以合并方式更新（其他 checkpoint 的结果保留） | `checkpoints/<配置>/<实验名>/eval/`（每项结果 + `summary.json`） |
+| `norm` | `opic-norm`（norm stats 已存在就跳过，`--force` 重算）；容器不分配 GPU，JAX 用 `JAX_PLATFORMS=cpu` 在 CPU 上算 | `openpi-docker-data/assets/<配置>/<asset_id>/norm_stats.json`（`asset_id` 取自配置，通常与 `repo_id` 相同） |
+| `train` | 检查 GPU（被别人占用超过 2000 MiB 就拒绝）、缺 norm 就先算、在独立容器 `openpi-console-train-<实验名>` 里训练，多卡自动加 NCCL/XLA 环境；跟随 `Step N:` 日志显示进度；取消任务会停容器；`--attach` 重新跟随仍在跑的容器；训练结束后从整个（追加模式）日志文件解析 `metrics.csv`，所以重跑时历史步数也保留在 csv 里。`--init-from <配置>/<实验名>/<步数>` 用之前某个 run 的 checkpoint（`checkpoints/.../<步数>/params`，宿主机上必须存在）代替 `openpi.weights`（pi05_base）作为初始权重；`--share-gpus` 不按"已占用 > 2000 MiB"拒绝，改为检查每张卡剩余显存 ≥ `openpi.train_need_mib`（18000 MiB，action-only 训练峰值约 17.3 GiB），用于和 openpi-serve 共用一张卡。必须加 `--yes`（先用 `--dry-run` 看命令） | `openpi-docker-data/wandb/<实验名>.log`（追加，重跑保留历史日志）、`checkpoints/<配置>/<实验名>/metrics.csv`（从整个日志解析）、`console_train.json` |
+| `eval` | 把配置的留出集按任务拆开，逐个 checkpoint 跑 `eval_open_loop.py`；多任务时再做 prompt 交换测试；共用同一个 prompt 的任务（如 `pick_only` 和 `pick_only_light-weak_1021`）按视图来源（清洗版）里的任务名分开统计；`--share-gpus` 和训练一样改为检查剩余显存 ≥ `openpi.eval_need_mib`（12000 MiB）；对同一 checkpoint/任务重跑会替换那项结果文件，`summary.json` 以合并方式更新（其他 checkpoint 的结果保留） | `checkpoints/<配置>/<实验名>/eval/`（每项结果 + `summary.json`） |
 | `register` | 写模型卡和登记表一行（同一 run 再登记会替换那一行）；手写的 `MODEL_CARD.md` 或 `model_card.json`（无 `generated_by` 字段）要 `--force` 才替换，并留备份 | `MODEL_CARD.md`、`model_card.json`、`checkpoints/MODELS.md` |
 
 openpi 的 norm 和评估脚本只接受配置名，所以仍然是"每个训练视图一个 openpi 配置"：命令里给配置名和视图目录，视图挂载到容器的 `/datasets/lerobot_realman`，配置的 `repo_id`、留出集、batch、步数在容器里读出来；配置的留出集不在视图里时拒绝（视图选错了）。

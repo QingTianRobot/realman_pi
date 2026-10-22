@@ -96,3 +96,14 @@ training_console:
     infer_rounds: 5                 # after one untimed round
     infer_max_ms: 200               # median, two 224x224 images + 7-dim state + prompt
     stats_timeout_sec: 5
+
+  # The web console (realman-train web; compose service realman_training on server5090, port 8780).
+  # Writes need REALMAN_TRAINING_TOKEN (from the untracked env file passed with --env-file); empty = read-only.
+  web:
+    host: 0.0.0.0
+    port: 8780
+    serve_status_ttl_sec: 20      # serve status = docker inspect + ssh + a ROS probe on realman_ts (~5 s)
+    gpu_ttl_sec: 3
+    log_tail_lines: 200
+    history_limit: 20             # link-check runs listed on the 服务 page
+    passwd_file: /etc/passwd      # uid -> name of GPU holders; the container mounts the host's

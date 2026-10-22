@@ -28,6 +28,8 @@ description: realman_pi 开发者入口：按任务找到对应页面，了解�
 | 改浏览器控制台、URDF 影子、WebSocket 协议 | [WebSocket 浏览器控制](./realman-web-control) | `config/ros/realman_web_control.yaml` |
 | 改夹爪、串口、流式控制 | [Changingtek 夹爪控制](./gripper-control) | `config/ros/gripper.yaml` |
 | 录制示教数据、导出 LeRobot、在网页回放与整理 episode | [独立数据录制平台](./recording-platform) | `config/ros/recording.yaml`、`config/python/recording-requirements.txt` |
+| 数据集质检、清洗、训练、评估、模型登记（命令行） | [训练控制平台（命令行）](./training-console) | `config/training/training_console.yaml` |
+| 数据集质检、清洗、训练、评估、模型登记、推理链路（网页） | [训练控制平台（网页）](./training-console-web) | `config/training/training_console.yaml` |
 | 接入 VLA 策略服务 | [VLA 策略桥接节点](./policy-bridge) | `config/ros/policy_bridge.yaml` |
 | 相机配置、手眼标定 | [相机指南](../guide/cameras)、[三臂 ChArUco 手眼标定](./camera-calibration) | `config/ros/{cameras_ros2,camera_calibration}.yaml` |
 | 测量速度跟随（增益、滞后、串轴） | [笛卡尔速度跟随测试](./velocity-follow-test) | `config/ros/{keyboard_control,realman_motion}.yaml` |

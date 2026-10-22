@@ -120,13 +120,14 @@ def build_params(args, config) -> tuple[str, dict]:
     if command == "train":
         return "train", {**base, "config_name": args.config_name, "view": str(Path(args.view).expanduser().resolve()),
                          "exp": args.exp, "gpus": args.gpus, "batch": args.batch, "steps": args.steps,
-                         "resume": args.resume, "attach": args.attach, "dry_run": args.dry_run}
+                         "resume": args.resume, "attach": args.attach, "dry_run": args.dry_run,
+                         "init_from": args.init_from, "share_gpus": args.share_gpus}
     if command == "eval":
         return "eval", {**base, "config_name": args.config_name, "exp": args.exp,
                         "view": str(Path(args.view).expanduser().resolve()), "gpu": args.gpu,
                         "checkpoints": parse_checkpoints(args.checkpoints) if args.checkpoints else None,
                         "stride": args.stride, "prompt_swap": False if args.no_prompt_swap else None,
-                        "dry_run": args.dry_run}
+                        "dry_run": args.dry_run, "share_gpus": args.share_gpus}
     if command == "register":
         return "register", {**base, "config_name": args.config_name, "exp": args.exp, "status": args.status,
                             "method": args.method, "force": args.force}
@@ -367,6 +368,10 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--batch", type=int)
     p.add_argument("--steps", type=int)
     p.add_argument("--resume", action="store_true")
+    p.add_argument("--init-from", metavar="CONFIG/EXP/STEP",
+                   help="start from an earlier run's checkpoint instead of openpi.weights (pi05_base)")
+    p.add_argument("--share-gpus", action="store_true",
+                   help="train on GPUs that already hold memory when openpi.train_need_mib is still free")
     p.add_argument("--attach", action="store_true", help="follow an already running training container")
     p.add_argument("--dry-run", action="store_true")
     p.add_argument("--yes", action="store_true")
@@ -378,6 +383,8 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--checkpoints", help="e.g. 10000,29999 (default: the latest)")
     p.add_argument("--stride", type=int)
     p.add_argument("--no-prompt-swap", action="store_true")
+    p.add_argument("--share-gpus", action="store_true",
+                   help="evaluate on a GPU that already holds memory when openpi.eval_need_mib is still free")
     p.add_argument("--dry-run", action="store_true")
     p = step("register", "write the model card and the registry row")
     p.add_argument("config_name")
@@ -407,6 +414,9 @@ def make_parser() -> argparse.ArgumentParser:
     check = sub.add_parser("linkcheck", help="the four data-path checks (Pika/Wi-Fi, bulk + ping, inference, bridge)")
     check.add_argument("--only", help="comma list of pika, link, inference, bridge")
     check.add_argument("--json", action="store_true")
+    web_cmd = sub.add_parser("web", help="the web console on web.host:web.port (writes need $REALMAN_TRAINING_TOKEN)")
+    web_cmd.add_argument("--host")
+    web_cmd.add_argument("--port", type=int)
     jobs = sub.add_parser("jobs", help="list jobs")
     jobs.add_argument("--kind")
     jobs.add_argument("--limit", type=int, default=20)
@@ -439,6 +449,14 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_serve(args, config)
         if args.command == "linkcheck":
             return _cmd_linkcheck(args, config)
+        if args.command == "web":
+            import os
+
+            from . import web_server
+
+            web_server.serve(config, args.host or config.web.host, args.port or config.web.port,
+                             os.environ.get(web_server.TOKEN_ENV, ""))
+            return 0
         if args.command in STEP_COMMANDS:
             return _run_step(args, config)
         return _cmd_jobs(args, config)

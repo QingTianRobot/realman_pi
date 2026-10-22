@@ -75,6 +75,13 @@ def test_discover_finds_nested_datasets_and_skips_everything_else(tmp_path):
     assert discover(tmp_path) == sorted([raw, clean])
 
 
+def test_discover_skips_partial_directories(tmp_path):
+    real = _raw(tmp_path / "real_dataset")
+    _raw(tmp_path / "in_progress.partial")
+    (tmp_path / "nested.partial" / "sub").mkdir(parents=True)
+    assert discover(tmp_path) == [real]
+
+
 def test_a_non_dataset_is_rejected(tmp_path):
     with pytest.raises(NotALeRobotDataset):
         summarize(tmp_path)

@@ -13,11 +13,14 @@ BRIDGE_CONTAINER = "realman_pi-policy_bridge-1"
 PLACE = "pick up the power adapter and put it in the blue bin"
 
 
-def inspect_json(running: bool, env: dict[str, str] | None = None) -> str:
+def inspect_json(running: bool, env: dict[str, str] | None = None, args: list[str] | None = None,
+                 ports: dict | None = None) -> str:
     return json.dumps([{
         "State": {"Running": running, "Status": "running" if running else "exited", "StartedAt": "2026-10-20T08:00:00.123456789Z"},
         "Config": {"Image": "img:tag", "Env": [f"{k}={v}" for k, v in (env or {}).items()]},
         "Image": "sha256:0123456789abcdef0123",
+        "Args": args or [],
+        "HostConfig": {"PortBindings": ports or {}},
     }])
 
 

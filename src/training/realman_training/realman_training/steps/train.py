@@ -23,11 +23,13 @@ from ..openpi import (
     check_holdout,
     check_name,
     config_info,
+    init_weights,
     norm_stats_path,
     parse_gpus,
     repo_commit,
     require_view,
     run_dir,
+    short_gpus,
     train_env,
 )
 from ..runner import Runner, compact
@@ -67,7 +69,9 @@ def parse_metrics(text: str) -> list[dict]:
         for pair in match.group(2).split(", "):
             key, _, value = pair.partition("=")
             try:
-                row[key.strip()] = float(value)
+                v = float(value)
+                if v == v and v != float("inf") and v != float("-inf"):
+                    row[key.strip()] = v
             except ValueError:
                 pass
         rows.append(row)
@@ -115,6 +119,8 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
     host_log = oc.docker_data / "wandb" / f"{exp}.log"
     total = int(params.get("steps") or info.num_train_steps)
     attach = bool(params.get("attach"))
+    init_from = params.get("init_from")
+    weights = init_weights(oc, str(init_from)) if init_from else oc.weights
     exists = runner.run(["docker", "container", "inspect", container]).returncode == 0
     record = {
         "config": name,
@@ -124,7 +130,8 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
         "batch_size": int(params.get("batch") or info.batch_size),
         "num_train_steps": total,
         "holdout": list(info.holdout),
-        "weights": oc.weights,
+        "weights": weights,
+        **({"init_from": str(init_from)} if init_from else {}),
         "container": container,
     }
 
@@ -146,10 +153,16 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
             raise StepFailed(f"{folder} exists: pass resume to continue it, or pick another exp name")
         if exists:
             raise StepFailed(f"container {container} exists (running or left over); attach, or remove it by hand")
-        busy = busy_gpus(runner, gpus, oc.gpu_busy_mib)
-        if busy:
-            held = " ".join(f"gpu{g}={mib}MiB" for g, mib in sorted(busy.items()))
-            raise StepFailed(f"GPUs in use by someone else ({held}); pick free GPUs")
+        if params.get("share_gpus"):
+            short = short_gpus(runner, gpus, oc.train_need_mib)
+            if short:
+                free = " ".join(f"gpu{g}={mib}MiB free" for g, mib in sorted(short.items()))
+                raise StepFailed(f"not enough free memory to share ({free}, need {oc.train_need_mib} MiB)")
+        else:
+            busy = busy_gpus(runner, gpus, oc.gpu_busy_mib)
+            if busy:
+                held = " ".join(f"gpu{g}={mib}MiB" for g, mib in sorted(busy.items()))
+                raise StepFailed(f"GPUs in use by someone else ({held}); pick free GPUs or pass share_gpus")
         norm_result = None
         if not norm_stats_path(oc, info).exists():
             log("norm stats missing: computing them first")
@@ -161,7 +174,7 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
         args = [
             f"--exp-name={exp}",
             f"--num-workers={int(params.get('num_workers') or oc.num_workers)}",
-            f"--weight-loader.params-path={oc.weights}",
+            f"--weight-loader.params-path={weights}",
         ]
         if params.get("batch"):
             args.append(f"--batch-size={int(params['batch'])}")

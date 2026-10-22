@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from realman_training.config import DEFAULT_CONFIG, ENV_CONFIG, LinkcheckConfig, OpenpiConfig, QualityConfig, RemoteConfig, ServingConfig, default_config_path, load_config
+from realman_training.config import DEFAULT_CONFIG, ENV_CONFIG, LinkcheckConfig, OpenpiConfig, QualityConfig, RemoteConfig, ServingConfig, WebConfig, default_config_path, load_config
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -164,3 +164,17 @@ def test_bad_serving_and_linkcheck_values_are_refused(tmp_path, body, fragment):
     path = _write(tmp_path, "training_console:\n  " + body)
     with pytest.raises(ValueError, match=fragment.replace(".", r"\.")):
         load_config(path)
+
+
+def test_the_shipped_web_section_equals_the_defaults():
+    assert load_config(DEFAULT_CONFIG).web == WebConfig()
+    assert WebConfig().port == 8780
+
+
+def test_the_web_section_is_validated(tmp_path):
+    with pytest.raises(ValueError, match="web.port"):
+        load_config(_write(tmp_path, "training_console:\n  web:\n    port: 70000\n"))
+    with pytest.raises(ValueError, match="web.gpu_ttl_sec"):
+        load_config(_write(tmp_path, "training_console:\n  web:\n    gpu_ttl_sec: 0\n"))
+    with pytest.raises(ValueError, match="unknown web keys"):
+        load_config(_write(tmp_path, "training_console:\n  web:\n    colour: blue\n"))

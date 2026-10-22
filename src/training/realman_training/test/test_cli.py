@@ -160,6 +160,10 @@ def test_build_params_for_each_step(setup, tmp_path):
     assert params["dst"].endswith("realman__pi05-three-arm_view")
     kind, params = build_params(cli_args(["train", "pi05_x", str(view), "--exp", "e1", "--gpus", "1,2", "--batch", "16", "--yes"]), config)
     assert (kind, params["gpus"], params["batch"], params["exp"]) == ("train", "1,2", 16, "e1")
+    assert params["init_from"] is None and params["share_gpus"] is False
+    _, params = build_params(cli_args(["train", "pi05_x", str(view), "--exp", "e1", "--gpus", "2", "--yes",
+                                       "--init-from", "pi05_old/e0/29999", "--share-gpus"]), config)
+    assert (params["init_from"], params["share_gpus"]) == ("pi05_old/e0/29999", True)
     kind, params = build_params(cli_args(["eval", "pi05_x", "e1", "--view", str(view), "--gpu", "2", "--checkpoints", "1000,2000", "--no-prompt-swap"]), config)
     assert params["checkpoints"] == [1000, 2000] and params["prompt_swap"] is False
     kind, params = build_params(cli_args(["register", "pi05_x", "e1", "--status", "已部署"]), config)
@@ -265,3 +269,10 @@ def test_linkcheck_refuses_unknown_items(setup, capsys):
     _, _, config = setup
     assert main(["--config", str(config), "linkcheck", "--only", "wifi"]) == 2
     assert "pika, link, inference, bridge" in capsys.readouterr().err
+
+
+def test_web_is_a_subcommand():
+    from realman_training.cli import make_parser
+
+    args = make_parser().parse_args(["web", "--port", "9999"])
+    assert (args.command, args.port, args.host) == ("web", 9999, None)

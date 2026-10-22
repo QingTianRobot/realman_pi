@@ -365,3 +365,46 @@ services:
       - policy_bridge.launch.py
       - config_file:=${POLICY_BRIDGE_CONFIG_FILE:-/opt/rm65_ws/config/ros/policy_bridge.yaml}
       - active_side:=${POLICY_BRIDGE_ACTIVE_SIDE:-right}
+
+  # Training console (server5090 only, never on the robot): web UI + realman-train jobs on :8780,
+  # see website/docs/development/training-console-web.md. Opt-in profile, so no robot command builds or
+  # starts it: `docker compose --profile training up -d realman_training`. The console hands host paths to
+  # the host's docker daemon (openpi containers) and to ssh (realman_local), so they are mounted at the same
+  # absolute path and the container runs as the host user with the host's HOME. Values come from an untracked env
+  # file outside the repo (the repo-root .env is a tracked template), passed with --env-file.
+  realman_training:
+    profiles: [training]
+    build:
+      context: .  # the root docker-compose.yml include sets project_directory to the repo root
+      dockerfile: config/docker/training-console.Dockerfile
+      network: host  # same as the robot images: a bridge build container may not reach the host resolver
+      args:
+        PIP_INDEX_URL: ${TRAINING_PIP_INDEX_URL:-https://pypi.org/simple}
+        APT_MIRROR: ${TRAINING_APT_MIRROR:-}
+    image: realman-training-console:local
+    runtime: nvidia
+    pid: host
+    restart: unless-stopped
+    user: "${TRAINING_UID:-1000}:${TRAINING_GID:-1000}"
+    group_add: ["${TRAINING_DOCKER_GID:-984}"]
+    environment:
+      HOME: ${TRAINING_HOME:-/home/server5090}
+      DOCKER_CONFIG: /tmp/.docker
+      REALMAN_TRAINING_TOKEN: ${REALMAN_TRAINING_TOKEN:-}
+      REALMAN_TRAINING_CONFIG: ${TRAINING_REPO:-/home/server5090/organization/realman_pi}/config/training/training_console.yaml
+      NVIDIA_VISIBLE_DEVICES: all
+      NVIDIA_DRIVER_CAPABILITIES: utility
+    ports:
+      - "${TRAINING_BIND:-0.0.0.0}:8780:8780"
+    volumes:
+      - /var/run/docker.sock:/var/run/docker.sock
+      - /usr/bin/docker:/usr/bin/docker:ro
+      - /usr/libexec/docker/cli-plugins:/usr/libexec/docker/cli-plugins:ro
+      - /etc/passwd:/etc/passwd:ro
+      - /etc/group:/etc/group:ro
+      - /etc/localtime:/etc/localtime:ro  # job and history times in the host's time zone
+      - ${TRAINING_HOME:-/home/server5090}/.ssh:${TRAINING_HOME:-/home/server5090}/.ssh:ro
+      - ${TRAINING_HOME:-/home/server5090}/data/realman:${TRAINING_HOME:-/home/server5090}/data/realman
+      - ${TRAINING_HOME:-/home/server5090}/organization/openpi:${TRAINING_HOME:-/home/server5090}/organization/openpi:ro
+      - ${TRAINING_HOME:-/home/server5090}/organization/openpi-docker-data:${TRAINING_HOME:-/home/server5090}/organization/openpi-docker-data
+      - ${TRAINING_REPO:-/home/server5090/organization/realman_pi}:${TRAINING_REPO:-/home/server5090/organization/realman_pi}:ro

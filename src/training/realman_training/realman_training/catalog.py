@@ -7,6 +7,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+import time
 from datetime import datetime
 from pathlib import Path
 
@@ -173,11 +174,73 @@ def _record_from_card(card: dict | None) -> dict:
             "gpus": [int(g) for g in match.group(1).split(",") if g] if match else None}
 
 
-def _run_row(config: ConsoleConfig, folder: Path, metrics: list[dict]) -> dict:
+# openpi's tqdm logger, every ~10 s: "Progress on: 1.69kit/30.0kit rate:1.3it/s remaining:5:50:20 elapsed:21:29".
+_PROGRESS = re.compile(r"Progress on: \S+ rate:([0-9.]+)(it/s|s/it) remaining:((?:\d+d ?)?[0-9:]+)")
+_PACE_TAIL_BYTES = 16384
+# A live run whose log has been quiet this long is shown as stalled (tqdm writes every ~10 s; a checkpoint save
+# pauses it for about a minute).
+STALE_SEC = 300
+
+
+def _clock_sec(text: str) -> float:
+    days, _, clock = text.rpartition("d")
+    total = 0.0
+    for part in clock.strip().split(":"):
+        total = total * 60 + int(part)
+    return total + (int(days) * 86400 if days else 0)
+
+
+def _iso(stamp: float) -> str:
+    return datetime.fromtimestamp(stamp).astimezone().isoformat(timespec="seconds")
+
+
+def _log_tail(path: Path) -> tuple[str | None, float | None]:
+    try:
+        with path.open("rb") as handle:
+            size = handle.seek(0, 2)
+            handle.seek(max(0, size - _PACE_TAIL_BYTES))
+            return handle.read().decode(errors="replace"), path.stat().st_mtime
+    except OSError:
+        return None, None
+
+
+def pace_of(record: dict, last_step: int | None, log: str | None, updated: float | None, now: float) -> dict | None:
+    """Training speed (steps/s) and, while it runs, the time left and the finish time. A live run uses the last
+    tqdm line of its log (timed by the log's mtime); without one, and for a finished run, the average since start."""
+    total = record.get("num_train_steps")
+    if record.get("started") and record.get("ended"):
+        span = _instant(record["ended"]) - _instant(record["started"])
+        rate = last_step / span if last_step and 0 < span < float("inf") else None
+        return {"source": "average", "rate": rate, "remaining_sec": None, "eta": None, "updated": record["ended"],
+                "stale": False}
+    if not record.get("started") or updated is None:
+        return None
+    matches = _PROGRESS.findall(log) if log else []
+    if matches:
+        value, unit, remaining = matches[-1]
+        rate = float(value) if unit == "it/s" else (1 / float(value) if float(value) > 0 else None)
+        remaining_sec: float | None = _clock_sec(remaining)
+        source = "tqdm"
+    else:
+        span = updated - _instant(record["started"])
+        rate = last_step / span if last_step and 0 < span < float("inf") else None
+        remaining_sec = (total - last_step) / rate if rate and total and last_step is not None else None
+        source = "average"
+    return {"source": source, "rate": rate, "remaining_sec": remaining_sec,
+            "eta": _iso(updated + remaining_sec) if remaining_sec is not None else None,
+            "updated": _iso(updated), "stale": now - updated > STALE_SEC}
+
+
+def _run_row(config: ConsoleConfig, folder: Path, metrics: list[dict],
+             docker_data: Path | None = None) -> dict:
     card = _read_json(folder / "model_card.json")
     record = _read_json(folder / "console_train.json") or _record_from_card(card)
     losses = [row["loss"] for row in metrics if "loss" in row]
     view = record.get("view")
+    last_step = record.get("last_step") or (metrics[-1]["step"] if metrics else None)
+    log, updated = (None, None)
+    if record.get("started") and not record.get("ended") and docker_data is not None:
+        log, updated = _log_tail(docker_data / "wandb" / f"{folder.name}.log")
     return {
         "name": f"{folder.parent.name}/{folder.name}",
         "config": folder.parent.name,
@@ -187,7 +250,7 @@ def _run_row(config: ConsoleConfig, folder: Path, metrics: list[dict]) -> dict:
         "gpus": record.get("gpus"),
         "batch_size": record.get("batch_size"),
         "num_train_steps": record.get("num_train_steps"),
-        "last_step": record.get("last_step") or (metrics[-1]["step"] if metrics else None),
+        "last_step": last_step,
         "started": record.get("started"),
         "ended": record.get("ended"),
         "exit_code": record.get("exit_code"),
@@ -195,6 +258,7 @@ def _run_row(config: ConsoleConfig, folder: Path, metrics: list[dict]) -> dict:
         "status": (card or {}).get("status"),
         "last_loss": losses[-1] if losses else None,
         "eval_latest": _eval_latest(_read_json(folder / "eval" / "summary.json") or _eval_from_card(card)),
+        "pace": pace_of(record, last_step, log, updated, time.time()),
     }
 
 
@@ -211,7 +275,8 @@ def _run_folders(config: ConsoleConfig) -> list[Path]:
 
 
 def list_runs(config: ConsoleConfig) -> list[dict]:
-    rows = [_run_row(config, f, _metrics(f, f.name, config.openpi.docker_data)) for f in _run_folders(config)]
+    docker_data = config.openpi.docker_data
+    rows = [_run_row(config, f, _metrics(f, f.name, docker_data), docker_data) for f in _run_folders(config)]
     return sorted(rows, key=lambda row: row["started"] or "", reverse=True)
 
 
@@ -259,7 +324,7 @@ def run_detail(config: ConsoleConfig, config_name: str, exp: str, max_points: in
     markdown = folder / "MODEL_CARD.md"
     card = _read_json(folder / "model_card.json")
     return {
-        **_run_row(config, folder, metrics),
+        **_run_row(config, folder, metrics, config.openpi.docker_data),
         "record": _read_json(folder / "console_train.json"),
         "metrics": series,
         "eval": _read_json(folder / "eval" / "summary.json") or _eval_from_card(card),

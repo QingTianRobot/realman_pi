@@ -32,7 +32,12 @@ export interface RunRow {
   name: string; config: string; exp: string; checkpoints: number[]; view: string | null; gpus: number[] | null;
   batch_size: number | null; num_train_steps: number | null; last_step: number | null; started: string | null;
   ended: string | null; exit_code: number | null; registered: boolean; status: string | null; last_loss: number | null;
-  eval_latest: EvalLatest | null;
+  eval_latest: EvalLatest | null; pace: Pace | null;
+}
+/** steps/s; while a run trains also the time left and the finish time (from the log's last tqdm line). */
+export interface Pace {
+  source: "tqdm" | "average"; rate: number | null; remaining_sec: number | null; eta: string | null;
+  updated: string | null; stale: boolean;
 }
 export interface RunDetail extends RunRow {
   record: Record<string, any> | null; metrics: Record<string, (number | null)[]>;

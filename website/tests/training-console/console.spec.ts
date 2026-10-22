@@ -59,6 +59,9 @@ test("overview: three status cards and the recent lists @mobile", async ({ page 
   await expect(page.locator("#card-gpus .gpu-row")).toHaveCount(4);
   await expect(page.locator("#card-gpus")).toContainText("openpi-serve-openpi-1");
   await expect(page.locator("#card-train")).toContainText("a_new_run");
+  await expect(page.locator("#card-train")).toContainText("1.30 步/s");
+  await expect(page.locator("#card-train")).toContainText("46 min");
+  await expect(page.locator("#card-train")).toContainText("预计完成");
   await expect(page.locator("#recent-datasets tbody tr")).toHaveCount(3);
   await expect(page.locator("#latest-models")).toContainText("m_multitask_b16_2gpu");
   await page.locator("#recent-datasets tbody tr", { hasText: "realman__multitask_clean" }).click();
@@ -136,6 +139,15 @@ test("train: curves, per-task eval and the prompt swap of a run", async ({ page 
   await expect(page.locator("#eval-table")).toContainText("零动作基线");
   await expect(page.locator("#swap-table")).toContainText("0.187");
   await expect(page.locator("#run-detail .gpu-row")).toHaveCount(2);
+  await expect(page.locator("#run-detail")).toContainText("平均速度");
+  await expect(page.locator("#run-detail")).toContainText("1.33 步/s");
+});
+
+test("train: a live run shows its speed, time left and finish time", async ({ page }) => {
+  await page.goto(`/#/train?run=${encodeURIComponent("pi05_realman_action_only/a_new_run")}`);
+  await expect(page.locator("#run-detail")).toContainText("1.30 步/s");
+  await expect(page.locator("#run-detail")).toContainText("46 min");
+  await expect(page.locator("#run-list .item", { hasText: "a_new_run" })).toContainText("剩 46 min");
 });
 
 test("train: a new run needs GPUs and goes through the confirm dialog", async ({ page, request }) => {

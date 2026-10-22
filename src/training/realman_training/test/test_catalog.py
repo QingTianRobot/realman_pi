@@ -207,3 +207,49 @@ def test_a_hand_trained_run_takes_its_facts_from_the_card(world, monkeypatch):
     assert row["started"] == "2026-10-16T09:54:38+08:00" and row["ended"] == "2026-10-16T16:09:40+08:00"
     assert catalog.list_models(config)["models"][0]["dataset"] == "realman_right_arm_multitask_view"
     assert catalog.card_path("/abs/x") == "/abs/x" and catalog.card_path(None) is None
+
+
+def _training_log(world, text, age_sec):
+    import os
+    import time
+
+    paths, config, _ = world
+    log = paths["docker_data"] / "wandb" / f"{TRAINING[1]}.log"
+    log.write_text(log.read_text(encoding="utf-8") + text, encoding="utf-8")
+    stamp = time.time() - age_sec
+    os.utime(log, (stamp, stamp))
+    return {row["name"]: row for row in catalog.list_runs(config)}["/".join(TRAINING)]["pace"], stamp
+
+
+def test_a_live_run_reports_speed_and_eta_from_the_tqdm_line(world):
+    from datetime import datetime
+
+    line = "07:33:17.111 [I] Progress on: 1.69kit/30.0kit rate:1.3it/s remaining:5:50:20 elapsed:21:29 postfix:- (215:tqdm_logging.py:145)\n"
+    pace, stamp = _training_log(world, line, age_sec=20)
+    assert pace["source"] == "tqdm" and pace["rate"] == pytest.approx(1.3) and pace["remaining_sec"] == 5 * 3600 + 50 * 60 + 20
+    assert pace["stale"] is False
+    assert datetime.fromisoformat(pace["eta"]).timestamp() == pytest.approx(stamp + pace["remaining_sec"], abs=1)
+    assert datetime.fromisoformat(pace["updated"]).timestamp() == pytest.approx(stamp, abs=1)
+
+
+def test_a_slow_run_in_seconds_per_step_and_a_quiet_log_is_stale(world):
+    line = "Progress on: 120it/5.00kit rate:2.50s/it remaining:3:23:20 elapsed:5:00 postfix:-\n"
+    pace, _ = _training_log(world, line, age_sec=3600)
+    assert pace["rate"] == pytest.approx(0.4) and pace["remaining_sec"] == 3 * 3600 + 23 * 60 + 20
+    assert pace["stale"] is True
+
+
+def test_without_a_tqdm_line_the_pace_is_the_average_since_start():
+    from datetime import datetime
+
+    started = "2026-10-21T08:00:00+08:00"
+    updated = datetime.fromisoformat(started).timestamp() + 1400
+    pace = catalog.pace_of({"started": started, "num_train_steps": 5000}, last_step=1400, log=None,
+                           updated=updated, now=updated + 10)
+    assert pace["source"] == "average" and pace["rate"] == pytest.approx(1.0) and pace["remaining_sec"] == pytest.approx(3600)
+
+
+def test_a_finished_run_reports_its_average_speed(world):
+    _, config, _ = world
+    pace = {row["name"]: row for row in catalog.list_runs(config)}[MODEL]["pace"]
+    assert pace["rate"] == pytest.approx(29999 / 22502, rel=1e-3) and pace["eta"] is None and pace["remaining_sec"] is None

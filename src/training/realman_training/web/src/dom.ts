@@ -76,6 +76,21 @@ export function fmtDuration(sec: number | null | undefined): string {
   return `${(sec / 3600).toFixed(1)} h`;
 }
 
+/** Time left as "5 h 46 min" / "2 天 3 h" (fmtDuration rounds hours to one decimal). */
+export function fmtRemaining(sec: number | null | undefined): string {
+  if (sec === null || sec === undefined) return "–";
+  const min = Math.round(sec / 60);
+  if (min < 60) return `${min} min`;
+  const hours = Math.floor(min / 60);
+  if (hours < 48) return `${hours} h ${String(min % 60).padStart(2, "0")} min`;
+  return `${Math.floor(hours / 24)} 天 ${hours % 24} h`;
+}
+
+export function fmtRate(rate: number | null | undefined): string {
+  if (!rate) return "–";
+  return rate >= 1 ? `${rate.toFixed(2)} 步/s · ${(1 / rate).toFixed(2)} s/步` : `${(1 / rate).toFixed(1)} s/步`;
+}
+
 function parts(iso: string | null | undefined): string[] | null {
   const match = iso ? /^(\d{4})-(\d{2})-(\d{2})T(\d{2}):(\d{2})/.exec(iso) : null;
   return match ? match.slice(1) : null;

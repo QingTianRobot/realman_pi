@@ -53,3 +53,57 @@ training_console:
     gpu_busy_mib: 2000              # more than this used on a GPU = someone else holds it
     num_workers: 6
     eval_stride: 10
+
+  # The inference chain (realman-train serve). openpi-serve on server5090 uses the compose files below with
+  # SERVE_CONFIG/SERVE_CHECKPOINT/SERVE_GPU/OPENPI_POLICY_PORT; compose.serve.yaml uses runtime: nvidia (stale CDI
+  # spec). policy_bridge on realman_ts is recreated with `docker compose up -d --no-deps --no-build policy_bridge`
+  # in robot_repo (never ./rm65, never bringup or the behaviour tree) and starts inactive.
+  serving:
+    project: openpi-serve
+    service: openpi
+    compose_files: [~/organization/openpi/compose.yaml, ~/data/realman/compose.serve.yaml]
+    model: pi05_realman_multitask_action_only/m_multitask_b16_2gpu   # <openpi config>/<exp>
+    checkpoint: ""                  # "" = latest numbered checkpoint
+    gpu: 2
+    port: 18000                     # = network.server_port in the robot's config/ros/policy_bridge.yaml
+    container_port: 8000            # inside the container ("server listening on 0.0.0.0:8000"); 0 = same as port
+    start_timeout_sec: 600
+    warmup_rounds: 2                # first inference after a restart JIT-compiles ~26 s
+    warmup_timeout_sec: 180
+    robot_repo: ~/realman_pi
+    bridge_service: policy_bridge
+    bridge_container: realman_pi-policy_bridge-1
+    bridge_config: config/ros/policy_bridge.yaml
+    bridge_start_timeout_sec: 90
+    ros_container: realman_pi-realman_bringup_remote-1
+    ros_setup: source /opt/ros/humble/setup.bash && source /opt/rm65_ws/install/setup.bash
+    server_host: ""                 # "" = the address realman_ts sees in $SSH_CLIENT (never write an IP here)
+    mode_wait_sec: 10
+    policy_modes: [policy]          # start/stop refuse while the behaviour tree is in one of these
+
+  # Data-path checks (realman-train linkcheck). Thresholds from the 2026-10-14..10-19 live runs.
+  linkcheck:
+    pika_node_prefix: pika_         # any such node on the robot graph = the Pika locator floods the Wi-Fi
+    wifi_interface: ""              # "" = first wl* interface on realman_ts
+    wifi_window_sec: 5
+    wifi_max_kb_per_sec: 600
+    bulk_bytes: 16777216            # realman_ts -> server5090 over ssh
+    bulk_min_mb_per_sec: 2.0
+    ping_count: 10
+    ping_size: 1400
+    ping_max_avg_ms: 50
+    ping_max_loss_pct: 5
+    infer_rounds: 5                 # after one untimed round
+    infer_max_ms: 200               # median, two 224x224 images + 7-dim state + prompt
+    stats_timeout_sec: 5
+
+  # The web console (realman-train web; compose service realman_training on server5090, port 8780).
+  # Writes need REALMAN_TRAINING_TOKEN (from the untracked env file passed with --env-file); empty = read-only.
+  web:
+    host: 0.0.0.0
+    port: 8780
+    serve_status_ttl_sec: 20      # serve status = docker inspect + ssh + a ROS probe on realman_ts (~5 s)
+    gpu_ttl_sec: 3
+    log_tail_lines: 200
+    history_limit: 20             # link-check runs listed on the 服务 page
+    passwd_file: /etc/passwd      # uid -> name of GPU holders; the container mounts the host's

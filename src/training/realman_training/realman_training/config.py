@@ -60,8 +60,69 @@ class OpenpiConfig:
     compose_overlay: Path | None = None  # None = openpi-console.compose.yaml next to the config file
     weights: str = "/home/openpi/.cache/openpi/openpi-assets/checkpoints/pi05_base_from_mac/params"
     gpu_busy_mib: int = 2000
+    eval_need_mib: int = 12000  # same for one eval process (inference only; openpi-serve holds ~8.8 GiB)
+    train_need_mib: int = 18000  # free memory a shared GPU needs for one action-only training process (peak ~17.3 GiB)
     num_workers: int = 6
     eval_stride: int = 10
+
+
+@dataclasses.dataclass(frozen=True)
+class ServingConfig:
+    """openpi-serve on server5090 and policy_bridge on realman_ts: the two ends of the inference chain."""
+
+    project: str = "openpi-serve"
+    service: str = "openpi"  # container <project>-<service>-1
+    compose_files: tuple[str, ...] = ("~/organization/openpi/compose.yaml", "~/data/realman/compose.serve.yaml")
+    model: str = "pi05_realman_multitask_action_only/m_multitask_b16_2gpu"  # <openpi config>/<exp>
+    checkpoint: str = ""  # "" = the latest numbered checkpoint of the run
+    gpu: int = 2
+    port: int = 18000  # must equal network.server_port of the robot's policy_bridge.yaml
+    container_port: int = 8000  # serve_policy listens on 0.0.0.0:8000 inside; OPENPI_POLICY_PORT maps the host port
+    start_timeout_sec: int = 600  # loading the checkpoint before the port listens
+    warmup_rounds: int = 2  # the first inference after a restart JIT-compiles ~26 s
+    warmup_timeout_sec: int = 180
+    robot_repo: str = "~/realman_pi"  # on realman_ts
+    bridge_service: str = "policy_bridge"
+    bridge_container: str = "realman_pi-policy_bridge-1"
+    bridge_config: str = "config/ros/policy_bridge.yaml"  # relative to robot_repo
+    bridge_start_timeout_sec: int = 90
+    ros_container: str = "realman_pi-realman_bringup_remote-1"  # any running ROS container on the robot's domain
+    ros_setup: str = "source /opt/ros/humble/setup.bash && source /opt/rm65_ws/install/setup.bash"
+    server_host: str = ""  # address the bridge uses for server5090; "" = what realman_ts sees in $SSH_CLIENT
+    mode_wait_sec: float = 10.0  # input_mode_state is not published at a fixed high rate
+    policy_modes: tuple[str, ...] = ("policy",)
+
+
+@dataclasses.dataclass(frozen=True)
+class LinkcheckConfig:
+    """Data-path checks; thresholds from the 2026-10-14..10-19 live runs."""
+
+    pika_node_prefix: str = "pika_"
+    wifi_interface: str = ""  # "" = the first wl* interface of realman_ts
+    wifi_window_sec: float = 5.0
+    wifi_max_kb_per_sec: float = 600.0  # the Pika locator flood measured ~2600
+    bulk_bytes: int = 16 << 20
+    bulk_min_mb_per_sec: float = 2.0
+    ping_count: int = 10
+    ping_size: int = 1400  # small pings pass even when bulk TCP has collapsed
+    ping_max_avg_ms: float = 50.0
+    ping_max_loss_pct: float = 5.0
+    infer_rounds: int = 5  # timed rounds after one untimed connect-and-warm round
+    infer_max_ms: float = 200.0  # median round trip from realman_ts
+    stats_timeout_sec: float = 5.0
+
+
+@dataclasses.dataclass(frozen=True)
+class WebConfig:
+    """The web console (realman-train web): bind address and how long cached answers stay fresh."""
+
+    host: str = "0.0.0.0"
+    port: int = 8780
+    serve_status_ttl_sec: float = 20.0  # serve status = docker inspect + ssh + a ROS probe on realman_ts (~5 s)
+    gpu_ttl_sec: float = 3.0
+    log_tail_lines: int = 200
+    history_limit: int = 20  # link-check runs listed on the 服务 page
+    passwd_file: str = "/etc/passwd"  # uid -> name of GPU holders; the container mounts the host's
 
 
 @dataclasses.dataclass(frozen=True)
@@ -71,6 +132,9 @@ class ConsoleConfig:
     quality: QualityConfig = dataclasses.field(default_factory=QualityConfig)
     remote: RemoteConfig = dataclasses.field(default_factory=RemoteConfig)
     openpi: OpenpiConfig = dataclasses.field(default_factory=OpenpiConfig)
+    serving: ServingConfig = dataclasses.field(default_factory=ServingConfig)
+    linkcheck: LinkcheckConfig = dataclasses.field(default_factory=LinkcheckConfig)
+    web: WebConfig = dataclasses.field(default_factory=WebConfig)
     prompts: dict[str, str] = dataclasses.field(default_factory=lambda: dict(DEFAULT_PROMPTS))
     source: Path | None = None
 
@@ -95,7 +159,7 @@ def _path(value: object) -> Path:
     return Path(str(value)).expanduser()
 
 
-_ALLOWED_TOP_KEYS = {"data_root", "state_dir", "quality", "remote", "openpi", "prompts"}
+_ALLOWED_TOP_KEYS = {"data_root", "state_dir", "quality", "remote", "openpi", "serving", "linkcheck", "web", "prompts"}
 
 
 def load_config(path: str | Path | None = None) -> ConsoleConfig:
@@ -113,6 +177,11 @@ def load_config(path: str | Path | None = None) -> ConsoleConfig:
     openpi = _parse(OpenpiConfig, section.get("openpi") or {}, source, "openpi")
     overlay = openpi.compose_overlay or Path("openpi-console.compose.yaml")
     openpi = dataclasses.replace(openpi, compose_overlay=overlay if overlay.is_absolute() else source.parent / overlay)
+    serving = _parse(ServingConfig, section.get("serving") or {}, source, "serving")
+    linkcheck = _parse(LinkcheckConfig, section.get("linkcheck") or {}, source, "linkcheck")
+    _validate_serving(serving, linkcheck, source)
+    web = _parse(WebConfig, section.get("web") or {}, source, "web")
+    _validate_web(web, source)
     prompts = section.get("prompts")
     if prompts is None:
         prompts = dict(DEFAULT_PROMPTS)
@@ -126,6 +195,9 @@ def load_config(path: str | Path | None = None) -> ConsoleConfig:
         quality=quality,
         remote=remote,
         openpi=openpi,
+        serving=serving,
+        linkcheck=linkcheck,
+        web=web,
         prompts={str(k): str(v) for k, v in prompts.items()},
         source=source,
     )
@@ -181,3 +253,38 @@ def _validate(q: QualityConfig, source: Path) -> None:
             fail(key, "must be positive")
     if len(q.start_pose_deg) not in (0, 6):
         fail("start_pose_deg", "must list six joint angles or be empty")
+
+
+def _validate_serving(s: ServingConfig, lc: LinkcheckConfig, source: Path) -> None:
+    def fail(key: str, why: str) -> None:
+        raise ValueError(f"{source}: {key} {why}")
+
+    if not 1 <= s.port <= 65535:
+        fail("serving.port", "must be in 1..65535")
+    if not 0 <= s.container_port <= 65535:
+        fail("serving.container_port", "must be in 0..65535 (0 = same as port)")
+    if s.gpu < 0:
+        fail("serving.gpu", "must be a GPU index >= 0")
+    if s.warmup_rounds < 1:
+        fail("serving.warmup_rounds", "must be at least 1")
+    if s.model.count("/") != 1:
+        fail("serving.model", "must be <openpi config>/<exp>")
+    if not s.compose_files:
+        fail("serving.compose_files", "must list at least one compose file")
+    for key in ("wifi_window_sec", "wifi_max_kb_per_sec", "bulk_min_mb_per_sec", "infer_max_ms", "stats_timeout_sec"):
+        if getattr(lc, key) <= 0:
+            fail(f"linkcheck.{key}", "must be positive")
+    for key in ("bulk_bytes", "ping_count", "infer_rounds"):
+        if getattr(lc, key) < 1:
+            fail(f"linkcheck.{key}", "must be at least 1")
+
+
+def _validate_web(w: WebConfig, source: Path) -> None:
+    if not 1 <= w.port <= 65535:
+        raise ValueError(f"{source}: web.port must be in 1..65535")
+    for key in ("serve_status_ttl_sec", "gpu_ttl_sec"):
+        if getattr(w, key) <= 0:
+            raise ValueError(f"{source}: web.{key} must be positive")
+    for key in ("log_tail_lines", "history_limit"):
+        if getattr(w, key) < 1:
+            raise ValueError(f"{source}: web.{key} must be at least 1")

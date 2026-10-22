@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from realman_training.config import DEFAULT_CONFIG, ENV_CONFIG, OpenpiConfig, QualityConfig, RemoteConfig, default_config_path, load_config
+from realman_training.config import DEFAULT_CONFIG, ENV_CONFIG, LinkcheckConfig, OpenpiConfig, QualityConfig, RemoteConfig, ServingConfig, WebConfig, default_config_path, load_config
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -113,3 +113,68 @@ def test_openpi_values_from_the_file(tmp_path):
     assert config.openpi.repo == Path("/o") and config.openpi.gpu_busy_mib == 500
     assert config.console_dir == Path("/s")
     assert OpenpiConfig().num_workers == 6
+
+
+def test_the_shipped_serving_and_linkcheck_sections_equal_the_defaults():
+    config = load_config(DEFAULT_CONFIG)
+    assert config.serving == ServingConfig()
+    assert config.linkcheck == LinkcheckConfig()
+
+
+def test_serving_defaults_are_the_deployed_chain():
+    s = ServingConfig()
+    assert (s.project, s.service, s.gpu, s.port) == ("openpi-serve", "openpi", 2, 18000)
+    assert s.compose_files == ("~/organization/openpi/compose.yaml", "~/data/realman/compose.serve.yaml")
+    assert s.model == "pi05_realman_multitask_action_only/m_multitask_b16_2gpu"
+    assert s.bridge_container == "realman_pi-policy_bridge-1" and s.bridge_service == "policy_bridge"
+    assert s.policy_modes == ("policy",)
+    assert s.warmup_rounds == 2 and s.container_port == 8000
+    assert s.ros_container == "realman_pi-realman_bringup_remote-1"
+
+
+def test_linkcheck_thresholds_come_from_the_live_runs():
+    lc = LinkcheckConfig()
+    assert lc.wifi_max_kb_per_sec == 600.0 and lc.wifi_window_sec == 5.0
+    assert lc.bulk_min_mb_per_sec == 2.0
+    assert lc.infer_max_ms == 200.0
+    assert lc.pika_node_prefix == "pika_"
+
+
+def test_serving_values_from_the_file(tmp_path):
+    path = _write(tmp_path, "training_console:\n  serving:\n    gpu: 3\n    port: 18001\n    checkpoint: 20000\n  linkcheck:\n    infer_max_ms: 150\n")
+    config = load_config(path)
+    assert (config.serving.gpu, config.serving.port, config.serving.checkpoint) == (3, 18001, "20000")
+    assert config.linkcheck.infer_max_ms == 150.0
+
+
+@pytest.mark.parametrize(
+    "body, fragment",
+    [
+        ("serving:\n    port: 0\n", "serving.port"),
+        ("serving:\n    gpu: -1\n", "serving.gpu"),
+        ("serving:\n    warmup_rounds: 0\n", "serving.warmup_rounds"),
+        ("serving:\n    model: just_a_config\n", "serving.model"),
+        ("serving:\n    container_port: 70000\n", "serving.container_port"),
+        ("linkcheck:\n    wifi_window_sec: 0\n", "linkcheck.wifi_window_sec"),
+        ("linkcheck:\n    infer_rounds: 0\n", "linkcheck.infer_rounds"),
+        ("serving:\n    nope: 1\n", "unknown serving keys"),
+    ],
+)
+def test_bad_serving_and_linkcheck_values_are_refused(tmp_path, body, fragment):
+    path = _write(tmp_path, "training_console:\n  " + body)
+    with pytest.raises(ValueError, match=fragment.replace(".", r"\.")):
+        load_config(path)
+
+
+def test_the_shipped_web_section_equals_the_defaults():
+    assert load_config(DEFAULT_CONFIG).web == WebConfig()
+    assert WebConfig().port == 8780
+
+
+def test_the_web_section_is_validated(tmp_path):
+    with pytest.raises(ValueError, match="web.port"):
+        load_config(_write(tmp_path, "training_console:\n  web:\n    port: 70000\n"))
+    with pytest.raises(ValueError, match="web.gpu_ttl_sec"):
+        load_config(_write(tmp_path, "training_console:\n  web:\n    gpu_ttl_sec: 0\n"))
+    with pytest.raises(ValueError, match="unknown web keys"):
+        load_config(_write(tmp_path, "training_console:\n  web:\n    colour: blue\n"))

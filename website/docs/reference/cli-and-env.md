@@ -98,6 +98,10 @@ PYTHONPATH=. python -m realman_training register <配置名> <实验名> [--stat
 PYTHONPATH=. python -m realman_training jobs [--kind <种类>] [--limit N]
 PYTHONPATH=. python -m realman_training job <任务id> [--log]
 PYTHONPATH=. python -m realman_training cancel <任务id>
+PYTHONPATH=. python -m realman_training serve start [--model <配置>/<实验>] [--checkpoint N] [--gpu N] [--port N] [--task <任务>] [--dry-run] [--yes]
+PYTHONPATH=. python -m realman_training serve stop [--dry-run] [--yes]
+PYTHONPATH=. python -m realman_training serve status [--json]
+PYTHONPATH=. python -m realman_training linkcheck [--only pika,link,inference,bridge] [--json]
 ```
 
 | 环境变量 | 作用 |

@@ -32,7 +32,8 @@ jobs:
       - name: Shell syntax
         run: |
           sudo apt-get update -qq && sudo apt-get install -y -qq zsh
-          bash -n rm65 start_sensors.sh scripts/*.sh docker/*.sh tests/*.sh
+          bash -n rm65 rm65_server start_sensors.sh scripts/*.sh docker/*.sh tests/*.sh
+          bash tests/test_rm65_server_entry.sh
           zsh -n functions.zsh
 
   python-tests:

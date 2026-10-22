@@ -74,7 +74,7 @@ async function boot(): Promise<void> {
       h("div", { class: "top-status" }, servePill, bridgePill, jobsButton,
         h("label", { class: "token-field" },
           health.read_only ? h("span", { class: "chip warn", id: "read-only" }, "只读") : null, token))),
-    page, drawer.el);
+    page, drawer.el, drawer.fab);
 
   let dispose: void | (() => void);
   let navCounter = 0;
@@ -139,6 +139,7 @@ async function boot(): Promise<void> {
       const jobs = (await api.jobs(20)).jobs;
       const active = jobs.filter((job) => isActive(job.state)).length;
       jobsButton.textContent = active ? `任务 (${active})` : "任务";
+      drawer.setActive(active);
       const training = jobs.find((job) => job.kind === "train" && isActive(job.state));
       const p = training?.progress;
       if (training) {
@@ -158,6 +159,7 @@ async function boot(): Promise<void> {
 
   window.addEventListener("hashchange", () => void route());
   await route();
+  if (drawer.wantsOpen) void drawer.open();
   void refreshCounts();
   void refreshStatus();
   window.setInterval(() => void refreshStatus(), 15000);

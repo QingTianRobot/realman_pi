@@ -42,13 +42,13 @@
 .panel h2 { font-size: 15px; margin: 0 0 14px; }
 .panel h3 { margin: 14px 0 8px; font-size: 12px; color: var(--text-2); letter-spacing: .04em; }
 .panel-head { display: flex; flex-wrap: wrap; align-items: center; justify-content: space-between; gap: 8px; margin-bottom: 12px; }
-.panel-head h2 { margin: 0; }
+.panel-head h2 { margin: 0; min-width: 0; overflow-wrap: anywhere; }
 .cards { display: grid; grid-template-columns: repeat(4, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
 .cards > .panel { display: flex; flex-direction: column; }
 .cards > .panel > h2 { margin-bottom: 14px; color: var(--text-2); font-size: 12px; letter-spacing: .08em; }
 .cards > .panel .bar { margin: 4px 0 8px; }
 .two.side { grid-template-columns: minmax(0, 2fr) minmax(300px, 1fr); }
-.panel > .stats { margin: 12px 0 14px; grid-template-columns: repeat(auto-fit, minmax(130px, 1fr)); }
+.panel > .stats { margin: 12px 0 14px; grid-template-columns: repeat(auto-fit, minmax(190px, 1fr)); }
 .two.wide-left { grid-template-columns: minmax(0, 3fr) minmax(0, 2fr); }
 .sticky-list { position: sticky; top: 84px; max-height: calc(100vh - 100px); overflow-y: auto; }
 .new-run { border-color: var(--accent-bar); }
@@ -56,7 +56,32 @@ table.jobs td.note, td.note { max-width: 520px; overflow-wrap: anywhere; }
 .card-details { margin-top: 14px; }
 .card-details pre { margin-top: 8px; }
 .split { display: grid; grid-template-columns: minmax(260px, 340px) minmax(0, 1fr); gap: 16px; align-items: start; }
-.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: start; }
+/* Card rows: every card in a row is as tall as the tallest one, content top-aligned. */
+.two { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; }
+.grid3 { display: grid; grid-template-columns: repeat(3, minmax(0, 1fr)); gap: 16px; }
+.grid3 > .span2 { grid-column: span 2; }
+.two > .panel, .grid3 > .panel { display: flex; flex-direction: column; }
+.grid3 > .panel > h2 { color: var(--text-2); font-size: 12px; letter-spacing: .08em; }
+.grid3 > .panel .bar { margin: 4px 0 8px; }
+/* A card's closing note sits at its bottom edge, so cards of one row end on the same line. */
+.panel > .foot { margin-top: auto; padding-top: 10px; }
+/* A titled block inside a card, separated from what is above it. */
+.sub { margin-top: 14px; padding-top: 12px; border-top: 1px solid var(--line); }
+.sub > h3 { display: flex; flex-wrap: wrap; align-items: center; gap: 8px; margin: 0 0 8px; }
+.sub > h3 .muted { font-weight: 500; letter-spacing: 0; }
+.facets { display: grid; grid-template-columns: repeat(auto-fit, minmax(260px, 1fr)); gap: 0 24px; }
+.facets > .sub { margin-top: 14px; }
+.charts { display: grid; gap: 6px; }
+.charts h3 { margin: 6px 0 4px; }
+/* A column of cards next to a single card: the last one takes up the extra height. */
+.two > .stack { display: flex; flex-direction: column; }
+.two > .stack > :last-child { flex: 1; }
+@media (min-width: 1101px) {
+  /* 条数 is a short number: give its width to the longer tiles so all five stay on one line. */
+  #dataset-stats { grid-template-columns: minmax(64px, .5fr) repeat(4, minmax(0, 1fr)); }
+}
+#card-gpus .gpu-list { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 0 16px; }
+#card-gpus .gpu-row:nth-last-child(-n + 2) { border-bottom: 0; }
 .stack { display: grid; gap: 16px; min-width: 0; }
 .kv { display: grid; grid-template-columns: auto minmax(0, 1fr); gap: 5px 12px; margin: 0; font-size: 12px; }
 .kv dt { color: var(--text-3); white-space: nowrap; }
@@ -67,6 +92,7 @@ table.jobs td.note, td.note { max-width: 520px; overflow-wrap: anywhere; }
 .big.state.bad::before { background: var(--danger); box-shadow: 0 0 0 4px var(--danger-bg); }
 .big.state.run::before { background: var(--primary); box-shadow: 0 0 0 4px var(--btn-bg); }
 .run-name { margin: 0 0 10px; font-size: 13px; font-weight: 700; overflow-wrap: anywhere; }
+.kv .run-name { display: block; margin: 0; font-size: 12px; font-weight: 600; }
 .run-name small { display: block; margin-top: 2px; color: var(--text-3); font-size: 11px; font-weight: 500; }
 .check-list { display: grid; gap: 5px; margin: 10px 0 0; padding: 0; list-style: none; font-size: 12px; }
 .check-list li { display: grid; grid-template-columns: 16px minmax(0, 1fr) auto; gap: 8px; align-items: baseline; }
@@ -168,17 +194,21 @@ dialog.confirm .actions { justify-content: flex-end; margin-top: 12px; }
 @media (max-width: 1100px) {
   .cards { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .two.wide-left, .two.side { grid-template-columns: minmax(0, 1fr); }
+  .grid3 { grid-template-columns: repeat(2, minmax(0, 1fr)); }
+  .grid3 > :last-child:nth-child(odd), .grid3 > .span2 + :last-child { grid-column: 1 / -1; }
   .stats { grid-template-columns: repeat(3, minmax(0, 1fr)); }
 }
 @media (max-width: 860px) {
-  .split, .two { grid-template-columns: minmax(0, 1fr); }
+  .split, .two, .grid3 { grid-template-columns: minmax(0, 1fr); }
+  .grid3 > .span2 { grid-column: auto; }
   .sticky-list { position: static; max-height: none; }
   .tab-arrow { display: none; }
   .drawer-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
   .drawer-jobs { grid-auto-flow: column; grid-auto-columns: minmax(170px, 1fr); overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
 }
 @media (max-width: 560px) {
-  .cards { grid-template-columns: minmax(0, 1fr); }
+  .cards, #card-gpus .gpu-list { grid-template-columns: minmax(0, 1fr); }
+  #card-gpus .gpu-row:nth-last-child(2) { border-bottom: 1px solid var(--line); }
   .stats { grid-template-columns: repeat(2, minmax(0, 1fr)); }
   .tabs { order: 3; width: 100%; margin-right: 0; }
   .tabs a { flex: 1; padding: 8px 4px; text-align: center; }

@@ -2,7 +2,7 @@ import { api, type Gpus, type LinkcheckPayload, type LinkRun, type ServeStatus, 
 import type { Ctx } from "../ctx";
 import { confirmJob } from "../dialog";
 import { errorText, fmtTime, h } from "../dom";
-import { checksTable, chip, kv, pageHead, panel, panelHead } from "../widgets";
+import { checksTable, chip, kv, modelName, pageHead, panel, panelHead } from "../widgets";
 
 function serveEnd(status: ServeStatus): HTMLElement {
   const serve = status.serve || {};
@@ -12,7 +12,7 @@ function serveEnd(status: ServeStatus): HTMLElement {
     status.error ? h("p", { class: "notice" }, status.error) : null,
     h("p", { class: `big state ${serve.running ? "ok" : "off"}` }, serve.running ? "运行中" : "已停止"),
     kv([["启动于", fmtTime(serve.started)], ["镜像", `${serve.image ?? "–"} ${serve.image_id ?? ""}`],
-      ["模型", record.model ? `${record.model} @ ${record.step}` : "–"], ["端口", record.port ? `:${record.port}` : "–"],
+      ["模型", record.model ? modelName(record.model, record.step) : "–"], ["端口", record.port ? `:${record.port}` : "–"],
       ["GPU", gpu.used_mib !== undefined ? `GPU ${gpu.index}: ${gpu.used_mib} / ${gpu.total_mib} MiB` : `GPU ${gpu.index ?? "–"}`],
       ["状态时间", fmtTime(status.at)]]));
   el.id = "serve-end";
@@ -28,7 +28,7 @@ function bridgeEnd(status: ServeStatus): HTMLElement {
     h("p", { class: `big state ${bridge.error ? "bad" : bridge.running ? "ok" : "off"}` }, state),
     kv([["启动于", fmtTime(bridge.started)], ["镜像", bridge.image ?? "–"], ["服务地址", bridge.server ? "已设置" : "–"],
       ["行为树模式", mode ? mode.active_mode ?? "–" : "没有 input_mode_state（行为树未运行？）"]]),
-    h("p", { class: "muted" }, "平台只启停桥接，不激活；机械臂运动仍由行为树和 /policy/activate 决定。"));
+    h("p", { class: "muted foot" }, "平台只启停桥接，不激活；机械臂运动仍由行为树和 /policy/activate 决定。"));
   el.id = "bridge-end";
   return el;
 }
@@ -125,7 +125,7 @@ function linkcheckPanel(link: LinkcheckPayload): HTMLElement {
     item.addEventListener("click", () => show(run));
     return item;
   }));
-  return h("section", { class: "two" }, panel("链路检测", latest), panel("历史", history));
+  return panel("链路检测", latest, h("div", { class: "sub" }, h("h3", {}, "历史"), history));
 }
 
 function errorPanel(reason: unknown): HTMLElement {
@@ -155,10 +155,9 @@ export async function renderServe(root: HTMLElement, ctx: Ctx): Promise<() => vo
   root.replaceChildren(
     pageHead("推理服务", "server5090 的 openpi-serve 和 realman_ts 的 policy_bridge；不碰 bringup 和行为树。", refresh),
     ...errors,
-    ...(status ? [h("section", { class: "two" }, serveEnd(status), bridgeEnd(status))] : []),
-    ...(settings ? [h("section", { class: "two" }, settingsForm(settings, gpus, ctx.query.get("model"), ctx),
-      ...(status ? [bridgeStats(status)] : []))] : []),
-    ...(link ? [linkcheckPanel(link)] : []));
+    ...(status ? [h("section", { class: "grid3" }, serveEnd(status), bridgeEnd(status), bridgeStats(status))] : []),
+    h("section", { class: "two" }, ...(settings ? [settingsForm(settings, gpus, ctx.query.get("model"), ctx)] : []),
+      ...(link ? [linkcheckPanel(link)] : [])));
   const onEnded = (event: Event) => {
     const job = (event as CustomEvent).detail;
     if (["serve", "linkcheck"].includes(job.kind)) ctx.reload();

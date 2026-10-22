@@ -48,9 +48,10 @@ test("the jobs button opens the drawer with live logs", async ({ page, request }
   await expect(page.locator("#drawer")).toBeHidden();
 });
 
-test("overview: four status cards and the recent lists @mobile", async ({ page }) => {
+test("overview: three status cards and the recent lists @mobile", async ({ page }) => {
   await page.goto("/#/overview");
-  await expect(page.locator("#card-serve")).toContainText("pi05_realman_multitask_action_only/m_multitask_b16_2gpu");
+  await expect(page.locator("#card-serve")).toContainText("m_multitask_b16_2gpu @ 29999");
+  await expect(page.locator("#card-serve")).toContainText("pi05_realman_multitask_action_only");
   await expect(page.locator("#card-serve")).toContainText("29999");
   await expect(page.locator("#card-link")).toContainText("未通过");
   await expect(page.locator("#card-link")).toContainText("bulk_throughput");

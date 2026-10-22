@@ -165,8 +165,10 @@ async function renderDetail(el: HTMLElement, path: string, options: Options, ctx
         stat("时间范围", `${fmtDay(s.first_file_time)} → ${fmtDay(s.last_file_time)}`),
         stat("格式", `LeRobot ${s.codebase_version} · ${s.fps} fps`),
         stat("磁盘 / 编码", `${fmtBytes(s.disk_bytes)} · ${codecs}`)),
-      h("h3", {}, "来源"), kv(provenance)),
-    h("section", { class: "two" }, panel("任务分布", taskBars(detail)), panel("特征与相机", features(detail))),
+      h("div", { class: "facets" },
+        h("div", { class: "sub" }, h("h3", {}, "来源"), kv(provenance)),
+        h("div", { class: "sub" }, h("h3", {}, "任务分布"), taskBars(detail)),
+        h("div", { class: "sub" }, h("h3", {}, "特征与相机"), features(detail)))),
     qualitySection(detail, options, ctx));
 }
 

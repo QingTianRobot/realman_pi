@@ -20,7 +20,8 @@ const marked = new Marked({
 
 export function markdown(source: string, attrs: Record<string, unknown> = {}): HTMLElement {
   const el = h("div", { ...attrs, class: `markdown${attrs.class ? ` ${attrs.class}` : ""}` });
-  el.innerHTML = marked.parse(source) as string;
+  // HTML comments (such as the register marker) stay invisible, as on GitHub; other raw HTML is shown as text.
+  el.innerHTML = marked.parse(source.replace(/<!--[\s\S]*?-->/g, "")) as string;
   for (const table of el.querySelectorAll("table")) table.replaceWith(h("div", { class: "table-wrap" }, table.cloneNode(true)));
   return el;
 }

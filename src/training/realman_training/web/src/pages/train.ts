@@ -151,8 +151,9 @@ async function renderRun(el: HTMLElement, name: string, gpus: Gpus | null, ctx: 
       kv([["训练视图", h("span", { class: "mono" }, run.view ?? "–")], ["checkpoints", h("span", { class: "mono" }, run.checkpoints.join(", ") || "–")]])),
     h("section", { class: "two side" },
       h("div", { class: "stack" },
-        panel("loss", lineChart(m.step ?? [], m.loss ?? [], { label: "loss", id: "chart-loss" })),
-        panel("grad norm", lineChart(m.step ?? [], m.grad_norm ?? [], { label: "grad_norm", id: "chart-grad" })),
+        panel("训练曲线", h("div", { class: "charts" },
+          h("div", {}, h("h3", {}, "loss"), lineChart(m.step ?? [], m.loss ?? [], { label: "loss", id: "chart-loss" })),
+          h("div", {}, h("h3", {}, "grad norm"), lineChart(m.step ?? [], m.grad_norm ?? [], { label: "grad_norm", id: "chart-grad" })))),
         panel("各 checkpoint 按任务评估", evalTable(run.eval), swapTable(run.eval))),
       panel("评估与登记", gpuList(gpus, run.gpus ?? []), evalForm(run, gpus, ctx), registerForm(run, ctx))));
 }

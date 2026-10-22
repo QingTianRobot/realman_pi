@@ -192,6 +192,7 @@ pre.card { max-height: 60vh; background: var(--card-sub); color: var(--text); }
 .markdown table { background: var(--card-bg); }
 .markdown th { white-space: normal; }
 .markdown th, .markdown td { border: 1px solid var(--line); vertical-align: top; }
+.markdown td:first-child { white-space: nowrap; color: var(--text-2); }
 details summary { cursor: pointer; color: var(--text-2); font-size: 12px; font-weight: 700; }
 
 .drawer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: grid; grid-template-rows: auto minmax(0, 1fr); height: min(60vh, 520px); border-top: 1px solid var(--line-strong); background: var(--card-bg); box-shadow: 0 -10px 30px oklch(0.3 0.02 var(--hue) / 0.12); }

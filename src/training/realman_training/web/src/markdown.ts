@@ -10,7 +10,13 @@ const marked = new Marked({
   gfm: true,
   async: false,
   renderer: {
-    html: ({ text }) => escape(text),
+    // Line breaks inside table cells are the one raw tag cards need.
+    html: ({ text }) => (/^<br\s*\/?>$/i.test(text.trim()) ? "<br>" : escape(text)),
+    // Cards write "~17 GiB" for "about": only a double tilde means strikethrough.
+    del({ raw, tokens }) {
+      const inner = this.parser.parseInline(tokens);
+      return raw.startsWith("~~") ? `<del>${inner}</del>` : `~${inner}~`;
+    },
     link({ href, title, tokens }) {
       const safe = /^(https?:|mailto:|#|\.{0,2}\/)/i.test(href) ? href : "#";
       return `<a href="${escape(safe)}"${title ? ` title="${escape(title)}"` : ""} target="_blank" rel="noopener noreferrer">${this.parser.parseInline(tokens)}</a>`;

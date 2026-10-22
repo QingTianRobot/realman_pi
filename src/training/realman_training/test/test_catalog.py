@@ -45,8 +45,13 @@ def test_datasets_are_listed_newest_first_and_same_named_pulls_stay_apart(world)
         os.utime(path, (later, later))
     rows = catalog.list_datasets(config, cache)
     assert rows[0]["path"] == "raw_realman_ts_20261021_152817/realman__pi05-three-arm"
-    times = [row["last_file_time"] for row in rows]
+    times = [catalog._instant(row["last_file_time"]) for row in rows]
     assert times == sorted(times, reverse=True)
+
+
+def test_newest_first_compares_instants_not_text():
+    # 09:53 UTC is 17:53 at +08:00: later than 15:48 +08:00 although it sorts lower as text.
+    assert catalog._instant("2026-10-16T09:53:08+00:00") > catalog._instant("2026-10-16T15:48:23+08:00")
 
 
 def test_openpi_configs_come_from_the_checkout_and_the_checkpoints(world):

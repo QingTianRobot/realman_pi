@@ -7,6 +7,7 @@ from __future__ import annotations
 import csv
 import json
 import re
+from datetime import datetime
 from pathlib import Path
 
 import pyarrow
@@ -71,8 +72,16 @@ def list_datasets(config: ConsoleConfig, cache: SummaryCache) -> list[dict]:
         rows.append({"path": rel, **{k: summary[k] for k in _ROW_KEYS}, "quality_counts": entry["quality_counts"]})
     # Newest first: several pulls share the recording's name, so the latest one must not hide in the middle.
     rows.sort(key=lambda row: row["path"])
-    rows.sort(key=lambda row: row.get("last_file_time") or "", reverse=True)
+    rows.sort(key=lambda row: _instant(row.get("last_file_time")), reverse=True)
     return rows
+
+
+def _instant(iso: str | None) -> float:
+    """Seconds since the epoch; files report local time with differing UTC offsets, so text order is not time order."""
+    try:
+        return datetime.fromisoformat(iso).timestamp() if iso else float("-inf")
+    except ValueError:
+        return float("-inf")
 
 
 _CONFIG_NAME = re.compile(r"""\bname\s*=\s*["']([A-Za-z0-9_.-]*realman[A-Za-z0-9_.-]*)["']""")

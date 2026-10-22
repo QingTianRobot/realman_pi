@@ -33,35 +33,39 @@ description: server5090:8780 上的训练控制平台网页：数据集与质检
 
 容器定义在 `config/docker/compose.yaml` 的 `realman_training` 服务（profile `training`，机器人侧任何命令都不会构建或启动它），镜像 `config/docker/training-console.Dockerfile`，配置 `config/training/training_console.yaml` 的 `web` 段。平台要把主机路径交给主机的 docker（openpi 容器）和 ssh（`realman_local`），所以这些路径在容器里挂载到同样的绝对路径，容器以主机用户身份运行。
 
-仓库根的 `.env` 是受版本管理的模板，令牌不能写进去。在仓库外建一个只有自己可读的 env 文件，例如 `~/.config/realman-training/console.env`（目录 700、文件 600）：
+仓库根的 `.env` 是受版本管理的模板，令牌不能写进去。容器的令牌、路径和构建镜像源放在仓库外一个只有自己可读的 env 文件里，默认 `~/.config/realman-training/console.env`（目录 700、文件 600，可用环境变量 `RM65_SERVER_ENV` 指定别的位置）。
+
+在 server5090 的部署工作区里，用仓库根的 `./rm65_server` 一键操作（它只管这个容器，不碰机器人的服务）：
 
 ```bash
-REALMAN_TRAINING_TOKEN=<随机令牌，例如 python3 -c "import secrets; print(secrets.token_urlsafe(24))">
+./rm65_server init-env     # 第一次：生成 env 文件（随机令牌、TRAINING_HOME/REPO/UID/GID、docker 组、阿里云镜像源），已存在就不动
+./rm65_server up --build   # 构建镜像并启动；以后只启动用 ./rm65_server up
+./rm65_server status       # 容器状态和 /api/health
+./rm65_server logs -f      # 跟随日志
+./rm65_server restart
+./rm65_server down
+```
+
+`up` 会等到 `/api/health` 有回应，并打印是否只读。env 文件的内容：
+
+```bash
+REALMAN_TRAINING_TOKEN=<随机令牌>
 TRAINING_HOME=/home/<用户>
 TRAINING_REPO=<部署工作区的绝对路径>
-TRAINING_DOCKER_GID=<getent group docker 的 gid>
 TRAINING_UID=<id -u 的值>
 TRAINING_GID=<id -g 的值>
-# 可选：绑定地址（默认 0.0.0.0；读操作含 WebSocket 日志不需要令牌，建议绑到受信任网段）
-# TRAINING_BIND=127.0.0.1
-# 可选：PyPI 镜像（中国大陆加速）
-# TRAINING_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
-# 可选：APT 镜像
-# TRAINING_APT_MIRROR=mirrors.aliyun.com
+TRAINING_DOCKER_GID=<getent group docker 的 gid>
+TRAINING_APT_MIRROR=mirrors.aliyun.com                    # 服务器连不上 deb.debian.org 时需要
+TRAINING_PIP_INDEX_URL=https://mirrors.aliyun.com/pypi/simple
+# TRAINING_BIND=127.0.0.1   # 读操作（含 WebSocket 日志）不需要令牌，建议绑到受信任网段
 ```
 
-然后在部署工作区里（`E=~/.config/realman-training/console.env`）：
+令牌：`grep REALMAN_TRAINING_TOKEN ~/.config/realman-training/console.env`，填进网页右上角的“令牌”框。
+
+浏览器打开 `http://server5090:8780`（或 `ssh -N -L 8780:127.0.0.1:8780 server5090` 后打开 `http://127.0.0.1:8780`）。重启或停止容器会中断它启动的任务：任务被标记为"中断"，`./rm65_server down`/`restart` 前会提示有几个任务在运行；训练容器本身不受影响，用以下命令接管：
 
 ```bash
-docker compose -p realman-training --env-file .env --env-file "$E" --profile training build realman_training
-docker compose -p realman-training --env-file .env --env-file "$E" --profile training up -d realman_training
-docker compose -p realman-training --env-file .env --env-file "$E" --profile training logs --tail=50 realman_training
-```
-
-浏览器打开 `http://server5090:8780`（或 `ssh -N -L 8780:127.0.0.1:8780 server5090` 后打开 `http://127.0.0.1:8780`）。重启容器会中断它启动的任务：任务被标记为"中断"；训练容器本身不受影响，用以下命令接管：
-
-```bash
-docker compose -p realman-training --env-file .env --env-file "$E" --profile training exec realman_training python -m realman_training train <config_name> <view> --exp <exp> --gpus <gpus> --attach
+./rm65_server exec python -m realman_training train <config_name> <view> --exp <exp> --gpus <gpus> --attach
 ```
 
 ## 开发

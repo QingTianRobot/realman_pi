@@ -14,6 +14,7 @@ from typing import Any, Callable
 
 from .lerobot_web_replay import LeRobotReplayCatalog, queue_from_manifests
 from .lerobot_reindex import reindex_dataset
+from .episode_tags import EpisodeTagStore, TagConflict, tag_types
 from .session_store import SessionStore
 
 
@@ -103,6 +104,7 @@ class RecordingWebServer:
         self._recording_root = Path(recording_root).resolve()
         self._lerobot_export_dir = Path(lerobot_export_dir).resolve()
         self._replay = LeRobotReplayCatalog(recording_root, lerobot_export_dir)
+        self._tags = EpisodeTagStore(recording_root)
         self._export_all = export_all
         self._logger = logger
         self._loop: asyncio.AbstractEventLoop | None = None
@@ -214,6 +216,13 @@ class RecordingWebServer:
         app.router.add_get("/api/lerobot", self._lerobot_list)
         app.router.add_get("/api/lerobot/queue", self._lerobot_queue)
         app.router.add_get("/api/lerobot/pending", self._lerobot_pending)
+        app.router.add_get("/api/recording/tag-defaults", self._tag_defaults_get)
+        app.router.add_put("/api/recording/tag-defaults", self._tag_defaults_put)
+        app.router.add_post("/api/recording/tags/backfill", self._tags_backfill)
+        app.router.add_get("/api/recording/episode-meta", self._episode_meta_get)
+        app.router.add_post("/api/recording/episode-meta/rebuild", self._episode_meta_rebuild)
+        app.router.add_get("/api/recording/{session_id}/tags", self._tags_get)
+        app.router.add_put("/api/recording/{session_id}/tags", self._tags_put)
         app.router.add_post("/api/lerobot/export-all", self._lerobot_export_all)
         app.router.add_post("/api/lerobot/reindex", self._lerobot_reindex)
         app.router.add_get("/api/lerobot/{session_id}/summary", self._lerobot_summary)
@@ -244,6 +253,14 @@ class RecordingWebServer:
         self._runner = web.AppRunner(app, access_log=None)
         await self._runner.setup()
         await web.TCPSite(self._runner, self._bind_host, self._port).start()
+        # Build the unified index in the background on startup.  Legacy
+        # manifests remain untouched until the explicit migration endpoint.
+        async def initial_index() -> None:
+            try:
+                await asyncio.to_thread(self._tags.rebuild)
+            except Exception as error:
+                self._logger.warning(f"Episode meta startup rebuild failed: {error}")
+        asyncio.create_task(initial_index())
 
     async def _shutdown(self) -> None:
         for client in list(self._clients):
@@ -300,6 +317,11 @@ class RecordingWebServer:
             # synchronous SDK work off the aiohttp event loop so live snapshot
             # WebSockets remain responsive while the replay tab is opened.
             sessions = await asyncio.to_thread(self._replay.list_datasets)
+            for session in sessions:
+                try:
+                    session.update(await asyncio.to_thread(self._tags.get, session["session_id"]))
+                except (OSError, ValueError):
+                    pass
             return web.json_response({"sessions": sessions})
         except Exception as error:  # noqa: BLE001 - read-only endpoint must stay available
             self._logger.warning(f"LeRobot replay listing failed: {error}")
@@ -313,10 +335,102 @@ class RecordingWebServer:
         from aiohttp import web
         try:
             sessions = await asyncio.to_thread(self._replay.list_pending)
+            for session in sessions:
+                try:
+                    session.update(await asyncio.to_thread(self._tags.get, session["session_id"]))
+                except (OSError, ValueError):
+                    pass
             return web.json_response({"sessions": sessions})
+
         except Exception as error:  # noqa: BLE001 - read-only endpoint must stay available
             self._logger.warning(f"LeRobot pending listing failed: {error}")
             raise web.HTTPServiceUnavailable(text="LeRobot pending is unavailable") from error
+
+    @staticmethod
+    async def _tag_body(request: Any) -> dict[str, Any]:
+        from aiohttp import web
+        try:
+            def no_duplicates(pairs):
+                result = {}
+                for key, value in pairs:
+                    if key in result:
+                        raise ValueError(f"duplicate JSON key: {key}")
+                    result[key] = value
+                return result
+            body = json.loads(await request.text(), object_pairs_hook=no_duplicates)
+        except Exception as error:
+            raise web.HTTPBadRequest(text="request body must be JSON") from error
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text="request body must be an object")
+        return body
+
+    async def _tag_defaults_get(self, _request: Any) -> Any:
+        from aiohttp import web
+        try:
+            values = await asyncio.to_thread(self._tags.defaults)
+            return web.json_response({"tags": values, "tag_types": tag_types(values),
+                                      "arms": ["left", "right", "both"], "lighting_levels": [1, 2, 3]})
+        except (OSError, ValueError) as error:
+            raise web.HTTPServiceUnavailable(text=str(error)) from error
+
+    async def _tag_defaults_put(self, request: Any) -> Any:
+        from aiohttp import web
+        body = await self._tag_body(request)
+        try:
+            result = await asyncio.to_thread(self._tags.save_defaults, body.get("tags"), body.get("set_types", {}))
+            return web.json_response(result, status=200 if result["meta_synced"] else 207)
+        except ValueError as error:
+            raise web.HTTPBadRequest(text=str(error)) from error
+
+    async def _tags_get(self, request: Any) -> Any:
+        from aiohttp import web
+        try:
+            return web.json_response(await asyncio.to_thread(self._tags.get, request.match_info["session_id"]))
+        except (OSError, ValueError) as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+
+    async def _tags_put(self, request: Any) -> Any:
+        from aiohttp import web
+        body = await self._tag_body(request)
+        try:
+            result = await asyncio.to_thread(self._tags.update, request.match_info["session_id"],
+                                             body.get("revision"), body.get("set", {}), body.get("reset", []),
+                                             body.get("delete", []), body.get("set_types", {}))
+            return web.json_response(result, status=200 if result["meta_synced"] else 207)
+        except TagConflict as error:
+            raise web.HTTPConflict(text=str(error)) from error
+        except ValueError as error:
+            raise web.HTTPBadRequest(text=str(error)) from error
+        except OSError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+
+    async def _tags_backfill(self, request: Any) -> Any:
+        from aiohttp import web
+        body = await self._tag_body(request)
+        if type(body.get("dry_run")) is not bool:
+            raise web.HTTPBadRequest(text="dry_run must be a boolean")
+        if body["dry_run"] is False and body.get("confirm") is not True:
+            raise web.HTTPBadRequest(text="confirm=true is required")
+        result = await asyncio.to_thread(self._tags.backfill, dry_run=body["dry_run"])
+        return web.json_response(result, status=200 if result.get("meta_synced", True) and not result["errors"] else 207)
+
+    async def _episode_meta_get(self, _request: Any) -> Any:
+        from aiohttp import web
+        try:
+            result = await asyncio.to_thread(self._tags.rebuild)
+            return web.json_response(result)
+        except (OSError, ValueError) as error:
+            raise web.HTTPServiceUnavailable(text=str(error)) from error
+
+    async def _episode_meta_rebuild(self, _request: Any) -> Any:
+        from aiohttp import web
+        body = await self._tag_body(_request) if _request.can_read_body else {}
+        if body.get("initialize_missing"):
+            if body.get("confirm") is not True:
+                raise web.HTTPBadRequest(text="confirm=true is required for history migration")
+            result = await asyncio.to_thread(self._tags.migrate_missing)
+            return web.json_response(result, status=200 if result["meta_synced"] else 207)
+        return await self._episode_meta_get(_request)
 
     @staticmethod
     def _read_raw_session(directory: Path) -> dict[str, Any]:
@@ -415,6 +529,7 @@ class RecordingWebServer:
         if not isinstance(result, dict) or not result.get("ok"):
             message = (result or {}).get("message", "batch export failed") if isinstance(result, dict) else "batch export failed"
             raise web.HTTPConflict(text=message)
+        result.update(await self._meta_sync())
         return web.json_response(result)
 
     async def _lerobot_reindex(self, _request: Any) -> Any:
@@ -424,10 +539,19 @@ class RecordingWebServer:
             result = await asyncio.to_thread(
                 reindex_dataset, self._recording_root, self._lerobot_export_dir
             )
+            result.update(await self._meta_sync())
             return web.json_response(result)
         except Exception as error:  # noqa: BLE001 - surface the reindex failure reason
             self._logger.warning(f"LeRobot reindex failed: {error}")
             raise web.HTTPConflict(text=str(error)) from error
+
+    async def _meta_sync(self) -> dict[str, Any]:
+        try:
+            index = await asyncio.to_thread(self._tags.rebuild)
+            return {"meta_synced": True, "index_count": len(index["episodes"]), "index_errors": index["errors"]}
+        except Exception as error:
+            self._logger.warning(f"Episode meta sync failed: {error}")
+            return {"meta_synced": False, "meta_error": str(error)}
 
     async def _lerobot_discard(self, request: Any) -> Any:
         """Discard one pending session so it is excluded from batch export."""
@@ -440,7 +564,7 @@ class RecordingWebServer:
             raise web.HTTPNotFound(text=str(error)) from error
         except RuntimeError as error:
             raise web.HTTPConflict(text=str(error)) from error
-        return web.json_response({"ok": True})
+        return web.json_response({"ok": True, **await self._meta_sync()})
 
     async def _lerobot_queue(self, _request: Any) -> Any:
         """Return the per-session conversion queue without exposing filesystem paths."""
@@ -476,7 +600,7 @@ class RecordingWebServer:
             raise web.HTTPNotFound(text=str(error)) from error
         except RuntimeError as error:
             raise web.HTTPConflict(text=str(error)) from error
-        return web.json_response({"ok": True})
+        return web.json_response({"ok": True, **await self._meta_sync()})
 
     async def _lerobot_restore(self, request: Any) -> Any:
         """Re-adopt one previously hidden exported episode."""
@@ -489,7 +613,7 @@ class RecordingWebServer:
             raise web.HTTPNotFound(text=str(error)) from error
         except RuntimeError as error:
             raise web.HTTPConflict(text=str(error)) from error
-        return web.json_response({"ok": True})
+        return web.json_response({"ok": True, **await self._meta_sync()})
 
     async def _lerobot_remove(self, request: Any) -> Any:
         """Permanently delete one exported episode's raw session files.
@@ -505,7 +629,7 @@ class RecordingWebServer:
             raise web.HTTPNotFound(text=str(error)) from error
         except RuntimeError as error:
             raise web.HTTPConflict(text=str(error)) from error
-        return web.json_response({"ok": True})
+        return web.json_response({"ok": True, **await self._meta_sync()})
 
     async def _lerobot_trash(self, _request: Any) -> Any:
         """List soft-deleted exported episodes without exposing filesystem paths."""
@@ -533,7 +657,7 @@ class RecordingWebServer:
                     removed += 1
                 except (ValueError, RuntimeError):
                     continue
-            return web.json_response({"ok": True, "removed": removed})
+            return web.json_response({"ok": True, "removed": removed, **await self._meta_sync()})
         except Exception as error:  # noqa: BLE001 - destructive endpoint must stay available
             self._logger.warning(f"remove-all-hidden failed: {error}")
             raise web.HTTPServiceUnavailable(text="remove-all-hidden failed") from error

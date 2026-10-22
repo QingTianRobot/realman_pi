@@ -186,3 +186,26 @@
 .panel-title h3{margin:0}
 #reindex-button{padding:4px 9px;font:10px inherit;color:#ffd58a;border-color:#6b5630;background:#262019}
 #reindex-button:hover{background:#332a1d}
+
+.tag-filters{display:grid;grid-template-columns:minmax(0,.9fr) minmax(0,1.1fr);column-gap:14px}
+.tag-filters .studio-select,.tag-filters .studio-search{min-width:0;width:100%}
+.tag-badges{color:#a8c7db}
+.tags-dialog{width:min(620px,calc(100vw - 24px));max-height:min(85vh,860px);padding:0;border:1px solid #385275;border-radius:14px;background:#111b2a;color:#edf3ff;box-shadow:0 22px 70px #000a}
+.tags-dialog::backdrop{background:#03060bcc}
+.tags-dialog form{padding:18px;overflow:auto;max-height:85vh}
+.tags-dialog header,.tags-actions{display:flex;align-items:center;justify-content:space-between;gap:10px}
+.tags-dialog h3{margin:0;font-size:17px}
+.tags-dialog button{background:#233752;border:1px solid #3c5574;color:#edf3ff;border-radius:7px;padding:7px 10px;cursor:pointer}
+.tags-dialog #tags-close{font-size:20px;line-height:1;padding:3px 9px}
+.tags-dialog #tags-message{min-height:22px;color:#92d8aa}
+.tags-dialog #tags-message.error{color:#ff9ca5}
+.tag-row{display:grid;grid-template-columns:minmax(100px,1fr) minmax(100px,1.3fr) auto;gap:7px;align-items:center;padding:8px 0;border-bottom:1px solid #263246}
+.tag-row:has(.tag-type){grid-template-columns:minmax(100px,1fr) 88px minmax(100px,1.3fr) auto}
+.tag-row label{font-weight:600;min-width:0;overflow-wrap:anywhere}
+.tag-row input:not([type=checkbox]),.tag-row select{min-width:0;width:100%;padding:7px;background:#0b1220;border:1px solid #334962;border-radius:6px;color:#edf3ff}
+.tag-row small{color:#97a8be}
+.tag-row .tag-reset{grid-column:1/-1;display:flex;align-items:center;gap:5px;font-weight:400;font-size:12px;color:#aab8ca}
+.tag-row .tag-key{margin-top:4px}
+.tags-actions{justify-content:flex-start;flex-wrap:wrap;margin-top:14px}
+.tags-actions #tags-save{margin-left:auto;background:#245a85}
+@media(max-width:560px){.tag-row,.tag-row:has(.tag-type){grid-template-columns:1fr 1fr}.tag-row label{grid-column:1/-1}.tag-row small{grid-column:1/-1}.tags-actions #tags-save{margin-left:0}}

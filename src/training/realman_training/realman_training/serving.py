@@ -14,6 +14,7 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import os
 import re
 import shlex
 import socket
@@ -110,7 +111,17 @@ def serve_env(config: ConsoleConfig, model: Model, gpu: int, port: int) -> dict[
     }
 
 
-def port_open(port: int, host: str = "127.0.0.1", timeout: float = 1.0) -> bool:
+# Where the published serve port is reachable. On the host that is 127.0.0.1; the console container sits on its own
+# bridge network, so its compose service sets this to host.docker.internal (extra_hosts: host-gateway).
+PROBE_HOST_ENV = "REALMAN_TRAINING_PROBE_HOST"
+
+
+def probe_host() -> str:
+    return os.environ.get(PROBE_HOST_ENV) or "127.0.0.1"
+
+
+def port_open(port: int, host: str | None = None, timeout: float = 1.0) -> bool:
+    host = host or probe_host()
     try:
         with socket.create_connection((host, port), timeout=timeout):
             return True

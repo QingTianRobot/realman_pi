@@ -178,6 +178,28 @@ def test_start_refuses_a_port_in_use(config):
                       clock=iter(range(100)).__next__, checks=ok_checks)
 
 
+def test_port_open_probes_the_host_from_the_environment(monkeypatch):
+    seen = []
+
+    class Conn:
+        def __enter__(self):
+            return self
+
+        def __exit__(self, *exc):
+            return False
+
+    def connect(address, timeout):
+        seen.append(address)
+        return Conn()
+
+    monkeypatch.setattr(serving.socket, "create_connection", connect)
+    monkeypatch.delenv(serving.PROBE_HOST_ENV, raising=False)
+    assert serving.port_open(18000)
+    monkeypatch.setenv(serving.PROBE_HOST_ENV, "host.docker.internal")
+    assert serving.port_open(18000)
+    assert seen == [("127.0.0.1", 18000), ("host.docker.internal", 18000)]
+
+
 def test_refusals_happen_before_anything_starts(config):
     chain = FakeChain()
     chain.gpu_used_mib = 16000

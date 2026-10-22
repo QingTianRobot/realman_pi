@@ -33,6 +33,8 @@ description: server5090:8780 上的训练控制平台网页：数据集与质检
 
 容器定义在 `config/docker/compose.yaml` 的 `realman_training` 服务（profile `training`，机器人侧任何命令都不会构建或启动它），镜像 `config/docker/training-console.Dockerfile`，配置 `config/training/training_console.yaml` 的 `web` 段。平台要把主机路径交给主机的 docker（openpi 容器）和 ssh（`realman_local`），所以这些路径在容器里挂载到同样的绝对路径，容器以主机用户身份运行。
 
+容器在自己的 bridge 网络里，容器内的 `127.0.0.1` 不是主机，连不到 openpi-serve 发布在主机上的端口（`serving.port`）。所以服务 `extra_hosts` 加了 `host.docker.internal:host-gateway`，并设 `REALMAN_TRAINING_PROBE_HOST=host.docker.internal`，"启动服务"等端口监听和检查端口占用都走它；在主机上直接跑命令行时不设这个变量，仍探测 `127.0.0.1`。少了它，服务其实已经起来，任务却一直停在"loading the checkpoint"直到 `start_timeout_sec` 超时，bridge 也不会被拉起。
+
 仓库根的 `.env` 是受版本管理的模板，令牌不能写进去。容器的令牌、路径和构建镜像源放在仓库外一个只有自己可读的 env 文件里，默认 `~/.config/realman-training/console.env`（目录 700、文件 600，可用环境变量 `RM65_SERVER_ENV` 指定别的位置）。
 
 在 server5090 的部署工作区里，用仓库根的 `./rm65_server` 一键操作（它只管这个容器，不碰机器人的服务）：

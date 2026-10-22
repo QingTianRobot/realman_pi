@@ -392,8 +392,11 @@ services:
       DOCKER_CONFIG: /tmp/.docker
       REALMAN_TRAINING_TOKEN: ${REALMAN_TRAINING_TOKEN:-}
       REALMAN_TRAINING_CONFIG: ${TRAINING_REPO:-/home/server5090/organization/realman_pi}/config/training/training_console.yaml
+      # The console runs on its own bridge network: its 127.0.0.1 is not the host, where openpi-serve publishes its port.
+      REALMAN_TRAINING_PROBE_HOST: host.docker.internal
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: utility
+    extra_hosts: ["host.docker.internal:host-gateway"]
     ports:
       - "${TRAINING_BIND:-0.0.0.0}:8780:8780"
     volumes:

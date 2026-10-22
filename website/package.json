@@ -19,6 +19,7 @@
   },
   "dependencies": {
     "gridstack": "^13.3.0",
+    "marked": "16.4.2",
     "three": "0.185.1",
     "uplot": "^1.6.32",
     "urdf-loader": "0.13.1",

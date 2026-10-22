@@ -145,6 +145,27 @@ pre.log, pre.card { margin: 0; padding: 10px 12px; border-radius: 10px; font-siz
 pre.log { background: oklch(0.22 0.02 var(--hue)); color: oklch(0.93 0.01 var(--hue)); }
 pre.card { max-height: 60vh; background: var(--card-sub); color: var(--text); }
 .panel > details { margin-top: 14px; }
+/* Rendered markdown (model cards, MODELS.md). */
+.markdown { max-height: 70vh; margin-top: 10px; padding: 14px 18px; overflow-y: auto; border: 1px solid var(--line); border-radius: 12px; background: var(--card-sub); color: var(--text); font-size: 13px; line-height: 1.65; overflow-wrap: anywhere; }
+.markdown > :first-child { margin-top: 0; }
+.markdown > :last-child { margin-bottom: 0; }
+.markdown h1, .markdown h2 { padding-left: 0; margin: 18px 0 8px; font-size: 17px; }
+.markdown h1::before, .markdown h2::before { display: none; }
+.markdown h2 { font-size: 15px; }
+.markdown h3, .markdown h4 { margin: 16px 0 6px; color: var(--text); font-size: 13.5px; }
+.markdown p, .markdown ul, .markdown ol { margin: 8px 0; }
+.markdown ul, .markdown ol { padding-left: 22px; }
+.markdown li + li { margin-top: 3px; }
+.markdown a { color: var(--primary-strong); }
+.markdown code { padding: 1px 5px; border-radius: 5px; background: var(--btn-bg); font-family: var(--mono); font-size: .9em; }
+.markdown pre { margin: 10px 0; padding: 10px 12px; overflow-x: auto; border-radius: 8px; background: oklch(0.22 0.02 var(--hue)); color: oklch(0.93 0.01 var(--hue)); }
+.markdown pre code { padding: 0; background: none; color: inherit; font-size: 11.5px; }
+.markdown blockquote { margin: 10px 0; padding: 2px 12px; border-left: 3px solid var(--accent-bar); color: var(--text-2); }
+.markdown hr { border: 0; border-top: 1px solid var(--line); margin: 16px 0; }
+.markdown .table-wrap { margin: 10px 0; }
+.markdown table { background: var(--card-bg); }
+.markdown th { white-space: normal; }
+.markdown th, .markdown td { border: 1px solid var(--line); vertical-align: top; }
 details summary { cursor: pointer; color: var(--text-2); font-size: 12px; font-weight: 700; }
 
 .drawer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: grid; grid-template-rows: auto minmax(0, 1fr); height: min(60vh, 520px); border-top: 1px solid var(--line-strong); background: var(--card-bg); box-shadow: 0 -10px 30px oklch(0.3 0.02 var(--hue) / 0.12); }

@@ -17,6 +17,8 @@ export default defineConfig({
   root: webDirectory,
   cacheDir: resolve(websiteDirectory, "node_modules/.vite-realman-training"),
   base: "/",
+  // Sources live outside website/, so bare imports resolve through website/node_modules explicitly.
+  resolve: { alias: { marked: resolve(websiteDirectory, "node_modules/marked") } },
   build: { outDir: staticDirectory, emptyOutDir: true, sourcemap: false },
   server: { host: "127.0.0.1", port: 4176, strictPort: true, proxy: { "/api": { target: api, ws: true } } },
 });

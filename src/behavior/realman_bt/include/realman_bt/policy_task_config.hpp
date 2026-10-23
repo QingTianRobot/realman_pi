@@ -3,6 +3,7 @@
 #include <array>
 #include <map>
 #include <string>
+#include <vector>
 
 namespace realman_bt {
 
@@ -18,6 +19,11 @@ inline constexpr char kPolicyCyclesKey[] = "policy_cycles";
 inline constexpr char kPolicyAttemptsKey[] = "policy_attempts";
 inline constexpr char kPolicyTimeoutAttemptsKey[] = "policy_timeout_attempts";
 inline constexpr char kPolicyTimeoutBackoffSecKey[] = "policy_timeout_backoff_sec";
+// Pick-and-clear cycle (config/behavior-trees/control_pick.xml): the lift pose as six comma-separated
+// degrees for MoveJ, the joint that turns to the release side and its target angle.
+inline constexpr char kPickLiftJointDegreesKey[] = "pick_lift_joint_degrees";
+inline constexpr char kPickReleaseJointKey[] = "pick_release_joint";
+inline constexpr char kPickReleaseJointDegKey[] = "pick_release_joint_deg";
 
 // Thresholds of the policy task. The values come from config/ros/policy_task.yaml (executor
 // parameters under `policy_task.`); the defaults below are the same numbers so a missing file
@@ -67,6 +73,35 @@ struct PolicyTaskConfig {
   struct Verdict {
     double window_sec{3.0};
     double empty_position_min{7800.0};  // closed plateau at or above this = jaws met = nothing held
+  };
+  // control_pick.xml: after a pick attempt lifts the object, the arm goes to lift_joint_degrees,
+  // turns joint release_joint (1-based) to release_joint_deg and opens the gripper there. The lift
+  // pose is the right arm's start pose (pika_config.yaml) until a dedicated one is measured.
+  struct PickCycle {
+    std::array<double, 6> lift_joint_degrees{-9.89, 18.046, 79.074, 15.505, 79.606, -6.194};
+    int release_joint{1};
+    double release_joint_deg{-135.0};
+  };
+  // WhiteObjectsRemain: are there still white objects (the power adapters) on the mat? Pixels of
+  // the ROI whose smallest RGB channel is at least min_channel and whose channel spread is at most
+  // max_chroma count as white; only those whose whole erode_px x erode_px square is white survive
+  // (this drops the thin white cables), and min_pixels survivors mean an object is left. The image
+  // is the first one received settle_sec after the check starts, so it shows the parked arm.
+  // Measured 2026-10-20 on D435 frames: adapters 110-170 per channel, the green mat below 40,
+  // one adapter keeps 245-500 pixels after a 9 px erosion, the cables at most 73 (live, 2026-10-20).
+  // exclude_xywh lists rectangles (x, y, width, height, flattened) inside which no pixel counts as
+  // white: the ceiling light's reflection on the glossy mat is as white as an adapter. An object
+  // lying in an excluded rectangle is not seen, so the loop can end with it still there.
+  struct ObjectDetection {
+    std::string image_topic{"/camera_global/d435/color/image_raw"};
+    std::array<int, 4> roi_xywh{235, 125, 250, 230};
+    std::vector<int> exclude_xywh{392, 170, 75, 185};
+    int min_channel{90};
+    int max_chroma{40};
+    int erode_px{9};
+    int min_pixels{150};
+    double settle_sec{1.0};
+    double timeout_sec{5.0};
   };
   struct GripperReady {
     double open_position_max{500.0};
@@ -128,6 +163,8 @@ struct PolicyTaskConfig {
   Lift lift;
   Verdict verdict;
   GripperReady gripper_ready;
+  PickCycle pick_cycle;
+  ObjectDetection object_detection;
   double router_release_sec{1.5};
   Trace trace;
 

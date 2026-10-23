@@ -1,0 +1,141 @@
+<?xml version="1.0"?>
+<!-- control.xml with a pick-and-clear policy branch; every other branch is identical to control.xml. -->
+<root main_tree_to_execute="InputControl"
+      realman_arm_id="r"
+      realman_required_arms="l,m,r"
+      realman_launch="control_router"
+      realman_stop_on_terminal="false"
+      realman_exit_on_terminal="false">
+  <BehaviorTree ID="InputControl">
+    <ReactiveSequence name="input_control">
+      <SelectInputMode selected_mode="{selected_mode}"/>
+      <ReactiveFallback name="input_router">
+        <ReactiveSequence name="web_branch">
+          <InputModeGuard mode="web" label="Web" selectable="false"
+                          selected_mode="{selected_mode}"/>
+          <ActivateInputMode mode="web"/>
+          <WebInputStub/>
+        </ReactiveSequence>
+        <ReactiveSequence name="keyboard_branch">
+          <InputModeGuard mode="keyboard" label="Web / 键盘速度控制" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <Sequence name="keyboard_entry">
+            <PrepareKeyboardWork dry_run="{dry_run}"/>
+            <ActivateInputMode mode="keyboard"/>
+            <KeyboardVelocityInput/>
+          </Sequence>
+        </ReactiveSequence>
+        <ReactiveSequence name="policy_branch">
+          <InputModeGuard mode="policy" label="Policy / 抓取清台" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <!-- Same entry as control.xml: the policy starts from the Pika default pose it was trained from. -->
+          <Sequence name="policy_entry">
+            <ThreeArmMoveJ name="policy_start_pose" dry_run="{dry_run}"
+                           l_joint_degrees="{pika_l_joint_degrees}"
+                           m_joint_degrees="{pika_m_joint_degrees}"
+                           r_joint_degrees="{pika_r_joint_degrees}"
+                           velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+            <ActivateInputMode mode="policy"/>
+            <!-- Pick and clear the table. Each cycle: the pick-only policy (task="pick", lift_and_hold) grasps one
+                 object and lifts it, retried and faulted exactly as in control.xml; the right arm then goes to the lift
+                 pose, turns J1 to the release side and opens the gripper there; WhiteObjectsRemain looks at the
+                 global camera. Objects left: SUCCESS, the Repeat runs the next cycle. Table clear: it writes
+                 pick_table_clear=true and fails, which ends the Repeat; CheckBool turns that into success and the
+                 branch idles in policy mode. Any other failure (attempts used up, a fault, a MoveJ, no camera
+                 image) leaves pick_table_clear false, so FailInputMode reports FAILED. Lift pose, release joint and
+                 angle, and the detector's ROI and thresholds come from config/ros/policy_task.yaml (pick_cycle,
+                 object_detection). -->
+            <Fallback name="pick_task">
+              <Sequence name="pick_task_ok">
+                <SetBool key="pick_table_clear" value="false"/>
+                <Fallback name="pick_until_clear">
+                  <Repeat num_cycles="-1">
+                    <Sequence name="pick_cycle">
+                      <RetryUnlessFault num_attempts="{policy_attempts}"
+                                      timeout_attempts="{policy_timeout_attempts}"
+                                      timeout_backoff_sec="{policy_timeout_backoff_sec}">
+                        <Sequence name="pick_attempt">
+                          <GripperReady arm_id="r" dry_run="{dry_run}"/>
+                          <ThreeArmMoveJ name="policy_rehome" dry_run="{dry_run}"
+                                         l_joint_degrees="{pika_l_joint_degrees}"
+                                         m_joint_degrees="{pika_m_joint_degrees}"
+                                         r_joint_degrees="{pika_r_joint_degrees}"
+                                         velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+                          <PolicyRun arm_id="r" task="pick" dry_run="{dry_run}"/>
+                        </Sequence>
+                      </RetryUnlessFault>
+                      <MoveJ name="pick_lift_pose" arm_id="r" dry_run="{dry_run}"
+                             joint_degrees="{pick_lift_joint_degrees}"
+                             velocity_percent="10" blend_radius_percent="0" timeout_sec="60"/>
+                      <MoveJointTo name="pick_turn_to_release" arm_id="r" dry_run="{dry_run}"
+                                   joint="{pick_release_joint}" target_degrees="{pick_release_joint_deg}"
+                                   velocity_percent="10" timeout_sec="60"/>
+                      <GripperReady name="pick_release" arm_id="r" dry_run="{dry_run}"/>
+                      <WhiteObjectsRemain name="objects_remain" dry_run="{dry_run}"
+                                          table_clear="{pick_table_clear}"/>
+                    </Sequence>
+                  </Repeat>
+                  <CheckBool key="pick_table_clear" expected="true"/>
+                </Fallback>
+                <!-- The last cycle left the right arm at the release pose; park all three at the start pose so
+                     the next entry's start-pose MoveJ is short (it runs under the 5 s input-mode switch timeout). -->
+                <ThreeArmMoveJ name="pick_done_home" dry_run="{dry_run}"
+                               l_joint_degrees="{pika_l_joint_degrees}"
+                               m_joint_degrees="{pika_m_joint_degrees}"
+                               r_joint_degrees="{pika_r_joint_degrees}"
+                               velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
+                <PolicyInputStub/>
+              </Sequence>
+              <FailInputMode reason="{policy_failure_reason}"/>
+            </Fallback>
+          </Sequence>
+        </ReactiveSequence>
+        <ReactiveSequence name="pikaposition_branch">
+          <InputModeGuard mode="pikaposition" label="Pika / 位置控制" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <Sequence name="pika_position_entry">
+            <ThreeArmMoveJ name="pika_default_pose" dry_run="{dry_run}"
+                           l_joint_degrees="{pika_l_joint_degrees}"
+                           m_joint_degrees="{pika_m_joint_degrees}"
+                           r_joint_degrees="{pika_r_joint_degrees}"
+                           velocity_percent="30" blend_radius_percent="0" timeout_sec="120"/>
+            <ActivateInputMode mode="pikaposition"/>
+            <PikaPositionInput/>
+          </Sequence>
+        </ReactiveSequence>
+        <ReactiveSequence name="pikavelocity_branch">
+          <InputModeGuard mode="pikavelocity" label="Pika / 速度控制" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <Sequence name="pika_velocity_entry">
+            <ThreeArmMoveJ name="pika_default_pose" dry_run="{dry_run}"
+                           l_joint_degrees="{pika_l_joint_degrees}"
+                           m_joint_degrees="{pika_m_joint_degrees}"
+                           r_joint_degrees="{pika_r_joint_degrees}"
+                           velocity_percent="30" blend_radius_percent="0" timeout_sec="120"/>
+            <ActivateInputMode mode="pikavelocity"/>
+            <PikaVelocityInput/>
+          </Sequence>
+        </ReactiveSequence>
+        <ReactiveSequence name="pikamixed_branch">
+          <InputModeGuard mode="pikamixed" label="Pika / Mixed 控制" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <Sequence name="pika_mixed_entry">
+            <ThreeArmMoveJ name="pika_default_pose" dry_run="{dry_run}"
+                           l_joint_degrees="{pika_l_joint_degrees}"
+                           m_joint_degrees="{pika_m_joint_degrees}"
+                           r_joint_degrees="{pika_r_joint_degrees}"
+                           velocity_percent="30" blend_radius_percent="0" timeout_sec="120"/>
+            <ActivateInputMode mode="pikamixed"/>
+            <PikaMixedInput/>
+          </Sequence>
+        </ReactiveSequence>
+        <ReactiveSequence name="none_branch">
+          <InputModeGuard mode="none" label="无输入" selectable="true"
+                          selected_mode="{selected_mode}"/>
+          <ActivateInputMode mode="none"/>
+          <IdleInput/>
+        </ReactiveSequence>
+      </ReactiveFallback>
+    </ReactiveSequence>
+  </BehaviorTree>
+</root>

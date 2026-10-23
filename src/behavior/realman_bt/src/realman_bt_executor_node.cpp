@@ -3,6 +3,8 @@
 #include <chrono>
 #include <cmath>
 #include <filesystem>
+#include <iomanip>
+#include <sstream>
 #include <stdexcept>
 #include <utility>
 
@@ -11,6 +13,8 @@
 #include "bt_nodes/control/reactive_fallback_node.hpp"
 #include "bt_nodes/control/reactive_sequence_node.hpp"
 #include "bt_nodes/control/sequence_node.hpp"
+#include "bt_nodes/data/check_bool_node.hpp"
+#include "bt_nodes/data/set_bool_node.hpp"
 #include "bt_nodes/decorator/repeat_node.hpp"
 #include "bt_nodes/decorator/retry_node.hpp"
 #include "realman_bt/cartesian_velocity_for_duration_node.hpp"
@@ -22,7 +26,9 @@
 #include "realman_bt/policy_task_params.hpp"
 #include "realman_bt/prepare_keyboard_work_node.hpp"
 #include "realman_bt/retry_unless_fault_node.hpp"
+#include "realman_bt/rotate_joint_node.hpp"
 #include "realman_bt/three_arm_move_j_node.hpp"
+#include "realman_bt/white_objects_remain_node.hpp"
 
 namespace realman_bt {
 namespace {
@@ -103,6 +109,18 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   blackboard_->set<int>(kPolicyAttemptsKey, policy_task_config_.attempts);
   blackboard_->set<int>(kPolicyTimeoutAttemptsKey, policy_task_config_.timeout_retry.attempts);
   blackboard_->set<double>(kPolicyTimeoutBackoffSecKey, policy_task_config_.timeout_retry.backoff_sec);
+  // control_pick.xml reads the lift pose and the release joint as {pick_lift_joint_degrees},
+  // {pick_release_joint} and {pick_release_joint_deg}.
+  {
+    std::ostringstream lift;
+    lift << std::setprecision(12);
+    for (std::size_t index = 0; index < policy_task_config_.pick_cycle.lift_joint_degrees.size(); ++index) {
+      lift << (index == 0 ? "" : ",") << policy_task_config_.pick_cycle.lift_joint_degrees[index];
+    }
+    blackboard_->set<std::string>(kPickLiftJointDegreesKey, lift.str());
+  }
+  blackboard_->set<int>(kPickReleaseJointKey, policy_task_config_.pick_cycle.release_joint);
+  blackboard_->set<double>(kPickReleaseJointDegKey, policy_task_config_.pick_cycle.release_joint_deg);
   // MotionDwellMonitor defaults (config/ros/motion_monitor.yaml); a port in the XML wins over them.
   const MotionMonitorConfig motion_monitor = declareAndLoadMotionMonitorConfig(*this);
   blackboard_->set<double>(kMotionDwellSecKey, motion_monitor.dwell_sec);
@@ -132,10 +150,13 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   factory_.registerNodeType<bt_nodes::FallbackNode>("Fallback");
   factory_.registerNodeType<bt_nodes::RepeatNode>("Repeat");
   factory_.registerNodeType<bt_nodes::RetryNode>("Retry");
+  factory_.registerNodeType<bt_nodes::SetBoolNode>("SetBool");
+  factory_.registerNodeType<bt_nodes::CheckBoolNode>("CheckBool");
   factory_.registerNodeType<RetryUnlessFaultNode>("RetryUnlessFault");
   factory_.registerNodeType<MotionDwellMonitorNode>("MotionDwellMonitor");
   factory_.registerNodeType<GripperReadyNode>("GripperReady");
   factory_.registerNodeType<PolicyRunNode>("PolicyRun");
+  factory_.registerNodeType<WhiteObjectsRemainNode>("WhiteObjectsRemain");
   factory_.registerNodeType<SelectInputModeNode>("SelectInputMode");
   factory_.registerNodeType<InputModeGuardNode>("InputModeGuard");
   factory_.registerNodeType<ActivateInputModeNode>("ActivateInputMode");
@@ -151,6 +172,8 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   factory_.registerNodeType<IdleInputNode>("IdleInput");
   factory_.registerNodeType<MoveJNode>("MoveJ");
   factory_.registerNodeType<ThreeArmMoveJNode>("ThreeArmMoveJ");
+  factory_.registerNodeType<RotateJointNode>("RotateJoint");
+  factory_.registerNodeType<MoveJointToNode>("MoveJointTo");
   factory_.registerNodeType<CartesianVelocityForDurationNode>(
       "CartesianVelocityForDuration");
   bt_core::XmlParser parser(factory_);

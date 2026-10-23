@@ -101,6 +101,11 @@ class RealManDriverNode(Node):
             self.declare_parameter("reconnect_interval", 5.0).value
         )
         self.state_publish_rate = float(self.declare_parameter("state_publish_rate", 10.0).value)
+        # Publish the joint currents (mA, JointState.effort) on joint_currents with every joint
+        # state. One more SDK read per state tick; it shares the SDK lock with velocity commands.
+        self.publish_joint_currents = bool(
+            self.declare_parameter("publish_joint_currents", True).value
+        )
         # Diagnostic only: log joint angles around each velocity-session start.
         self.velocity_start_trace = bool(
             self.declare_parameter("velocity_start_trace", False).value
@@ -361,6 +366,7 @@ class RealManDriverNode(Node):
             callback_group=self.velocity_command_callback_group,
         )
         self.joint_state_publisher = self.create_publisher(JointState, "joint_states", 10)
+        self.joint_current_publisher = self.create_publisher(JointState, "joint_currents", 10)
         self.cartesian_velocity_state_publisher = self.create_publisher(
             CartesianVelocityState,
             "cartesian_velocity/state",
@@ -1193,6 +1199,25 @@ class RealManDriverNode(Node):
         except Exception as error:
             self.get_logger().error(f"Automatic RealMan reconnect failed: {error}")
 
+    def _publish_joint_currents(self, stamp: Any) -> None:
+        """Publish the joint currents (mA in effort) next to a joint state; skip when unreadable."""
+        if not getattr(self, "publish_joint_currents", False):
+            return
+        read = getattr(self.adapter, "joint_currents", None)
+        if not callable(read):
+            return
+        try:
+            currents = read()
+        except Exception:
+            return
+        if not currents or len(currents) != len(self.joint_names):
+            return
+        message = JointState()
+        message.header.stamp = stamp
+        message.name = list(self.joint_names)
+        message.effort = [float(value) for value in currents]
+        self.joint_current_publisher.publish(message)
+
     def _publish_state(self) -> None:
         self._maybe_reconnect()
 
@@ -1247,6 +1272,7 @@ class RealManDriverNode(Node):
         # The vendor API reports degrees; sensor_msgs/JointState requires radians.
         message.position = [math.radians(float(value)) for value in state.joint_degrees]
         self.joint_state_publisher.publish(message)
+        self._publish_joint_currents(message.header.stamp)
         estimator = getattr(self, "_velocity_estimator", None)
         if estimator is not None:
             fk = getattr(self.adapter, "forward_kinematics", None)

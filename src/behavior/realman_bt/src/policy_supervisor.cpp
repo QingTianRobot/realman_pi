@@ -41,6 +41,8 @@ const char* outcomeName(AttemptOutcome outcome) {
       return "dropped";
     case AttemptOutcome::kWrongTask:
       return "wrong_task";
+    case AttemptOutcome::kWrongSideEmpty:
+      return "wrong_side_empty";
     case AttemptOutcome::kTimeout:
       return "timeout";
     case AttemptOutcome::kStall:
@@ -171,6 +173,15 @@ void PolicySupervisor::onDriverCommand(double linear_mps, double angular_radps, 
   cmd_valid_ = true;
 }
 
+void PolicySupervisor::onJointCurrents(const std::string& arm, const Joints& milliamps) {
+  if (arm != config_.arm) return;
+  for (const double value : milliamps) {
+    if (!std::isfinite(value)) return;
+  }
+  currents_ma_ = milliamps;
+  currents_valid_ = true;
+}
+
 void PolicySupervisor::onGripperReading(double position, bool torque_reached, double time) {
   last_gripper_position_ = position;
   last_torque_reached_ = torque_reached;
@@ -255,6 +266,8 @@ SupervisorSnapshot PolicySupervisor::snapshot(double now) const {
   if (policy_gripper_valid_) out.policy_gripper = policy_gripper_;
   out.gripper_position = last_gripper_position_;
   out.torque_reached = last_torque_reached_;
+  out.currents_valid = currents_valid_;
+  out.currents_ma = currents_ma_;
   if (cmd_valid_) {
     out.cmd_linear = cmd_linear_;
     out.cmd_angular = cmd_angular_;
@@ -373,6 +386,20 @@ void PolicySupervisor::evaluateLift(double now, bool closed) {
   if (!lift_reference_deg_) return;  // the policy has not tried to grasp yet
 
   if (arm[lift.wrong_side_joint_index] < lift.wrong_side_below_deg) {
+    // With the jaws met nothing is carried to the bin; the policy missed and wanders, so another
+    // attempt (open, go home, start again) can fix it. Holding something, or no gripper reading,
+    // stays a fault: then it really is carrying the object away under the pick prompt.
+    const bool jaws_met = std::isfinite(last_gripper_position_) &&
+                          last_gripper_position_ >= config_.verdict.empty_position_min;
+    if (jaws_met) {
+      finish(now, AttemptOutcome::kWrongSideEmpty,
+             "the arm turned to the bin side (J" + std::to_string(lift.wrong_side_joint_index + 1) + " = " +
+                 number(arm[lift.wrong_side_joint_index], 1) + " deg, limit " +
+                 number(lift.wrong_side_below_deg, 1) + ") with empty jaws (gripper position " +
+                 number(last_gripper_position_, 0) + "): the grasp missed",
+             "empty");
+      return;
+    }
     finish(now, AttemptOutcome::kWrongTask,
            "the arm turned to the bin side (J" + std::to_string(lift.wrong_side_joint_index + 1) + " = " +
                number(arm[lift.wrong_side_joint_index], 1) + " deg, limit " +

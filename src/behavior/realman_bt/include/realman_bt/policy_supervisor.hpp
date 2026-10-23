@@ -19,7 +19,8 @@ enum class AttemptOutcome {
   kReleasedEmpty,  // release_over_bin: let go over the bin but nothing was held: retryable
   kLiftedHeld,     // lift_and_hold: lifted the object and kept holding it: success
   kDropped,        // lift_and_hold: held the object, then it slipped out of the closed jaws: retryable
-  kWrongTask,      // lift_and_hold: turned to the bin side, i.e. ran the place task: not retryable
+  kWrongTask,      // lift_and_hold: turned to the bin side holding the object, i.e. ran the place task: not retryable
+  kWrongSideEmpty, // lift_and_hold: turned to the bin side after closing on nothing (jaws met): retryable
   kTimeout,        // no success in max_attempt_sec: retryable
   kStall,          // gripper closed and the policy stopped moving: retryable
   kPolicyTimeout,  // the policy server or its bridge timed out: retryable on its own budget
@@ -66,6 +67,9 @@ struct SupervisorSnapshot {
   bool stats_allow_publish{false};
   bool stats_paused{false};
   double closed_total_sec{0.0};
+  // The supervised arm's joint currents (mA, from /<arm>/joint_currents), recorded in the trace.
+  bool currents_valid{false};
+  Joints currents_ma{};
 };
 
 // The decisions of PolicyRun, with no ROS in it: it is fed the sensor readings as they arrive and
@@ -92,6 +96,8 @@ class PolicySupervisor {
   void onPolicyGripperCommand(double value, double time);  // 0 = closed, 1 = open
   void onDriverCommand(double linear_mps, double angular_radps, double time);
   void onGripperReading(double position, bool torque_reached, double time);
+  // Joint currents in mA. Only the supervised arm's are kept; for now they are only recorded.
+  void onJointCurrents(const std::string& arm, const Joints& milliamps);
 
   // Starts an attempt of task `task_name` (a key of config.tasks; throws std::invalid_argument for
   // an unknown one). The task decides how a successful attempt ends.
@@ -138,6 +144,8 @@ class PolicySupervisor {
   std::deque<GripperSample> gripper_samples_;  // this attempt only: the grasp verdict looks back over it
   double last_gripper_position_{std::nan("")};  // the latest reading, kept across reset() for the snapshot
   bool last_torque_reached_{false};
+  bool currents_valid_{false};  // like the gripper reading, kept across reset() for the snapshot
+  Joints currents_ma_{};
 
   bool started_{false};
   double start_time_{0.0};

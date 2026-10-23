@@ -394,6 +394,44 @@ void testTaskControlNodesAreRegistered() {
   require(f.until([&] { return f.snapshot().find("\"success\":1") != std::string::npos; }),
           "Repeat/RetryUnlessFault/Fallback/Retry tree did not run to success");
 }
+
+std::string pickXml() {
+  return readFile(std::filesystem::path(BT_TEST_CONFIG_DIR) / "control_pick.xml");
+}
+
+// control_pick.xml in dry run: every leaf of one pick cycle is registered and validates, the
+// detector reports a clear table without reading the camera, and the branch then idles in policy
+// mode instead of failing.
+void testPickTreeDryRunEndsWithAClearTableAndIdles() {
+  Fixture f;
+  f.load(pickXml());
+  f.subscribe();
+  require(f.until([&] { return !f.states.empty(); }), "missing initial state");
+  require(f.select("policy")->accepted, "policy request rejected");
+  f.start();
+  require(f.until([&] { return f.snapshot().find("dry-run: camera not read") != std::string::npos; }, 5s),
+          "pick cycle did not reach WhiteObjectsRemain");
+  require(!f.until([&] { return f.states.back().phase == State::FAILED; }, 500ms),
+          "a clear table was reported as FAILED");
+  require(f.states.back().phase == State::ACTIVE && f.states.back().active_mode == "policy",
+          "pick branch did not stay in policy mode after clearing the table");
+}
+
+// A cycle that fails (here every attempt) ends the Repeat without pick_table_clear, so the branch
+// reports FAILED instead of mistaking the end of the loop for a clear table.
+void testPickTreeFailedCycleIsNotAClearTable() {
+  Fixture f;
+  auto xml = pickXml();
+  replaceOnce(xml, "<PolicyRun arm_id=\"r\" task=\"pick\" dry_run=\"{dry_run}\"/>",
+              "<CheckBool key=\"never_set\"/>");
+  f.load(xml);
+  f.subscribe();
+  require(f.until([&] { return !f.states.empty(); }), "missing initial state");
+  require(f.select("policy")->accepted, "policy request rejected");
+  f.start();
+  require(f.until([&] { return f.states.back().phase == State::FAILED; }, 5s),
+          "a failed pick cycle did not publish FAILED");
+}
 }  // namespace
 
 // The Web "终止行为树" button calls ~/shutdown: it must answer, halt the tree, and then end
@@ -439,6 +477,8 @@ int main(int argc, char** argv) {
     testPolicyTaskCountsReachTheTreeThroughTheBlackboard();
     testAnInvalidPolicyTaskValueStopsTheExecutorFromStarting();
     testTaskControlNodesAreRegistered();
+    testPickTreeDryRunEndsWithAClearTableAndIdles();
+    testPickTreeFailedCycleIsNotAClearTable();
     testShutdownServiceHaltsThenExits();
   } catch (const std::exception& error) {
     RCLCPP_ERROR(rclcpp::get_logger("test_input_mode_executor"), "%s", error.what());

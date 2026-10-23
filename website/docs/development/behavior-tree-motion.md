@@ -7,7 +7,7 @@ description: 使用 vendored BehaviorTree.CPP-X 执行单臂或三臂同步分�
 
 realman_bt 提供一个独立的 ROS 2 C++ 执行器，用于从 XML 加载行为树并执行关节移动。它参考
 third_party/behavior_tree_cpp 的 NodeFactory -> XmlParser -> Tree::tickOnce() 链路，注册
-Sequence、MoveJ、ThreeArmMoveJ、CartesianVelocityForDuration 和输入路由所需的
+Sequence、MoveJ、ThreeArmMoveJ、RotateJoint、CartesianVelocityForDuration 和输入路由所需的
 PrepareKeyboardWork 等节点，不替换生产 ./rm65 up 编排，也不会
 自动启动机械臂驱动。
 
@@ -21,7 +21,9 @@ PrepareKeyboardWork 等节点，不替换生产 ./rm65 up 编排，也不会
       -> realman_bt_executor
            -> move.xml: Sequence -> MoveJ
            -> three.xml: Sequence -> ThreeArmMoveJ -> ThreeArmMoveJ
+           -> rotate_joint.xml: Sequence -> RotateJoint -> RotateJoint
            -> tool_x.xml: Sequence -> CartesianVelocityForDuration
+           -> /l|m|r/get_current_pose (realman_msgs/srv/GetCurrentPose，仅 RotateJoint 读当前关节角)
            -> /l|m|r/execute_motion (realman_msgs/action/ExecuteMotion)
            -> /l|m|r/cartesian_velocity (realman_msgs/action/CartesianVelocity)
               + /l|m|r/cartesian_velocity/command (geometry_msgs/msg/TwistStamped)
@@ -56,6 +58,48 @@ goal，并在三路都成功后返回 SUCCESS。任一路失败或超时会使�
 `dry_run`、`velocity_percent`、`blend_radius_percent`、`timeout_sec` 默认分别为 `true`、`10`、`0`、
 `120`。成功要求三路 Action 均返回 `SUCCEEDED`，且每个结果消息的 `success=true`。超时从节点初始化
 开始计算，包含等待服务器就绪的时间。
+
+## 关节相对转动节点
+
+`RotateJoint` 让某一个关节 JX 在当前角度上顺时针或逆时针转动一个角度，其余五个关节保持不动。它本质上
+是一次 MoveJ：节点先调用 `/<arm_id>/get_current_pose` 读当前六个关节角（度），只改第 `joint` 个关节，
+再把完整目标作为普通 MoveJ 发给 `/<arm_id>/execute_motion`。超时、取消和 halt 移交 drain 都直接复用
+MoveJ，行为与 MoveJ 完全一致。
+
+```xml
+<RotateJoint arm_id="{arm_id}" dry_run="{dry_run}" joint="6" direction="ccw"
+             angle_degrees="10" velocity_percent="10" timeout_sec="60"/>
+```
+
+| 端口 | 默认 | 约束 |
+| --- | --- | --- |
+| `arm_id` | `r` | `l`、`m` 或 `r` |
+| `joint` | `6` | `1`..`6`，对应 J1..J6 |
+| `direction` | `ccw` | `ccw` 逆时针，关节角增加；`cw` 顺时针，关节角减小 |
+| `angle_degrees` | `10` | 转动幅度（度），范围 `(0, 180]`，只填正数，方向由 `direction` 决定 |
+| `velocity_percent` | `10` | `1`..`100` |
+| `timeout_sec` | `30` | 正数；读关节角和 MoveJ 各自使用这个超时 |
+| `dry_run` | `true` | 只接受 `true`/`false`/`1`/`0` |
+
+顺/逆时针按右手定则定义：沿关节 +Z 轴往关节看（轴指向观察者），逆时针为正方向，与 RealMan 关节角
+正方向一致。如果实际安装让你从反面观察，看到的方向会相反，以关节角变大/变小为准。
+
+端口写了但解析不出来（例如 `timeout_sec="abc"`、`joint="six"`）会直接失败，不会悄悄退回默认值。
+`dry_run=true` 只校验端口，不读关节角也不发 goal，因此 dry-run 日志里看不到目标角度；真机运行时
+诊断事件 `target`（来源 `SERVICE`，接口 `/<arm>/get_current_pose`）记录 `当前角度 -> 目标角度`。
+节点和 ROS 驱动都不检查关节限位，目标原样交给控制器的 `rm_movej`；控制器拒绝时 MoveJ 失败并带回驱动消息。
+关节靠近限位时，先查看当前关节角（例如 `/<arm>/joint_states`）再决定转动幅度。
+
+同一实现还注册了 `MoveJointTo`：端口相同，只是把 `direction`/`angle_degrees` 换成 `target_degrees`（范围 [-360, 360]），把关节 JX 转到绝对角度，其余关节保持当前角度。[抓取清台树](./policy-task#抓取清台树-control-pick-xml) 用它把右臂 J1 转到 -135°。
+
+示例树 `config/behavior-trees/rotate_joint.xml` 先让右臂 J6 逆时针转 10°，再顺时针转 10° 回到原角度：
+
+```bash
+./rm65 bt rotate_joint
+REALMAN_BT_DRY_RUN=false ./rm65 bt rotate_joint
+```
+
+第二条命令会让真机运动，执行前先清空工作区、确认急停可达。
 
 ## 定时笛卡尔速度节点
 
@@ -518,7 +562,7 @@ dry-run 成功证明参数与执行退出链路通过，不证明真实运动成
 | stop_on_terminal | true | SUCCESS/FAILURE 后停止 timer |
 | exit_on_terminal | true | 终态且 cancellation drain 清空后退出 executor；false 保留 Service 常驻模式 |
 
-当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ、定时笛卡尔速度，以及 `control.xml` 的
+当前实现支持单臂 MoveJ、三臂 ThreeArmMoveJ、关节相对转动 RotateJoint、定时笛卡尔速度，以及 `control.xml` 的
 `SelectInputMode`、`InputModeGuard`、`ActivateInputMode`、`KeyboardVelocityInput` 和其它输入叶。切入
 `keyboard` 时，ReactiveFallback 激活键盘叶并由独立 router 管理 l/r WORK 速度 session；切入
 `pikaposition`、`pikavelocity` 或 `pikamixed` 时，输入树会先执行一次有状态 Sequence 中的三臂 ThreeArmMoveJ 默认姿态准备动作，

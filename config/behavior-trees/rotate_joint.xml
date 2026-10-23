@@ -1,0 +1,17 @@
+<?xml version="1.0"?>
+<!-- Rotate one joint relative to its current angle: J6 counterclockwise 10 deg, then
+     clockwise 10 deg back. ccw adds the angle, cw subtracts it (right-hand rule about
+     the joint +Z axis). The executor defaults to dry_run=true. -->
+<root main_tree_to_execute="MainTree"
+      realman_arm_id="r"
+      realman_required_arms="r"
+      realman_launch="arm_move"
+      realman_stop_on_terminal="true"
+      realman_exit_on_terminal="true">
+  <BehaviorTree ID="MainTree">
+    <Sequence name="rotate_joint_demo">
+      <RotateJoint name="rotate_j6_ccw" arm_id="{arm_id}" dry_run="{dry_run}" joint="6" direction="ccw" angle_degrees="10" velocity_percent="10" timeout_sec="60"/>
+      <RotateJoint name="rotate_j6_cw" arm_id="{arm_id}" dry_run="{dry_run}" joint="6" direction="cw" angle_degrees="10" velocity_percent="10" timeout_sec="60"/>
+    </Sequence>
+  </BehaviorTree>
+</root>

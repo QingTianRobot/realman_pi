@@ -1,5 +1,6 @@
 #include "realman_bt/policy_task_config.hpp"
 
+#include <algorithm>
 #include <cmath>
 #include <stdexcept>
 
@@ -90,6 +91,38 @@ void PolicyTaskConfig::validate() const {
   require(!trace.enabled || !trace.dir.empty(), "policy_task.trace.dir must be set when the trace is enabled");
   require(std::isfinite(router_release_sec) && router_release_sec >= 0.0,
           "policy_task.router_release_sec must not be negative");
+  for (const double degrees : pick_cycle.lift_joint_degrees) {
+    require(std::isfinite(degrees), "policy_task.pick_cycle.lift_joint_degrees must be finite");
+  }
+  require(pick_cycle.release_joint >= 1 && pick_cycle.release_joint <= 6,
+          "policy_task.pick_cycle.release_joint must be 1..6");
+  require(std::isfinite(pick_cycle.release_joint_deg) && pick_cycle.release_joint_deg >= -360.0 &&
+              pick_cycle.release_joint_deg <= 360.0,
+          "policy_task.pick_cycle.release_joint_deg must be in [-360, 360]");
+  const auto& detection = object_detection;
+  require(detection.image_topic.size() > 1 && detection.image_topic.front() == '/',
+          "policy_task.object_detection.image_topic must start with /");
+  require(detection.roi_xywh[0] >= 0 && detection.roi_xywh[1] >= 0 && detection.roi_xywh[2] > 0 &&
+              detection.roi_xywh[3] > 0,
+          "policy_task.object_detection.roi_xywh needs x, y >= 0 and width, height > 0");
+  require(detection.exclude_xywh.size() % 4 == 0,
+          "policy_task.object_detection.exclude_xywh must hold x, y, width, height per rectangle");
+  for (std::size_t i = 0; i + 3 < detection.exclude_xywh.size(); i += 4) {
+    require(detection.exclude_xywh[i] >= 0 && detection.exclude_xywh[i + 1] >= 0 &&
+                detection.exclude_xywh[i + 2] > 0 && detection.exclude_xywh[i + 3] > 0,
+            "policy_task.object_detection.exclude_xywh needs x, y >= 0 and width, height > 0");
+  }
+  require(detection.min_channel >= 0 && detection.min_channel <= 255,
+          "policy_task.object_detection.min_channel must be 0..255");
+  require(detection.max_chroma >= 0 && detection.max_chroma <= 255,
+          "policy_task.object_detection.max_chroma must be 0..255");
+  require(detection.erode_px >= 1 && detection.erode_px % 2 == 1 &&
+              detection.erode_px <= std::min(detection.roi_xywh[2], detection.roi_xywh[3]),
+          "policy_task.object_detection.erode_px must be odd, at least 1 and fit in the roi");
+  require(detection.min_pixels >= 1, "policy_task.object_detection.min_pixels must be at least 1");
+  require(std::isfinite(detection.settle_sec) && detection.settle_sec >= 0.0,
+          "policy_task.object_detection.settle_sec must not be negative");
+  require(positive(detection.timeout_sec), "policy_task.object_detection.timeout_sec must be positive");
 }
 
 const PolicyTaskConfig::Task& PolicyTaskConfig::task(const std::string& name) const {

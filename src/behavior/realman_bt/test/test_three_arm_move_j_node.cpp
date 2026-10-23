@@ -1,3 +1,5 @@
+// The assertions wrap calls with side effects (selectForTick); keep assert live in every build type.
+#undef NDEBUG
 #include <cassert>
 #include <array>
 #include <chrono>
@@ -8,6 +10,7 @@
 #include <thread>
 #include <vector>
 
+#include "realman_bt/input_mode_nodes.hpp"
 #include "realman_bt/move_j_node.hpp"
 #include "realman_bt/runtime_snapshot.hpp"
 #include "realman_bt/three_arm_move_j_node.hpp"
@@ -194,10 +197,21 @@ int main(int argc, char** argv) {
     server_state.fail_m = false;
   }
 
+  // The live move runs as a branch's start-pose entry: policy is selected and waiting for activation.
+  realman_bt::InputModeRegistry registry;
+  registry.registerMode("policy", "Policy", true);
+  registry.registerMode("none", "None", true);
+  realman_bt::InputModeCoordinator coordinator(registry, std::chrono::milliseconds(500), "none", nullptr);
+  const auto requested_at = realman_bt::InputModeCoordinator::Clock::now();
+  coordinator.request("policy", "test", requested_at);
+  coordinator.activate("none", requested_at);
+  assert(coordinator.selectForTick(requested_at) == "policy");
+
   realman_bt::RuntimeDiagnostics live_diagnostics;
-  realman_bt::ThreeArmMoveJNode live_move(
-      "live_three_arm_move",
-      validConfig(ros_node.get(), &live_diagnostics, false));
+  auto live_config = validConfig(ros_node.get(), &live_diagnostics, false);
+  live_config.blackboard->set<realman_bt::InputModeCoordinator*>(
+      realman_bt::kInputModeCoordinatorBlackboardKey, &coordinator);
+  realman_bt::ThreeArmMoveJNode live_move("live_three_arm_move", live_config);
   assert(tickUntil(
       live_move,
       [&server_state](bt_core::NodeStatus) {
@@ -217,7 +231,14 @@ int main(int argc, char** argv) {
     assert(server_state.goals[1] == expected_m);
     assert(server_state.goals[2] == expected_r);
   }
+  // r is still travelling after the 500 ms switch timeout: each RUNNING tick restarts the deadline.
+  for (int tick = 0; tick < 4; ++tick) {
+    std::this_thread::sleep_for(std::chrono::milliseconds(200));
+    assert(live_move.executeTick() == bt_core::NodeStatus::RUNNING);
+  }
   assert(live_move.executeTick() == bt_core::NodeStatus::RUNNING);
+  assert(coordinator.selectForTick(realman_bt::InputModeCoordinator::Clock::now()) == "policy");
+  assert(coordinator.snapshot().phase == realman_bt::InputModePhase::kSwitching);
 
   {
     std::lock_guard<std::mutex> lock(server_state.mutex);

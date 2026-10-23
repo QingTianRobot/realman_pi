@@ -474,6 +474,87 @@ void testRequestedNoneNamesTheRequester() {
 
 }  // namespace
 
+// The requested branch moves the arms to its start pose before ActivateInputMode; at 10% that takes far
+// longer than the switch timeout. While its MoveJ keeps the switch alive the deadline restarts, so a long
+// entry move is not cut off as "input mode switch timed out" (2026-10-24, policy mode).
+void testKeepSwitchAliveOutlastsTheSwitchTimeout() {
+  using Clock = InputModeCoordinator::Clock;
+  using std::chrono::milliseconds;
+  const auto start = Clock::time_point{};
+  auto registry = makeRegistry();
+  InputModeCoordinator coordinator(registry, milliseconds(100), "none", nullptr);
+
+  const auto request = coordinator.request("policy", "browser", start);
+  coordinator.activate("none", start);
+  assert(coordinator.selectForTick(start) == "policy");
+  for (int tick = 1; tick <= 30; ++tick) {
+    const auto now = start + milliseconds(50 * tick);
+    assert(coordinator.selectForTick(now) == "policy");
+    coordinator.keepSwitchAlive(now);
+    coordinator.afterTick(true, now);
+  }
+  assert(coordinator.snapshot().phase == InputModePhase::kSwitching);
+
+  coordinator.activate("policy", start + milliseconds(1550));
+  assertSnapshot(coordinator.snapshot(), "policy", "policy", "policy",
+                 InputModePhase::kActive, request.request_id, 1);
+
+  // Once ACTIVE, neither call changes anything.
+  coordinator.keepSwitchAlive(start + milliseconds(1600));
+  coordinator.afterTick(false, start + milliseconds(1600));
+  assert(coordinator.snapshot().phase == InputModePhase::kActive);
+}
+
+// A branch that is merely RUNNING (an entry waiting for a service that never comes) is still bounded by
+// the switch timeout; so is the neutral half of a switch, and a deadline that already passed.
+void testOnlyKeepSwitchAliveExtendsTheDeadline() {
+  using Clock = InputModeCoordinator::Clock;
+  using std::chrono::milliseconds;
+  const auto start = Clock::time_point{};
+  auto registry = makeRegistry();
+
+  InputModeCoordinator waiting(registry, milliseconds(100), "none", nullptr);
+  waiting.request("policy", "browser", start);
+  waiting.activate("none", start);
+  assert(waiting.selectForTick(start) == "policy");
+  waiting.afterTick(true, start + milliseconds(90));
+  static_cast<void>(waiting.selectForTick(start + milliseconds(100)));
+  assert(waiting.snapshot().phase == InputModePhase::kFailed);
+  assert(waiting.snapshot().detail == "input mode switch timed out");
+
+  InputModeCoordinator neutral(registry, milliseconds(100), "none", nullptr);
+  neutral.request("policy", "browser", start);
+  neutral.keepSwitchAlive(start + milliseconds(90));
+  assert(neutral.selectForTick(start + milliseconds(100)) == "none");
+  assert(neutral.snapshot().phase == InputModePhase::kFailed);
+
+  InputModeCoordinator late(registry, milliseconds(100), "none", nullptr);
+  late.request("policy", "browser", start);
+  late.activate("none", start);
+  assert(late.selectForTick(start) == "policy");
+  late.keepSwitchAlive(start + milliseconds(100));
+  static_cast<void>(late.selectForTick(start + milliseconds(101)));
+  assert(late.snapshot().phase == InputModePhase::kFailed);
+  assert(late.snapshot().detail == "input mode switch timed out");
+}
+
+// An entry that stopped (its MoveJ failed) is not re-entered every tick until the deadline: the switch
+// fails at once and names the mode.
+void testFailedEntryFailsTheSwitchAtOnce() {
+  using Clock = InputModeCoordinator::Clock;
+  const auto start = Clock::time_point{};
+  auto registry = makeRegistry();
+  InputModeCoordinator coordinator(registry, std::chrono::milliseconds(100), "none", nullptr);
+
+  coordinator.request("policy", "browser", start);
+  coordinator.activate("none", start);
+  assert(coordinator.selectForTick(start) == "policy");
+  coordinator.afterTick(false, start);
+  assert(coordinator.snapshot().phase == InputModePhase::kFailed);
+  assert(coordinator.snapshot().detail == "policy entry failed before activation");
+  assert(coordinator.selectForTick(start) == "none");
+}
+
 int main() {
   testRegistryPreservesOrderAndCoalescesExactDuplicates();
   testRegistryRejectsMalformedDefinitionsIndependently();
@@ -491,5 +572,8 @@ int main() {
   testFallbackToNoneCarriesTheFailureReason();
   testRequestingAModeAgainClearsTheOldFailure();
   testRequestedNoneNamesTheRequester();
+  testKeepSwitchAliveOutlastsTheSwitchTimeout();
+  testOnlyKeepSwitchAliveExtendsTheDeadline();
+  testFailedEntryFailsTheSwitchAtOnce();
   return 0;
 }

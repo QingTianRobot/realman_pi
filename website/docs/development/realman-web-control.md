@@ -93,7 +93,7 @@ transient-local 订阅 `/realman_bt_executor/input_mode_state`。同一 YAML 的
 `web_override_timeout_sec: 5.0`（秒）是等待 Web override 激活的上限；服务监听配置为
 `server.bind_host: 0.0.0.0`、`port: 8765`、`allowed_origins: [same-origin]`、`max_clients: 8` 和
 `max_message_bytes: 65536`（bytes）。行为树自身的 `config/ros/behavior_tree.yaml` 使用 10.0 Hz tick、
-5000 ms 切换超时及 `safe_fallback_mode: none`。
+5000 ms 切换超时（入口 `ThreeArmMoveJ` 运动期间会续期，见[行为树输入控制](./behavior-tree-control)）及 `safe_fallback_mode: none`。
 
 `list_input_modes`（`realman_msgs/srv/ListInputModes`）响应 `success`、`message` 和并行的
 `mode_ids`、`labels`、`selectable` 数组；`select_input_mode`（`realman_msgs/srv/SelectInputMode`）请求

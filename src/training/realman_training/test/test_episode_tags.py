@@ -205,3 +205,48 @@ def test_unseen_values_are_listed(raw):
     doc = _doc(raw)
     where = episode_tags.parse_where(["lighting_level=3,2", "arm=left"], doc)
     assert episode_tags.unseen(doc, where) == ["lighting_level=3", "arm=left"]
+
+
+# --- F1: load() shape validation ---
+
+def _write_raw_doc(raw, doc):
+    path = episode_tags.tags_path(raw)
+    import os
+    tmp = path.with_suffix(".tmp")
+    tmp.write_text(json.dumps(doc), encoding="utf-8")
+    os.replace(tmp, path)
+
+
+def test_load_rejects_non_dict_row(raw):
+    write_tags(raw, TAGS)
+    _edit(raw, lambda d: d["episodes"].__setitem__(1, "not a dict"))
+    with pytest.raises(TagsMismatch, match="not a dict"):
+        episode_tags.load(raw)
+
+
+def test_load_rejects_row_without_episode_index(raw):
+    write_tags(raw, TAGS)
+    _edit(raw, lambda d: d["episodes"][0].pop("episode_index"))
+    with pytest.raises(TagsMismatch, match="episode_index"):
+        episode_tags.load(raw)
+
+
+def test_load_rejects_episodes_as_dict(raw):
+    write_tags(raw, TAGS)
+    _edit(raw, lambda d: d.update(episodes={"0": d["episodes"][0]}))
+    with pytest.raises(TagsMismatch, match="must be a list"):
+        episode_tags.load(raw)
+
+
+def test_load_rejects_duplicate_episode_index(raw):
+    write_tags(raw, TAGS)
+    _edit(raw, lambda d: d["episodes"].append({**d["episodes"][0]}))
+    with pytest.raises(TagsMismatch, match="appears twice"):
+        episode_tags.load(raw)
+
+
+def test_payload_returns_error_for_shape_violations(raw):
+    write_tags(raw, TAGS)
+    _edit(raw, lambda d: d["episodes"].__setitem__(0, "bad"))
+    p = episode_tags.payload(raw)
+    assert "error" in p and isinstance(p["error"], str)

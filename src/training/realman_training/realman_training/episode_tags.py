@@ -73,6 +73,23 @@ def load(root: str | Path) -> dict | None:
     version = doc.get("schema_version") if isinstance(doc, dict) else None
     if version != SCHEMA_VERSION:
         raise TagsMismatch(f"{path}: schema_version {version!r}, expected {SCHEMA_VERSION}")
+    episodes = doc.get("episodes")
+    if not isinstance(episodes, list):
+        raise TagsMismatch(f"{path}: episodes must be a list, got {type(episodes).__name__}")
+    seen_indices: set[int] = set()
+    for i, row in enumerate(episodes):
+        if not isinstance(row, dict):
+            raise TagsMismatch(f"{path}: episode row {i} is not a dict")
+        idx = row.get("episode_index")
+        if idx is None or isinstance(idx, bool) or not isinstance(idx, int):
+            raise TagsMismatch(f"{path}: episode row {i} has no int episode_index")
+        if idx in seen_indices:
+            raise TagsMismatch(f"episode {idx} appears twice in episode_tags.json")
+        seen_indices.add(idx)
+        if "tags" in row and not isinstance(row["tags"], dict):
+            raise TagsMismatch(f"{path}: episode {idx} tags must be a dict")
+        if "tag_sources" in row and not isinstance(row["tag_sources"], dict):
+            raise TagsMismatch(f"{path}: episode {idx} tag_sources must be a dict")
     check(doc, root)
     return doc
 

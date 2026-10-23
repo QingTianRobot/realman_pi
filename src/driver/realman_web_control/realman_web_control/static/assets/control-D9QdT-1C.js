@@ -4155,7 +4155,7 @@ No loader available`)}}const sp=["#e5484d","#30a46c","#3e63dd"],yr=1e4,kl=600;fu
     <aside class="controls">
       <section id="input-mode-card" class="panel panel-section input-mode-card" hidden>
         <div class="panel-heading compact"><div><span class="eyebrow">GLOBAL INPUT</span><h2>输入模式</h2></div><span id="input-mode-active" class="mini-state">WAIT</span></div>
-        <div class="input-mode-body"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><button id="input-mode-restart" class="button ghost" type="button" title="先切到无输入分支，再切回当前分支，重新开始该分支" disabled>重启此分支</button><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div></div>
+        <div class="input-mode-body"><div class="input-mode-row"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><button id="input-mode-restart" class="button ghost" type="button" title="先切到无输入分支，再切回当前分支，重新开始该分支" disabled>重启此分支</button></div><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div></div>
       </section>
       <section id="bt-panel" class="panel panel-section bt-panel" aria-label="行为树" hidden>
         <div class="panel-heading compact"><div><span class="eyebrow">BEHAVIOR TREE</span><h2>行为树<span id="bt-dot" class="tab-dot"></span></h2></div><div class="panel-actions"><span id="bt-root-status" class="bt-status bt-idle">未运行</span><button id="bt-stop" class="button danger" type="button" hidden>终止行为树</button><button id="bt-collapse" class="bt-collapse" type="button" aria-expanded="true" aria-controls="bt-body" title="收起">▾</button></div></div>

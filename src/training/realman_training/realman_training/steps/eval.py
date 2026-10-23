@@ -9,7 +9,6 @@ from pathlib import Path
 
 from ..config import load_config
 from ..jobs import JobCancelled, StepFailed, write_json
-from ..lerobot_io import read_episodes
 from ..openpi import (
     Compose,
     busy_gpus,
@@ -23,28 +22,16 @@ from ..openpi import (
     script,
 )
 from ..runner import Runner, compact
+from .view import episode_tasks
 
 ENV = {"XLA_PYTHON_CLIENT_PREALLOCATE": "false"}
 
 
 def holdout_by_task(view: str | Path, holdout: tuple[int, ...]) -> dict[str, dict]:
-    view = Path(view)
-    contract = json.loads((view / "contract.json").read_text(encoding="utf-8"))
-    task_of_prompt = {prompt: task for task, prompt in (contract.get("prompts") or {}).items()}
-    episodes = read_episodes(view)
-    # Tasks that share a prompt (pick_only and pick_only_light-weak_1021) are told apart by the source's task names;
-    # the view keeps the source's episode numbering.
-    source_task: dict[int, str] = {}
-    source = Path(str(contract.get("source") or ""))
-    if source.name and (source / "meta" / "info.json").is_file():
-        rows = read_episodes(source)
-        if len(rows) == len(episodes):
-            source_task = {row.index: row.task for row in rows}
     tasks: dict[str, dict] = {}
-    for episode in episodes:
-        if episode.index in holdout:
-            task = source_task.get(episode.index) or task_of_prompt.get(episode.task, episode.task)
-            tasks.setdefault(task, {"prompt": episode.task, "episodes": []})["episodes"].append(episode.index)
+    for index, (task, prompt) in sorted(episode_tasks(view).items()):
+        if index in holdout:
+            tasks.setdefault(task, {"prompt": prompt, "episodes": []})["episodes"].append(index)
     return dict(sorted(tasks.items()))
 
 

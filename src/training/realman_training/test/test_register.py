@@ -4,7 +4,7 @@ import json
 
 import pytest
 from fake_runner import RecordingLog
-from lerobot_fixture import build_view, write_clean_manifest
+from lerobot_fixture import Episode, build_dataset, build_view, write_clean_manifest
 
 from realman_training.jobs import StepFailed
 from realman_training.steps import register
@@ -159,3 +159,14 @@ def test_span_falls_back_to_raw_strings_for_docker_nanosecond_timestamps(env, tm
     # Must complete without raising; the training time column must contain something from the raw value
     assert "2026-10-20" in card.get("trained_start", "") or nano_ts in str(card.get("trained_start", ""))
     assert result["card"]
+
+
+def test_register_keeps_tasks_that_share_a_prompt_apart_by_the_source(tmp_path):
+    names = ["pick_only", "pick_only", "pick_only_dark", "pick_only_dark", "pick_only_dark"]
+    source = build_dataset(tmp_path / "clean", [Episode(task=n, gripper=[50.0] * 10) for n in names])
+    view = build_view(tmp_path / "v", source=str(source), prompts={"pick_only": PICK, "pick_only_dark": PICK},
+                      lengths=[10] * 5, tasks=names)
+    assert register._tasks(view) == {
+        "pick_only": {"prompt": PICK, "episodes": [0, 1], "count": 2},
+        "pick_only_dark": {"prompt": PICK, "episodes": [2, 4], "count": 3},
+    }

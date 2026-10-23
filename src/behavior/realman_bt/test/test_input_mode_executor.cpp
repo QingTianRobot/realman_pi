@@ -305,6 +305,48 @@ void testFailInputModeReportsFailedThenRecoversToNone() {
           "none does not say why the router fell back to it");
 }
 
+// The policy branch's start-pose MoveJ with no driver to send it to. Waiting for an action server does
+// not keep the switch alive, so the switch timeout still bounds it; a MoveJ that fails before the
+// deadline fails the switch at once with its own detail instead (2026-10-24).
+std::string policyEntryWithoutDriver(const std::string& move_timeout_sec) {
+  auto xml = routerXml();
+  replaceOnce(xml, R"(<ThreeArmMoveJ name="policy_start_pose" dry_run="{dry_run}")",
+              R"(<ThreeArmMoveJ name="policy_start_pose" dry_run="false")");
+  replaceOnce(xml, R"(timeout_sec="120"/>
+            <ActivateInputMode mode="policy"/>)",
+              "timeout_sec=\"" + move_timeout_sec + R"("/>
+            <ActivateInputMode mode="policy"/>)");
+  return xml;
+}
+
+void testEntryWaitingForADriverStillTimesOut() {
+  Fixture f;
+  f.load(policyEntryWithoutDriver("120"), {{"switch_timeout_ms", 300}});
+  f.subscribe();
+  require(f.until([&] { return !f.states.empty(); }), "missing initial state");
+  require(f.select("policy")->accepted, "policy request rejected");
+  f.start();
+  require(f.until([&] { return f.states.back().phase == State::FAILED; }),
+          "an entry waiting for a driver was not bounded by the switch timeout");
+  require(f.states.back().detail == "input mode switch timed out", "timeout detail changed");
+}
+
+void testFailedEntryFailsTheSwitchAtOnce() {
+  Fixture f;
+  f.load(policyEntryWithoutDriver("0.3"), {{"switch_timeout_ms", 5000}});
+  f.subscribe();
+  require(f.until([&] { return !f.states.empty(); }), "missing initial state");
+  require(f.select("policy")->accepted, "policy request rejected");
+  f.start();
+  require(f.until([&] { return f.states.back().phase == State::FAILED; }, 2s),
+          "a failed entry move waited for the switch timeout");
+  require(f.states.back().detail == "policy entry failed before activation",
+          "entry failure detail changed");
+  require(f.until([&] { return f.states.back().phase == State::ACTIVE &&
+                              f.states.back().active_mode == "none"; }),
+          "router did not recover to none after the entry failed");
+}
+
 std::string policyTaskTree(const std::string& body) {
   return R"(<?xml version="1.0"?>
 <root main_tree_to_execute="MainTree" realman_arm_id="r" realman_required_arms="r"
@@ -472,6 +514,8 @@ int main(int argc, char** argv) {
     testInvalidConfigurationFailsConstruction();
     testBranchExceptionPublishesFailureAndRecovers();
     testTimeoutPublishesFailedDetail();
+    testEntryWaitingForADriverStillTimesOut();
+    testFailedEntryFailsTheSwitchAtOnce();
     testFailInputModeReportsFailedThenRecoversToNone();
     testPolicyTaskLeavesAreRegisteredAndDryRunOnTheirOwn();
     testPolicyTaskCountsReachTheTreeThroughTheBlackboard();

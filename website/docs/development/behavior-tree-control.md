@@ -103,6 +103,14 @@ stateDiagram-v2
 `tick_rate_hz: 10.0`（Hz）、`switch_timeout_ms: 5000`（ms），以及必须是已注册且可选模式的
 `safe_fallback_mode: none`。`none` 既是安全回退也是中性 tick，不能删除或改成 Web。
 
+`switch_timeout_ms` 限制的是切换握手，不是入口动作的总时长。policy 和 Pika 分支在 `ActivateInputMode` 之前先用
+`ThreeArmMoveJ` 把三臂移到起始位姿；手臂离起始位姿较远时（例如 policy 的 10% 速度），这段移动远超 5 s。
+`ThreeArmMoveJ` 的目标已发出、手臂仍在运动时，每个 tick 都会重新开始切换计时，移动由它自己的 `timeout_sec`
+限制；还在等待 action server、或 `PrepareKeyboardWork` 等待坐标服务时不会续期，仍由 5 s 切换超时兜底。
+入口在激活前返回 `FAILURE`（例如 MoveJ 被拒绝或超时）时，切换立即进入 `FAILED`，说明为
+`<模式> entry failed before activation`，不会在剩余的切换时间里每个 tick 重新发起入口动作（2026-10-24 修复：
+以前 policy 回位超过 5 s 就会以 `input mode switch timed out` 退回 none）。
+
 键盘按键、速度比例和 Web 输入时序的权威配置是
 [`config/ros/keyboard_control.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/keyboard_control.yaml)。浏览器每 `50 ms` 发送一次
 左右臂各自的完整按键集合；Web bridge 对每臂要求严格递增的 sequence，并拒绝未知物理键码、重复键码、

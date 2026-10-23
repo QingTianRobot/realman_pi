@@ -4,6 +4,7 @@
 #include <sstream>
 #include <stdexcept>
 
+#include "realman_bt/input_mode_nodes.hpp"
 #include "realman_bt/runtime_snapshot.hpp"
 
 namespace realman_bt {
@@ -270,7 +271,16 @@ bt_core::NodeStatus ThreeArmMoveJNode::tick() {
   }
   if (!processGoals() || !processResults()) return bt_core::NodeStatus::FAILURE;
   for (const auto& arm : arms_) {
-    if (!arm.completed) return bt_core::NodeStatus::RUNNING;
+    if (!arm.completed) {
+      // A branch's start-pose move runs ahead of ActivateInputMode; it must not be cut off by the
+      // input mode switch timeout while the arms are still travelling.
+      const auto coordinator = blackboard()->get<InputModeCoordinator*>(
+          kInputModeCoordinatorBlackboardKey);
+      if (coordinator.has_value() && coordinator.value() != nullptr) {
+        coordinator.value()->keepSwitchAlive(InputModeCoordinator::Clock::now());
+      }
+      return bt_core::NodeStatus::RUNNING;
+    }
   }
   completed_ = true;
   RCLCPP_INFO(ros_node_->get_logger(), "[%s] all three MoveJ goals completed",

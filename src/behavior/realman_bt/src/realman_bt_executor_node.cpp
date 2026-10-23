@@ -279,6 +279,10 @@ void RealmanBtExecutorNode::onTick() {
   bt_core::NodeStatus status = bt_core::NodeStatus::FAILURE;
   try {
     status = tree_->tickOnce();
+    if (input_mode_state_pub_) {
+      input_mode_coordinator_->afterTick(status == bt_core::NodeStatus::RUNNING,
+                                         InputModeCoordinator::Clock::now());
+    }
   } catch (const std::exception& error) {
     RCLCPP_ERROR(get_logger(), "behavior tree tick failed: %s", error.what());
     recordEvent("ERROR", "EXECUTOR", "realman_bt_executor", "exception",

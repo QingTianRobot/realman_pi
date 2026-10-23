@@ -53,7 +53,7 @@ target_include_directories(move_j_nodes PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
   $<INSTALL_INTERFACE:include>)
 target_compile_features(move_j_nodes PUBLIC cxx_std_17)
-target_link_libraries(move_j_nodes runtime_snapshot bt::core)
+target_link_libraries(move_j_nodes input_mode runtime_snapshot bt::core)
 ament_target_dependencies(move_j_nodes
   geometry_msgs rclcpp rclcpp_action realman_msgs)
 

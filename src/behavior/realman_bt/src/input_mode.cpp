@@ -208,6 +208,22 @@ void InputModeCoordinator::fail(std::string detail, Clock::time_point) {
   if (changed) notifyObserver();
 }
 
+void InputModeCoordinator::keepSwitchAlive(Clock::time_point now) {
+  if (snapshot_.phase != InputModePhase::kSwitching ||
+      transition_step_ != TransitionStep::kAwaitingRequestedActivation || now >= deadline_) {
+    return;
+  }
+  deadline_ = now + switch_timeout_;
+}
+
+void InputModeCoordinator::afterTick(bool tree_running, Clock::time_point now) {
+  if (tree_running || snapshot_.phase != InputModePhase::kSwitching ||
+      transition_step_ != TransitionStep::kAwaitingRequestedActivation) {
+    return;
+  }
+  fail(snapshot_.requested_mode + " entry failed before activation", now);
+}
+
 void InputModeCoordinator::ensureConfigurationValid() {
   if (configuration_validated_) return;
   registry_.validate();

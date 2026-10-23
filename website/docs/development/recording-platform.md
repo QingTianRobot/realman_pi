@@ -68,6 +68,9 @@ LeRobot v3 的每个向量 feature 都在 `features.<key>.names` 中声明分量
 
 **前端**（`web/`，`npm run build:recording` 构建）：左侧 episode 侧栏支持搜索、筛选、隐藏/恢复和就地编辑任务；中央同步多相机视频与时间轴，可在时间轴上标注子任务；右侧是 action 与 state 的对比曲线和健康面板；导出队列面板显示转换进度。回放渲染循环被限频，图表做了记忆化，视频 I/O 在工作线程里，选择范围被钳制。
 
+训练端（server5090 的 `realman-train`）只读这些标签：pull 时把 `episode_meta.json` 里本数据集的行快照成
+`episode_tags.json`，`realman-train tags refresh` 更新，`clean --where` 按标签选数据。见[训练命令行](./training-cli-walkthrough.md)。
+
 ## ROS 接口
 
 节点名为 `/recording_recorder` 与 `/recording_web_bridge`。前者订阅如下已有输出：

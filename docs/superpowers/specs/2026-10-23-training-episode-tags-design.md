@@ -126,7 +126,7 @@
 - `/api/dataset` 的返回值新增 `tags` 字段：包括 `snapshot_at`、`derived_from`、`summary`，以及每个 episode 的 `tags` 和 `tag_sources`。
   没有标签文件时为 `null`；标签文件和数据集对不上时，返回 `{"error": ...}`，页面显示错误，不显示标签。
 - 新增 `GET /api/dataset/tags-status?path=`：只读，内部调用 `tags status`，最多等 15 秒，连不上机器人时返回 `{"state": "unknown"}`。
-- 新增 `GET /api/dataset/select?path=&where=...`：只读预览，返回会保留和会剔除的编号及原因，也可以同时带上 `suggested=1`。
+- 新增 `GET /api/dataset/select?path=&where=...`：只读预览，返回会保留和会剔除的编号及原因；质检勾选和按标签剔除在页面上合并。
 - 新增任务类型 `tags_refresh`（`job_params.ALLOWED` 加 `{"path"}`），和其他任务一样需要令牌、走任务日志窗口。
   `clean` 的允许参数加上 `where`。
 - 数据页：

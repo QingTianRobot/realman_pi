@@ -155,7 +155,8 @@ canvas { display: block; width: 100%; height: 100%; }
 .input-mode-body { display: grid; gap: 10px; }
 .input-mode-body label { display: grid; grid-template-columns: minmax(0, 1fr) minmax(150px, 1.25fr); gap: 10px; align-items: center; color: var(--text-3); font-size: 10px; }
 .input-mode-body select { width: 100%; min-width: 0; padding: 7px; font-size: 11px; }
-.input-mode-body .button { justify-self: end; }
+.input-mode-row { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 8px; align-items: end; }
+.input-mode-row .button { padding: 7px 9px; white-space: nowrap; }
 .keyboard-help { margin: 0 0 12px; color: var(--text-2); font-size: 11px; line-height: 1.55; }
 .keyboard-arm-grid { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 10px; }
 .keyboard-arm { min-width: 0; padding: 10px; border: 1px solid var(--line); border-radius: 12px; background: var(--card-sub); }

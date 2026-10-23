@@ -209,3 +209,89 @@ def payload(root: str | Path) -> dict | None:
         "episodes": {str(row["episode_index"]): {"tags": row.get("tags") or {}, "tag_sources": row.get("tag_sources") or {},
                                                  "session_id": row.get("session_id")} for row in doc["episodes"]},
     }
+
+
+def _kind(doc: dict, key: str) -> str:
+    if key == TASK_KEY:
+        return "str"
+    types = {type(v) for row in doc["episodes"] if (v := (row.get("tags") or {}).get(key)) is not None}
+    if types == {bool}:
+        return "bool"
+    if types == {int}:
+        return "int"
+    if types and types <= {int, float}:
+        return "number"
+    return "str"
+
+
+def _parse(text: str, kind: str, key: str):
+    if text == "null":
+        return None
+    if kind == "bool":
+        if text not in ("true", "false"):
+            raise ValueError(f"{key} is true/false, got {text!r}")
+        return text == "true"
+    if kind in ("int", "number"):
+        try:
+            return int(text) if kind == "int" else float(text)
+        except ValueError:
+            raise ValueError(f"{key} is a number, got {text!r}") from None
+    return text
+
+
+def matches(value, wanted) -> bool:
+    if wanted is None or value is None:
+        return value is None and wanted is None
+    if isinstance(wanted, str):
+        return value_text(value) == wanted
+    if isinstance(wanted, bool) or isinstance(value, bool):
+        return type(value) is type(wanted) and value == wanted
+    return value == wanted
+
+
+def parse_where(items: list[str], doc: dict) -> dict[str, list]:
+    """["k=v1,v2", ...] -> {k: [values]}: keys AND, values of one key OR."""
+    keys = tag_keys(doc)
+    where: dict[str, list] = {}
+    for item in items:
+        key, sep, text = str(item).partition("=")
+        key = key.strip()
+        if not sep or not key:
+            raise ValueError(f"where wants key=v1,v2, got {item!r}")
+        if key not in keys:
+            raise ValueError(f"unknown tag {key!r}; known: {', '.join(keys)}")
+        if key in where:
+            raise ValueError(f"{key} is given twice: list its values once, {key}=a,b")
+        values = [v.strip() for v in text.split(",") if v.strip()]
+        if not values:
+            raise ValueError(f"{key}= has no values")
+        kind = _kind(doc, key)
+        where[key] = [_parse(v, kind, key) for v in values]
+    return where
+
+
+def select(doc: dict, where: dict[str, list]) -> dict[int, str]:
+    """Episodes that fail the filter -> why."""
+    dropped: dict[int, str] = {}
+    for row in doc["episodes"]:
+        reasons = []
+        for key, wanted in where.items():
+            value = episode_value(row, key)
+            if any(matches(value, w) for w in wanted):
+                continue
+            failure = (row.get("tags") or {}).get("failure_reason")
+            if key == "success" and failure:
+                reasons.append(f"tag success={value_text(value)} ({failure})")
+            else:
+                reasons.append(f"tag {key}={value_text(value)} not in {{{', '.join(value_text(w) for w in wanted)}}}")
+        if reasons:
+            dropped[int(row["episode_index"])] = "; ".join(reasons)
+    return dropped
+
+
+def unseen(doc: dict, where: dict[str, list]) -> list[str]:
+    out = []
+    for key, wanted in where.items():
+        present = [episode_value(row, key) for row in doc["episodes"]]
+        out += [f"{key}={value_text(w)}" for w in wanted if not any(matches(v, w) for v in present)]
+    return out

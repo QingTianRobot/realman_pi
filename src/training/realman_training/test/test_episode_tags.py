@@ -149,3 +149,58 @@ def test_payload_for_the_console(raw):
     assert p["episodes"]["1"]["session_id"] == "S001" and p["snapshot_at"] == "2026-10-23T09:30:00+08:00"
     _edit(raw, lambda d: d["episodes"][0].update(length=1))
     assert "does not match" in episode_tags.payload(raw)["error"]
+
+
+def _doc(raw):
+    write_tags(raw, TAGS)
+    return episode_tags.load(raw)
+
+
+def test_where_parses_values_by_the_tags_type(raw):
+    doc = _doc(raw)
+    where = episode_tags.parse_where(["success=true", "lighting_level=1,2", "arm=right", "task=pick_only"], doc)
+    assert where == {"success": [True], "lighting_level": [1, 2], "arm": ["right"], "task": ["pick_only"]}
+    assert episode_tags.parse_where(["failure_reason=null"], doc) == {"failure_reason": [None]}
+    assert episode_tags.parse_where([" arm = right , left "], doc) == {"arm": ["right", "left"]}
+
+
+@pytest.mark.parametrize("items, fragment", [
+    (["success"], "key=v1,v2"),
+    (["colour=red"], "unknown tag 'colour'"),
+    (["success=yes"], "true/false"),
+    (["lighting_level=bright"], "is a number"),
+    (["success=true", "success=false"], "given twice"),
+    (["arm="], "no values"),
+])
+def test_where_refuses_bad_items(raw, items, fragment):
+    with pytest.raises(ValueError, match=fragment):
+        episode_tags.parse_where(items, _doc(raw))
+
+
+def test_select_keeps_matches_and_explains_drops(raw):
+    doc = _doc(raw)
+    assert episode_tags.select(doc, episode_tags.parse_where(["success=true"], doc)) == {1: "tag success=false (re-grasp)"}
+    assert episode_tags.select(doc, episode_tags.parse_where(["lighting_level=2", "task=pick_only"], doc)) == {
+        0: "tag task=pick_and_place not in {pick_only}",
+        2: "tag lighting_level=1 not in {2}",
+    }
+    assert episode_tags.select(doc, episode_tags.parse_where(["success=true", "lighting_level=1"], doc)) == {
+        0: "tag lighting_level=2 not in {1}",
+        1: "tag success=false (re-grasp); tag lighting_level=2 not in {1}",
+    }
+    assert episode_tags.select(doc, {}) == {}
+
+
+def test_booleans_and_integers_do_not_mix(raw):
+    doc = _doc(raw)
+    for row in doc["episodes"]:
+        row["tags"]["flag"] = 1
+    assert episode_tags.parse_where(["flag=1"], doc) == {"flag": [1]}
+    assert episode_tags.select(doc, {"flag": [1]}) == {}
+    assert len(episode_tags.select(doc, {"flag": [True]})) == 3
+
+
+def test_unseen_values_are_listed(raw):
+    doc = _doc(raw)
+    where = episode_tags.parse_where(["lighting_level=3,2", "arm=left"], doc)
+    assert episode_tags.unseen(doc, where) == ["lighting_level=3", "arm=left"]

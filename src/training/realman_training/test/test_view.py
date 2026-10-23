@@ -7,7 +7,9 @@ from pathlib import Path
 
 import pytest
 from fake_runner import FakeRunner, RecordingLog
-from lerobot_fixture import Episode, build_dataset, build_view, gripper
+from lerobot_fixture import Episode, build_dataset, build_view, gripper, write_tags
+
+from realman_training import episode_tags
 
 from realman_training.config import load_config
 from realman_training.jobs import StepFailed
@@ -150,3 +152,21 @@ def test_wrong_gripper_labels_rename_partial_to_dst_before_failing(clean, tmp_pa
         view.run({"src": str(clean), "dst": str(dst)}, RecordingLog(), runner=runner)
     assert dst.exists() and (dst / "label_check.json").exists()
     assert not (dst.parent / f"{dst.name}.partial").exists()
+
+
+def test_a_view_carries_its_sources_tags(clean, tmp_path):
+    write_tags(clean, [{"success": True}, {"success": False}])
+    dst = tmp_path / "data" / "v"
+    view.run({"src": str(clean), "dst": str(dst)}, RecordingLog(), runner=fake_make_view([GOOD_PLACE, GOOD_PICK]))
+    doc = episode_tags.load(dst)
+    assert doc["episodes"][1]["tags"]["success"] is False and doc["derived_from"]["path"] == str(clean.resolve())
+
+
+def test_stale_source_tags_are_skipped_with_a_note(clean, tmp_path):
+    write_tags(clean, [{"success": True}, {"success": False}])
+    doc = json.loads(episode_tags.tags_path(clean).read_text())
+    doc["episodes"][0]["length"] = 1
+    episode_tags.write(clean, doc)
+    log, dst = RecordingLog(), tmp_path / "data" / "v2"
+    view.run({"src": str(clean), "dst": str(dst)}, log, runner=fake_make_view([GOOD_PLACE, GOOD_PICK]))
+    assert not episode_tags.tags_path(dst).exists() and any("tags not copied" in line for line in log.lines)

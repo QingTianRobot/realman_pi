@@ -18,6 +18,7 @@ import numpy as np
 import pyarrow as pa
 import pyarrow.parquet as pq
 
+from .. import episode_tags
 from ..config import load_config
 from ..jobs import StepFailed
 from ..lerobot_io import NotALeRobotDataset, read_info
@@ -99,9 +100,11 @@ def verify_stats(src: str | Path) -> dict[str, float]:
     return worst
 
 
-def _selection(params: dict, indices: list[int]) -> set[int]:
+def _selection(params: dict, indices: list[int], tag_drops: set[int] = frozenset()) -> set[int]:
     if "drop" in params and "keep" in params:
         raise StepFailed("pass either drop or keep, not both")
+    if "keep" in params and params.get("where"):
+        raise StepFailed("pass either keep or where, not both")
     known = set(indices)
     if "keep" in params:
         keep = {int(e) for e in params["keep"]}
@@ -112,11 +115,12 @@ def _selection(params: dict, indices: list[int]) -> set[int]:
             raise StepFailed(f"episodes {sorted(unknown)} are not in the dataset")
         return known - keep
     drop = {int(e) for e in params.get("drop") or []}
-    if not drop:
-        raise StepFailed("nothing to drop: pass drop (or keep) episodes")
     unknown = drop - known
     if unknown:
         raise StepFailed(f"episodes {sorted(unknown)} are not in the dataset (0..{max(known)})")
+    drop |= set(tag_drops)
+    if not drop:
+        raise StepFailed("nothing to drop: pass drop (or keep) episodes, or a where filter that some episode fails")
     if drop == known:
         raise StepFailed("that drops every episode")
     return drop
@@ -138,6 +142,34 @@ def _reasons(params: dict, src: Path, drop: set[int], log) -> dict[int, str]:
     return {e: given[e] for e in sorted(drop)}
 
 
+def _tag_drops(params: dict, src: Path, log) -> tuple[dict | None, dict[int, str]]:
+    """The source's tags (None when it has none or they are stale and no where was asked) and the where drops."""
+    items = list(params.get("where") or [])
+    if not items:
+        try:
+            return episode_tags.load(src), {}
+        except episode_tags.TagsMismatch as error:
+            log(f"tags not copied: {error}")
+            return None, {}
+    if "keep" in params:
+        raise StepFailed("pass either keep or where, not both")
+    try:
+        doc = episode_tags.load(src)
+    except episode_tags.TagsMismatch as error:
+        raise StepFailed(str(error)) from None
+    if doc is None:
+        raise StepFailed(f"{src} has no {episode_tags.FILE_NAME}: run realman-train tags refresh {src} first")
+    try:
+        where = episode_tags.parse_where(items, doc)
+    except ValueError as error:
+        raise StepFailed(f"where: {error}") from None
+    for item in episode_tags.unseen(doc, where):
+        log(f"warning: no episode has {item}")
+    drops = episode_tags.select(doc, where)
+    log(f"where {' '.join(items)}: drops {sorted(drops)}")
+    return doc, drops
+
+
 def run(params: dict, log, runner=None) -> dict:
     src = Path(params["src"]).expanduser().resolve()
     dst = Path(params["dst"]).expanduser().absolute()
@@ -151,8 +183,13 @@ def run(params: dict, log, runner=None) -> dict:
     indices = [row["episode_index"] for _, row in rows]
     if indices != list(range(info["total_episodes"])):
         raise StepFailed("episode indices must be 0..total_episodes-1")
-    drop = _selection(params, indices)
-    reasons = _reasons(params, src, drop, log)
+    tags_doc, tag_drops = _tag_drops(params, src, log)
+    drop = _selection(params, indices, set(tag_drops))
+    explicit = drop if "keep" in params else {int(e) for e in params.get("drop") or []}
+    reasons = _reasons(params, src, explicit, log)
+    for episode, why in tag_drops.items():
+        reasons[episode] = f"{reasons[episode]}; {why}" if episode in reasons else why
+    reasons = dict(sorted(reasons.items()))
     cameras = [k for k, f in info["features"].items() if f.get("dtype") == "video"]
     chunk_size = int(info.get("chunks_size", 1000))
     data_tpl, video_tpl = info["data_path"], info.get("video_path")
@@ -245,9 +282,13 @@ def run(params: dict, log, runner=None) -> dict:
         "kept_frames": position,
         "removed": {str(e): {"frames": lengths[e], "reason": r} for e, r in reasons.items()},
         "old_to_new": {str(k): v for k, v in mapping.items()},
+        "where": list(params.get("where") or []),
+        "tags_snapshot_at": tags_doc.get("snapshot_at") if tags_doc else None,
         "note": "Episode indices were renumbered. Do not rsync from the source into this directory.",
     }
     manifest_path.write_text(json.dumps(manifest, indent=2, ensure_ascii=False), encoding="utf-8")
+    if tags_doc is not None:
+        episode_tags.write(dst, episode_tags.derive(tags_doc, dst, mapping, source=src, via=str(manifest_path)))
     log(f"built {dst}: {len(mapping)} episodes, {position} frames (removed {len(drop)})")
     return {
         "dst": str(dst),
@@ -255,4 +296,6 @@ def run(params: dict, log, runner=None) -> dict:
         "kept_episodes": len(mapping),
         "kept_frames": position,
         "removed": {str(e): r for e, r in reasons.items()},
+        "where": list(params.get("where") or []),
+        "tags": tags_doc is not None,
     }

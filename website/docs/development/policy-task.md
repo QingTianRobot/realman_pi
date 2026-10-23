@@ -64,7 +64,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 | `GripperReady` | 读取 `/gripper_<name>/position`；夹爪未张开时调用一次 `/gripper_<name>/open`，并等待位置回到阈值以内 | 服务缺失、没有位置数据、请求被拒绝或超时：判为故障 |
 | `PolicyRun` | 预检、激活、监督一次尝试，并按固定顺序停止 | 见下表 |
 | `FailInputMode` | 把任务级失败转为输入模式 `FAILED`，原因取自 `policy_failure_reason`；协调器随后切换到 `none` | — |
-| `RetryUnlessFault` | 与 `Retry` 相同，但如果失败的叶节点已置位 `policy_fault`，会立即返回失败，不再消耗剩余次数；置位 `policy_timeout` 的失败按 `timeout_attempts` 单独计数，等待 `timeout_backoff_sec` 后再重试 | 超时次数耗尽时，在 `policy_failure_reason` 前加上 `policy server timed out N times; last: ` |
+| `RetryUnlessFault` | 与 `Retry` 相同，但如果失败的叶节点已置位 `policy_fault`，会立即返回失败，不再消耗剩余次数；置位 `policy_timeout` 的失败按 `timeout_attempts` 单独计数，等待 `timeout_backoff_sec` 后再重试 | 超时次数耗尽时，在 `policy_failure_reason` 前加上 `policy server timed out N times; last: `；运行开始、每次重试前和成功时清空 `policy_failure_reason`，失败结束时保留最后一次尝试的原因 |
 
 叶节点返回 `FAILURE` 并不会把输入模式标记为 `FAILED`，只有 `FailInputMode`（以及切换超时和 tick 异常）会这样做。因此"次数耗尽"必须经过它，否则持久路由会让失败的分支无限重来。
 

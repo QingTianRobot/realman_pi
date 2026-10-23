@@ -188,6 +188,7 @@ app.innerHTML = `
         <div id="bt-running" hidden>
           <div id="bt-stop-status" class="bt-stop-status" role="status" aria-live="polite" hidden></div>
           <div class="bt-meta"><span id="bt-tree-id"></span><button id="bt-scope-toggle" class="text-button" type="button" hidden>显示整棵树</button></div>
+          <div id="bt-mode-reason" class="bt-mode-reason" role="status" aria-live="polite" hidden></div>
           <div id="bt-breadcrumb" class="bt-breadcrumb" hidden></div>
           <div id="bt-failure" class="bt-reason bt-root-reason" hidden></div>
           <ul id="bt-tree" class="bt-tree" aria-live="off"></ul>
@@ -1678,6 +1679,7 @@ function handleMessage(message: Message) {
     if (modeLost) keyboardLeaseOwned = false;
     finishInputModeRequestIfTerminal();
     renderInputModeCard();
+    renderBehaviorTree();
   } else if (message.type === "gripper_list") {
     updateGripperList(Array.isArray(message.grippers) ? message.grippers : []);
   } else if (message.type === "gripper_state") {
@@ -2333,12 +2335,28 @@ const btTreeId = $("#bt-tree-id") as HTMLElement;
 const btScopeToggle = $("#bt-scope-toggle") as HTMLButtonElement;
 const btBreadcrumb = $("#bt-breadcrumb") as HTMLElement;
 const btFailure = $("#bt-failure") as HTMLElement;
+const btModeReason = $("#bt-mode-reason") as HTMLElement;
 const btTreeHost = $("#bt-tree") as HTMLElement;
 const btToggled = new Map<string, boolean>();
 let btRuntime: BtRuntime = { available: false };
 let btShowWholeTree = false;
 let btLastMarkup = "";
 let btWasRunning = false;
+// Why the router is (or is going) to the none branch: a branch failure ("policy failed: ...") or a
+// request ("requested by ..."). The executor keeps that reason on the none state until the next
+// switch, so it stays here after the failed branch has been halted and its nodes reset.
+function renderBtModeReason() {
+  const state = inputModeState;
+  const failed = state?.phase === "FAILED";
+  const toNone = state !== undefined && (state.requested_mode === "none" ||
+    (state.phase === "ACTIVE" && state.active_mode === "none"));
+  const shown = Boolean(state?.detail) && (failed || toNone);
+  btModeReason.hidden = !shown;
+  btModeReason.classList.toggle("bt-mode-reason-failure", shown && (failed || / failed: /.test(state!.detail)));
+  btModeReason.textContent = !shown ? "" : failed
+    ? `${inputModeLabel(state!.requested_mode)} 失败：${state!.detail}`
+    : `切换到 ${inputModeLabel("none")} 分支的原因：${state!.detail}`;
+}
 function renderBehaviorTree() {
   // The card stays while trees can be started from here, and always while one runs.
   btPanel.hidden = !btRuntime.available && !btLibrary.available;
@@ -2370,6 +2388,7 @@ function renderBehaviorTree() {
   btTabDot.className = `tab-dot bt-dot-${btRuntime.root_status.toLowerCase()}`;
   btFailure.hidden = !btRuntime.failure_reason;
   btFailure.textContent = btRuntime.failure_reason;
+  renderBtModeReason();
   if (!root) return;
   const router = findInputRouter(root);
   const branch = router && activeRouterBranch(router, inputModeState?.active_mode);

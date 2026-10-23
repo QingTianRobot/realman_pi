@@ -53,8 +53,14 @@ class ScriptedAction final : public bt_core::ActionNode {
       }
     }
     const std::size_t index = std::min<std::size_t>(ticks_ - 1, script_.size() - 1);
+    if (write_failure_reasons && script_[index] == NodeStatus::FAILURE) {
+      blackboard()->set<std::string>(kReasonKey, "failed on tick " + std::to_string(ticks_));
+    }
     return script_[index];
   }
+
+  // When set, every FAILURE writes a reason naming the tick, like PolicyRun does.
+  bool write_failure_reasons{false};
 
   void onHalted() override { events_.push_back("halt"); }
 
@@ -372,6 +378,42 @@ void testWithoutAChildItFails() {
   assert(retry.executeTick() == NodeStatus::FAILURE);
 }
 
+// policy_failure_reason belongs to one attempt; an older one must never explain a later failure.
+void testAReasonFromAnEarlierRunIsClearedWhenARunStarts() {
+  Fixture f(3, {NodeStatus::RUNNING});
+  f.config.blackboard->set<std::string>(kReasonKey, "joint J5 out of range");
+
+  assert(f.retry->executeTick() == NodeStatus::RUNNING);
+  assert(f.reason().empty());
+}
+
+void testTheReasonIsClearedBeforeEachRetry() {
+  Fixture f(3, {NodeStatus::FAILURE, NodeStatus::RUNNING});
+  f.child->write_failure_reasons = true;
+
+  assert(f.retry->executeTick() == NodeStatus::RUNNING);  // attempt 1 failed, retrying
+  assert(f.reason().empty());
+}
+
+void testAFailedRunKeepsTheLastAttemptsReason() {
+  Fixture f(2, {NodeStatus::FAILURE});
+  f.child->write_failure_reasons = true;
+
+  assert(f.retry->executeTick() == NodeStatus::RUNNING);
+  assert(f.retry->executeTick() == NodeStatus::FAILURE);
+  assert(f.reason() == "failed on tick 2");
+}
+
+void testASuccessfulRunClearsTheReasonOfItsFailedAttempts() {
+  Fixture f(3, {NodeStatus::FAILURE, NodeStatus::SUCCESS});
+  f.child->write_failure_reasons = true;
+
+  assert(f.retry->executeTick() == NodeStatus::RUNNING);
+  f.config.blackboard->set<std::string>(kReasonKey, "written while attempt 2 ran");
+  assert(f.retry->executeTick() == NodeStatus::SUCCESS);
+  assert(f.reason().empty());
+}
+
 }  // namespace
 
 int main() {
@@ -404,5 +446,9 @@ int main() {
   testTheTimeoutCountStartsOverInEveryRun();
   testStaleTimeoutFlagFromAnEarlierRunIsIgnored();
   testWithoutAChildItFails();
+  testAReasonFromAnEarlierRunIsClearedWhenARunStarts();
+  testTheReasonIsClearedBeforeEachRetry();
+  testAFailedRunKeepsTheLastAttemptsReason();
+  testASuccessfulRunClearsTheReasonOfItsFailedAttempts();
   return 0;
 }

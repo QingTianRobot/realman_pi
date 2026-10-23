@@ -70,6 +70,8 @@ public:
     onHalted();
     markHalted();
     setStatus(NodeStatus::IDLE);
+    // 与 TreeNode::halt 一致：被中止的动作不再带着上一次的失败原因。
+    setFailureReason("");
   }
 };
 

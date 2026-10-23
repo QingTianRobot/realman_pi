@@ -291,7 +291,11 @@ Web 服务读取它并压缩成树视图（`bt_runtime.py`）：去掉事件日�
 - **其它树**（如 `move.xml`、`three.xml`）：没有路由结构，直接显示整棵树。
 - **折叠**：有子节点的节点可点击三角折叠/展开；IDLE 子树默认折叠，手动选择按节点 path 记住，不会被下一帧快照覆盖。
   每个节点显示类型图标、节点名（与注册名不同时附注册名）、状态标签，失败节点下方显示 `failure_reason`；
-  根节点的失败原因显示在树上方。
+  根节点的失败原因显示在树上方。节点的 `failure_reason` 只属于它最近一次执行：节点被 halt（路由离开所在分支）或开始新一次执行时清空，
+  所以切回某个分支时不会再显示上一次运行留下的错误（bt_core `ActionNode::halt` 与 `TreeNode::executeTick`）。
+- **切换到 none 的原因**：树上方的 `#bt-mode-reason` 行显示路由为什么在（或正在去）`none` 分支，内容取自
+  `input_mode_state.detail`：`FAILED` 时显示“X 失败：原因”，之后显示“切换到 无输入 分支的原因：policy failed: …”
+  或“…：requested by web:…”；失败原因用红底。失败分支被 halt、节点原因清空后，这一行仍保留原因，直到下一次切换。
 - **终止行为树**：面板右上角“终止行为树”按钮第一次点击只变为红色“确认终止？”，4 s 内再点一次才发送
   `{"type":"stop_behavior_tree","request_id":...}`。Web 节点调用 `/realman_bt_executor/shutdown`，等同在终端对
   `./rm65 bt` 按 Ctrl-C：halt 树、等运动取消排空、executor 退出、router 随 launch 关闭、`bt-start` 归档并关掉

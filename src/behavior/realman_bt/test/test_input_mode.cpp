@@ -406,6 +406,72 @@ void testExplicitFailurePublishesBeforeFallback() {
                  InputModePhase::kSwitching, request.request_id, 1);
 }
 
+// Drives the coordinator the way the tree does on each tick until no transition is pending.
+void settle(InputModeCoordinator& coordinator, InputModeCoordinator::Clock::time_point now) {
+  for (int tick = 0; tick < 4 && coordinator.snapshot().phase != InputModePhase::kActive; ++tick) {
+    coordinator.activate(coordinator.selectForTick(now), now);
+  }
+}
+
+// After a branch fails, the fallback mode keeps saying why the tree went there, through the switch
+// and once it is ACTIVE, so the Web page can show it.
+void testFallbackToNoneCarriesTheFailureReason() {
+  using Clock = InputModeCoordinator::Clock;
+  const auto now = Clock::time_point{};
+  auto registry = makeRegistry();
+  InputModeCoordinator coordinator(registry, std::chrono::milliseconds(100), "none", {});
+  coordinator.request("policy", "browser", now);
+  settle(coordinator, now);
+  assert(coordinator.snapshot().active_mode == "policy");
+  assert(coordinator.snapshot().detail.empty());
+
+  coordinator.fail("joint J5 = 19.6 deg is outside [20.0, 108.2]", now);
+  assert(coordinator.selectForTick(now) == "none");
+  assert(coordinator.snapshot().phase == InputModePhase::kSwitching);
+  assert(coordinator.snapshot().detail ==
+         "policy failed: joint J5 = 19.6 deg is outside [20.0, 108.2]");
+  settle(coordinator, now);
+  assertSnapshot(coordinator.snapshot(), "none", "none", "none", InputModePhase::kActive, 1, 2);
+  assert(coordinator.snapshot().detail ==
+         "policy failed: joint J5 = 19.6 deg is outside [20.0, 108.2]");
+}
+
+// Switching back to the failed mode starts clean: the old failure is not shown again.
+void testRequestingAModeAgainClearsTheOldFailure() {
+  using Clock = InputModeCoordinator::Clock;
+  const auto now = Clock::time_point{};
+  auto registry = makeRegistry();
+  InputModeCoordinator coordinator(registry, std::chrono::milliseconds(100), "none", {});
+  coordinator.request("policy", "browser", now);
+  settle(coordinator, now);
+  coordinator.fail("grasp missed", now);
+  static_cast<void>(coordinator.selectForTick(now));
+  settle(coordinator, now);
+
+  coordinator.request("policy", "browser", now);
+  assert(coordinator.snapshot().detail.empty());
+  settle(coordinator, now);
+  assert(coordinator.snapshot().active_mode == "policy");
+  assert(coordinator.snapshot().detail.empty());
+}
+
+// A switch to none that someone asked for names who asked; other modes carry no detail.
+void testRequestedNoneNamesTheRequester() {
+  using Clock = InputModeCoordinator::Clock;
+  const auto now = Clock::time_point{};
+  auto registry = makeRegistry();
+  InputModeCoordinator coordinator(registry, std::chrono::milliseconds(100), "none", {});
+  coordinator.request("pika", "browser", now);
+  settle(coordinator, now);
+  assert(coordinator.snapshot().detail.empty());
+
+  coordinator.request("none", "web:operator", now);
+  settle(coordinator, now);
+  assert(coordinator.snapshot().active_mode == "none");
+  assert(coordinator.snapshot().phase == InputModePhase::kActive);
+  assert(coordinator.snapshot().detail == "requested by web:operator");
+}
+
 }  // namespace
 
 int main() {
@@ -422,5 +488,8 @@ int main() {
   testTimeoutPublishesFailedBeforeSchedulingFallback();
   testActivationAfterDeadlinePublishesFailedInsteadOfActive();
   testExplicitFailurePublishesBeforeFallback();
+  testFallbackToNoneCarriesTheFailureReason();
+  testRequestingAModeAgainClearsTheOldFailure();
+  testRequestedNoneNamesTheRequester();
   return 0;
 }

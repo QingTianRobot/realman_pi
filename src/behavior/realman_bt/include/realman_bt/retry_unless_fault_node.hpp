@@ -35,6 +35,11 @@ inline constexpr const char* kPolicyTimeoutKey = "policy_timeout";
 /// so a flag left over from an earlier run never blocks the first attempt of a new one, and the
 /// timeout flag is also cleared before each retry. After a run ends in FAILURE the flags stay set
 /// so the parent can still read them.
+///
+/// `policy_failure_reason` belongs to one attempt: it is cleared when a run starts, before each
+/// retry and when the run succeeds, so a later failure that writes no reason of its own (a MoveJ
+/// after a successful retry, a re-home on the next entry) is never reported with an older
+/// attempt's error. After a failed run it keeps the last attempt's reason for FailInputMode.
 class RetryUnlessFaultNode final : public bt_core::DecoratorNode {
  public:
   using bt_core::DecoratorNode::DecoratorNode;
@@ -61,6 +66,7 @@ class RetryUnlessFaultNode final : public bt_core::DecoratorNode {
       backing_off_ = false;
       blackboard()->remove(kPolicyFaultKey);
       blackboard()->remove(kPolicyTimeoutKey);
+      blackboard()->remove(kPolicyFailureReasonKey);
     }
     if (backing_off_) {
       if (Clock::now() < backoff_until_) return bt_core::NodeStatus::RUNNING;
@@ -72,6 +78,7 @@ class RetryUnlessFaultNode final : public bt_core::DecoratorNode {
     switch (child()->executeTick()) {
       case bt_core::NodeStatus::SUCCESS:
         endRun();
+        blackboard()->remove(kPolicyFailureReasonKey);
         return bt_core::NodeStatus::SUCCESS;
 
       case bt_core::NodeStatus::RUNNING:
@@ -91,6 +98,7 @@ class RetryUnlessFaultNode final : public bt_core::DecoratorNode {
             return bt_core::NodeStatus::FAILURE;
           }
           blackboard()->remove(kPolicyTimeoutKey);
+          blackboard()->remove(kPolicyFailureReasonKey);
           child()->halt();
           const double backoff = getInput<double>("timeout_backoff_sec").value_or(0.0);
           if (backoff > 0.0) {
@@ -103,6 +111,7 @@ class RetryUnlessFaultNode final : public bt_core::DecoratorNode {
         ++attempts_done_;
         if (max_attempts < 0 || attempts_done_ < max_attempts) {
           blackboard()->remove(kPolicyTimeoutKey);
+          blackboard()->remove(kPolicyFailureReasonKey);
           child()->halt();
           return bt_core::NodeStatus::RUNNING;
         }

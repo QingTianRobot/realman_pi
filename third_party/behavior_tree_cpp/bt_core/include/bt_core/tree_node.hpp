@@ -8,6 +8,7 @@
 //  @last_modified 2026-07-13
 //  @changelog
 //    - v1.1.0 (2026-07-13): 跟踪已执行但尚未显式 halt 的节点，支持幂等深度复位
+//    - 2026-10-23: 新一次执行开始与动作节点 halt 时清除上一次的失败原因
 //
 //  设计说明：
 //    一切节点(控制/装饰/动作/条件)都继承自 TreeNode。它定义了节点的统一接口：
@@ -94,6 +95,9 @@ public:
    *          以保证状态变化被记录与广播。
    */
   NodeStatus executeTick() {
+    // 失败原因只属于最近一次执行：新一次执行(此前不是 RUNNING)开始时清掉上一次的原因，
+    // 否则复位为 IDLE 的节点会一直显示早已过时的错误。
+    if (status_ != NodeStatus::RUNNING) failure_reason_.clear();
     // 即使 tick 抛异常，显式 halt 仍应知道该节点可能已创建部分资源。
     halt_pending_ = true;
     const NodeStatus new_status = tick();

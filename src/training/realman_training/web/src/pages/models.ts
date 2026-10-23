@@ -1,6 +1,7 @@
 import { api, type ModelRow } from "../api";
 import type { Ctx } from "../ctx";
 import { markdown } from "../markdown";
+import { tagDistribution } from "../tag-distribution";
 import { errorText, fmtEpisodes, fmtMae, fmtTime, h } from "../dom";
 import { chip, kv, pageHead, panel, panelHead, table } from "../widgets";
 
@@ -15,6 +16,7 @@ async function renderCard(el: HTMLElement, model: ModelRow, ctx: Ctx): Promise<v
   const tasks = Object.entries(model.tasks);
   const loop = model.open_loop;
   const cardBody = h("div", { id: "model-card-markdown" }, h("p", { class: "loading" }, "加载中…"));
+  const tags = h("div", { id: "model-tags" }, h("p", { class: "loading" }, "加载训练数据的标签…"));
   el.replaceChildren(h("section", { class: "panel", id: "model-card" },
     panelHead(model.name, model.serving ? chip("服务中", "ok") : null, deploy),
     kv([["方法", model.method ?? "–"], ["训练时间", `${fmtTime(model.trained_start)} → ${fmtTime(model.trained_end)}`],
@@ -25,10 +27,13 @@ async function renderCard(el: HTMLElement, model: ModelRow, ctx: Ctx): Promise<v
     table(["任务", "prompt", "条数", "episode"], tasks.map(([task, info]) => [task, info.prompt ?? "–",
       (info as { count?: number }).count ?? (typeof info.episodes === "number" ? info.episodes : "–"),
       h("span", { class: "mono" }, Array.isArray(info.episodes) ? fmtEpisodes(info.episodes) : "–")]), { numeric: [2] }),
+    tags,
     loop ? h("h3", {}, `开环评估（checkpoint ${loop.step}）`) : null,
     loop ? table(["任务", "MAE", "零动作基线"], Object.keys(loop.tasks).map((t) => [t, fmtMae(loop.tasks[t]), fmtMae(loop.zero_baseline[t])]),
       { numeric: [1, 2] }) : null,
     h("details", { class: "card-details" }, h("summary", {}, "MODEL_CARD.md 全文"), cardBody)));
+  void api.serveDataset(model.name).then((data) => tags.replaceChildren(tagDistribution(data, "model-tag-distribution")),
+    (error) => tags.replaceChildren(h("p", { class: "error" }, errorText(error))));
   try {
     const run = await api.run(model.config, model.exp);
     cardBody.replaceChildren(run.card_markdown ? markdown(run.card_markdown) : h("p", { class: "muted" }, "没有 MODEL_CARD.md"));

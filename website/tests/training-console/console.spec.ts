@@ -270,6 +270,7 @@ test("models: registry, card and deploy to the serve page", async ({ page }) => 
   await row.click();
   await expect(page.locator("#model-card")).toContainText("pi0.5 action-only fine-tune");
   await expect(page.locator("#model-card")).toContainText("pick up the power adapter");
+  await expect(page.locator("#model-tags")).toContainText("还没有标签文件 episode_tags.json");
   // Rendered, not shown as source: a heading element, no literal "#", and the HTML comment is not printed as text.
   await expect(page.locator("#model-card-markdown h1")).toContainText("m_multitask_b16_2gpu");
   await expect(page.locator("#model-card-markdown")).not.toContainText("# m_multitask");

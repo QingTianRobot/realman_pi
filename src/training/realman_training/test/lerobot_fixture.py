@@ -238,10 +238,51 @@ def build_view(
     return root
 
 
-def write_clean_manifest(root: Path, *, source: str, removed: dict[int, str]) -> Path:
+def write_tags(root: Path, tags: list[dict], *, sources: list[dict] | None = None,
+               snapshot_at: str = "2026-10-23T09:30:00+08:00") -> Path:
+    """episode_tags.json for a fixture dataset: one tags dict per episode; frames and task come from the dataset.
+    tag_sources default to "manual" for every given key."""
+    from realman_training.lerobot_io import read_episodes
+
+    rows = read_episodes(root)
+    assert len(rows) == len(tags), "one tags dict per episode"
+    doc = {
+        "schema_version": 1, "origin": "fixture", "dataset_path": f"lerobot/{Path(root).name}",
+        "snapshot_at": snapshot_at, "remote_generated_at": None, "remote_errors": 0, "derived_from": None,
+        "episodes": [
+            {"episode_index": r.index, "session_id": f"S{r.index:03d}", "length": r.length, "task": r.task,
+             "tags": dict(t), "tag_sources": dict(sources[r.index]) if sources else {k: "manual" for k in t}}
+            for r, t in zip(rows, tags)
+        ],
+    }
+    path = Path(root) / "episode_tags.json"
+    path.write_text(json.dumps(doc, indent=2, ensure_ascii=False), encoding="utf-8")
+    return path
+
+
+def tag_index(root: Path, tags: list[dict], *, dataset_path: str | None = None) -> dict:
+    """The recording platform's episode_meta.json for a fixture dataset (every episode adopted and exported)."""
+    from realman_training.lerobot_io import read_episodes
+
+    rows = read_episodes(root)
+    return {
+        "schema_version": 1, "generated_at": "2026-10-23T01:09:02+00:00", "path_base": ".", "errors": [],
+        "episodes": [
+            {"session_id": f"S{r.index:03d}", "episode_index": r.index, "decision": "ADOPTED",
+             "export_state": "SUCCEEDED", "dataset_path": dataset_path or f"lerobot/{Path(root).name}",
+             "raw_session_path": f"S{r.index:03d}", "recording_state": "READY",
+             "tags": dict(t), "tag_sources": {k: "manual" for k in t}}
+            for r, t in zip(rows, tags)
+        ],
+    }
+
+
+def write_clean_manifest(root: Path, *, source: str, removed: dict[int, str],
+                         old_to_new: dict[int, int] | None = None) -> Path:
     """The manifest drop_episodes.py writes next to the cleaned directory (<dir>.clean_manifest.json)."""
     path = Path(f"{root}.clean_manifest.json")
-    path.write_text(
-        json.dumps({"source": source, "removed": {str(e): {"frames": 1, "reason": r} for e, r in removed.items()}})
-    )
+    manifest = {"source": source, "removed": {str(e): {"frames": 1, "reason": r} for e, r in removed.items()}}
+    if old_to_new is not None:
+        manifest["old_to_new"] = {str(k): v for k, v in old_to_new.items()}
+    path.write_text(json.dumps(manifest))
     return path

@@ -29,6 +29,19 @@ rt pull          # → $D/raw_realman_ts_<时间>/realman__pi05-three-arm + pull
 
 本次 `raw_realman_ts_20261021_152817`：342 条、142413 帧、5.2 GB，约 13 分钟（局域网 ssh）。
 
+拉取会把录制平台的 Episode 标签一起写进 `<数据集>/episode_tags.json`（快照，每条按帧数和任务核对过）。
+之后在 realman_ts 上改了标签，不用重拉，只更新标签：
+
+```bash
+realman-train tags status ~/data/realman/raw_realman_ts_<ts>/realman__pi05-three-arm   # 只读，看有没有变化
+realman-train tags refresh ~/data/realman/raw_realman_ts_<ts>/realman__pi05-three-arm  # 重新读取并核对
+```
+
+清洗版和训练视图也能 `tags refresh`：按清洗记录的编号映射从来源推导，不连机器人（来源要先有标签）。
+清洗版的清洗记录里如果 `source` 就是 realman_ts 的路径本身（如 10-13 的直接整理数据集），标签文件是手工标的，
+对它们 `tags refresh` 会报错（来源在机器人上，无法推导）并保留原文件，不会覆盖。
+手工标注的标签文件（`derived_from.via == "manual"`）永远不会被自动替换，除非显式传入 `realman-train tags refresh --force`。
+
 ## 2. 质检
 
 ```bash
@@ -45,6 +58,21 @@ rt clean $D/raw_realman_ts_20261021_152817/realman__pi05-three-arm --suggested \
 ```
 
 结果 328 条、135370 帧；剔除清单和原因在 `realman__multitask_v2_clean.clean_manifest.json`。
+
+按标签选数据用 `--where 标签=值1,值2`，可以写多个：不同标签之间是"且"，同一标签的多个值之间是"或"；
+`task` 也能当条件。它可以和 `--suggested`、`--drop` 一起用（剔除取并集），不能和 `--keep` 一起用。
+
+```bash
+# 只要成功、正常光照的 pick_only 两类数据，同时剔除质检规则建议的
+realman-train clean ~/data/realman/raw_realman_ts_<ts>/realman__pi05-three-arm \
+  --suggested --where success=true --where lighting_level=2 \
+  --where task=pick_only,pick_only_light-weak_1021
+```
+
+值按标签的类型解析：`true`/`false`、整数、`null`（匹配空值），其余按文字精确匹配。光照 `lighting_level`：1 较暗、2 正常、3 较亮。
+剔除原因写成 `tag success=false (<failure_reason>)` 或 `tag lighting_level=1 not in {2}`；清洗记录多出 `where` 和
+`tags_snapshot_at`，新数据集带上按新编号重写的 `episode_tags.json`。`realman-train inspect` 会打印每个标签的取值和来源（人工/默认/自动）分布。
+注意：`success` 的默认值是 true，只有人工标过的才可信，看 inspect 里的来源计数。
 
 ## 4. 训练视图
 

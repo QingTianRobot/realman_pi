@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
-from lerobot_fixture import Episode, build_dataset, build_view, gripper
+from lerobot_fixture import Episode, build_dataset, build_view, gripper, write_tags
 
 from realman_training.cli import main
 
@@ -276,3 +277,84 @@ def test_web_is_a_subcommand():
 
     args = make_parser().parse_args(["web", "--port", "9999"])
     assert (args.command, args.port, args.host) == ("web", 9999, None)
+
+
+def test_clean_where_needs_tags_and_then_filters(setup, tmp_path, capsys):
+    raw, _, config_path = setup
+    args = ["--config", str(config_path), "clean", str(raw), "--where", "success=true"]
+    assert main([*args, "--dst", str(tmp_path / "data" / "c1")]) == 1
+    assert "tags refresh" in capsys.readouterr().err
+    write_tags(raw, [{"success": True}, {"success": False, "failure_reason": "closed on nothing"}])
+    assert main([*args, "--dst", str(tmp_path / "data" / "c2")]) == 0
+    manifest = json.loads(Path(f"{tmp_path / 'data' / 'c2'}.clean_manifest.json").read_text())
+    assert manifest["where"] == ["success=true"]
+    assert manifest["removed"]["1"]["reason"] == "tag success=false (closed on nothing)"
+
+
+def test_clean_needs_some_selection(setup, capsys):
+    raw, _, config_path = setup
+    assert main(["--config", str(config_path), "clean", str(raw)]) == 2
+    assert "--where" in capsys.readouterr().err
+
+
+def test_clean_refuses_keep_with_where(setup, capsys):
+    raw, _, config_path = setup
+    assert main(["--config", str(config_path), "clean", str(raw), "--keep", "0", "--where", "success=true"]) == 2
+    assert "--keep and --where" in capsys.readouterr().err
+
+
+def test_inspect_shows_tag_counts(setup, capsys):
+    raw, _, config_path = setup
+    write_tags(raw, [{"success": True}, {"success": False}], sources=[{"success": "default"}, {"success": "manual"}])
+    assert main(["--config", str(config_path), "inspect", str(raw), "--no-quality"]) == 0
+    out = capsys.readouterr().out
+    assert "tags: snapshot 2026-10-23T09:30:00+08:00" in out
+    assert "success: false 1 (manual 1), true 1 (default 1)" in out
+    assert main(["--config", str(config_path), "inspect", str(raw), "--no-quality", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["tags"]["episodes"]["1"]["tags"]["success"] is False
+
+
+def test_tags_refresh_of_a_cleaned_set_runs_as_a_job(setup, tmp_path, capsys):
+    raw, _, config_path = setup
+    write_tags(raw, [{"success": True}, {"success": False}])
+    dst = tmp_path / "data" / "c3"
+    assert main(["--config", str(config_path), "clean", str(raw), "--drop", "1", "--dst", str(dst)]) == 0
+    (dst / "episode_tags.json").unlink()
+    assert main(["--config", str(config_path), "tags", "refresh", str(dst)]) == 0
+    assert (dst / "episode_tags.json").is_file()
+
+
+def test_tags_status_prints_the_change(setup, monkeypatch, capsys):
+    raw, _, config_path = setup
+    monkeypatch.setattr("realman_training.cli.tags_step.status", lambda config, path, runner: {
+        "state": "changed", "raw": str(raw), "snapshot_at": "2026-10-23T09:30:00+08:00",
+        "episodes_changed": 2, "keys": {"success": 2}})
+    assert main(["--config", str(config_path), "tags", "status", str(raw)]) == 0
+    assert "2 episode(s) changed" in capsys.readouterr().out
+
+
+def test_inspect_handmade_tags_show_hand_made(setup, capsys):
+    """inspect --no-quality with a hand-made tag file (derived_from.via == "manual") prints 'hand-made'."""
+    raw, _, config_path = setup
+    # Write a hand-made tag file directly
+    import json as _json
+    from realman_training.lerobot_io import read_episodes
+    rows = read_episodes(raw)
+    handmade_doc = {
+        "schema_version": 1,
+        "origin": "manual",
+        "dataset_path": f"lerobot/{raw.name}",
+        "snapshot_at": "2026-10-13T10:00:00+08:00",
+        "remote_generated_at": None,
+        "remote_errors": 0,
+        "derived_from": {"source": None, "via": "manual", "note": "hand-tagged"},
+        "episodes": [
+            {"episode_index": r.index, "session_id": None, "length": r.length, "task": r.task,
+             "tags": {}, "tag_sources": {}}
+            for r in rows
+        ],
+    }
+    (raw / "episode_tags.json").write_text(_json.dumps(handmade_doc, indent=2), encoding="utf-8")
+    assert main(["--config", str(config_path), "inspect", str(raw), "--no-quality"]) == 0
+    out = capsys.readouterr().out
+    assert "hand-made" in out

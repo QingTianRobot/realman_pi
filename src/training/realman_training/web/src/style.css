@@ -291,3 +291,31 @@ dialog.confirm .actions { justify-content: flex-end; margin-top: 12px; }
 .split-bar i.legend-dot-bar.s1 { background: var(--series-1); }
 .split-bar i.legend-dot-bar.s2 { background: var(--series-2); }
 .split-bar i.legend-dot-bar.s3 { background: var(--series-3); }
+
+#tag-filter { display: grid; gap: 8px; margin: 4px 0 12px; }
+#tag-filter .groups { display: flex; flex-wrap: wrap; gap: 8px 12px; }
+.tag-group { display: flex; flex-wrap: wrap; gap: 4px 12px; margin: 0; padding: 6px 10px; border: 1px solid var(--line); border-radius: 10px; min-width: 0; }
+.tag-group legend { padding: 0 4px; color: var(--text-3); font-size: 11px; }
+td.tags { white-space: nowrap; }
+td.tags .chip + .chip { margin-left: 4px; }
+.chip.tag-default { opacity: .6; }
+tr.failed td { background: var(--danger-bg); }
+tr.tag-drop td { color: var(--text-3); text-decoration: line-through; }
+.tag-dist { margin: 6px 0 12px; }
+.tag-dist h4 { margin: 0 0 4px; font-size: 12px; color: var(--text-2); font-weight: 600; }
+.tag-dist-legend { display: flex; flex-wrap: wrap; gap: 4px 12px; margin-bottom: 8px; font-size: 11px; color: var(--text-3); }
+.tag-dist-legend i { display: inline-block; width: 8px; height: 8px; border-radius: 50%; vertical-align: middle; margin-right: 3px; }
+.tag-dist-row { display: grid; grid-template-columns: minmax(60px, auto) auto minmax(40px, 1fr); align-items: center; gap: 2px 10px; margin-bottom: 6px; }
+.tag-dist-value { font-size: 12px; font-weight: 600; }
+.tag-dist-count { font-size: 11px; color: var(--text-3); white-space: nowrap; }
+.tag-dist-bar { height: 8px; border-radius: 4px; display: flex; background: var(--line); overflow: hidden; min-width: 40px; }
+.tag-dist-bar i { height: 100%; }
+.tag-dist-sources { grid-column: 1 / -1; font-size: 11px; color: var(--text-3); }
+.tag-dist-bar i.s0, .tag-dist-legend i.s0 { background: var(--primary); }
+.tag-dist-bar i.s1, .tag-dist-legend i.s1 { background: var(--ok); }
+.tag-dist-bar i.s2, .tag-dist-legend i.s2 { background: var(--warn); }
+.tag-dist-bar i.s3, .tag-dist-legend i.s3 { background: var(--danger); }
+@media (max-width: 600px) {
+  .tag-dist-row { grid-template-columns: minmax(60px, auto) minmax(80px, auto); }
+  .tag-dist-bar { grid-column: 1 / -1; }
+}

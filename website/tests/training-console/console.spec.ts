@@ -392,3 +392,37 @@ test("the job log docks to the bottom on phones @mobile", async ({ page }) => {
   await expect(page.locator("#drawer-grip")).toBeHidden();
   await noHorizontalScroll(page);
 });
+
+test("data: tags show per episode and a tag filter joins the cleaned set", async ({ page, request }) => {
+  await page.goto(`/#/data?path=${encodeURIComponent(RAW)}`);
+  await expect(page.locator("#tags-facet")).toContainText("lighting_level");
+  const light2 = page.locator('#tags-facet .tag-dist[data-key="lighting_level"] .tag-dist-row').first();
+  await expect(light2).toContainText("2");
+  await expect(light2).toContainText("3 条 · 60%");
+  await expect(light2.locator(".tag-dist-bar i")).toHaveCount(2);
+  await expect(page.locator('#tags-facet .tag-dist[data-key="failure_reason"]')).toContainText("1 条有内容");
+  await expect(page.locator(`#quality-table tr[data-episode="2"]`)).toHaveClass(/failed/);
+  await expect(page.locator(`#quality-table tr[data-episode="2"] td.tags`)).toContainText("失败");
+  await page.locator(`#tag-filter input[data-key="lighting_level"][value="2"]`).check();
+  await expect(page.locator("#drop-count")).toHaveText("已选 4 条（其中按标签 2 条）");
+  await expect(page.locator(`#quality-table tr[data-episode="3"]`)).toHaveClass(/tag-drop/);
+  await page.locator("#make-clean").click();
+  const dialog = page.locator("#confirm-dialog");
+  await expect(dialog).toContainText("剔除 4 条：1, 2, 3, 4");
+  await expect(dialog).toContainText("lighting_level=2");
+  await page.locator("#confirm-token").fill(TOKEN);
+  await page.locator("#confirm-start").click();
+  await expect(page.locator("#drawer-log")).toContainText("fake clean done");
+  const jobs = await (await request.get("/api/jobs?kind=clean")).json();
+  expect(jobs.jobs[0].params.where).toEqual(["lighting_level=2"]);
+  expect(jobs.jobs[0].params.drop).toEqual([1, 2]);
+});
+
+test("data: refreshing tags goes through the confirm dialog", async ({ page }) => {
+  await page.goto(`/#/data?path=${encodeURIComponent(RAW)}`);
+  await page.locator("#tags-refresh").click();
+  await expect(page.locator("#confirm-dialog")).toContainText("episode_meta.json");
+  await page.locator("#confirm-token").fill(TOKEN);
+  await page.locator("#confirm-start").click();
+  await expect(page.locator("#drawer-log")).toContainText("fake tags_refresh done");
+});

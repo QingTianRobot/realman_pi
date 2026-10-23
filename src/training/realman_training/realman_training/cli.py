@@ -10,14 +10,16 @@ from pathlib import Path
 import pyarrow
 import yaml
 
-from . import linkcheck, serving
+from . import episode_tags, linkcheck, serving
 from .config import load_config
 from .datasets import DatasetSummary, discover, summarize
 from .jobs import JobConflict, JobStore, StepFailed
 from .lerobot_io import NotALeRobotDataset
 from .quality import QualityUnavailable, inspect_dataset, suggested_drops
+from .runner import Runner
 from .steps import clean as clean_step
 from .steps import pull as pull_step
+from .steps import tags as tags_step
 from .steps import view as view_step
 
 STEP_COMMANDS = ("pull", "clean", "view", "norm", "train", "eval", "register")
@@ -44,6 +46,52 @@ def _summary_text(s: DatasetSummary) -> list[str]:
     for task, prompt in s.prompts.items():
         lines.append(f"  prompt {task}: {prompt}")
     return lines
+
+
+def _tags_text(payload: dict | None) -> list[str]:
+    if payload is None:
+        return ["  tags: none (realman-train tags refresh <path>)"]
+    if "error" in payload:
+        return [f"  tags: {payload['error']}"]
+    derived = payload.get("derived_from")
+    derived_note = ""
+    if derived:
+        if derived.get("path"):
+            derived_note = f" · derived from {derived['path']}"
+        elif derived.get("via") == "manual":
+            derived_note = " · hand-made"
+    lines = [f"  tags: snapshot {payload['snapshot_at']}" + derived_note]
+    for key, values in payload["summary"].items():
+        if key == episode_tags.TASK_KEY:
+            continue
+        lines.append(f"    {key}: " + ", ".join(
+            f"{v['text']} {v['count']} (" + ", ".join(f"{s} {n}" for s, n in v["sources"].items()) + ")" for v in values))
+    return lines
+
+
+def _status_text(result: dict) -> str:
+    state = result["state"]
+    if state == "current":
+        return f"{result['raw']}: tags are current (snapshot {result['snapshot_at']})"
+    if state == "changed":
+        keys = ", ".join(f"{k} {n}" for k, n in result["keys"].items())
+        return (f"{result['raw']}: {result['episodes_changed']} episode(s) changed on realman_ts since "
+                f"{result['snapshot_at']} ({keys}); run realman-train tags refresh")
+    if state == "no_tags":
+        return f"{result['raw']}: no episode_tags.json yet; run realman-train tags refresh {result['raw']}"
+    return f"tags status {state}: {result.get('error')}"
+
+
+def _cmd_tags(args, config) -> int:
+    path = Path(args.path).expanduser().resolve()
+    if args.tags_command == "refresh":
+        params: dict = {"config": str(config.source), "path": str(path)}
+        if getattr(args, "force", False):
+            params["force"] = True
+        return _run_job("tags_refresh", params, args, config)
+    result = tags_step.status(config, path, Runner())
+    print(json.dumps(result, ensure_ascii=False, indent=2) if args.json else _status_text(result))
+    return 0 if result["state"] in ("current", "changed") else 1
 
 
 def parse_episodes(text: str) -> list[int]:
@@ -97,6 +145,10 @@ def build_params(args, config) -> tuple[str, dict]:
         params = {**base, "src": str(src), "dst": str(Path(args.dst).expanduser() if args.dst else clean_step.default_dst(config.data_root, src))}
         if args.reasons:
             params["reasons"] = json.loads(Path(args.reasons).read_text(encoding="utf-8"))
+        if args.where:
+            params["where"] = list(args.where)
+        if args.where and args.keep is not None:
+            raise ValueError("--keep and --where are mutually exclusive")
         if args.suggested:
             quality = inspect_dataset(src, config.quality)
             params["drop"] = suggested_drops(quality)
@@ -106,8 +158,10 @@ def build_params(args, config) -> tuple[str, dict]:
             } | params.get("reasons", {})
         elif args.keep is not None:
             params["keep"] = parse_episodes(args.keep)
-        else:
+        elif args.drop is not None:
             params["drop"] = parse_episodes(args.drop)
+        elif not args.where:
+            raise ValueError("clean needs --drop, --keep, --suggested or --where")
         return "clean", params
     if command == "view":
         src = Path(args.src).expanduser().resolve()
@@ -292,6 +346,7 @@ def _cmd_inspect(args, config) -> int:
         except QualityUnavailable as error:
             unavailable = str(error)
     drops = suggested_drops(quality) if quality is not None else []
+    tags = episode_tags.payload(summary.path)
     if args.json:
         print(
             json.dumps(
@@ -300,13 +355,14 @@ def _cmd_inspect(args, config) -> int:
                     "quality": None if quality is None else [q.to_dict() for q in quality],
                     "quality_unavailable": unavailable,
                     "suggested_drops": drops,
+                    "tags": tags,
                 },
                 ensure_ascii=False,
                 indent=2,
             )
         )
         return 0
-    print("\n".join(_summary_text(summary)))
+    print("\n".join(_summary_text(summary) + _tags_text(tags)))
     if quality is None:
         print(f"  quality: {unavailable}")
         return 0
@@ -343,11 +399,13 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--name", help="target directory name under data_root")
     p = step("clean", "write a new dataset without the given episodes")
     p.add_argument("src")
-    group = p.add_mutually_exclusive_group(required=True)
+    group = p.add_mutually_exclusive_group(required=False)
     group.add_argument("--drop", help="episodes to drop, e.g. 13,28,40-44")
     group.add_argument("--keep", help="episodes to keep (a subset)")
     group.add_argument("--suggested", action="store_true", help="drop what the quality rules suggest")
     p.add_argument("--reasons", help="JSON file {episode: reason}")
+    p.add_argument("--where", action="append", metavar="KEY=V1,V2",
+                   help="keep episodes whose tag KEY is one of the values (repeat for more keys: all must hold)")
     p.add_argument("--dst")
     p = step("view", "build a training view (openpi make_realman_view.py) and check its gripper labels")
     p.add_argument("src")
@@ -411,6 +469,16 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--json", action="store_true")
     p = serve_sub.add_parser("status", help="both containers, model, GPU memory, bridge prompt")
     p.add_argument("--json", action="store_true")
+    tags_cmd = sub.add_parser("tags", help="episode tags of a dataset (episode_tags.json from realman_ts)")
+    tags_sub = tags_cmd.add_subparsers(dest="tags_command", required=True)
+    p = tags_sub.add_parser("refresh", help="re-read a raw copy's tags from realman_ts, or re-derive a cleaned set/view")
+    p.add_argument("path")
+    p.add_argument("--force", action="store_true", help="replace a hand-made tag file")
+    p.add_argument("--background", action="store_true", help="start the job and return its id")
+    p.add_argument("--json", action="store_true", help="print the result as JSON")
+    p = tags_sub.add_parser("status", help="have the recording's tags changed since the snapshot? (read-only)")
+    p.add_argument("path")
+    p.add_argument("--json", action="store_true")
     check = sub.add_parser("linkcheck", help="the four data-path checks (Pika/Wi-Fi, bulk + ping, inference, bridge)")
     check.add_argument("--only", help="comma list of pika, link, inference, bridge")
     check.add_argument("--json", action="store_true")
@@ -445,6 +513,8 @@ def main(argv: list[str] | None = None) -> int:
             return _cmd_list(args, config)
         if args.command == "inspect":
             return _cmd_inspect(args, config)
+        if args.command == "tags":
+            return _cmd_tags(args, config)
         if args.command == "serve":
             return _cmd_serve(args, config)
         if args.command == "linkcheck":

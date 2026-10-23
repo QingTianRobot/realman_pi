@@ -13,6 +13,7 @@ import shlex
 import shutil
 from pathlib import Path
 
+from .. import episode_tags
 from ..config import OpenpiConfig, load_config
 from ..datasets import summarize
 from ..jobs import StepFailed, now
@@ -77,6 +78,20 @@ def check_gripper_labels(root: str | Path, release_tasks: tuple[str, ...]) -> li
     return failures
 
 
+def _copy_tags(src: Path, partial: Path, log) -> None:
+    """The view keeps its source's numbering, so its tags are the source's rows, checked by frames."""
+    try:
+        doc = episode_tags.load(src)
+        if doc is None:
+            return
+        mapping = {i: i for i in episode_tags.local_episodes(partial)}
+        new = episode_tags.derive(doc, partial, mapping, source=src, via="contract.json")
+    except episode_tags.TagsMismatch as error:
+        log(f"tags not copied: {error}")
+        return
+    episode_tags.write(partial, new)
+
+
 def run(params: dict, log, runner: Runner | None = None) -> dict:
     runner = runner or Runner()
     config = load_config(params.get("config"))
@@ -124,6 +139,7 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
         (partial / "label_check.json").write_text(
             json.dumps({"checked": now(), "failures": failures}, indent=2, ensure_ascii=False), encoding="utf-8"
         )
+        _copy_tags(src, partial, log)
         partial.rename(dst)
     except BaseException:
         if partial.exists():

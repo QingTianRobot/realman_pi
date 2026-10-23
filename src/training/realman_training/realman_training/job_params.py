@@ -12,7 +12,7 @@ from pathlib import Path
 import pyarrow
 
 from . import linkcheck
-from .catalog import BadRequest, NotFound, resolve_dataset
+from .catalog import BadRequest, NotFound, resolve_dataset, select_preview
 from .config import ARMS, ConsoleConfig
 from .datasets import summarize
 from .jobs import STEPS, StepFailed
@@ -25,7 +25,7 @@ from .steps import view as view_step
 
 ALLOWED = {
     "pull": {"dataset", "name"},
-    "clean": {"src", "drop", "reasons", "dst"},
+    "clean": {"src", "drop", "reasons", "dst", "where"},
     "view": {"src", "task_prompts", "arm", "dst", "dry_run"},
     "norm": {"config_name", "view", "force", "dry_run"},
     "train": {"config_name", "view", "exp", "gpus", "batch", "steps", "resume", "dry_run"},
@@ -33,6 +33,7 @@ ALLOWED = {
     "register": {"config_name", "exp", "status", "method", "force"},
     "serve": {"action", "model", "checkpoint", "gpu", "port", "task", "dry_run"},
     "linkcheck": {"only"},
+    "tags_refresh": {"path"},
 }
 SETTINGS = {"model", "checkpoint", "gpu", "port", "task"}
 _TEXT_MAX = 500
@@ -103,6 +104,14 @@ def _view(config: ConsoleConfig, raw: dict) -> str:
     return str(path)
 
 
+def _where(value) -> list[str]:
+    if value is None:
+        return []
+    if not isinstance(value, list) or any(not isinstance(v, str) or "=" not in v or len(v) > _TEXT_MAX for v in value):
+        raise BadRequest("where must be a list of key=v1,v2 texts")
+    return [v.strip() for v in value]
+
+
 def _episodes(value, key: str) -> list[int]:
     if not isinstance(value, list) or any(isinstance(v, bool) or not isinstance(v, int) or v < 0 for v in value):
         raise BadRequest(f"{key} must be a list of episode numbers")
@@ -170,9 +179,11 @@ def build(kind: str, raw: dict, config: ConsoleConfig, settings: dict | None = N
                 **({"dataset": params["dataset"]} if "dataset" in params else {})}
     if kind == "clean":
         src = _dataset(config, raw, "src")
-        drop = _episodes(raw.get("drop"), "drop")
-        if not drop:
-            raise BadRequest("nothing to drop: tick at least one episode")
+        drop = _episodes(raw.get("drop") or [], "drop")
+        where = _where(raw.get("where"))
+        tag_drops = select_preview(config, raw["src"], where)["drop"] if where else []
+        if not drop and not tag_drops:
+            raise BadRequest("nothing to drop: tick at least one episode, or a tag filter that some episode fails")
         reasons = raw.get("reasons") or {}
         if not isinstance(reasons, dict) or any(not isinstance(v, str) or len(v) > _TEXT_MAX for v in reasons.values()):
             raise BadRequest("reasons must map dropped episode numbers to text")
@@ -182,6 +193,8 @@ def build(kind: str, raw: dict, config: ConsoleConfig, settings: dict | None = N
         params.update(src=str(src), drop=drop)
         if reasons:
             params["reasons"] = dict(reasons)
+        if where:
+            params["where"] = where
         params["dst"] = _new_dir(config, raw, "dst", clean_step.default_dst(config.data_root, src))
         return params
     if kind == "view":
@@ -200,6 +213,8 @@ def build(kind: str, raw: dict, config: ConsoleConfig, settings: dict | None = N
         if arm is not None:
             params["arm"] = arm
         return params
+    if kind == "tags_refresh":
+        return {**params, "path": str(_dataset(config, raw, "path"))}
     if kind in ("norm", "train", "eval", "register"):
         params["config_name"] = _name(raw.get("config_name"), "config_name")
     if kind == "norm":

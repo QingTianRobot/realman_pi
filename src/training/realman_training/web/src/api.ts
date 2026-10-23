@@ -23,9 +23,21 @@ export interface Summary {
   first_file_time: string | null; last_file_time: string | null; source: string | null; removed_episodes: number | null;
   prompts: Record<string, string>;
 }
+export interface TagValue { value: unknown; text: string; count: number; sources: Record<string, number> }
+export interface TagRow { tags: Record<string, unknown>; tag_sources: Record<string, string>; session_id?: string | null; task?: string | null }
+export interface TagsPayload {
+  snapshot_at?: string | null; derived_from?: { path: string; snapshot_at?: string | null; via?: string } | null;
+  keys?: string[]; summary?: Record<string, TagValue[]>; episodes?: Record<string, TagRow>; error?: string;
+}
+export interface TagSelect { path: string; where: string[]; drop: number[]; reasons: Record<string, string>; keep_count: number; unseen: string[] }
+export interface TagStatus {
+  state: "current" | "changed" | "no_tags" | "unknown" | "error"; raw?: string; snapshot_at?: string | null;
+  episodes_changed?: number; keys?: Record<string, number>; error?: string;
+}
 export interface DatasetDetail {
   path: string; built: string; summary: Summary; quality: EpisodeQuality[] | null; quality_unavailable: string | null;
   suggested_drops: number[]; quality_counts: QualityCounts | null; traces: Record<string, number[]>;
+  tags: TagsPayload | null;
 }
 export interface EvalLatest { step: number; tasks: Record<string, number> }
 export interface RunRow {
@@ -150,6 +162,9 @@ export const api = {
   health: () => request<Health>("GET", "/api/health"),
   datasets: () => request<{ root: string; datasets: DatasetRow[] }>("GET", "/api/datasets"),
   dataset: (path: string) => request<DatasetDetail>("GET", `/api/dataset?path=${q(path)}`),
+  selectByTags: (path: string, where: string[]) =>
+    request<TagSelect>("GET", `/api/dataset/select?path=${q(path)}${where.map((w) => `&where=${q(w)}`).join("")}`),
+  tagsStatus: (path: string) => request<TagStatus>("GET", `/api/dataset/tags-status?path=${q(path)}`),
   jobs: (limit = 30, kind?: string) =>
     request<{ jobs: JobRow[] }>("GET", `/api/jobs?limit=${limit}${kind ? `&kind=${q(kind)}` : ""}`),
   job: (id: string) => request<{ job: JobRow; log: string }>("GET", `/api/jobs/${q(id)}`),

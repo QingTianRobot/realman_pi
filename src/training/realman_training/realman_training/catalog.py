@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pyarrow
 
-from . import serving_state
+from . import episode_tags, serving_state
 from .config import ConsoleConfig
 from .datasets import discover
 from .jobs import Job, StepFailed, write_json
@@ -104,10 +104,31 @@ def openpi_configs(config: ConsoleConfig) -> list[str]:
 
 def dataset_detail(config: ConsoleConfig, cache: SummaryCache, rel: str) -> dict:
     try:
-        entry = cache.get(resolve_dataset(config, rel))
+        root = resolve_dataset(config, rel)
+        entry = cache.get(root)
+        tags = episode_tags.payload(root)
     except (NotALeRobotDataset, OSError, ValueError, KeyError, TypeError, pyarrow.ArrowInvalid) as error:
         raise BadRequest(str(error)) from error
-    return {"path": rel, **{k: v for k, v in entry.items() if k not in ("fingerprint", "version")}}
+    return {"path": rel, **{k: v for k, v in entry.items() if k not in ("fingerprint", "version")}, "tags": tags}
+
+
+def select_preview(config: ConsoleConfig, rel: str, where: list[str]) -> dict:
+    """What a where filter would drop from a dataset, without starting anything."""
+    root = resolve_dataset(config, rel)
+    try:
+        doc = episode_tags.load(root)
+    except episode_tags.TagsMismatch as error:
+        raise BadRequest(str(error)) from None
+    if doc is None:
+        raise BadRequest(f"{rel} has no episode tags yet: refresh its tags first")
+    try:
+        parsed = episode_tags.parse_where(where, doc)
+    except ValueError as error:
+        raise BadRequest(str(error)) from None
+    drops = episode_tags.select(doc, parsed)
+    return {"path": rel, "where": list(where), "drop": sorted(drops),
+            "reasons": {str(e): why for e, why in sorted(drops.items())},
+            "keep_count": len(doc["episodes"]) - len(drops), "unseen": episode_tags.unseen(doc, parsed)}
 
 
 def job_row(job: Job) -> dict:

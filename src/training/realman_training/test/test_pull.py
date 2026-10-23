@@ -6,7 +6,7 @@ import subprocess
 
 import pytest
 from fake_runner import FakeRunner, RecordingLog
-from lerobot_fixture import Episode, build_dataset, gripper
+from lerobot_fixture import Episode, build_dataset, gripper, tag_index
 
 from realman_training.config import RemoteConfig
 from realman_training.datasets import summarize
@@ -40,10 +40,13 @@ def _video_sizes(recording) -> str:
     return "\n".join(lines) + ("\n" if lines else "")
 
 
-def fake_remote(recording, *, drop_video=False):
+def fake_remote(recording, *, drop_video=False, meta=None):
     """Answers the remote du/cat/find and runs the remote tar locally against the fixture."""
     runner = FakeRunner()
     size = sum(p.stat().st_size for p in recording.rglob("*") if p.is_file())
+    if meta is None:
+        meta = tag_index(recording, [{"success": True}, {"success": True}])
+    runner.on("episode_meta.json", stdout=json.dumps(meta))
     runner.on("du -sb", stdout=f"{size}\t{SOURCE}\n")
     runner.on("cat", stdout=(recording / "meta/info.json").read_text())
     runner.on("find", stdout=_video_sizes(recording))
@@ -255,3 +258,20 @@ def test_unreferenced_remote_videos_are_ignored(recording, tmp_path):
     runner.on("find", stdout=_video_sizes(recording) + "\n" + extra)
     result = pull.run({"target": str(tmp_path / "t")}, RecordingLog(), runner=runner)
     assert result["episodes"] == 2
+
+
+def test_pull_snapshots_the_tags(recording, tmp_path):
+    target = tmp_path / "data" / "t"
+    result = pull.run({"target": str(target)}, RecordingLog(), runner=fake_remote(recording))
+    dataset = target / REMOTE.dataset
+    doc = json.loads((dataset / "episode_tags.json").read_text())
+    assert result["tags_episodes"] == 2 and [r["episode_index"] for r in doc["episodes"]] == [0, 1]
+    assert json.loads((target / "pull.json").read_text())["tags_snapshot_at"] == doc["snapshot_at"]
+
+
+def test_pull_fails_when_the_tag_index_lacks_an_episode(recording, tmp_path):
+    meta = tag_index(recording, [{"success": True}, {"success": True}])
+    del meta["episodes"][1]
+    with pytest.raises(StepFailed, match="not in the tag index"):
+        pull.run({"target": str(tmp_path / "t")}, RecordingLog(), runner=fake_remote(recording, meta=meta))
+    assert not (tmp_path / "t").exists() and not (tmp_path / "t.partial").exists()

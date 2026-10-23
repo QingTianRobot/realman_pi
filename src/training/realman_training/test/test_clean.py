@@ -7,7 +7,9 @@ from pathlib import Path
 import pyarrow.parquet as pq
 import pytest
 from fake_runner import RecordingLog
-from lerobot_fixture import Episode, build_dataset, gripper
+from lerobot_fixture import Episode, build_dataset, gripper, write_tags
+
+from realman_training import episode_tags
 
 from realman_training.datasets import summarize
 from realman_training.jobs import StepFailed
@@ -116,3 +118,76 @@ def test_a_failure_halfway_removes_only_the_partial_target(raw, tmp_path, monkey
 def test_default_dst_is_under_data_root(tmp_path):
     dst = clean.default_dst(tmp_path, tmp_path / "raw_x" / "realman__pi05-three-arm")
     assert dst.parent == tmp_path and dst.name.startswith("realman__pi05-three-arm_clean_")
+
+
+TAGS5 = [
+    {"success": True, "lighting_level": 2},
+    {"success": True, "lighting_level": 2},
+    {"success": False, "lighting_level": 2, "failure_reason": "never closed"},
+    {"success": True, "lighting_level": 1},
+    {"success": True, "lighting_level": 2},
+]
+
+
+def test_where_drops_by_tag_and_carries_renumbered_tags(raw, tmp_path):
+    write_tags(raw, TAGS5)
+    dst = tmp_path / "c"
+    result = clean.run({"src": str(raw), "dst": str(dst), "where": ["success=true", "lighting_level=2"]}, RecordingLog())
+    assert result["removed"] == {"2": "tag success=false (never closed)", "3": "tag lighting_level=1 not in {2}"}
+    assert result["tags"] is True and result["where"] == ["success=true", "lighting_level=2"]
+    manifest = json.loads(Path(f"{dst}.clean_manifest.json").read_text())
+    assert manifest["where"] == ["success=true", "lighting_level=2"]
+    assert manifest["tags_snapshot_at"] == "2026-10-23T09:30:00+08:00"
+    doc = episode_tags.load(dst)
+    assert [r["session_id"] for r in doc["episodes"]] == ["S000", "S001", "S004"]
+    assert doc["derived_from"]["path"] == str(raw.resolve())
+
+
+def test_where_and_drop_are_a_union_with_both_reasons(raw, tmp_path):
+    write_tags(raw, TAGS5)
+    result = clean.run({"src": str(raw), "dst": str(tmp_path / "a"), "drop": [3], "reasons": {"3": "by hand"},
+                        "where": ["success=true"]}, RecordingLog())
+    assert result["removed"] == {"2": "tag success=false (never closed)", "3": "by hand"}
+    result = clean.run({"src": str(raw), "dst": str(tmp_path / "b"), "drop": [2], "reasons": {"2": "re-grasp seen"},
+                        "where": ["success=true"]}, RecordingLog())
+    assert result["removed"] == {"2": "re-grasp seen; tag success=false (never closed)"}
+
+
+@pytest.mark.parametrize("params, fragment", [
+    ({"where": ["success=true"]}, "tags refresh"),                          # no episode_tags.json
+    ({"keep": [0], "where": ["success=true"]}, "either keep or where"),
+])
+def test_where_needs_tags_and_excludes_keep(raw, tmp_path, params, fragment):
+    with pytest.raises(StepFailed, match=fragment):
+        clean.run({"src": str(raw), "dst": str(tmp_path / "x"), **params}, RecordingLog())
+
+
+@pytest.mark.parametrize("where, fragment", [
+    (["lighting_level=1,2"], "nothing to drop"),
+    (["colour=red"], "unknown tag"),
+])
+def test_bad_or_empty_where_is_refused(raw, tmp_path, where, fragment):
+    write_tags(raw, TAGS5)
+    with pytest.raises(StepFailed, match=fragment):
+        clean.run({"src": str(raw), "dst": str(tmp_path / "x"), "where": where}, RecordingLog())
+    assert not (tmp_path / "x").exists()
+
+
+def test_unseen_values_are_warned_about(raw, tmp_path):
+    write_tags(raw, TAGS5)
+    log = RecordingLog()
+    clean.run({"src": str(raw), "dst": str(tmp_path / "w"), "where": ["lighting_level=2,3"]}, log)
+    assert any("no episode has lighting_level=3" in line for line in log.lines)
+
+
+def test_a_plain_clean_carries_tags_and_stale_tags_do_not_block_it(raw, tmp_path):
+    write_tags(raw, TAGS5)
+    clean.run({"src": str(raw), "dst": str(tmp_path / "p"), "drop": [1]}, RecordingLog())
+    assert len(episode_tags.load(tmp_path / "p")["episodes"]) == 4
+    doc = json.loads(episode_tags.tags_path(raw).read_text())
+    doc["episodes"][0]["length"] = 1
+    episode_tags.write(raw, doc)
+    log = RecordingLog()
+    result = clean.run({"src": str(raw), "dst": str(tmp_path / "q"), "drop": [1]}, log)
+    assert result["tags"] is False and not episode_tags.tags_path(tmp_path / "q").exists()
+    assert any("tags not copied" in line for line in log.lines)

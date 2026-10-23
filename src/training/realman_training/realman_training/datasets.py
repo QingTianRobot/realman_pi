@@ -48,11 +48,16 @@ class DatasetSummary:
         return dataclasses.asdict(self)
 
 
-def _manifest(root: Path) -> dict | None:
-    for path in (Path(f"{root}.clean_manifest.json"), root / "clean_manifest.json"):
+def clean_manifest_path(root: Path) -> Path | None:
+    for path in (Path(f"{root}.clean_manifest.json"), Path(root) / "clean_manifest.json"):
         if path.is_file():
-            return json.loads(path.read_text(encoding="utf-8"))
+            return path
     return None
+
+
+def read_clean_manifest(root: Path) -> dict | None:
+    path = clean_manifest_path(root)
+    return json.loads(path.read_text(encoding="utf-8")) if path else None
 
 
 def _disk_bytes(root: Path) -> int:
@@ -98,7 +103,7 @@ def summarize(root: str | Path) -> DatasetSummary:
     times = [e.data_file.stat().st_mtime for e in episodes if e.data_file.is_file()]
     contract_path = root / "contract.json"
     contract = json.loads(contract_path.read_text(encoding="utf-8")) if contract_path.is_file() else None
-    manifest = None if contract else _manifest(root)
+    manifest = None if contract else read_clean_manifest(root)
     if contract is not None:
         kind, source = "view", contract.get("source")
         prompts = contract.get("prompts") or ({"*": contract["prompt"]} if contract.get("prompt") else {})

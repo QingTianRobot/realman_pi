@@ -41,6 +41,8 @@ training_console:
     dataset: realman__pi05-three-arm
     connect_timeout_sec: 10
     lock_wait_sec: 120              # the recorder holds .<dataset>.lock only while appending an episode
+    # The recording platform's tag index (episode_meta.json) and its lock; recording_root must lie under it.
+    tags_root: /data/realman-recordings
 
   # The openpi checkout and its docker data on server5090.
   openpi:

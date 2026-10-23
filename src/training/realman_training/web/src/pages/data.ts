@@ -104,6 +104,12 @@ function tagsFacet(detail: DatasetDetail, ctx: Ctx): HTMLElement {
     : null;
 
   const distBlocks = Object.entries(tags.summary ?? {}).filter(([key]) => key !== "task").map(([key, values]) => {
+    if (FILTER_SKIP.has(key)) {
+      // Free text (one value per failure): a count, the texts themselves are on the table rows' hover.
+      const filled = values.filter((v) => v.value != null).reduce((n, v) => n + v.count, 0);
+      return h("div", { class: "tag-dist", "data-key": key }, h("h4", {}, key),
+        h("p", { class: "muted" }, `${filled} 条有内容，${totalEpisodes - filled} 条为空（原因见质检表里失败行的悬停提示）`));
+    }
     const rows = values.map((v) => {
       const count = v.count;
       const percent = Math.round((100 * count) / totalEpisodes);

@@ -400,6 +400,7 @@ test("data: tags show per episode and a tag filter joins the cleaned set", async
   await expect(light2).toContainText("2");
   await expect(light2).toContainText("3 条 · 60%");
   await expect(light2.locator(".tag-dist-bar i")).toHaveCount(2);
+  await expect(page.locator('#tags-facet .tag-dist[data-key="failure_reason"]')).toContainText("1 条有内容");
   await expect(page.locator(`#quality-table tr[data-episode="2"]`)).toHaveClass(/failed/);
   await expect(page.locator(`#quality-table tr[data-episode="2"] td.tags`)).toContainText("失败");
   await page.locator(`#tag-filter input[data-key="lighting_level"][value="2"]`).check();

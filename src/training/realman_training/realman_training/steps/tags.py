@@ -16,6 +16,7 @@ import shlex
 import subprocess
 import tarfile
 import tempfile
+import time
 from pathlib import Path, PurePosixPath
 
 from .. import episode_tags
@@ -91,9 +92,15 @@ def remote_doc(config: RemoteConfig, root: Path, runner: Runner, *, remote_episo
                timeout: float | None = None) -> dict:
     """Fresh rows for a raw copy at root (its directory name is the recording's dataset name)."""
     dataset = Path(root).name
+    t0 = time.monotonic() if timeout is not None else None
     meta = read_index(config, runner, timeout=timeout)
     if remote_episodes is None:
-        remote_episodes = read_remote_episodes(config, dataset, runner, timeout=timeout)
+        if timeout is not None and t0 is not None:
+            elapsed = time.monotonic() - t0
+            remaining = max(1.0, timeout - elapsed)
+        else:
+            remaining = None
+        remote_episodes = read_remote_episodes(config, dataset, runner, timeout=remaining)
     origin = f"{config.ssh_host}:{config.recording_container}:{config.tags_root}/episode_meta.json"
     try:
         return episode_tags.from_remote(meta, dataset_path(config, dataset), episode_tags.local_episodes(root),
@@ -171,10 +178,9 @@ def refresh(params: dict, log, runner: Runner | None = None) -> dict:
     except episode_tags.TagsMismatch as error:
         log(f"replacing tags that no longer match: {error}")
         old = None
+    if not params.get("force"):
+        _refuse_if_handmade(root, old)
     if kind == "raw":
-        # For raw datasets: check hand-made before any remote call
-        if not params.get("force"):
-            _refuse_if_handmade(root, old)
         log(f"{root.name}: reading the tag index from {config.remote.ssh_host}")
         doc = remote_doc(config.remote, root, runner)
     else:

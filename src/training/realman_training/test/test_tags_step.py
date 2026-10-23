@@ -149,32 +149,14 @@ def test_status_compares_the_raw_ancestor(raw, tmp_path):
 # --- F3: robot-path source and hand-made file protection ---
 
 def test_clean_set_with_robot_path_source_raises_on_the_robot(raw, tmp_path):
-    """(a) cleaned set whose manifest source is a robot path with a hand-made tag file raises 'on the robot'."""
+    """(a) cleaned set whose manifest source is a robot path raises 'on the robot'."""
     robot_source = "realman_ts:/home/x/lerobot/realman__pi05-three-arm"
     clean = build_dataset(tmp_path / "data" / "c2", [EPISODES[0], EPISODES[2]])
     write_clean_manifest(clean, source=robot_source, removed={1: "re-grasp"}, old_to_new={0: 0, 2: 1})
-    # Write a hand-made tag file (valid schema but derived_from.via == "manual")
-    handmade_doc = {
-        "schema_version": 1,
-        "origin": "manual",
-        "dataset_path": "lerobot/realman__pi05-three-arm",
-        "snapshot_at": "2026-10-13T10:00:00+08:00",
-        "remote_generated_at": None,
-        "remote_errors": 0,
-        "derived_from": {"source": None, "via": "manual", "note": "hand-tagged 10-13"},
-        "episodes": [
-            {"episode_index": 0, "session_id": None, "length": 140, "task": "pick_and_place",
-             "tags": {"success": True}, "tag_sources": {}},
-            {"episode_index": 1, "session_id": None, "length": 60, "task": "pick_only",
-             "tags": {"success": True}, "tag_sources": {}},
-        ],
-    }
-    episode_tags.write(clean, handmade_doc)
-    before = episode_tags.tags_path(clean).read_bytes()
+    # No existing tag file: the hand-made guard passes and derived_doc raises "on the robot"
     runner = FakeRunner()
     with pytest.raises(StepFailed, match="on the robot"):
         tags.refresh({"path": str(clean)}, RecordingLog(), runner=runner)
-    assert episode_tags.tags_path(clean).read_bytes() == before
 
 
 def test_raw_handmade_refuses_before_remote_call(raw):
@@ -273,11 +255,16 @@ def test_status_error_for_missing_local_source(raw, tmp_path):
 
 # --- F5: timeout passes -w to both remote commands ---
 
-def test_status_timeout_sets_flock_wait(raw):
-    """status(..., timeout=7) passes -w 7 to both remote commands (read_index and read_remote_episodes)."""
+def test_status_timeout_sets_flock_wait(raw, monkeypatch):
+    """status(..., timeout=7) with no elapsed time passes -w 7 to both remote commands.
+
+    Adjusted from the original (which asserted the same value for both): now monkeypatches
+    time.monotonic to return a constant so that elapsed == 0 and remaining == timeout == 7.
+    """
     write_tags(raw, TAGS)
     config = load_config(None)
     runner = fake_robot(raw, tag_index(raw, TAGS))
+    monkeypatch.setattr(tags.time, "monotonic", lambda: 0.0)
     result = tags.status(config, raw, runner, timeout=7)
     assert result["state"] == "current"
     # read_index command (episode_meta.json): check -w 7
@@ -293,3 +280,57 @@ def test_status_timeout_sets_flock_wait(raw):
     tar_part = sh_cmd_str[: -len(" | base64")]
     tar_argv = shlex.split(tar_part)
     assert tar_argv[3] == "7"
+
+
+def test_clean_set_handmade_refuses_without_force(raw, tmp_path):
+    """A cleaned set whose source is a local raw dataset with valid tags but whose own tags are
+    hand-made must refuse refresh without force, and succeed with force."""
+    write_tags(raw, TAGS)
+    clean = _clean_of(raw, tmp_path)
+    handmade_doc = {
+        "schema_version": 1,
+        "origin": "derived",
+        "dataset_path": "lerobot/c",
+        "snapshot_at": "2026-10-13T10:00:00+08:00",
+        "remote_generated_at": None,
+        "remote_errors": 0,
+        "derived_from": {"source": None, "via": "manual"},
+        "episodes": [
+            {"episode_index": 0, "session_id": "S000", "length": 140, "task": "pick_and_place",
+             "tags": {"success": True}, "tag_sources": {}},
+            {"episode_index": 1, "session_id": "S002", "length": 60, "task": "pick_only",
+             "tags": {"success": True}, "tag_sources": {}},
+        ],
+    }
+    episode_tags.write(clean, handmade_doc)
+    before = episode_tags.tags_path(clean).read_bytes()
+    with pytest.raises(StepFailed, match="hand-made"):
+        tags.refresh({"path": str(clean)}, RecordingLog(), runner=FakeRunner())
+    assert episode_tags.tags_path(clean).read_bytes() == before
+    # With force=True it succeeds and derived_from.path is now the source
+    result = tags.refresh({"path": str(clean), "force": True}, RecordingLog(), runner=FakeRunner())
+    assert result["kind"] == "clean"
+    doc = episode_tags.load(clean)
+    assert doc["derived_from"]["path"] == str(raw)
+
+
+def test_status_shared_deadline(raw, monkeypatch):
+    """status(..., timeout=15) with 10 s elapsed after read_index passes -w 5 to read_remote_episodes."""
+    write_tags(raw, TAGS)
+    config = load_config(None)
+    runner = fake_robot(raw, tag_index(raw, TAGS))
+    times = iter([0.0, 10.0])
+    monkeypatch.setattr(tags.time, "monotonic", lambda: next(times))
+    result = tags.status(config, raw, runner, timeout=15)
+    assert result["state"] == "current"
+    # read_index: -w 15 (min(120, 15) = 15)
+    index_cmd = runner.commands("episode_meta.json")[0]
+    index_inner = shlex.split(index_cmd[-1])
+    assert index_inner[5:7] == ["-w", "15"]
+    # read_remote_episodes: -w 5 (remaining = max(1, 15-10) = 5, min(120, 5) = 5)
+    base64_cmd = runner.commands("base64")[0]
+    base64_inner = shlex.split(base64_cmd[-1])
+    sh_cmd_str = base64_inner[base64_inner.index("-c") + 1]
+    tar_part = sh_cmd_str[: -len(" | base64")]
+    tar_argv = shlex.split(tar_part)
+    assert tar_argv[3] == "5"

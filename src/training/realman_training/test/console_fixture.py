@@ -7,7 +7,20 @@ import json
 import math
 from pathlib import Path
 
-from lerobot_fixture import Episode, build_dataset, build_view, gripper, write_clean_manifest
+from lerobot_fixture import Episode, build_dataset, build_view, gripper, write_clean_manifest, write_tags
+
+RAW_TAGS = [
+    {"success": True, "arm": "right", "lighting_level": 2, "date": "2026-10-16"},
+    {"success": True, "arm": "right", "lighting_level": 2, "date": "2026-10-16"},
+    {"success": False, "arm": "right", "lighting_level": 2, "date": "2026-10-16", "failure_reason": "2 closing events (re-grasp)"},
+    {"success": True, "arm": "right", "lighting_level": 1, "date": "2026-10-16"},
+    {"success": True, "arm": "right", "lighting_level": 1, "date": "2026-10-16"},
+]
+RAW_TAG_SOURCES = [
+    {"success": "manual" if t["success"] is False else "default", "arm": "manual", "lighting_level": "manual",
+     "date": "derived", **({"failure_reason": "manual"} if "failure_reason" in t else {})}
+    for t in RAW_TAGS
+]
 
 PLACE = "pick up the power adapter and put it in the blue bin"
 PICK = "pick up the power adapter"
@@ -32,6 +45,7 @@ def build_world(root: Path) -> dict[str, Path]:
         Episode("pick_only", gripper((50, 60), (5600, 120))),                                    # 3 ok
         Episode("pick_only", gripper((800, 60), (5600, 120))),                                   # 4 starts half closed (warn)
     ])
+    write_tags(raw, RAW_TAGS, sources=RAW_TAG_SOURCES)
     clean = build_dataset(data / "realman__multitask_clean", [
         Episode("pick_and_place", gripper((50, 60), (5700, 150), (50, 60))),
         Episode("pick_only", gripper((50, 60), (5600, 120))),

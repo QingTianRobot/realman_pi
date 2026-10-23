@@ -19,6 +19,7 @@ from typing import Callable
 from aiohttp import web
 
 from . import catalog, gpus as gpu_mod, job_params, linkcheck, serving
+from .steps import tags as tags_step
 from .catalog import BadRequest, NotFound
 from .config import ARMS, ConsoleConfig
 from .jobs import ACTIVE, FINAL, JobConflict, JobStore, now
@@ -28,6 +29,7 @@ from .summary_cache import SummaryCache
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 TOKEN_ENV = "REALMAN_TRAINING_TOKEN"
 TOKEN_HEADER = "X-Training-Token"
+TAGS_STATUS_TIMEOUT_SEC = 15
 _LOG_START_BYTES = 256 * 1024  # a WebSocket starts at most this far from the end of a long log
 _POLL_SEC = 0.5
 
@@ -95,6 +97,7 @@ class Console:
         self.store = store or JobStore(config.console_dir)
         self.targets = targets or {}
         runner = runner or Runner()
+        self.runner = runner
         self._serve_status = serve_status or (lambda: serving.status(config, runner))
         self._gpu_query = gpu_query or (lambda: gpu_mod.query(runner, busy_mib=config.openpi.gpu_busy_mib,
                                                               passwd=Path(config.web.passwd_file)))
@@ -142,6 +145,8 @@ class Console:
         r.add_get("/api/health", self.health)
         r.add_get("/api/datasets", self.datasets)
         r.add_get("/api/dataset", self.dataset)
+        r.add_get("/api/dataset/select", self.dataset_select)
+        r.add_get("/api/dataset/tags-status", self.dataset_tags_status)
         r.add_get("/api/jobs", self.jobs)
         r.add_post("/api/jobs", self.start_job)
         r.add_get("/api/jobs/{id}", self.job)
@@ -171,6 +176,16 @@ class Console:
     async def dataset(self, request):
         rel = request.query.get("path", "")
         return _json(await self._blocking(catalog.dataset_detail, self.config, self.summaries, rel))
+
+    async def dataset_select(self, request):
+        rel = request.query.get("path", "")
+        where = list(request.query.getall("where", []))
+        return _json(await self._blocking(catalog.select_preview, self.config, rel, where))
+
+    async def dataset_tags_status(self, request):
+        root = catalog.resolve_dataset(self.config, request.query.get("path", ""))
+        return _json(await self._blocking(lambda: tags_step.status(self.config, root, self.runner,
+                                                                   timeout=TAGS_STATUS_TIMEOUT_SEC)))
 
     async def jobs(self, request):
         kind = request.query.get("kind") or None

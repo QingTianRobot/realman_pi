@@ -49,3 +49,7 @@ def serve(params, log):
 
 def linkcheck(params, log):
     return _fake("linkcheck", params, log)
+
+
+def tags_refresh(params, log):
+    return _fake("tags_refresh", params, log)

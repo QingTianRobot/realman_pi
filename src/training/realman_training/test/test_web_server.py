@@ -6,6 +6,7 @@ from pathlib import Path
 
 import pytest
 from console_fixture import CONFIG_NAME, EXP, MODEL, build_world
+from fake_runner import FakeRunner
 
 from realman_training.config import load_config
 from realman_training.jobs import JobStore
@@ -51,7 +52,7 @@ def world(tmp_path):
     def make(token=TOKEN, **kwargs):
         store = JobStore(config.console_dir, env={"PYTHONPATH": str(TEST_DIR)})
         targets = {kind: "fake_steps:ok" for kind in
-                   ("pull", "clean", "view", "norm", "train", "eval", "register", "serve", "linkcheck")}
+                   ("pull", "clean", "view", "norm", "train", "eval", "register", "serve", "linkcheck", "tags_refresh")}
         return Console(config, token=token, store=store, targets=kwargs.pop("targets", targets),
                        serve_status=serve_status, gpu_query=gpu_query, static_root=kwargs.pop("static_root", static),
                        clock=clock, **kwargs)
@@ -467,3 +468,60 @@ def test_models_mark_what_the_live_serve_status_serves(world):
     stopped = world["make"]()
     stopped._serve_status = lambda: {"serve": {"running": False}, "record": {"model": MODEL}}
     assert call(stopped, scenario)["models"][0]["serving"] is False
+
+
+def test_dataset_detail_carries_tags(world):
+    async def scenario(client):
+        raw = await get_json(client, f"/api/dataset?path={RAW}")
+        view = await get_json(client, "/api/dataset?path=realman_right_arm_multitask_view")
+        return raw, view
+
+    raw, view = call(world["make"](), scenario)
+    assert raw["tags"]["keys"][0] == "task" and raw["tags"]["episodes"]["2"]["tags"]["success"] is False
+    assert raw["tags"]["episodes"]["2"]["tag_sources"]["success"] == "manual"
+    assert view["tags"] is None
+
+
+def test_select_previews_tag_drops(world):
+    async def scenario(client):
+        ok = await get_json(client, f"/api/dataset/select?path={RAW}&where=lighting_level%3D2&where=success%3Dtrue")
+        bad = await get_json(client, f"/api/dataset/select?path={RAW}&where=colour%3Dred", status=400)
+        none = await get_json(client, "/api/dataset/select?path=realman__multitask_clean&where=success%3Dtrue", status=400)
+        return ok, bad, none
+
+    ok, bad, none = call(world["make"](), scenario)
+    assert ok["drop"] == [2, 3, 4] and ok["keep_count"] == 2
+    assert ok["reasons"]["2"] == "tag success=false (2 closing events (re-grasp))"
+    assert ok["reasons"]["3"] == "tag lighting_level=1 not in {2}"
+    assert "unknown tag" in bad["error"] and "no episode tags" in none["error"]
+
+
+def test_tags_status_reports_unknown_when_the_robot_is_away(world):
+    down = FakeRunner().on("episode_meta.json", returncode=255, stdout="ssh: connect to host realman_local: timed out")
+
+    async def scenario(client):
+        return await get_json(client, f"/api/dataset/tags-status?path={RAW}")
+
+    data = call(world["make"](runner=down), scenario)
+    assert data["state"] == "unknown" and "realman_local" in data["error"]
+
+
+def test_tag_jobs_are_validated(world):
+    async def scenario(client):
+        headers = {TOKEN_HEADER: TOKEN}
+
+        async def post(kind, params, status):
+            response = await client.post("/api/jobs", json={"kind": kind, "params": params, "confirm": True}, headers=headers)
+            assert response.status == status, await response.text()
+            return await response.json()
+
+        refresh = await post("tags_refresh", {"path": RAW}, 201)
+        where_only = await post("clean", {"src": RAW, "where": ["lighting_level=2"]}, 201)
+        unknown = await post("clean", {"src": RAW, "where": ["colour=red"]}, 400)
+        nothing = await post("clean", {"src": RAW, "where": ["lighting_level=1,2"]}, 400)
+        return refresh, where_only, unknown, nothing
+
+    refresh, where_only, unknown, nothing = call(world["make"](), scenario)
+    assert refresh["job"]["params"]["path"].endswith(RAW)
+    assert where_only["job"]["params"]["where"] == ["lighting_level=2"] and where_only["job"]["params"]["drop"] == []
+    assert "unknown tag" in unknown["error"] and "nothing to drop" in nothing["error"]

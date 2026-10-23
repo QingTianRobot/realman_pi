@@ -164,6 +164,45 @@ def _end_effectors(path: Path, description_root: Path) -> dict[str, Any]:
     return result
 
 
+# PolicyRun's joint-current guard (config/ros/policy_task.yaml `policy_task.current_guard`). These are the
+# executor's own defaults (policy_task_config.hpp), used when the file or the block is missing, as the executor does.
+DEFAULT_CURRENT_GUARD = {
+    "enabled": True,
+    "limits_ma": [4000.0, 7000.0, 8000.0, 6000.0, 7500.0, 3000.0],
+    "sustain_sec": 0.5,
+}
+
+
+def _joint_current_guard(path: Path | None) -> dict[str, Any]:
+    """The guard's limits for the page's joint-current charts, and the arm the policy drives."""
+    task: dict[str, Any] = {}
+    if path is not None and path.is_file():
+        parameters = _child_mapping(
+            _child_mapping(_load_yaml(path).get("realman_bt_executor"), "policy_task.yaml realman_bt_executor").get(
+                "ros__parameters"
+            ),
+            "policy_task.yaml ros__parameters",
+        )
+        task = _child_mapping(parameters.get("policy_task", {}), "policy_task")
+    guard = {**DEFAULT_CURRENT_GUARD, **_child_mapping(task.get("current_guard", {}), "policy_task.current_guard")}
+    limits = guard["limits_ma"]
+    if not isinstance(limits, list) or len(limits) != 6:
+        raise ValueError("policy_task.current_guard.limits_ma must list six numbers")
+    limits_ma = [_finite(value, f"policy_task.current_guard.limits_ma[{index}]") for index, value in enumerate(limits)]
+    sustain_sec = _finite(guard["sustain_sec"], "policy_task.current_guard.sustain_sec")
+    if min(limits_ma) <= 0.0 or sustain_sec <= 0.0:
+        raise ValueError("policy_task.current_guard limits_ma and sustain_sec must be positive")
+    arm = task.get("arm", "r")
+    if arm not in ARMS:
+        raise ValueError("policy_task.arm must be l, m or r")
+    return {
+        "enabled": bool(guard["enabled"]),
+        "limits_ma": limits_ma,
+        "sustain_sec": sustain_sec,
+        "policy_arm": arm,
+    }
+
+
 def build_manifest(
     layout_path: str | Path,
     motion_path: str | Path,
@@ -171,6 +210,7 @@ def build_manifest(
     keyboard_path: str | Path,
     description_root: str | Path,
     end_effectors_path: str | Path | None = None,
+    policy_task_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Return browser-safe layout data without copying model files."""
 
@@ -239,6 +279,7 @@ def build_manifest(
             "coordinates": "config/ros/realman_coordinates.yaml",
             "keyboard": "config/ros/keyboard_control.yaml",
             "end_effectors": "config/ros/end_effectors.yaml",
+            "joint_current": "config/ros/policy_task.yaml",
         },
         "root_frame": robots[0]["parent_frame"],
         "default_joint_position_rad": _finite(
@@ -254,6 +295,7 @@ def build_manifest(
             if end_effectors_path is not None and Path(end_effectors_path).is_file()
             else {}
         ),
+        "joint_current": _joint_current_guard(None if policy_task_path is None else Path(policy_task_path).resolve()),
     }
 
 

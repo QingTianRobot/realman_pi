@@ -135,3 +135,40 @@ def test_manifest_rejects_an_invalid_pedestal(tmp_path, change, message):
              "bottom_z": -0.2, "color": "#e9edf1", **change}
     with pytest.raises(ValueError, match=message):
         build_manifest(*_layout_with_pedestal(tmp_path, block))
+
+
+def test_manifest_publishes_the_policy_current_guard_for_the_current_charts():
+    guard = build_manifest(*paths(), None, ROOT / "config/ros/policy_task.yaml")["joint_current"]
+    assert guard == {
+        "enabled": True,
+        "limits_ma": [4000.0, 7000.0, 8000.0, 6000.0, 7500.0, 3000.0],
+        "sustain_sec": 0.5,
+        "policy_arm": "r",
+    }
+
+
+def test_manifest_falls_back_to_the_executor_defaults_without_the_guard(tmp_path):
+    # The executor declares the same defaults when policy_task.yaml has no current_guard block.
+    assert build_manifest(*paths())["joint_current"]["limits_ma"] == [4000.0, 7000.0, 8000.0, 6000.0, 7500.0, 3000.0]
+    task = tmp_path / "policy_task.yaml"
+    task.write_text("realman_bt_executor:\n  ros__parameters:\n    policy_task:\n      arm: l\n", encoding="utf-8")
+    guard = build_manifest(*paths(), None, task)["joint_current"]
+    assert guard["policy_arm"] == "l" and guard["sustain_sec"] == 0.5 and guard["enabled"] is True
+
+
+@pytest.mark.parametrize(
+    "block, message",
+    [
+        ("limits_ma: [1, 2, 3]", "six numbers"),
+        ("limits_ma: [4000, 7000, 0, 6000, 7500, 3000]", "positive"),
+        ("sustain_sec: .nan", "finite"),
+    ],
+)
+def test_manifest_rejects_an_invalid_current_guard(tmp_path, block, message):
+    task = tmp_path / "policy_task.yaml"
+    task.write_text(
+        "realman_bt_executor:\n  ros__parameters:\n    policy_task:\n      current_guard:\n        " + block + "\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match=message):
+        build_manifest(*paths(), None, task)

@@ -112,6 +112,10 @@ class WebControlNode(Node):
             str(config_root / "ros" / "end_effectors.yaml"),
         )
         self.declare_parameter(
+            "policy_task_config_file",
+            str(config_root / "ros" / "policy_task.yaml"),
+        )
+        self.declare_parameter(
             "gripper_config_file",
             str(config_root / "ros" / "gripper.yaml"),
         )
@@ -144,6 +148,7 @@ class WebControlNode(Node):
             keyboard_file,
             description_root,
             self._parameter("end_effectors_config_file"),
+            self._parameter("policy_task_config_file"),
         )
         self._robots = {robot["id"]: robot for robot in self._manifest["robots"]}
         self._keyboard_config = load_keyboard_control_config(
@@ -347,6 +352,15 @@ class WebControlNode(Node):
                     Bool,
                     f"/{arm}/connected",
                     lambda message, selected=arm: self._connection(selected, message),
+                    10,
+                    callback_group=self._callback_group,
+                )
+            )
+            self._web_subscriptions.append(
+                self.create_subscription(
+                    JointState,
+                    f"/{arm}/joint_currents",
+                    lambda message, selected=arm: self._joint_current_message(selected, message),
                     10,
                     callback_group=self._callback_group,
                 )
@@ -2038,6 +2052,21 @@ class WebControlNode(Node):
                 "names": names,
                 "positions_rad": values,
                 "stamp_ns": stamp_ns,
+            }
+        )
+
+    def _joint_current_message(self, arm: str, message: JointState) -> None:
+        # The driver's /<arm>/joint_currents: mA in effort, stamped like the matching joint_states.
+        currents = [float(value) for value in message.effort[:6]]
+        if len(currents) != 6 or not all(math.isfinite(value) for value in currents):
+            return
+        stamp = message.header.stamp
+        self._server.send_event(
+            {
+                "type": "joint_currents",
+                "arm": arm,
+                "currents_ma": currents,
+                "stamp_ns": int(stamp.sec) * 1_000_000_000 + int(stamp.nanosec),
             }
         )
 

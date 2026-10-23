@@ -108,6 +108,7 @@ InputModeRequestResult InputModeCoordinator::request(
       snapshot_.phase = InputModePhase::kActive;
       snapshot_.request_id = request_id;
       snapshot_.detail.clear();
+      arrival_detail_.clear();
       transition_step_ = TransitionStep::kIdle;
       notifyObserver();
       return {true, request_id, "already active"};
@@ -120,6 +121,7 @@ InputModeRequestResult InputModeCoordinator::request(
   snapshot_.phase = InputModePhase::kSwitching;
   snapshot_.request_id = request_id;
   snapshot_.detail.clear();
+  arrival_detail_ = mode_id == safe_fallback_mode_ ? "requested by " + requester_id : "";
   deadline_ = now + switch_timeout_;
   transition_step_ = TransitionStep::kAwaitingNeutralActivation;
   notifyObserver();
@@ -190,7 +192,8 @@ void InputModeCoordinator::activate(const std::string& mode_id,
   snapshot_.active_mode = mode_id;
   snapshot_.phase = InputModePhase::kActive;
   ++snapshot_.epoch;
-  snapshot_.detail.clear();
+  snapshot_.detail = std::move(arrival_detail_);
+  arrival_detail_.clear();
   transition_step_ = TransitionStep::kIdle;
   notifyObserver();
 }
@@ -241,10 +244,12 @@ void InputModeCoordinator::notifyObserver() const {
 }
 
 void InputModeCoordinator::scheduleFallback(Clock::time_point now) {
+  // Keep the failure visible through the switch and on the fallback mode once it is ACTIVE.
+  arrival_detail_ = snapshot_.requested_mode + " failed: " + snapshot_.detail;
   snapshot_.requested_mode = safe_fallback_mode_;
   snapshot_.selected_mode = "none";
   snapshot_.phase = InputModePhase::kSwitching;
-  snapshot_.detail.clear();
+  snapshot_.detail = arrival_detail_;
   deadline_ = now + switch_timeout_;
   transition_step_ = TransitionStep::kAwaitingNeutralActivation;
   notifyObserver();

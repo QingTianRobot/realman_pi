@@ -301,6 +301,8 @@ void testFailInputModeReportsFailedThenRecoversToNone() {
   require(f.until([&] { return f.states.back().phase == State::ACTIVE &&
                               f.states.back().active_mode == "none"; }),
           "router did not recover to none after FailInputMode");
+  require(f.states.back().detail == "policy failed: task gave up",
+          "none does not say why the router fell back to it");
 }
 
 std::string policyTaskTree(const std::string& body) {

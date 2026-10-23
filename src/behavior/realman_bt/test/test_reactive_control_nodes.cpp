@@ -1,3 +1,8 @@
+// A Release build defines NDEBUG, which would turn every assert below into a no-op.
+#ifdef NDEBUG
+#undef NDEBUG
+#endif
+
 #include <cassert>
 #include <memory>
 #include <string>
@@ -31,6 +36,26 @@ class RecordingAction final : public bt_core::ActionNode {
  private:
   std::vector<std::string>& events_;
   bt_core::NodeStatus& next_status_;
+};
+
+// Returns the scripted status and, when that is FAILURE, the given failure reason, the way a real
+// leaf (PolicyRun) explains its FAILURE.
+class ReasonAction final : public bt_core::ActionNode {
+ public:
+  ReasonAction(std::string name, bt_core::NodeConfig config, bt_core::NodeStatus& next_status,
+               std::string reason)
+      : ActionNode(std::move(name), std::move(config)),
+        next_status_(next_status),
+        reason_(std::move(reason)) {}
+
+  bt_core::NodeStatus tick() override {
+    if (next_status_ == bt_core::NodeStatus::FAILURE) setFailureReason(reason_);
+    return next_status_;
+  }
+
+ private:
+  bt_core::NodeStatus& next_status_;
+  std::string reason_;
 };
 
 void testReactiveSequenceReticksItsSelector() {
@@ -172,6 +197,73 @@ void testExplicitHaltClearsReactiveFallbackRunningChild() {
   assert(events == std::vector<std::string>({"tick:candidate_zero"}));
 }
 
+// The input router leaves a branch whose task failed: the failed leaf must not keep its old
+// reason, or switching back to that branch shows the previous error again.
+void testLeavingABranchClearsItsFailedLeafReason() {
+  bt_core::NodeConfig config;
+  std::vector<std::string> events;
+  bt_core::NodeStatus guard_status = bt_core::NodeStatus::SUCCESS;
+  bt_core::NodeStatus task_status = bt_core::NodeStatus::FAILURE;
+  bt_core::NodeStatus reporter_status = bt_core::NodeStatus::RUNNING;
+  bt_core::NodeStatus none_status = bt_core::NodeStatus::RUNNING;
+  auto task = std::make_shared<ReasonAction>("task", config, task_status, "joint J5 out of range");
+  auto attempt = std::make_shared<bt_nodes::SequenceNode>("attempt", config);
+  attempt->addChild(task);
+  auto handler = std::make_shared<bt_nodes::FallbackNode>("handler", config);
+  handler->addChild(attempt);
+  handler->addChild(std::make_shared<RecordingAction>("reporter", config, events, reporter_status));
+  auto branch = std::make_shared<bt_nodes::ReactiveSequenceNode>("branch", config);
+  branch->addChild(std::make_shared<RecordingAction>("guard", config, events, guard_status));
+  branch->addChild(handler);
+  auto router = std::make_shared<bt_nodes::ReactiveFallbackNode>("router", config);
+  router->addChild(branch);
+  router->addChild(std::make_shared<RecordingAction>("none", config, events, none_status));
+
+  assert(router->executeTick() == bt_core::NodeStatus::RUNNING);
+  // Right after the failure the leaf is reset to IDLE by its Sequence but still explains it.
+  assert(task->status() == bt_core::NodeStatus::IDLE);
+  assert(task->failureReason() == "joint J5 out of range");
+
+  guard_status = bt_core::NodeStatus::FAILURE;
+  assert(router->executeTick() == bt_core::NodeStatus::RUNNING);
+  assert(task->failureReason().empty());
+
+  guard_status = bt_core::NodeStatus::SUCCESS;
+  task_status = bt_core::NodeStatus::RUNNING;
+  assert(router->executeTick() == bt_core::NodeStatus::RUNNING);
+  assert(task->status() == bt_core::NodeStatus::RUNNING);
+  assert(task->failureReason().empty());
+}
+
+// A leaf reset to IDLE without a halt (its Sequence failed) loses the old reason as soon as it
+// starts a new execution, so a retry never runs under the previous attempt's error.
+void testANewExecutionStartsWithoutTheOldReason() {
+  bt_core::NodeConfig config;
+  bt_core::NodeStatus task_status = bt_core::NodeStatus::FAILURE;
+  auto task = std::make_shared<ReasonAction>("task", config, task_status, "grasp missed");
+  auto attempt = std::make_shared<bt_nodes::SequenceNode>("attempt", config);
+  attempt->addChild(task);
+
+  assert(attempt->executeTick() == bt_core::NodeStatus::FAILURE);
+  assert(task->failureReason() == "grasp missed");
+
+  task_status = bt_core::NodeStatus::RUNNING;
+  assert(attempt->executeTick() == bt_core::NodeStatus::RUNNING);
+  assert(task->failureReason().empty());
+}
+
+// A RUNNING node keeps a reason it set while running (only a new execution clears it).
+void testARunningNodeKeepsItsReasonBetweenTicks() {
+  bt_core::NodeConfig config;
+  bt_core::NodeStatus task_status = bt_core::NodeStatus::RUNNING;
+  auto task = std::make_shared<ReasonAction>("task", config, task_status, "unused");
+
+  assert(task->executeTick() == bt_core::NodeStatus::RUNNING);
+  task->setFailureReason("goal rejected, stopping");
+  assert(task->executeTick() == bt_core::NodeStatus::RUNNING);
+  assert(task->failureReason() == "goal rejected, stopping");
+}
+
 }  // namespace
 
 int main() {
@@ -182,5 +274,8 @@ int main() {
   testFalseGuardHaltsOldWorkerBeforeFallbackTicksNone();
   testExplicitHaltClearsReactiveSequenceRunningChild();
   testExplicitHaltClearsReactiveFallbackRunningChild();
+  testLeavingABranchClearsItsFailedLeafReason();
+  testANewExecutionStartsWithoutTheOldReason();
+  testARunningNodeKeepsItsReasonBetweenTicks();
   return 0;
 }

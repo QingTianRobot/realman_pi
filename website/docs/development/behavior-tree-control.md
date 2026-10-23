@@ -94,6 +94,11 @@ stateDiagram-v2
 | `/realman_bt_executor/select_input_mode` | `realman_msgs/srv/SelectInputMode`：请求 `mode_id`、`requester_id`；响应 `accepted`、`request_id`、`message` | 请求一个已注册模式。 |
 | `/realman_bt_executor/input_mode_state` | `realman_msgs/msg/InputModeState`：`requested_mode`、`selected_mode`、`active_mode`、`phase`、`request_id`、`epoch`、`detail` | 发布 `ACTIVE`、`SWITCHING` 或 `FAILED` 的路由状态。 |
 
+`detail` 说明当前状态的原因：`FAILED` 时是失败原因；协调器随后切到 `none` 时，`SWITCHING` 和之后的
+`ACTIVE/none` 都带着 `<失败的模式> failed: <原因>`（例如 `policy failed: joint J5 = 19.6 deg is outside [15.0, 108.2]`）；
+有人主动请求 `none` 时是 `requested by <requester_id>`。这个说明一直保留到下一次切换，再次请求任何模式时清空，
+因此切回 `policy` 不会再显示上一次的错误。executor 的 `input mode active: ...` 日志行末尾也会打印它。
+
 配置在 [`config/ros/behavior_tree.yaml`](https://github.com/QingTianRobot/realman_pi/blob/main/config/ros/behavior_tree.yaml)：
 `tick_rate_hz: 10.0`（Hz）、`switch_timeout_ms: 5000`（ms），以及必须是已注册且可选模式的
 `safe_fallback_mode: none`。`none` 既是安全回退也是中性 tick，不能删除或改成 Web。

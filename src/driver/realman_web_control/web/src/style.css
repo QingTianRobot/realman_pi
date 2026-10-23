@@ -144,6 +144,8 @@ canvas { display: block; width: 100%; height: 100%; }
 .bt-row .bt-status { margin-left: auto; }
 .bt-reason { margin: 0 0 4px 44px; color: var(--danger); font-size: 10px; line-height: 1.45; overflow-wrap: anywhere; }
 .bt-root-reason { margin: 0 0 8px; padding: 6px 8px; border-radius: 8px; background: var(--danger-bg); }
+.bt-mode-reason { margin: 0 0 8px; padding: 6px 8px; border-radius: 8px; color: var(--text-2); background: var(--card-sub); border: 1px solid var(--line); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.bt-mode-reason-failure { color: var(--danger); background: var(--danger-bg); border-color: transparent; }
 .bt-empty { padding: 10px; color: var(--text-3); font-size: 11px; text-align: center; }
 .status-row { display: grid; grid-template-columns: repeat(2, minmax(0, 1fr)); gap: 16px; align-items: stretch; }
 .status-row > .panel { min-width: 0; }

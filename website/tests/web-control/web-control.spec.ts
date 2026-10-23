@@ -546,6 +546,43 @@ test("shows the behavior-tree card only while a tree runs and focuses the active
   await expect(page.locator("#motion-panel")).toBeVisible();
 });
 
+test("says in the behavior-tree card why the router went to the none branch", async ({ page }) => {
+  await page.goto("/");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list",
+    available: true,
+    modes: [{ id: "policy", label: "Policy", selectable: true }, { id: "none", label: "无输入", selectable: true }],
+  });
+  await pushBtRuntime(page, controlRuntime);
+  const reason = page.locator("#bt-mode-reason");
+  const state = { type: "input_mode_state", request_id: 7, epoch: 3 };
+  await emitWebSocketEvent(page, { ...state, requested_mode: "policy", selected_mode: "policy",
+    active_mode: "policy", phase: "ACTIVE", detail: "" });
+  await expect(reason).toBeHidden();
+
+  const failure = "joint J5 = 19.6 deg is outside [20.0, 108.2]";
+  await emitWebSocketEvent(page, { ...state, requested_mode: "policy", selected_mode: "policy",
+    active_mode: "policy", phase: "FAILED", detail: failure });
+  await expect(reason).toHaveText(`Policy 失败：${failure}`);
+  await expect(reason).toHaveClass(/bt-mode-reason-failure/);
+
+  // The executor keeps the reason on the none state after the failed branch has been halted.
+  await emitWebSocketEvent(page, { ...state, epoch: 4, requested_mode: "none", selected_mode: "none",
+    active_mode: "none", phase: "ACTIVE", detail: `policy failed: ${failure}` });
+  await expect(reason).toHaveText(`切换到 无输入 分支的原因：policy failed: ${failure}`);
+  await expect(reason).toHaveClass(/bt-mode-reason-failure/);
+
+  await emitWebSocketEvent(page, { ...state, epoch: 5, requested_mode: "none", selected_mode: "none",
+    active_mode: "none", phase: "ACTIVE", detail: "requested by web:operator" });
+  await expect(reason).toHaveText("切换到 无输入 分支的原因：requested by web:operator");
+  await expect(reason).not.toHaveClass(/bt-mode-reason-failure/);
+
+  // Switching back to policy starts clean: the old reason is gone.
+  await emitWebSocketEvent(page, { ...state, request_id: 8, epoch: 5, requested_mode: "policy",
+    selected_mode: "none", active_mode: "none", phase: "SWITCHING", detail: "" });
+  await expect(reason).toBeHidden();
+});
+
 test("updates the behavior tree from pushes and hides it when the socket drops", async ({ page }) => {
   await page.goto("/");
   await pushBtRuntime(page, controlRuntime);

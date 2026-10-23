@@ -88,6 +88,9 @@ class InputModeCoordinator {
   InputModeSnapshot snapshot_;
   std::uint64_t next_request_id_{1};
   Clock::time_point deadline_{};
+  // Detail the requested mode carries once it is ACTIVE: why the tree is going to the safe fallback
+  // ("policy failed: ...") or who asked for it ("requested by ..."). Empty for any other mode.
+  std::string arrival_detail_;
   TransitionStep transition_step_{TransitionStep::kIdle};
   bool configuration_validated_{false};
 };

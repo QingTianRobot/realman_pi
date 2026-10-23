@@ -64,6 +64,10 @@ async function devManifest() {
       open_rad: gripper.open_rad,
     }];
   }));
+  // Same shape as model_manifest._joint_current_guard (validation and defaults live there).
+  const policyTask = YAML.parse(await readFile(resolve(repositoryDirectory, "config/ros/policy_task.yaml"), "utf8"))
+    .realman_bt_executor.ros__parameters.policy_task;
+  const jointCurrent = { ...policyTask.current_guard, policy_arm: policyTask.arm };
   return {
     version: 1,
     root_frame: robots[0].parent_frame || layout.robots.l.parent_frame,
@@ -81,6 +85,7 @@ async function devManifest() {
         }
       : null,
     end_effectors: endEffectors,
+    joint_current: jointCurrent,
     keyboard_control: {
       heartbeat_period_ms: keyboard.heartbeat_period_ms,
       input_timeout_ms: keyboard.input_timeout_ms,

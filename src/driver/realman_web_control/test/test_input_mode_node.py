@@ -19,6 +19,7 @@ from rclpy.node import Node
 from rclpy.callback_groups import ReentrantCallbackGroup
 import rclpy
 from realman_msgs.msg import CartesianVelocityState, InputModeState
+from sensor_msgs.msg import JointState
 from realman_msgs.srv import ListInputModes, SelectInputMode
 
 from realman_web_control.action_bridge import ActionRecord
@@ -172,6 +173,30 @@ def state(request_id=41):
 def sent(node):
     return [goal for clients in (node._motion_clients, node._trajectory_clients, node._velocity_clients)
             for client in clients.values() for goal, _ in client.goals]
+
+
+def test_joint_currents_are_forwarded_in_milliamps_and_bad_samples_dropped(node):
+    message = JointState()
+    message.header.stamp.sec = 3
+    message.header.stamp.nanosec = 5
+    message.effort = [812.0, -2440.0, 1503.0, 95.0, -310.0, 12.0]
+
+    node._joint_current_message("r", message)
+
+    event, client_id = node._server.events[-1]
+    assert client_id is None
+    assert event == {
+        "type": "joint_currents",
+        "arm": "r",
+        "currents_ma": [812.0, -2440.0, 1503.0, 95.0, -310.0, 12.0],
+        "stamp_ns": 3_000_000_005,
+    }
+    count = len(node._server.events)
+    message.effort = [1.0, 2.0, 3.0]
+    node._joint_current_message("r", message)
+    message.effort = [1.0, 2.0, 3.0, 4.0, 5.0, float("nan")]
+    node._joint_current_message("r", message)
+    assert len(node._server.events) == count
 
 
 def test_cartesian_velocity_state_is_forwarded_with_frames_and_validity(node):

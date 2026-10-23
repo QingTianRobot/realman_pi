@@ -4,6 +4,7 @@ import URDFLoader from "urdf-loader";
 import "./theme.css";
 import "./style.css";
 import { AXIS_COLORS, VelocityTrace } from "./velocity_trace";
+import { JOINT_COLORS, JointCurrentTrace } from "./joint_current_trace";
 import { activeRouterBranch, ancestors, buildBtTree, findInputRouter, renderBreadcrumb, renderBtNode, type BtRuntime } from "./bt_tree";
 
 type ArmId = "l" | "m" | "r";
@@ -70,8 +71,11 @@ type Pedestal = {
   bottom_z: number;
   color: string;
 };
+// PolicyRun's joint-current guard (config/ros/policy_task.yaml `current_guard`) and the arm the policy drives.
+type JointCurrentGuard = { enabled: boolean; limits_ma: number[]; sustain_sec: number; policy_arm: ArmId };
 type Manifest = {
   end_effectors?: Partial<Record<ArmId, EndEffector>>;
+  joint_current?: JointCurrentGuard;
   pedestal?: Pedestal | null;
   root_frame: string;
   default_joint_position_rad: number;
@@ -164,6 +168,7 @@ app.innerHTML = `
         <section id="action-monitor-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">ACTION MONITOR</span><h2>运行反馈</h2></div><span id="action-state" class="mini-state">IDLE</span></div><div class="progress-track"><div id="progress" class="progress-bar"></div></div><div id="feedback" class="feedback">尚未发送 Action</div><pre id="result" class="result" aria-live="polite">等待结果…</pre></section>
       </div>
       <section id="velocity-telemetry-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">VELOCITY TELEMETRY</span><h2>命令与实际末端速度</h2></div><span class="mini-state">L + R</span></div><div class="telemetry-legend" id="velocity-telemetry-legend">${["X", "Y", "Z"].map((axis, index) => `<span class="legend-axis"><i style="background: ${AXIS_COLORS[index]}"></i>${axis}</span>`).join("")}<span class="legend-line solid"><i></i>实际</span><span class="legend-line dashed"><i></i>命令（限速后）</span><span class="legend-hint">最近 10 s · 纵轴按数据自动缩放</span></div><div id="velocity-telemetry-grid" class="velocity-telemetry-grid"></div></section>
+      <section id="joint-current-panel" class="panel panel-section"><div class="panel-heading compact"><div><span class="eyebrow">JOINT CURRENT</span><h2>关节电流</h2></div><span class="mini-state">L + R</span></div><div class="telemetry-legend" id="joint-current-legend">${JOINT_COLORS.map((color, index) => `<span class="legend-axis"><i style="background: ${color}"></i>J${index + 1}</span>`).join("")}<span class="legend-line dashed limit"><i></i>保护阈值 100%</span><span class="legend-hint" id="joint-current-hint">最近 10 s · 纵轴为 |电流| / 阈值</span></div><div id="joint-current-grid" class="velocity-telemetry-grid"></div></section>
     </div>
     <aside class="controls">
       <section id="input-mode-card" class="panel panel-section input-mode-card" hidden>
@@ -343,6 +348,7 @@ $("#control-tabs").addEventListener("click", (event) => {
 });
 renderControlTabs();
 const velocityTelemetryGrid = $("#velocity-telemetry-grid") as HTMLElement;
+const jointCurrentGrid = $("#joint-current-grid") as HTMLElement;
 const motionMode = $("#motion-mode");
 const jointTarget = $("#joint-target") as HTMLElement;
 const poseTarget = $("#pose-target") as HTMLElement;
@@ -837,6 +843,86 @@ function ensureVelocityTelemetrySkeleton() {
     for (const trace of Object.values(velocityTraces)) trace?.draw(now);
   };
   requestAnimationFrame(frame);
+}
+// Joint currents (/<arm>/joint_currents, mA) against PolicyRun's guard. Drawn for L and R like the
+// velocity telemetry; the status pill says which joint is over its limit and for how long, which is
+// what the guard times (sustain_sec) before it ends a policy attempt on the policy arm.
+const JOINT_CURRENT_STALE_MS = 1000;
+const jointCurrentTraces: Partial<Record<KeyboardArmId, JointCurrentTrace>> = {};
+const jointCurrentLatest: Partial<Record<KeyboardArmId, { t: number; currents: number[] }>> = {};
+const jointCurrentOverSince: Record<KeyboardArmId, (number | null)[]> = { l: Array(6).fill(null), r: Array(6).fill(null) };
+function ensureJointCurrentSkeleton(guard: JointCurrentGuard) {
+  if (jointCurrentGrid.childElementCount) return;
+  const amps = (milliamps: number) => String(Number((milliamps / 1000).toFixed(1)));
+  $("#joint-current-hint").textContent = `最近 10 s · 纵轴为 |电流| / 阈值 · ${guard.policy_arm.toUpperCase()} 臂持续 ${guard.sustain_sec} s 超过 100% 时，PolicyRun 结束本次尝试并重新抓取`;
+  jointCurrentGrid.innerHTML = (["l", "r"] as const).map((arm) => {
+    const guarded = guard.enabled && guard.policy_arm === arm;
+    return `<article class="velocity-telemetry-arm" id="joint-current-${arm}" data-arm="${arm}">
+      <div class="velocity-telemetry-heading"><strong>${arm === "l" ? "LEFT / L" : "RIGHT / R"}</strong><span class="telemetry-pills"><span class="telemetry-status ${guarded ? "active" : ""}" data-field="guard" title="${guarded ? "policy 运行时由 PolicyRun 判定" : "只显示，不拦截"}">${guarded ? "保护 ON" : "仅监测"}</span><span class="telemetry-status" data-field="status">WAIT</span></span></div>
+      <div class="current-chips">${guard.limits_ma.map((limit, joint) => `<span class="current-chip" data-joint="${joint + 1}"><i style="background: ${JOINT_COLORS[joint]}"></i>J${joint + 1} <strong data-field="j${joint + 1}">--</strong><small>/ ${amps(limit)} A</small></span>`).join("")}</div>
+      <figure class="velocity-trace"><figcaption>|电流| / 阈值<span>%</span></figcaption><canvas data-field="current-trace" aria-label="${arm.toUpperCase()} 关节电流：最近 10 秒，按各关节阈值归一化，虚线为 100%"></canvas></figure>
+    </article>`;
+  }).join("");
+  for (const arm of ["l", "r"] as const) {
+    jointCurrentTraces[arm] = new JointCurrentTrace(
+      jointCurrentGrid.querySelector<HTMLCanvasElement>(`#joint-current-${arm} [data-field="current-trace"]`)!, guard.limits_ma);
+  }
+  let lastDraw = 0;
+  const frame = (now: number) => {
+    requestAnimationFrame(frame);
+    if (document.hidden || now - lastDraw < 33) return;
+    lastDraw = now;
+    for (const arm of ["l", "r"] as const) {
+      jointCurrentTraces[arm]?.draw(now);
+      renderJointCurrentStatus(arm, guard, now);
+    }
+  };
+  requestAnimationFrame(frame);
+}
+function recordJointCurrents(arm: KeyboardArmId, currents: unknown) {
+  const guard = manifest?.joint_current;
+  if (!guard) return;
+  ensureJointCurrentSkeleton(guard);
+  if (!Array.isArray(currents) || currents.length !== 6 || !currents.every(Number.isFinite)) return;
+  const now = performance.now();
+  jointCurrentLatest[arm] = { t: now, currents };
+  jointCurrentTraces[arm]?.push(now, currents);
+  const card = $(`#joint-current-${arm}`) as HTMLElement;
+  currents.forEach((value: number, joint: number) => {
+    const over = Math.abs(value) > guard.limits_ma[joint];
+    const since = jointCurrentOverSince[arm];
+    // Same rule as the guard: one reading back under the limit restarts that joint's window.
+    since[joint] = over ? since[joint] ?? now : null;
+    card.querySelector<HTMLElement>(`[data-field="j${joint + 1}"]`)!.textContent = (Math.abs(value) / 1000).toFixed(2);
+    card.querySelector<HTMLElement>(`.current-chip[data-joint="${joint + 1}"]`)!.classList.toggle("over", over);
+  });
+}
+function renderJointCurrentStatus(arm: KeyboardArmId, guard: JointCurrentGuard, now: number) {
+  const status = document.querySelector<HTMLElement>(`#joint-current-${arm} [data-field="status"]`);
+  if (!status) return;
+  const latest = jointCurrentLatest[arm];
+  let text = "WAIT";
+  let tone = "";
+  if (latest && now - latest.t > JOINT_CURRENT_STALE_MS) {
+    text = "STALE / NO DATA";
+    tone = "stale";
+  } else if (latest) {
+    let worst = -1;
+    jointCurrentOverSince[arm].forEach((since, joint) => {
+      if (since !== null && (worst < 0 || since < jointCurrentOverSince[arm][worst]!)) worst = joint;
+    });
+    if (worst < 0) {
+      text = "正常";
+      tone = "valid";
+    } else {
+      const seconds = (now - jointCurrentOverSince[arm][worst]!) / 1000;
+      text = `J${worst + 1} 超限 ${seconds.toFixed(1)} s`;
+      tone = seconds >= guard.sustain_sec ? "over" : "stale";
+    }
+  }
+  if (status.textContent !== text) status.textContent = text;
+  const className = `telemetry-status ${tone}`.trim();
+  if (status.className !== className) status.className = className;
 }
 function recordCartesianVelocitySample(arm: KeyboardArmId, state: CartesianVelocityTelemetry) {
   ensureVelocityTelemetrySkeleton();
@@ -1717,6 +1803,9 @@ function handleMessage(message: Message) {
     cartesianVelocityStates[arm] = state;
     if (arm !== "m") recordCartesianVelocitySample(arm, state);
     renderCartesianVelocityTelemetry();
+  } else if (message.type === "joint_currents") {
+    const arm = message.arm as ArmId;
+    if (arm === "l" || arm === "r") recordJointCurrents(arm, message.currents_ma);
   } else if (message.type === "tf_frames") {
     const arm = message.arm as ArmId;
     tfFramesByArm[arm] = Array.isArray(message.frames) ? message.frames : [];
@@ -2020,6 +2109,7 @@ function updateButtons() {
 
 function loadManifest(next: Manifest) {
   manifest = next;
+  if (next.joint_current) ensureJointCurrentSkeleton(next.joint_current);
   renderKeyboardControl();
   selectedArm = armSelect.value as ArmId;
   next.robots.forEach((item) => {

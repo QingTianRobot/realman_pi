@@ -1027,6 +1027,43 @@ test("renders command and measured Cartesian velocity telemetry for both arms", 
   await expect(trace("l", "linear")).toHaveAttribute("data-last-command", "[0.2,0,0]");
 });
 
+test("plots joint currents against the policy guard limits below the velocity telemetry", async ({ page }) => {
+  await page.goto("/");
+  const panel = page.locator("#joint-current-panel");
+  await expect(panel).toBeVisible();
+  // Placed directly after the velocity telemetry, in the same column.
+  await expect(page.locator(".visualization-column > #velocity-telemetry-panel + #joint-current-panel")).toHaveCount(1);
+  // Limits and sustain come from config/ros/policy_task.yaml current_guard; the policy drives r.
+  await expect(page.locator("#joint-current-hint")).toContainText("R 臂持续 0.5 s 超过 100%");
+  await expect(page.locator('#joint-current-r [data-field="guard"]')).toHaveText("保护 ON");
+  await expect(page.locator('#joint-current-l [data-field="guard"]')).toHaveText("仅监测");
+  await expect(page.locator('#joint-current-r .current-chip[data-joint="2"]')).toContainText("/ 7 A");
+
+  await emitWebSocketEvent(page, { type: "joint_currents", arm: "l", currents_ma: [800, -2400, 1500, 90, -300, 12], stamp_ns: 1 });
+  await expect(page.locator('#joint-current-l [data-field="status"]')).toHaveText("正常");
+  await expect(page.locator('#joint-current-l [data-field="j2"]')).toHaveText("2.40");
+  const trace = (arm: string) => page.locator(`#joint-current-${arm} [data-field="current-trace"]`);
+  await expect(trace("l")).toHaveAttribute("data-last-percent", "[20,34,19,2,4,0]");
+  await expect(trace("l")).toHaveAttribute("data-y-max", "150");
+
+  // J2 pressed past its 7 A limit: the chip turns red at once, the status counts up and turns to
+  // the guard's colour once the sustain time has passed.
+  const pressing = { type: "joint_currents", arm: "r", currents_ma: [900, -10000, 3000, 500, 400, 100], stamp_ns: 2 };
+  await emitWebSocketEvent(page, pressing);
+  await expect(page.locator('#joint-current-r .current-chip[data-joint="2"]')).toHaveClass(/over/);
+  await expect(page.locator('#joint-current-r .current-chip[data-joint="1"]')).not.toHaveClass(/over/);
+  await expect(page.locator('#joint-current-r [data-field="status"]')).toContainText("J2 超限");
+  await expect(trace("r")).toHaveAttribute("data-y-max", "200");
+  await page.waitForTimeout(600);
+  await emitWebSocketEvent(page, pressing);
+  await expect(page.locator('#joint-current-r [data-field="status"]')).toHaveClass(/over/);
+  // One reading back under the limit clears it, as in the guard.
+  await emitWebSocketEvent(page, { ...pressing, currents_ma: [900, -3000, 3000, 500, 400, 100] });
+  await expect(page.locator('#joint-current-r [data-field="status"]')).toHaveText("正常");
+  // No readings for a second: stale.
+  await expect(page.locator('#joint-current-r [data-field="status"]')).toHaveText("STALE / NO DATA", { timeout: 3000 });
+});
+
 test("expresses WORK commands in the measured base frame and skips TOOL commands", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator("#motion-reference")).toHaveText("WORK / cell");

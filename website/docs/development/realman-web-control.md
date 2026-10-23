@@ -172,13 +172,14 @@ Shift 或键盘布局影响的 `event.key`，并忽略 `input`、`textarea`、`s
 有界的 viewer 面板高度，避免 WebGL canvas 被右栏总高度拉伸后压缩相机水平视场。
 
 - 左列 \`visualization-column\`（只看不操作）：上方是 WebGL 三臂展示；中间 \`status-row\` 并排放
-  “当前坐标”和“运行反馈”，切换右侧标签页时它们始终可见；下方是 \`velocity-telemetry-panel\`。
+  “当前坐标”和“运行反馈”，切换右侧标签页时它们始终可见；下方是 \`velocity-telemetry-panel\`，再下是
+  \`joint-current-panel\`（关节电流，见下文“关节电流曲线”）。
 - 右列 \`controls\`（操作）：顶部是全局“输入模式”卡片，其下是独立的“行为树”卡片（启动菜单或运行中的树，见下文
   “行为树视图”），再下是 \`control-tabs\` 标签栏——运动（一次性 MOVEJ/MOVEL/MOVEP 与关节记录）、速度（末端速度 Action）、
   夹爪、键盘（仅在发现键盘模式时出现）。
   一次只显示一个操作面板，所选标签保存在该浏览器的 \`localStorage\` 中，刷新后恢复；存储不可用时默认“运动”。
   桌面端右列 sticky 跟随滚动，超出视口高度时在列内滚动。
-- 窄屏和手机端（≤980px）按 WebGL 展示、状态面板、控制卡片（输入模式 + 标签页）、速度遥测的顺序单列排列，
+- 窄屏和手机端（≤980px）按 WebGL 展示、状态面板、控制卡片（输入模式 + 标签页）、速度遥测、关节电流的顺序单列排列，
   让操作区紧跟实时状态；状态面板在手机端也改为单列。
 - 视觉风格沿用 mafumaful.github.io 的浅色主题：共享的 `theme.css` 用 `--hue: 250` 派生全部颜色令牌
   （页面底色、白色圆角卡片、浅蓝按钮、标题前的强调竖条），并提供按钮、输入框、卡片等公共样式；控制页
@@ -596,6 +597,25 @@ ros2 topic echo --once /l/cartesian_velocity/state
   work 坐标系的 `quaternion_wxyz` 旋转到 base 后再叠加，卡片显示“命令已从 WORK / x 旋转到实测坐标系”；
   缺少该姿态或命令在 TOOL 坐标系（随末端旋转）时不画虚线，并在卡片上说明原因。
 
+### 关节电流曲线
+
+驱动随每次 `joint_states` 发布 `/<arm>/joint_currents`（`sensor_msgs/JointState`，`effort` 为 mA，见
+[驱动骨架](./realman-driver-scaffold)）。Web bridge 将其转成 WebSocket 事件
+`{type: "joint_currents", arm, currents_ma, stamp_ns}`，丢弃不足六轴或含非有限值的样本。速度遥测下方的
+“关节电流”面板与速度曲线布局相同，同时显示 l、r 两臂，不受所选 arm 影响：
+
+- **阈值来源**：`/api/layout` 清单中的 `joint_current` 取自 `config/ros/policy_task.yaml` 的
+  `policy_task.current_guard`（`limits_ma`、`sustain_sec`、`enabled`）和 `policy_task.arm`；文件或配置块缺失时
+  使用与执行器相同的默认值。改阈值后重启 web_control，页面上的阈值才会跟着变。
+- **曲线**（`joint_current_trace.ts`）：每臂一张图，J1–J6 各一种颜色，纵轴是 |电流| ÷ 该关节阈值（%），因此
+  红色虚线 100% 就是六个关节共同的保护阈值。纵轴从 0 开始，最小显示到 150%，数据更大时以 50% 为步长立即放大、
+  持续 1 s 变小后才缩回；时间窗、断线规则与速度曲线相同（最近 10 s，间隔超过 0.6 s 断开）。
+- **数值**：曲线上方列出各关节的当前电流（A）和阈值，超过阈值的关节标红。
+- **状态**：`正常`；有关节超限时显示 `J2 超限 0.3 s`（超限时长，按与保护相同的规则计时：任一读数回到阈值以下
+  即重新计时），达到 `sustain_sec` 后变红；超过 1 s 没有数据时显示 `STALE / NO DATA`。policy 驱动的那条臂显示
+  `保护 ON`，另一条显示 `仅监测`。页面只负责显示，真正结束尝试并重新抓取的是执行器里的 `PolicyRun`
+  （[关节电流保护](./policy-task#关节电流保护)），并且只在 policy 尝试进行时生效。
+
 ## 取消与软件停止
 
 “取消 Action”只对发起该 Action 的 WebSocket 客户端有效，调用 `cancel_goal_async()`，
@@ -685,7 +705,8 @@ npm run test:web-control
 ```
 
 Playwright 测试应覆盖桌面和移动视口、WebGL canvas 非空、实体/影子同时存在、滑轨后画布改变、
-WebGL 不可用时的明确渲染错误、速度遥测的命令/限速/实测与 stale 状态、feedback/result 实时更新、
+WebGL 不可用时的明确渲染错误、速度遥测的命令/限速/实测与 stale 状态、关节电流的阈值归一化与超限计时、
+feedback/result 实时更新、
 cancel 和 software stop 的协议消息。
 真机测试前先用 mock driver
 启动同一 Web 服务验证 ownership 和断开清理，再在低速率和明确物理安全员在场时切换

@@ -24,6 +24,7 @@ enum class AttemptOutcome {
   kTimeout,        // no success in max_attempt_sec: retryable
   kStall,          // gripper closed and the policy stopped moving: retryable
   kPolicyTimeout,  // the policy server or its bridge timed out: retryable on its own budget
+  kOvercurrent,    // a joint current stayed above current_guard.limits_ma (pressing on the table): retryable
   kFault,          // something unsafe or broken: not retryable
 };
 
@@ -77,9 +78,10 @@ struct SupervisorSnapshot {
 //
 // Faults (joint range, joint speed, the other arms drifting, lost joint states) are checked as each
 // reading arrives, so a reading that is bad for one sample between two ticks is still caught, and
-// the first one latches. Then, in this order of priority: fault, a policy-server timeout (the bridge
-// paused itself after its inference requests timed out, or its stats went silent), the task's
-// completion (release settled, or wrong side / dropped / lifted and held), timeout, stall.
+// the first one latches; so is an overcurrent (current_guard). Then, in this order of priority:
+// fault, overcurrent, a policy-server timeout (the bridge paused itself after its inference
+// requests timed out, or its stats went silent), the task's completion (release settled, or wrong
+// side / dropped / lifted and held), timeout, stall.
 class PolicySupervisor {
  public:
   explicit PolicySupervisor(PolicyTaskConfig config);
@@ -96,8 +98,9 @@ class PolicySupervisor {
   void onPolicyGripperCommand(double value, double time);  // 0 = closed, 1 = open
   void onDriverCommand(double linear_mps, double angular_radps, double time);
   void onGripperReading(double position, bool torque_reached, double time);
-  // Joint currents in mA. Only the supervised arm's are kept; for now they are only recorded.
-  void onJointCurrents(const std::string& arm, const Joints& milliamps);
+  // Joint currents in mA, received at `time`. Only the supervised arm's are kept: recorded for the
+  // trace and, during an attempt, checked against current_guard.
+  void onJointCurrents(const std::string& arm, const Joints& milliamps, double time);
 
   // Starts an attempt of task `task_name` (a key of config.tasks; throws std::invalid_argument for
   // an unknown one). The task decides how a successful attempt ends.
@@ -125,6 +128,7 @@ class PolicySupervisor {
   void finish(double now, AttemptOutcome outcome, std::string reason, std::string grasp);
   std::string judgeGrasp() const;
   void checkSpeed(const Joints& degrees, double sample_time);
+  void checkCurrents(const Joints& milliamps, double time);
   // The completion checks; each may finish the verdict. evaluateRelease returns true while the
   // release is settling (nothing else may end the attempt then).
   bool evaluateRelease(double now);
@@ -159,6 +163,8 @@ class PolicySupervisor {
   bool held_once_{false};  // lift_and_hold: the closed jaws held something at least once
   std::optional<double> stall_since_;
   std::optional<std::string> latched_fault_;
+  std::optional<std::string> latched_overcurrent_;
+  std::array<std::optional<double>, 6> over_limit_since_;  // per joint: start of the run above its limit
   std::string release_grasp_;
   std::map<std::string, Joints> reference_;
   std::deque<std::pair<double, Joints>> history_;

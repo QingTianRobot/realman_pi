@@ -52,6 +52,7 @@ struct Rig {
     sup.onPolicyGripperCommand(policy_gripper, t);
     sup.onDriverCommand(lin, ang, t);
     if (gripper_alive) sup.onGripperReading(gripper_position, torque_reached, t);
+    if (currents_alive) sup.onJointCurrents("r", currents, t);
   }
 
   PolicyTaskConfig config;
@@ -67,6 +68,8 @@ struct Rig {
   bool lm_alive{true};
   bool stats_alive{true};
   bool gripper_alive{true};
+  bool currents_alive{true};
+  Joints currents{800, -2400, 1500, 90, -300, 12};  // mA, a quiet approach
   double policy_gripper{1.0};  // 1 = open
   double lin{0.05};
   double ang{0.10};
@@ -486,23 +489,100 @@ void testSnapshotBeforeStartIsNotStarted() {
   assert(snapshot.elapsed_sec == 0.0);
 }
 
-// Currents are only recorded: the supervised arm's latest reading reaches the snapshot, another
-// arm's or a non-finite one does not, and none of them ends the attempt.
+// The supervised arm's latest current reading reaches the snapshot; another arm's or a non-finite
+// one does not, and currents below the guard's limits never end the attempt.
 void testJointCurrentsOfTheSupervisedArmReachTheSnapshot() {
   Rig rig;
+  rig.currents_alive = false;  // fed by hand below
   rig.start();
   assert(!rig.sup.snapshot(rig.t).currents_valid);
-  rig.sup.onJointCurrents("l", {1, 2, 3, 4, 5, 6});
+  rig.sup.onJointCurrents("l", {1, 2, 3, 4, 5, 6}, rig.t);
   assert(!rig.sup.snapshot(rig.t).currents_valid);
-  rig.sup.onJointCurrents("r", {800, -2400, 1500, 90, -300, 12});
+  rig.sup.onJointCurrents("r", {800, -2400, 1500, 90, -300, 12}, rig.t);
   auto snapshot = rig.sup.snapshot(rig.t);
   assert(snapshot.currents_valid && snapshot.currents_ma[1] == -2400 && snapshot.currents_ma[5] == 12);
-  rig.sup.onJointCurrents("r", {9e9, 9e9, 9e9, 9e9, 9e9, std::nan("")});
+  rig.sup.onJointCurrents("r", {9e9, 9e9, 9e9, 9e9, 9e9, std::nan("")}, rig.t);
   snapshot = rig.sup.snapshot(rig.t);
   assert(snapshot.currents_ma[1] == -2400);  // the non-finite reading was ignored
-  rig.sup.onJointCurrents("r", {9e9, 9e9, 9e9, 9e9, 9e9, 9e9});
+  rig.currents = {1500, -3700, 4400, 2400, 2700, 1100};  // the highest of normal grasps (2026-10-23)
+  rig.currents_alive = true;
+  rig.run(3.0);
+  assert(!rig.verdict.finished);
+}
+
+// Pressing on the table: J2 held above its limit for sustain_sec ends the attempt, retryably.
+void testASustainedJointCurrentIsARetryableOvercurrent() {
+  Rig rig;
+  rig.start();
   rig.run(1.0);
-  assert(!rig.verdict.finished);  // recording only: no current ends an attempt yet
+  rig.currents[1] = -10000.0;  // J2 saturated at the controller's clamp, sign does not matter
+  rig.run(0.35);
+  assert(!rig.verdict.finished);  // not yet held for 0.5 s
+  rig.run(1.0);
+  assert(rig.verdict.finished && rig.verdict.outcome == AttemptOutcome::kOvercurrent);
+  assert(!rig.verdict.fault && !rig.verdict.succeeded && !rig.verdict.policy_timeout);
+  assert(std::string(realman_bt::outcomeName(rig.verdict.outcome)) == "overcurrent");
+  assert(rig.verdict.reason.find("J2") != std::string::npos);
+  assert(rig.verdict.reason.find("10.0 A") != std::string::npos);
+  assert(rig.verdict.attempt_sec > 1.4 && rig.verdict.attempt_sec < 1.75);
+}
+
+// A peak shorter than sustain_sec (an acceleration) does not count, and one reading back under the
+// limit restarts that joint's window.
+void testShortCurrentPeaksDoNotEndTheAttempt() {
+  Rig rig;
+  rig.start();
+  for (int i = 0; i < 10; ++i) {
+    rig.currents[2] = 12000.0;
+    rig.run(0.4);
+    rig.currents[2] = 3000.0;
+    rig.step();
+  }
+  assert(!rig.verdict.finished);
+}
+
+void testEachJointHasItsOwnLimit() {
+  PolicyTaskConfig config;
+  config.current_guard.limits_ma = {4000, 7000, 8000, 6000, 7500, 3000};
+  Rig rig(config);
+  rig.start();
+  rig.currents = {3900, 6900, 7900, 5900, 7400, 2900};  // each just under its own limit
+  rig.run(2.0);
+  assert(!rig.verdict.finished);
+  rig.currents[5] = 3100;  // J6 over 3 A
+  rig.run(1.0);
+  assert(rig.verdict.finished && rig.verdict.outcome == AttemptOutcome::kOvercurrent);
+  assert(rig.verdict.reason.find("J6") != std::string::npos);
+}
+
+void testTheCurrentGuardCanBeSwitchedOff() {
+  PolicyTaskConfig config;
+  config.current_guard.enabled = false;
+  Rig rig(config);
+  rig.start();
+  rig.currents[1] = 20000.0;
+  rig.run(3.0);
+  assert(!rig.verdict.finished);
+  assert(rig.sup.snapshot(rig.t).currents_ma[1] == 20000.0);  // still recorded
+}
+
+// High current before the attempt starts (the re-home pushing, say) is not carried into it, and a
+// fault keeps its priority over an overcurrent in the same tick.
+void testCurrentBeforeTheStartDoesNotCountAndAFaultWins() {
+  Rig rig;
+  rig.currents[1] = 10000.0;
+  for (int i = 0; i < 10; ++i) rig.step();
+  rig.start();
+  rig.run(0.3);
+  assert(!rig.verdict.finished);
+
+  Rig both;
+  both.start();
+  both.currents[1] = 10000.0;
+  both.run(0.45);
+  both.arm[4] = 1.0;  // J5 below the envelope in the same step the current window completes
+  both.step(0.1);
+  assert(both.verdict.finished && both.verdict.outcome == AttemptOutcome::kFault);
 }
 
 void testSnapshotReportsTheLatestReadings() {
@@ -583,6 +663,7 @@ void testOutcomeNamesAreStable() {
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kTimeout)) == "timeout");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kStall)) == "stall");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kPolicyTimeout)) == "policy_timeout");
+  assert(std::string(realman_bt::outcomeName(AttemptOutcome::kOvercurrent)) == "overcurrent");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kFault)) == "fault");
 }
 
@@ -594,7 +675,7 @@ void testOnlyTheTwoHeldOutcomesAreSuccessesAndOnlyFaultAndWrongTaskEndTheTask() 
   }
   using realman_bt::isPolicyTimeout;
   for (auto outcome : {AttemptOutcome::kReleasedEmpty, AttemptOutcome::kDropped, AttemptOutcome::kTimeout,
-                       AttemptOutcome::kStall, AttemptOutcome::kWrongSideEmpty}) {
+                       AttemptOutcome::kStall, AttemptOutcome::kWrongSideEmpty, AttemptOutcome::kOvercurrent}) {
     assert(!isSuccess(outcome) && !isFault(outcome) && !isPolicyTimeout(outcome));
   }
   for (auto outcome : {AttemptOutcome::kFault, AttemptOutcome::kWrongTask}) {
@@ -874,6 +955,11 @@ int main() {
   testSnapshotBeforeStartIsNotStarted();
   testSnapshotReportsTheLatestReadings();
   testJointCurrentsOfTheSupervisedArmReachTheSnapshot();
+  testASustainedJointCurrentIsARetryableOvercurrent();
+  testShortCurrentPeaksDoNotEndTheAttempt();
+  testEachJointHasItsOwnLimit();
+  testTheCurrentGuardCanBeSwitchedOff();
+  testCurrentBeforeTheStartDoesNotCountAndAFaultWins();
   testSnapshotShowsHowFarTheOtherArmsMoved();
   testSnapshotCountsClosedTime();
   testSnapshotKeepsTheLatestGripperReadingAcrossAReset();

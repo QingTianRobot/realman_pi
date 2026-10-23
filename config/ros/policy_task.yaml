@@ -76,6 +76,18 @@ realman_bt_executor:
         cmd_lin_mps_below: 0.01
         cmd_ang_radps_below: 0.04
         sec: 8.0
+      # Retryable overcurrent (pressing on the table): a joint of the supervised arm draws more than limits_ma (|mA|,
+      # J1..J6, from the driver's /<arm>/joint_currents) in every reading for sustain_sec. The attempt stops like any
+      # other and the retry opens the gripper, goes back to the start pose and grasps again; it uses up one of
+      # `attempts`. Measured on the 67 traced attempts of 2026-10-20..23 (i1_ma..i6_ma, 0.5 s sustained): normal
+      # approaches, grasps and lifts stay below 1.6 / 3.7 / 4.5 / 2.4 / 2.7 / 1.1 A; pressing saturates J2 at ~10 A
+      # (J3 up to 16, J4/J5 at 9) for seconds, and on 2026-10-23 16:28 and 16:42 the controller tripped and the driver
+      # lost the arm ~6 s after J2 passed 7 A. These limits stop 9 of those attempts 0.5 s into the push and none of
+      # the normal ones. enabled: false keeps recording the currents without stopping on them.
+      current_guard:
+        enabled: true
+        limits_ma: [4000, 7000, 8000, 6000, 7500, 3000]
+        sustain_sec: 0.5
 
       # Release = the policy's gripper command goes above open_above after it has been below closed_below for
       # min_closed_sec in total, while the arm is over the bin (joint_index below joint_below_deg; J1 is far negative

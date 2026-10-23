@@ -94,7 +94,7 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 
 `joint_states.position` 遵守 ROS 约定使用弧度。适配器从 `rm_get_joint_degree()` 读取厂商的度数，节点只在发布边界转换一次。RM65-B 的六个名称固定为 `joint_1` 到 `joint_6`，由配置中的 `joint_names` 显式声明。
 
-每发布一次 `joint_states`，节点还会用 `rm_get_current_joint_current()` 读一次关节电流，发布到 `joint_currents`：电流（mA）放在 `JointState.effort`，`position` 为空，时间戳与对应的 `joint_states` 相同。读取失败时只是这一拍不发布，不会把机械臂标记为断连，也不会覆盖已记录的错误。PolicyRun 把它记录进每次尝试的轨迹，用于找出顶到桌面时的电流特征（先记录，之后再据此拦截）。这一读与速度指令共用 SDK 锁，如果速度会话的 `late` 计数明显上升，可以设置 `publish_joint_currents: false` 关闭。
+每发布一次 `joint_states`，节点还会用 `rm_get_current_joint_current()` 读一次关节电流，发布到 `joint_currents`：电流（mA）放在 `JointState.effort`，`position` 为空，时间戳与对应的 `joint_states` 相同。读取失败时只是这一拍不发布，不会把机械臂标记为断连，也不会覆盖已记录的错误。PolicyRun 把它记录进每次尝试的轨迹，并据此判定手臂是否顶在桌面上（见[关节电流保护](./policy-task#关节电流保护)）。这一读与速度指令共用 SDK 锁，如果速度会话的 `late` 计数明显上升，可以设置 `publish_joint_currents: false` 关闭，但关闭后电流保护也随之失效。
 
 未连接或 SDK 状态查询失败时不发布不可用的关节状态；mock 连接后发布六轴零位。通信错误
 `-1/-2` 或 SDK 异常会将当前连接标记为失效，节点记录错误、发布该臂离线状态并按

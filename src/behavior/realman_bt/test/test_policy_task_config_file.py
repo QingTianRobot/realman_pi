@@ -61,6 +61,12 @@ def test_the_safety_thresholds_are_the_reviewed_values():
     assert parameters["joint_envelope_deg"]["lo"] == [-73.4, 5.0, -16.2, -28.4, 3.5, -125.1]
     assert parameters["joint_envelope_deg"]["hi"] == [40.1, 107.0, 124.3, 70.8, 108.2, 49.0]
     assert parameters["max_joint_speed_dps"] == 50
+    # Joint currents of 67 traced attempts (2026-10-20..23): normal grasps vs pressing on the table.
+    assert parameters["current_guard"] == {
+        "enabled": True,
+        "limits_ma": [4000, 7000, 8000, 6000, 7500, 3000],
+        "sustain_sec": 0.5,
+    }
     assert parameters["lm_drift_limit_deg"] == 1.0
     assert parameters["joint_state_stale_sec"] == 1.0
     assert parameters["max_attempt_sec"] == 45

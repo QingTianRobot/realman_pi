@@ -6,6 +6,7 @@ Read only. Tasks that share a prompt are told apart through the view's source (s
 
 from __future__ import annotations
 
+import json
 import math
 import re
 import statistics
@@ -20,6 +21,11 @@ from .steps.view import episode_tasks
 STATE_LABELS = ("J1", "J2", "J3", "J4", "J5", "J6", "夹爪")
 ACTION_LABELS = ("vx", "vy", "vz", "wx", "wy", "wz", "夹爪")
 LENGTH_BINS = 12
+# The recording tags shown on the card, from <view>/episode_tags.json (written by `realman-train tags refresh`, see
+# docs/superpowers/specs/2026-10-23-training-episode-tags-design.md).
+TAGS_FILE = "episode_tags.json"
+TAGS_SCHEMA = 1
+TAG_KEYS = ("lighting_level", "date")
 LINEAGE_DEPTH = 6
 
 
@@ -131,6 +137,38 @@ def _norm_stats(config: ConsoleConfig, step_dir: Path) -> dict | None:
     return out
 
 
+def tag_distribution(view: Path, lengths: dict[int, int], tasks_of: dict[int, tuple[str, str]],
+                     holdout: set[int]) -> dict:
+    """Per value of each TAG_KEYS tag: episodes, by task, held out, and how many were set by hand. A file whose rows do
+    not match the view's episodes (index and frame count) is reported, never shown."""
+    path = view / TAGS_FILE
+    if not path.is_file():
+        return {"state": "missing", "file": TAGS_FILE}
+    doc = _read_json(path)
+    if not isinstance(doc, dict) or doc.get("schema_version") != TAGS_SCHEMA:
+        return {"state": "mismatch", "error": f"{TAGS_FILE}: not schema_version {TAGS_SCHEMA}"}
+    rows = {int(r["episode_index"]): r for r in doc.get("episodes") or [] if isinstance(r, dict) and "episode_index" in r}
+    bad = [i for i, n in lengths.items() if i not in rows or rows[i].get("length") != n]
+    if bad or set(rows) - set(lengths):
+        return {"state": "mismatch", "error": f"{TAGS_FILE} 与数据集对不上（例如 episode {(bad or sorted(set(rows) - set(lengths)))[:5]}），"
+                                             "请重新 realman-train tags refresh"}
+    keys = {}
+    for key in TAG_KEYS:
+        slots: dict[str, dict] = {}
+        for index in sorted(lengths):
+            value = (rows[index].get("tags") or {}).get(key)
+            slot = slots.setdefault(json.dumps(value), {"value": value, "episodes": 0, "frames": 0, "by_task": {},
+                                                        "holdout": 0, "manual": 0})
+            task = tasks_of[index][0]
+            slot["episodes"] += 1
+            slot["frames"] += lengths[index]
+            slot["by_task"][task] = slot["by_task"].get(task, 0) + 1
+            slot["holdout"] += index in holdout
+            slot["manual"] += (rows[index].get("tag_sources") or {}).get(key) == "manual"
+        keys[key] = sorted(slots.values(), key=lambda s: (s["value"] is None, str(s["value"])))
+    return {"state": "ok", "snapshot_at": doc.get("snapshot_at"), "keys": keys}
+
+
 def model_dataset(config: ConsoleConfig, model: str, step: int | None = None) -> dict:
     config_name, _, exp = model.partition("/")
     if not exp:
@@ -196,4 +234,5 @@ def model_dataset(config: ConsoleConfig, model: str, step: int | None = None) ->
         "tasks": list(tasks.values()),
         "lengths": {"unit": "s" if fps else "frames", **_histogram(lengths_sec)},
         "lineage": lineage(config, view, contract),
+        "tags": tag_distribution(view, lengths, tasks_of, holdout),
     }

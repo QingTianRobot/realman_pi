@@ -106,6 +106,13 @@ transient-local 订阅 `/realman_bt_executor/input_mode_state`。同一 YAML 的
 `pikavelocity`、`pikamixed` 都可选；`web` 虽会由
 状态显示为 active，却保持隐藏且不可选。状态行优先显示 `input_mode_state.detail`；行为树常发空 detail，
 此时按 phase 显示“行为树已切换到 X（epoch N）”“正在切换到 X…”或“切换到 X 失败”，不再停留在“等待输入模式状态”。
+
+select 下方的“重启此分支”按钮从头重启当前 router 分支（例如让 policy 分支重新走完它的前置动作）。
+重选 active 模式不会经过中性 tick（见下文），所以按钮由浏览器发两次普通的 `select_input_mode`：先选
+`none`，等到该请求的 `input_mode_state` 为 `ACTIVE/none`（旧分支已被 halt），再选回刚才 active 的模式，
+不需要新的服务端消息。按钮仅在可写、没有进行中的切换、phase 为 `ACTIVE`、active 模式不是 `none`，
+且 `none` 与该模式都在目录中可选时启用。第一步被拒绝、`FAILED` 或 socket 断开时重启中止，router
+停在 `none` 或失败状态，不会自动选回原分支。
 没有正在运行的路由器或 discovery 不健康时，卡片隐藏；
 既有直接 Action 控制继续兼容，仅在两项 router service 都确认为不可用时启用。服务只短暂失联或
 catalog probe 超时不是“路由器不存在”，此时会丢弃运动并返回 `input_mode_unavailable`，而不是绕过仲裁。

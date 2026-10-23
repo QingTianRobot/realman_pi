@@ -168,7 +168,7 @@ app.innerHTML = `
     <aside class="controls">
       <section id="input-mode-card" class="panel panel-section input-mode-card" hidden>
         <div class="panel-heading compact"><div><span class="eyebrow">GLOBAL INPUT</span><h2>输入模式</h2></div><span id="input-mode-active" class="mini-state">WAIT</span></div>
-        <div class="input-mode-body"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div></div>
+        <div class="input-mode-body"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><button id="input-mode-restart" class="button ghost" type="button" title="先切到无输入分支，再切回当前分支，重新开始该分支" disabled>重启此分支</button><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div></div>
       </section>
       <section id="bt-panel" class="panel panel-section bt-panel" aria-label="行为树" hidden>
         <div class="panel-heading compact"><div><span class="eyebrow">BEHAVIOR TREE</span><h2>行为树<span id="bt-dot" class="tab-dot"></span></h2></div><div class="panel-actions"><span id="bt-root-status" class="bt-status bt-idle">未运行</span><button id="bt-stop" class="button danger" type="button" hidden>终止行为树</button><button id="bt-collapse" class="bt-collapse" type="button" aria-expanded="true" aria-controls="bt-body" title="收起">▾</button></div></div>
@@ -296,6 +296,7 @@ const inputModeCard = $("#input-mode-card") as HTMLElement;
 const inputModeSelect = $("#input-mode-select") as HTMLSelectElement;
 const inputModeActive = $("#input-mode-active");
 const inputModeDetail = $("#input-mode-detail");
+const inputModeRestart = $("#input-mode-restart") as HTMLButtonElement;
 const keyboardControlCard = $("#keyboard-control-card") as HTMLElement;
 const keyboardControlState = $("#keyboard-control-state");
 const keyboardFrameLegend = $("#keyboard-frame-legend") as HTMLElement;
@@ -392,6 +393,8 @@ let inputModeResultDetail = "";
 let activeInputModeRequest = "";
 let activeInputModeExecutorRequest: number | undefined;
 let pendingInputModeId = "";
+// Set while "重启此分支" waits for the router to settle on none; the branch to select again then.
+let restartInputModeTarget = "";
 let activeMotionRequest = "";
 let motionFeedbackTimer = 0;
 let activeVelocityRequest = "";
@@ -608,9 +611,33 @@ function guideToKeyboardControl() {
     keyboardGuideTimer = 0;
   }, 1800);
 }
+function selectableInputMode(modeId: string) {
+  return inputModeCatalog?.find((option) => option.id === modeId && option.id !== "web" && option.selectable);
+}
+// The branch "重启此分支" would restart: the active one, when it is a real branch and none can be selected.
+function restartableInputMode() {
+  const state = inputModeState;
+  if (state?.phase !== "ACTIVE" || state.active_mode === "none" || !selectableInputMode("none")) return undefined;
+  return selectableInputMode(state.active_mode);
+}
 function updateInputModeSelectionDisabled() {
   inputModeSelect.disabled = !canWrite() || Boolean(activeInputModeRequest) || inputModeState?.phase === "SWITCHING" ||
     !(inputModeCatalog?.some((option) => option.id !== "web" && option.selectable));
+  inputModeRestart.disabled = !canWrite() || Boolean(activeInputModeRequest) || !restartableInputMode();
+}
+function clearInputModeRequest() {
+  activeInputModeRequest = "";
+  activeInputModeExecutorRequest = undefined;
+  pendingInputModeId = "";
+  restartInputModeTarget = "";
+}
+function requestInputMode(option: InputModeOption, detail: string) {
+  activeInputModeRequest = requestId("input-mode");
+  activeInputModeExecutorRequest = undefined;
+  pendingInputModeId = option.id;
+  inputModeResultDetail = detail;
+  renderInputModeCard();
+  send({ type: "select_input_mode", request_id: activeInputModeRequest, mode_id: option.id });
 }
 function renderInputModeCard() {
   inputModeCard.hidden = !inputModeCatalog;
@@ -658,9 +685,14 @@ function finishInputModeRequestIfTerminal() {
       inputModeState.request_id !== activeInputModeExecutorRequest ||
       !["ACTIVE", "FAILED"].includes(inputModeState.phase)) return;
   inputModeSelect.blur();
-  activeInputModeRequest = "";
-  activeInputModeExecutorRequest = undefined;
-  pendingInputModeId = "";
+  const restartTarget = restartInputModeTarget;
+  clearInputModeRequest();
+  if (!restartTarget) return;
+  // Second half of "重启此分支": the router has halted the branch and ticked none, so select it again.
+  const option = selectableInputMode(restartTarget);
+  if (inputModeState.phase === "ACTIVE" && inputModeState.active_mode === "none" && option && canWrite()) {
+    requestInputMode(option, `重启 ${option.label}：正在切回…`);
+  }
 }
 function displayNumber(value: number, digits = 2) {
   return Number.isFinite(value) ? value.toFixed(digits) : "";
@@ -1604,9 +1636,7 @@ function handleMessage(message: Message) {
       inputModeCatalog = undefined;
       inputModeState = undefined;
       inputModeResultDetail = "";
-      activeInputModeRequest = "";
-      activeInputModeExecutorRequest = undefined;
-      pendingInputModeId = "";
+      clearInputModeRequest();
     }
     renderInputModeCard();
   } else if (message.type === "keyboard_lease") {
@@ -1626,9 +1656,7 @@ function handleMessage(message: Message) {
         activeInputModeExecutorRequest = modeResult.executor_request_id;
         finishInputModeRequestIfTerminal();
       } else {
-        activeInputModeRequest = "";
-        activeInputModeExecutorRequest = undefined;
-        pendingInputModeId = "";
+        clearInputModeRequest();
       }
       renderInputModeCard();
     }
@@ -1914,9 +1942,7 @@ function handleMessage(message: Message) {
     result.textContent = `${message.code}: ${message.message}`;
     if (message.request_id === activeInputModeRequest) {
       inputModeResultDetail = `${message.code}: ${message.message}`;
-      activeInputModeRequest = "";
-      activeInputModeExecutorRequest = undefined;
-      pendingInputModeId = "";
+      clearInputModeRequest();
       renderInputModeCard();
     }
     if (activeMotionRequest && message.request_id === activeMotionRequest) {
@@ -1958,9 +1984,7 @@ function connect() {
   socket.addEventListener("close", () => {
     releaseKeyboardInput();
     setConnection(false);
-    activeInputModeRequest = "";
-    activeInputModeExecutorRequest = undefined;
-    pendingInputModeId = "";
+    clearInputModeRequest();
     // Tree states only arrive over this socket; do not keep showing a frozen tree.
     btRuntime = { available: false };
     renderBehaviorTree();
@@ -2076,12 +2100,15 @@ armSelect.addEventListener("change", () => {
 inputModeSelect.addEventListener("change", () => {
   const selected = inputModeCatalog?.find((option) => option.id === inputModeSelect.value);
   if (!selected || !selected.selectable || selected.id === "web" || !canWrite()) return;
-  activeInputModeRequest = requestId("input-mode");
-  activeInputModeExecutorRequest = undefined;
-  pendingInputModeId = selected.id;
-  inputModeResultDetail = `请求切换到 ${selected.label}…`;
-  renderInputModeCard();
-  send({ type: "select_input_mode", request_id: activeInputModeRequest, mode_id: selected.id });
+  requestInputMode(selected, `请求切换到 ${selected.label}…`);
+});
+// "重启此分支": select none, then (in finishInputModeRequestIfTerminal) the branch that was active.
+inputModeRestart.addEventListener("click", () => {
+  const target = restartableInputMode();
+  const none = selectableInputMode("none");
+  if (!target || !none || activeInputModeRequest || !canWrite()) return;
+  requestInputMode(none, `重启 ${target.label}：先切换到 ${none.label}…`);
+  restartInputModeTarget = target.id;
 });
 motionMode.querySelectorAll<HTMLButtonElement>("button[data-motion-command]").forEach((button) => {
   button.addEventListener("click", () => {

@@ -49,6 +49,8 @@ const char* outcomeName(AttemptOutcome outcome) {
       return "stall";
     case AttemptOutcome::kPolicyTimeout:
       return "policy_timeout";
+    case AttemptOutcome::kOvercurrent:
+      return "overcurrent";
     case AttemptOutcome::kFault:
       return "fault";
   }
@@ -86,6 +88,8 @@ void PolicySupervisor::reset() {
   held_once_ = false;
   stall_since_.reset();
   latched_fault_.reset();
+  latched_overcurrent_.reset();
+  over_limit_since_.fill(std::nullopt);
   release_grasp_.clear();
   reference_.clear();
   history_.clear();
@@ -173,13 +177,36 @@ void PolicySupervisor::onDriverCommand(double linear_mps, double angular_radps, 
   cmd_valid_ = true;
 }
 
-void PolicySupervisor::onJointCurrents(const std::string& arm, const Joints& milliamps) {
+void PolicySupervisor::onJointCurrents(const std::string& arm, const Joints& milliamps, double time) {
   if (arm != config_.arm) return;
   for (const double value : milliamps) {
     if (!std::isfinite(value)) return;
   }
   currents_ma_ = milliamps;
   currents_valid_ = true;
+  if (!started_ || verdict_.finished || latched_fault_ || latched_overcurrent_) return;
+  if (config_.current_guard.enabled) checkCurrents(milliamps, time);
+}
+
+void PolicySupervisor::checkCurrents(const Joints& milliamps, double time) {
+  const auto& guard = config_.current_guard;
+  for (std::size_t joint = 0; joint < milliamps.size(); ++joint) {
+    auto& since = over_limit_since_[joint];
+    // One reading at or below the limit restarts that joint's window: only a sustained push counts,
+    // not the short peak of an acceleration.
+    if (std::fabs(milliamps[joint]) <= guard.limits_ma[joint]) {
+      since.reset();
+      continue;
+    }
+    if (!since) since = time;
+    if (time - *since >= guard.sustain_sec - 1e-9) {
+      latched_overcurrent_ = "joint J" + std::to_string(joint + 1) + " current " +
+                             number(std::fabs(milliamps[joint]) / 1000.0, 1) + " A stayed above " +
+                             number(guard.limits_ma[joint] / 1000.0, 1) + " A for " +
+                             number(time - *since, 1) + " s: the arm is pressing on something";
+      return;
+    }
+  }
 }
 
 void PolicySupervisor::onGripperReading(double position, bool torque_reached, double time) {
@@ -283,6 +310,10 @@ const Verdict& PolicySupervisor::evaluate(double now) {
 
   if (latched_fault_) {
     finishFault(now, *latched_fault_);
+    return verdict_;
+  }
+  if (latched_overcurrent_) {
+    finish(now, AttemptOutcome::kOvercurrent, *latched_overcurrent_, release_grasp_);
     return verdict_;
   }
 

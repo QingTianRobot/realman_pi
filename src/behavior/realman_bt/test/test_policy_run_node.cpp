@@ -201,7 +201,7 @@ struct FakeStack {
       sensor_msgs::msg::JointState currents;  // the driver's joint_currents: mA in effort
       currents.header.stamp = stamp;
       currents.name = {"j1", "j2", "j3", "j4", "j5", "j6"};
-      currents.effort = {812.0, -2440.0, 1503.0, 95.0, -310.0, 12.0};
+      currents.effort.assign(r_current_ma.begin(), r_current_ma.end());
       r_current_pub->publish(currents);
     }
     if (gripper_alive) {
@@ -279,6 +279,7 @@ struct FakeStack {
   bool stats_allow_publish{false}, stats_mode_active{true}, stats_paused{false};
   double policy_gripper{1.0};
   double gripper_position{50.0};
+  std::array<double, 6> r_current_ma{812.0, -2440.0, 1503.0, 95.0, -310.0, 12.0};
   bool torque_reached{false};
   double cmd_linear{0.05};
   double cmd_angular{0.10};
@@ -633,6 +634,22 @@ void testAClosedGripperThatStopsMovingIsARetryableStall() {
 
   assert(!f.faultRaised());
   assert(f.text(realman_bt::kPolicyAttemptResultKey) == "stall");
+  expectStopsInOrder(f.stack);
+}
+
+void testPressingOnTheTableIsARetryableOvercurrent() {
+  Fixture f;
+  f.stack.serve();
+  const auto script = [](FakeStack& s, double) {
+    if (!s.activated()) return;
+    s.r_current_ma[1] = -10000.0;  // J2 saturated, as when the policy pushed the gripper into the table
+  };
+
+  assert(f.run(6s, script) == NodeStatus::FAILURE);
+
+  assert(!f.faultRaised());  // retried: open, go home, grasp again
+  assert(f.text(realman_bt::kPolicyAttemptResultKey) == "overcurrent");
+  assert(f.text(realman_bt::kPolicyFailureReasonKey).find("J2") != std::string::npos);
   expectStopsInOrder(f.stack);
 }
 
@@ -1148,6 +1165,7 @@ int main(int argc, char** argv) {
   testReleasingWithNothingHeldIsARetryableFailure();
   testNoReleaseInTimeIsARetryableTimeout();
   testAClosedGripperThatStopsMovingIsARetryableStall();
+  testPressingOnTheTableIsARetryableOvercurrent();
   testAJointOutsideTheEnvelopeStopsTheBridge();
   testAnotherArmDriftingStopsTheBridge();
   testLosingTheArmsJointStatesStopsTheBridge();

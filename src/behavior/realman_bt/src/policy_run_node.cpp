@@ -19,7 +19,7 @@ constexpr double kPromptRepublishSec = 0.5;
 
 const char* severity(const Verdict& verdict) {
   if (verdict.fault) return "ERROR";
-  return verdict.policy_timeout ? "WARN" : "INFO";
+  return verdict.policy_timeout || verdict.outcome == AttemptOutcome::kOvercurrent ? "WARN" : "INFO";
 }
 
 }  // namespace
@@ -88,8 +88,8 @@ void PolicyRunNode::initialize() {
           joints_at_[joint_arm] = Clock::now();
         }));
   }
-  // Joint currents (mA in JointState.effort), published by the driver next to joint_states. Only
-  // recorded in the attempt trace for now, to find the current that pressing on the table draws.
+  // Joint currents (mA in JointState.effort), published by the driver next to joint_states:
+  // recorded in the attempt trace and checked by the supervisor's current guard.
   for (const char* name : {"l", "m", "r"}) {
     const std::string current_arm = name;
     subscriptions_.push_back(ros_node_->create_subscription<sensor_msgs::msg::JointState>(
@@ -98,8 +98,9 @@ void PolicyRunNode::initialize() {
           if (message->effort.size() < 6) return;
           Joints milliamps{};
           for (std::size_t i = 0; i < 6; ++i) milliamps[i] = message->effort[i];
+          const double received = nowSec();
           std::lock_guard<std::mutex> lock(mutex_);
-          supervisor_->onJointCurrents(current_arm, milliamps);
+          supervisor_->onJointCurrents(current_arm, milliamps, received);
         }));
   }
   subscriptions_.push_back(

@@ -194,6 +194,7 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 | `lift_and_hold`：夹住后物体掉落 | 失败，`dropped` | 是 |
 | 超过 `max_attempt_sec` 仍未完成（放手或抬起保持） | 失败，`timeout` | 是 |
 | 夹爪闭合且指令几乎为零，持续 `stall.sec` | 失败，`stall` | 是 |
+| 某个关节电流持续 `current_guard.sustain_sec` 高于 `current_guard.limits_ma`（手臂顶在桌面或其他东西上） | 失败，`overcurrent` | 是：张开夹爪、回到起始位姿后重新抓取 |
 | 桥接因推理连续超时而自行暂停、桥接统计中断超过 `stats_stale_sec`、预检时桥接迟迟未就绪、`/policy/activate` 无回应 | 失败，`policy_timeout` | 是，按 `timeout_retry` 单独计数，先等待 `backoff_sec` |
 | 关节超出范围、关节速度过大、另外两臂漂移、`joint_states` 丢失、路由服务缺失、夹爪无法张开 | 故障，`fault` | 否，经 `FailInputMode` 进入 `FAILED` |
 | `lift_and_hold`：夹着物体转向收纳盒一侧 | 故障，`wrong_task` | 否，经 `FailInputMode` 进入 `FAILED` |
@@ -202,6 +203,22 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 以下关于放手和抓取的判定适用于 `release_over_bin`，`lift_and_hold` 的判定见上一节。**放手**指策略的夹爪指令在累计闭合足够久之后升到阈值以上，同时手臂位于收纳盒一侧（`release.joint_index` 对应的关节低于 `release.joint_below_deg`）。这一位置条件可以排除策略在垫子上为重新抓取而张开夹爪的情况。**抓取判定**依据放手前最后一段闭合期的夹爪位置：停在中间且出现过 `torque_reached`，说明夹住了物体；合到底且没有力矩，则是抓空。
 
 每次尝试的结果会写入黑板键 `policy_attempt_result`、`policy_grasp_verdict`、`policy_attempt_sec`、`policy_failure_reason`，并作为事件记入运行快照，可在 Web 监视器中查看。
+
+## 关节电流保护
+
+策略偶尔会把夹爪压向桌面并持续往下推。此时关节被卡住，电流一路升高；2026-10-23 16:28 和 16:42 两次都是 J2 电流先在约 10 A 处饱和，数秒后控制器过流保护，驱动随即失去这条臂（轨迹 CSV 里 J1、J2 电流变为 0，尝试以 `no r joint_states` 故障结束），必须到现场清除故障。
+
+`PolicyRun` 的监督器订阅 `/<臂>/joint_currents`，对受监督的那条臂逐个读数检查：某个关节的电流绝对值高于 `current_guard.limits_ma` 中对应的值，并且从第一次超限起连续 `current_guard.sustain_sec` 内的每个读数都超限，就锁存一次 `overcurrent`。这次尝试会像其他结束方式一样按顺序停止桥接和路由，然后 `RetryUnlessFault` 把它当作普通的失败尝试重试：`GripperReady` 张开夹爪、`policy_rehome` 回到起始位姿、`PolicyRun` 重新抓取。它占用一次 `attempts`，用完后和其他失败一样进入 `FAILED`。只要有一个读数回到阈值以下，该关节的计时就重新开始，所以加减速时的短暂峰值不会触发。尝试开始之前的电流不计入；同一时刻若还有故障，按故障处理。
+
+| 配置项 | 默认值 | 说明 |
+| --- | --- | --- |
+| `current_guard.enabled` | `true` | `false` 时只记录电流，不据此结束尝试 |
+| `current_guard.limits_ma` | `[4000, 7000, 8000, 6000, 7500, 3000]` | J1 到 J6 的阈值，单位 mA，按绝对值比较 |
+| `current_guard.sustain_sec` | `0.5` | 超限需要持续的时间 |
+
+阈值来自 2026-10-20 到 10-23 的 67 条带电流的轨迹（取 0.5 s 窗口内的持续值）：正常的接近、抓取和抬起，J1 到 J6 分别不超过约 1.6、3.7、4.5、2.4、2.7、1.1 A；顶到桌面时 J2 在约 10 A 处饱和（J3 最高 16 A，J4、J5 在 9 A 处饱和），并持续数秒。用这组阈值回放全部轨迹：9 次顶桌的尝试会在开始顶压 0.5 s 后结束，其中包括上述两次掉线（判定时刻比掉线早约 6 s）；正常尝试一次也不会触发。其中有两次顶压后最终仍成功了（一次 `lifted_held`、一次放置任务的 `released_held`），启用保护后这类尝试会被提前结束并重试。
+
+调整阈值时应以轨迹数据为依据：比较新轨迹中 `i1_ma` 到 `i6_ma` 的正常值和顶压值，并同步修改 `test_policy_task_config_file.py` 中的期望值。
 
 ## 策略服务超时重试
 
@@ -245,7 +262,7 @@ timeout_retry:
 | `gripper_position`、`torque_reached` | 夹爪位置（设备单位）和力矩到达标志 |
 | `closed_total_sec` | 夹爪指令累计闭合的时间（用于放手判定） |
 | `allow_publish`、`paused` | 桥接的统计值 |
-| `i1_ma` 到 `i6_ma` | 受监督机械臂的关节电流（mA，来自驱动的 `/<臂>/joint_currents`）。目前只记录不拦截：用来比较正常抓取和顶到桌面时的电流，再确定拦截阈值 |
+| `i1_ma` 到 `i6_ma` | 受监督机械臂的关节电流（mA，来自驱动的 `/<臂>/joint_currents`），也是[关节电流保护](#关节电流保护)判定所用的读数 |
 
 没有读数的单元格留空。文件末尾是 `# result=`、`# grasp=`、`# seconds=`、`# reason=` 四行；被 `halt()` 中断的尝试记为 `# result=halted`。可以在 `policy_task.trace` 中关闭记录、修改目录或采样周期；文件写入失败只会缺少这份记录，不影响尝试本身。
 
@@ -295,6 +312,7 @@ REALMAN_BT_DRY_RUN=false ./scripts/bt.sh control    # 然后在 Web 中选择 po
 | 一轮结束后夹爪未张开就开始下一轮 | 不会发生：每次尝试的第一步都是 `GripperReady`，夹爪无法张开会判为故障 |
 | 一直是 `released_empty` | 抓空：查看相机画面和 `policy_grasp_verdict`。这是策略精度问题，不是监督问题 |
 | 想知道某次尝试为何结束 | 查看对应轨迹 CSV 末尾的四行，以及最后几行数据 |
+| `overcurrent` | 某个关节持续过流，通常是夹爪顶在桌面上；会自动张开夹爪、回位后重新抓取。原因中会写明关节和电流值。如果频繁出现，查看对应轨迹 CSV 中合爪前的 J2 角度和电流：策略合爪位置过低 |
 | 夹着物体不动 | 判为 `stall`，下一次尝试会先张开夹爪；如果反复出现，说明策略在抓取后进入了训练分布之外的状态，见 [VLA 策略桥接节点](./policy-bridge) |
 
 ## 验证

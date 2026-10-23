@@ -114,6 +114,8 @@ void testLimitsMustBePositive() {
   assertRejected([](PolicyTaskConfig& c) { c.max_attempt_sec = 0.0; }, "max_attempt_sec");
   assertRejected([](PolicyTaskConfig& c) { c.service_wait_sec = -1.0; }, "service_wait_sec");
   assertRejected([](PolicyTaskConfig& c) { c.stall.sec = 0.0; }, "stall");
+  assertRejected([](PolicyTaskConfig& c) { c.current_guard.limits_ma[3] = 0.0; }, "current_guard.limits_ma");
+  assertRejected([](PolicyTaskConfig& c) { c.current_guard.sustain_sec = -1.0; }, "current_guard.sustain_sec");
   assertRejected([](PolicyTaskConfig& c) { c.gripper_ready.timeout_sec = 0.0; }, "gripper_ready");
   assertRejected([](PolicyTaskConfig& c) { c.verdict.window_sec = 0.0; }, "verdict");
 }

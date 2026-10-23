@@ -50,6 +50,11 @@ void PolicyTaskConfig::validate() const {
   require(positive(stall.sec) && positive(stall.cmd_lin_mps_below) &&
               positive(stall.cmd_ang_radps_below),
           "policy_task.stall thresholds and sec must be positive");
+  for (std::size_t joint = 0; joint < current_guard.limits_ma.size(); ++joint) {
+    require(positive(current_guard.limits_ma[joint]),
+            "policy_task.current_guard.limits_ma must be positive for J" + std::to_string(joint + 1));
+  }
+  require(positive(current_guard.sustain_sec), "policy_task.current_guard.sustain_sec must be positive");
   require(positive(gripper_ready.timeout_sec) && positive(gripper_ready.open_position_max) &&
               positive(gripper_ready.position_stale_sec),
           "policy_task.gripper_ready values must be positive");

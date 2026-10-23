@@ -146,6 +146,11 @@ PolicyTaskConfig declareAndLoadPolicyTaskConfig(rclcpp::Node& node) {
   config.stall.cmd_ang_radps_below =
       read.number(p + "stall.cmd_ang_radps_below", defaults.stall.cmd_ang_radps_below);
   config.stall.sec = read.number(p + "stall.sec", defaults.stall.sec);
+  config.current_guard.enabled = read.boolean(p + "current_guard.enabled", defaults.current_guard.enabled);
+  config.current_guard.limits_ma =
+      read.sixNumbers(p + "current_guard.limits_ma", defaults.current_guard.limits_ma);
+  config.current_guard.sustain_sec =
+      read.number(p + "current_guard.sustain_sec", defaults.current_guard.sustain_sec);
   config.release.open_above = read.number(p + "release.open_above", defaults.release.open_above);
   config.release.closed_below = read.number(p + "release.closed_below", defaults.release.closed_below);
   config.release.min_closed_sec = read.number(p + "release.min_closed_sec", defaults.release.min_closed_sec);

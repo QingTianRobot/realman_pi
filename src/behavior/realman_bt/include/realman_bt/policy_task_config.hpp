@@ -103,6 +103,17 @@ struct PolicyTaskConfig {
     double settle_sec{1.0};
     double timeout_sec{5.0};
   };
+  // Pressing into the table: the supervised arm's joint current (|mA| from /<arm>/joint_currents)
+  // above limits_ma[joint] in every reading for sustain_sec ends the attempt as a retryable
+  // `overcurrent`, so the retry opens the gripper, goes home and grasps again. Measured on the 67
+  // pick/place attempts of 2026-10-20..23: normal approaches and grasps stay below 1.6/3.7/4.5/2.4/
+  // 2.7/1.1 A held for 0.5 s; pressing on the table saturates J2 at ~10 A (J3 16, J4/J5 9) for
+  // seconds, and twice (2026-10-23 16:28 and 16:42) the controller tripped ~6 s after J2 passed 7 A.
+  struct CurrentGuard {
+    bool enabled{true};
+    std::array<double, 6> limits_ma{4000.0, 7000.0, 8000.0, 6000.0, 7500.0, 3000.0};
+    double sustain_sec{0.5};
+  };
   struct GripperReady {
     double open_position_max{500.0};
     double timeout_sec{20.0};
@@ -162,6 +173,7 @@ struct PolicyTaskConfig {
   Release release;
   Lift lift;
   Verdict verdict;
+  CurrentGuard current_guard;
   GripperReady gripper_ready;
   PickCycle pick_cycle;
   ObjectDetection object_detection;

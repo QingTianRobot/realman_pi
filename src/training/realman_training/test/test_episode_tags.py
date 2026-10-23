@@ -147,6 +147,7 @@ def test_payload_for_the_console(raw):
     p = episode_tags.payload(raw)
     assert p["keys"][0] == "task" and p["episodes"]["1"]["tags"]["success"] is False
     assert p["episodes"]["1"]["session_id"] == "S001" and p["snapshot_at"] == "2026-10-23T09:30:00+08:00"
+    assert p["episodes"]["1"]["task"] == "pick_only"
     _edit(raw, lambda d: d["episodes"][0].update(length=1))
     assert "does not match" in episode_tags.payload(raw)["error"]
 

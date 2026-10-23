@@ -207,7 +207,8 @@ def payload(root: str | Path) -> dict | None:
         "keys": tag_keys(doc),
         "summary": summary(doc),
         "episodes": {str(row["episode_index"]): {"tags": row.get("tags") or {}, "tag_sources": row.get("tag_sources") or {},
-                                                 "session_id": row.get("session_id")} for row in doc["episodes"]},
+                                                 "session_id": row.get("session_id"),
+                                                 "task": row.get("task")} for row in doc["episodes"]},
     }
 
 

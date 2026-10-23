@@ -6,7 +6,6 @@ Read only. Tasks that share a prompt are told apart through the view's source (s
 
 from __future__ import annotations
 
-import json
 import math
 import re
 import statistics

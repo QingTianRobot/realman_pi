@@ -297,6 +297,12 @@ def test_clean_needs_some_selection(setup, capsys):
     assert "--where" in capsys.readouterr().err
 
 
+def test_clean_refuses_keep_with_where(setup, capsys):
+    raw, _, config_path = setup
+    assert main(["--config", str(config_path), "clean", str(raw), "--keep", "0", "--where", "success=true"]) == 2
+    assert "--keep and --where" in capsys.readouterr().err
+
+
 def test_inspect_shows_tag_counts(setup, capsys):
     raw, _, config_path = setup
     write_tags(raw, [{"success": True}, {"success": False}], sources=[{"success": "default"}, {"success": "manual"}])

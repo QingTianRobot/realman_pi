@@ -138,6 +138,8 @@ def build_params(args, config) -> tuple[str, dict]:
             params["reasons"] = json.loads(Path(args.reasons).read_text(encoding="utf-8"))
         if args.where:
             params["where"] = list(args.where)
+        if args.where and args.keep is not None:
+            raise ValueError("--keep and --where are mutually exclusive")
         if args.suggested:
             quality = inspect_dataset(src, config.quality)
             params["drop"] = suggested_drops(quality)

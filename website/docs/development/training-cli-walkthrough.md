@@ -39,7 +39,8 @@ realman-train tags refresh ~/data/realman/raw_realman_ts_<ts>/realman__pi05-thre
 
 清洗版和训练视图也能 `tags refresh`：按清洗记录的编号映射从来源推导，不连机器人（来源要先有标签）。
 清洗版的清洗记录里如果 `source` 就是 realman_ts 的路径本身（如 10-13 的直接整理数据集），标签文件是手工标的，
-对它们 `tags refresh` 会报错（找不到来源的标签）并保留原文件，不会覆盖。
+对它们 `tags refresh` 会报错（来源在机器人上，无法推导）并保留原文件，不会覆盖。
+手工标注的标签文件（`derived_from.via == "manual"`）永远不会被自动替换，除非显式传入 `realman-train tags refresh --force`。
 
 ## 2. 质检
 

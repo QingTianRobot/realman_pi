@@ -4,6 +4,9 @@ Every write is POST /api/jobs (parameters built by job_params, started through j
 /api/serve/settings, and needs REALMAN_TRAINING_TOKEN in the X-Training-Token header; an empty token makes the
 console read-only. Blocking work (dataset scans, nvidia-smi, ssh) runs in the default executor. The UI is the Vite
 build in realman_training/static/ (website: npm run build:training).
+
+Read routes include GET /api/datasets (list), GET /api/dataset/select (filtered episode list),
+and GET /api/dataset/tags-status (live tag freshness check against realman_ts).
 """
 
 from __future__ import annotations

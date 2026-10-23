@@ -331,3 +331,30 @@ def test_tags_status_prints_the_change(setup, monkeypatch, capsys):
         "episodes_changed": 2, "keys": {"success": 2}})
     assert main(["--config", str(config_path), "tags", "status", str(raw)]) == 0
     assert "2 episode(s) changed" in capsys.readouterr().out
+
+
+def test_inspect_handmade_tags_show_hand_made(setup, capsys):
+    """inspect --no-quality with a hand-made tag file (derived_from.via == "manual") prints 'hand-made'."""
+    raw, _, config_path = setup
+    # Write a hand-made tag file directly
+    import json as _json
+    from realman_training.lerobot_io import read_episodes
+    rows = read_episodes(raw)
+    handmade_doc = {
+        "schema_version": 1,
+        "origin": "manual",
+        "dataset_path": f"lerobot/{raw.name}",
+        "snapshot_at": "2026-10-13T10:00:00+08:00",
+        "remote_generated_at": None,
+        "remote_errors": 0,
+        "derived_from": {"source": None, "via": "manual", "note": "hand-tagged"},
+        "episodes": [
+            {"episode_index": r.index, "session_id": None, "length": r.length, "task": r.task,
+             "tags": {}, "tag_sources": {}}
+            for r in rows
+        ],
+    }
+    (raw / "episode_tags.json").write_text(_json.dumps(handmade_doc, indent=2), encoding="utf-8")
+    assert main(["--config", str(config_path), "inspect", str(raw), "--no-quality"]) == 0
+    out = capsys.readouterr().out
+    assert "hand-made" in out

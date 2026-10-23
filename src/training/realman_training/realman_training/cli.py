@@ -54,7 +54,13 @@ def _tags_text(payload: dict | None) -> list[str]:
     if "error" in payload:
         return [f"  tags: {payload['error']}"]
     derived = payload.get("derived_from")
-    lines = [f"  tags: snapshot {payload['snapshot_at']}" + (f" · derived from {derived['path']}" if derived else "")]
+    derived_note = ""
+    if derived:
+        if derived.get("path"):
+            derived_note = f" · derived from {derived['path']}"
+        elif derived.get("via") == "manual":
+            derived_note = " · hand-made"
+    lines = [f"  tags: snapshot {payload['snapshot_at']}" + derived_note]
     for key, values in payload["summary"].items():
         if key == episode_tags.TASK_KEY:
             continue
@@ -79,7 +85,10 @@ def _status_text(result: dict) -> str:
 def _cmd_tags(args, config) -> int:
     path = Path(args.path).expanduser().resolve()
     if args.tags_command == "refresh":
-        return _run_job("tags_refresh", {"config": str(config.source), "path": str(path)}, args, config)
+        params: dict = {"config": str(config.source), "path": str(path)}
+        if getattr(args, "force", False):
+            params["force"] = True
+        return _run_job("tags_refresh", params, args, config)
     result = tags_step.status(config, path, Runner())
     print(json.dumps(result, ensure_ascii=False, indent=2) if args.json else _status_text(result))
     return 0 if result["state"] in ("current", "changed") else 1
@@ -464,6 +473,7 @@ def make_parser() -> argparse.ArgumentParser:
     tags_sub = tags_cmd.add_subparsers(dest="tags_command", required=True)
     p = tags_sub.add_parser("refresh", help="re-read a raw copy's tags from realman_ts, or re-derive a cleaned set/view")
     p.add_argument("path")
+    p.add_argument("--force", action="store_true", help="replace a hand-made tag file")
     p.add_argument("--background", action="store_true", help="start the job and return its id")
     p.add_argument("--json", action="store_true", help="print the result as JSON")
     p = tags_sub.add_parser("status", help="have the recording's tags changed since the snapshot? (read-only)")

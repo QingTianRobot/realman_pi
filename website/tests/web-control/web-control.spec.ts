@@ -866,6 +866,66 @@ test("renders the server-discovered global input mode and sends selections", asy
   await expect(page.locator("#input-mode-card")).toBeHidden();
 });
 
+test("restarts the active input branch through none and back", async ({ page }) => {
+  await page.goto("/");
+  const lastSelection = () => page.evaluate(() =>
+    ((window as any).__webMessages as string[])
+      .map((value) => JSON.parse(value))
+      .findLast((message) => message.type === "select_input_mode"),
+  );
+  const modeState = (overrides: Record<string, unknown>) => emitWebSocketEvent(page, {
+    type: "input_mode_state", requested_mode: "pika", selected_mode: "pika", active_mode: "pika",
+    phase: "ACTIVE", request_id: 1, epoch: 3, detail: "", ...overrides,
+  });
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list",
+    available: true,
+    modes: [
+      { id: "web", label: "Web", selectable: false },
+      { id: "pika", label: "Pika", selectable: true },
+      { id: "none", label: "无输入", selectable: true },
+    ],
+  });
+  const restart = page.locator("#input-mode-restart");
+  await modeState({ requested_mode: "none", selected_mode: "none", active_mode: "none" });
+  await expect(restart).toBeDisabled();
+
+  await modeState({});
+  await expect(restart).toBeEnabled();
+  await restart.click();
+  const toNone = await lastSelection();
+  expect(toNone).toMatchObject({ mode_id: "none" });
+  await expect(restart).toBeDisabled();
+  await expect(page.locator("#input-mode-detail")).toContainText("重启 Pika");
+
+  await emitWebSocketEvent(page, {
+    type: "input_mode_result", request_id: toNone.request_id, executor_request_id: 10, accepted: true, message: "",
+  });
+  await modeState({ requested_mode: "none", selected_mode: "none", phase: "SWITCHING", request_id: 10 });
+  expect((await lastSelection()).request_id).toBe(toNone.request_id);
+  await modeState({ requested_mode: "none", selected_mode: "none", active_mode: "none", request_id: 10, epoch: 4 });
+
+  const back = await lastSelection();
+  expect(back).toMatchObject({ mode_id: "pika" });
+  expect(back.request_id).not.toBe(toNone.request_id);
+  await emitWebSocketEvent(page, {
+    type: "input_mode_result", request_id: back.request_id, executor_request_id: 11, accepted: true, message: "",
+  });
+  await modeState({ request_id: 11, epoch: 5 });
+  await expect(page.locator("#input-mode-select")).toHaveValue("pika");
+  await expect(restart).toBeEnabled();
+
+  // A failed switch to none ends the restart; nothing is selected afterwards.
+  await restart.click();
+  const failedNone = await lastSelection();
+  await emitWebSocketEvent(page, {
+    type: "input_mode_result", request_id: failedNone.request_id, executor_request_id: 12, accepted: true, message: "",
+  });
+  await modeState({ requested_mode: "none", selected_mode: "none", phase: "FAILED", request_id: 12, detail: "none 失败" });
+  await modeState({ requested_mode: "none", selected_mode: "none", active_mode: "none", request_id: 12, epoch: 6 });
+  expect((await lastSelection()).request_id).toBe(failedNone.request_id);
+});
+
 test("renders command and measured Cartesian velocity telemetry for both arms", async ({ page }) => {
   await page.goto("/");
   // The WORK command is rotated with the arm's coordinate_state, so wait for it first.

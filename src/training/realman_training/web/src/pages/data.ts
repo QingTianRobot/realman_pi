@@ -88,7 +88,10 @@ function tagsFacet(detail: DatasetDetail, ctx: Ctx): HTMLElement {
   if (!tags) return h("div", { id: "tags-facet" }, h("p", { class: "muted" }, "没有标签（episode_tags.json）。"), actions, status);
   if (tags.error) return h("div", { id: "tags-facet" }, h("p", { class: "error" }, tags.error), actions, status);
   const metaRows: [string, string][] = [["快照", fmtTime(tags.snapshot_at)]];
-  if (tags.derived_from) metaRows.push(["推导自", tags.derived_from.path]);
+  if (tags.derived_from) {
+    if (tags.derived_from.path) metaRows.push(["推导自", tags.derived_from.path]);
+    else if (tags.derived_from.via === "manual") metaRows.push(["推导自", "人工整理"]);
+  }
 
   // Build distribution blocks
   const totalEpisodes = Object.keys(tags.episodes ?? {}).length || 1;

@@ -1,7 +1,7 @@
 import { api, type DatasetRow, type Gpus, type JobRow, type LinkcheckPayload, type ModelRow, type RunRow, type ServeStatus } from "../api";
 import type { Ctx } from "../ctx";
 import { DATASET_KIND, errorText, fmtCount, fmtMae, fmtTime, h, isActive } from "../dom";
-import { checkList, chip, gpuList, jobChip, jobLabel, kv, modelName, pageHead, panel } from "../widgets";
+import { checkList, chip, gpuList, jobChip, jobLabel, kv, modelName, pageHead, paceRows, panel } from "../widgets";
 
 function settled<T>(result: PromiseSettledResult<T>): T | null {
   return result.status === "fulfilled" ? result.value : null;
@@ -64,11 +64,13 @@ function trainCard(trainJobs: JobRow[] | null, runs: RunRow[] | null): HTMLEleme
   if (running) {
     const p = running.progress;
     const share = p?.total ? Math.min(100, (100 * p.done) / p.total) : 0;
+    const row = runs?.find((run) => run.exp === running.params.exp && run.config === running.params.config_name);
     return card("card-train", "当前训练",
       h("p", { class: "big state run" }, p?.total ? `${share.toFixed(0)}%` : "启动中"),
       h("p", { class: "run-name mono" }, running.params.exp, h("small", {}, running.params.config_name)),
       h("div", { class: "bar" }, h("i", { style: `width:${share.toFixed(1)}%` })),
-      h("p", { class: "muted mono" }, p ? `step ${p.done} / ${p.total ?? "?"}` : "等待第一步"));
+      h("p", { class: "muted mono" }, p ? `step ${p.done} / ${p.total ?? "?"}` : "等待第一步"),
+      p ? kv(paceRows(row?.pace, true)) : null);
   }
   const live = runs?.find((run) => run.started && !run.ended);
   if (live) {
@@ -78,6 +80,7 @@ function trainCard(trainJobs: JobRow[] | null, runs: RunRow[] | null): HTMLEleme
       h("p", { class: "run-name mono" }, live.exp, h("small", {}, live.config)),
       h("div", { class: "bar" }, h("i", { style: `width:${share.toFixed(1)}%` })),
       h("p", { class: "muted mono" }, `step ${live.last_step ?? "–"} / ${live.num_train_steps ?? "–"} · loss ${fmtMae(live.last_loss)}`),
+      kv(paceRows(live.pace, true)),
       h("p", { class: "muted foot" }, "没有跟随它的任务：在 server5090 上用 realman-train train … --attach 接管（见文档）"));
   }
   return card("card-train", "当前训练", h("p", { class: "big state off" }, "空闲"), h("p", { class: "muted" }, "没有运行中的训练"));

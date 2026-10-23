@@ -89,7 +89,8 @@ def build_world(root: Path) -> dict[str, Path]:
                                                  "started": "2026-10-21T08:00:00+08:00"})
     (docker_data / "wandb").mkdir(parents=True)
     (docker_data / "wandb" / f"{TRAINING[1]}.log").write_text(
-        "".join(f"Step {s}: grad_norm={0.4 - s / 20000:.4f}, loss={0.6 - s / 10000:.4f}\n" for s in range(0, 1500, 100)),
+        "".join(f"Step {s}: grad_norm={0.4 - s / 20000:.4f}, loss={0.6 - s / 10000:.4f}\n" for s in range(0, 1500, 100))
+        + "Progress on: 1.40kit/5.00kit rate:1.3it/s remaining:46:09 elapsed:17:57 postfix:-\n",
         encoding="utf-8")
 
     console = data / "_console"

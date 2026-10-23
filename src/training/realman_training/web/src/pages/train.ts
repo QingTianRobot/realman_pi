@@ -2,8 +2,8 @@ import { api, type DatasetRow, type Gpus, type Options, type RunDetail, type Run
 import { lineChart } from "../charts";
 import type { Ctx } from "../ctx";
 import { confirmJob } from "../dialog";
-import { DATASET_KIND, errorText, fmtCount, fmtMae, fmtMiB, fmtTime, h } from "../dom";
-import { chip, evalTable, gpuList, kv, pageHead, panel, panelHead, stat, swapTable } from "../widgets";
+import { DATASET_KIND, errorText, fmtCount, fmtMae, fmtMiB, fmtRate, fmtRemaining, fmtTime, h } from "../dom";
+import { chip, evalTable, gpuList, kv, pageHead, paceLine, panel, panelHead, stat, swapTable } from "../widgets";
 import { datasetTitle } from "./data";
 
 function runState(run: RunRow): HTMLElement {
@@ -134,6 +134,8 @@ async function renderRun(el: HTMLElement, name: string, gpus: Gpus | null, ctx: 
   const m = run.metrics;
   const progress = run.job?.progress;
   const share = progress?.total ? Math.min(100, (100 * progress.done) / progress.total) : null;
+  const live = Boolean(run.started && !run.ended);
+  const pace = run.pace;
   el.replaceChildren(
     h("section", { class: "panel" },
       panelHead(run.name, runState(run), run.job ? (() => {
@@ -143,10 +145,14 @@ async function renderRun(el: HTMLElement, name: string, gpus: Gpus | null, ctx: 
       })() : null),
       share !== null ? h("div", { class: "bar" }, h("i", { style: `width:${share.toFixed(1)}%` })) : null,
       progress ? h("p", { class: "muted mono" }, progress.text) : null,
+      live && pace?.stale ? h("p", { class: "error" }, `训练日志从 ${fmtTime(pace.updated)} 起没有更新：训练可能已经停了，看一下容器和日志。`) : null,
       h("div", { class: "stats" },
         stat("step", `${run.last_step ?? "–"} / ${run.num_train_steps ?? "–"}`), stat("loss", fmtMae(run.last_loss)),
         stat("batch · GPU", `${run.batch_size ?? "–"} · ${run.gpus?.join(",") ?? "–"}`),
-        stat("时间", `${fmtTime(run.started)} → ${fmtTime(run.ended).slice(-5)}`),
+        stat(live ? "速度" : "平均速度", fmtRate(pace?.rate)),
+        live ? stat("剩余 · 预计完成", pace?.remaining_sec !== null && pace?.remaining_sec !== undefined
+          ? `${fmtRemaining(pace.remaining_sec)} · ${fmtTime(pace.eta)}` : "–") : null,
+        stat("时间", `${fmtTime(run.started)} → ${live ? "…" : fmtTime(run.ended).slice(-5)}`),
         stat("checkpoints", run.checkpoints.length ? `${run.checkpoints.length} 个 · 最新 ${run.checkpoints[run.checkpoints.length - 1]}` : "–")),
       kv([["训练视图", h("span", { class: "mono" }, run.view ?? "–")], ["checkpoints", h("span", { class: "mono" }, run.checkpoints.join(", ") || "–")]])),
     h("section", { class: "two side" },
@@ -167,6 +173,7 @@ export async function renderTrain(root: HTMLElement, ctx: Ctx): Promise<() => vo
       h("strong", {}, h("span", { class: "mono" }, run.exp), " ", runState(run)),
       h("small", { class: "mono" }, run.config),
       h("small", {}, `${fmtTime(run.started)} · step ${run.last_step ?? "–"} · loss ${fmtMae(run.last_loss)}`),
+      run.started && !run.ended && run.pace ? h("small", { class: "mono" }, paceLine(run.pace)) : null,
       run.eval_latest ? h("small", {}, Object.entries(run.eval_latest.tasks).map(([t, v]) => `${t} ${fmtMae(v)}`).join(" · ")) : null);
     item.addEventListener("click", () => ctx.navigate("train", { run: run.name }));
     return item;

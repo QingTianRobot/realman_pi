@@ -44,6 +44,7 @@ test("the jobs button opens the drawer with live logs", async ({ page, request }
   await page.locator(`#drawer-jobs .item[data-job="${job.id}"]`).click();
   await expect(page.locator("#drawer-log")).toContainText("fake linkcheck done");
   await expect(page.locator("#drawer-job-head")).toContainText("成功");
+  await expect(page.locator("#drawer-job-head")).not.toContainText("null");
   await page.locator("#drawer-close").click();
   await expect(page.locator("#drawer")).toBeHidden();
 });
@@ -58,6 +59,9 @@ test("overview: three status cards and the recent lists @mobile", async ({ page 
   await expect(page.locator("#card-gpus .gpu-row")).toHaveCount(4);
   await expect(page.locator("#card-gpus")).toContainText("openpi-serve-openpi-1");
   await expect(page.locator("#card-train")).toContainText("a_new_run");
+  await expect(page.locator("#card-train")).toContainText("1.30 步/s");
+  await expect(page.locator("#card-train")).toContainText("46 min");
+  await expect(page.locator("#card-train")).toContainText("预计完成");
   await expect(page.locator("#recent-datasets tbody tr")).toHaveCount(3);
   await expect(page.locator("#latest-models")).toContainText("m_multitask_b16_2gpu");
   await page.locator("#recent-datasets tbody tr", { hasText: "realman__multitask_clean" }).click();
@@ -92,6 +96,7 @@ test("data: suggested drops are pre-checked and a cleaned set is requested", asy
   await page.locator("#confirm-start").click();
   await expect(dialog).toHaveCount(0);
   await expect(page.locator("#drawer")).toBeVisible();
+  await expect(page.locator("#drawer")).toHaveAttribute("data-size", "large");
   await expect(page.locator("#drawer-log")).toContainText("fake clean done");
   const jobs = await (await request.get("/api/jobs?kind=clean")).json();
   expect(jobs.jobs[0].params.drop).toEqual([1, 4]);
@@ -134,6 +139,15 @@ test("train: curves, per-task eval and the prompt swap of a run", async ({ page 
   await expect(page.locator("#eval-table")).toContainText("零动作基线");
   await expect(page.locator("#swap-table")).toContainText("0.187");
   await expect(page.locator("#run-detail .gpu-row")).toHaveCount(2);
+  await expect(page.locator("#run-detail")).toContainText("平均速度");
+  await expect(page.locator("#run-detail")).toContainText("1.33 步/s");
+});
+
+test("train: a live run shows its speed, time left and finish time", async ({ page }) => {
+  await page.goto(`/#/train?run=${encodeURIComponent("pi05_realman_action_only/a_new_run")}`);
+  await expect(page.locator("#run-detail")).toContainText("1.30 步/s");
+  await expect(page.locator("#run-detail")).toContainText("46 min");
+  await expect(page.locator("#run-list .item", { hasText: "a_new_run" })).toContainText("剩 46 min");
 });
 
 test("train: a new run needs GPUs and goes through the confirm dialog", async ({ page, request }) => {
@@ -181,6 +195,7 @@ test("train: evaluate and register a run", async ({ page, request }) => {
   await page.waitForTimeout(500); // the page reloads itself when the job ends
   const evals = await (await request.get("/api/jobs?kind=eval")).json();
   expect(evals.jobs[0].params).toMatchObject({ gpu: "3", checkpoints: [29999], prompt_swap: null });
+  await page.locator("#drawer-close").click(); // the floating log sits over the register form
   await page.locator('#register-form input[name="status"]').fill("e2e");
   await page.locator("#start-register").click();
   await page.locator("#confirm-start").click();
@@ -287,4 +302,77 @@ test("drawer: re-selecting a finished job reopens its log", async ({ page, reque
   await page.locator("#drawer-log").evaluate((el) => { el.textContent = ""; });
   await page.locator(`#drawer-jobs .item[data-job="${job1.id}"]`).click();
   await expect(page.locator("#drawer-log")).toContainText("fake linkcheck done", { timeout: 10000 });
+});
+
+test("the job log is a floating window that moves, switches size, hides and remembers", async ({ page }) => {
+  await page.goto("/");
+  const win = page.locator("#drawer");
+  const fab = page.locator("#jobs-fab");
+  await expect(win).toBeHidden();
+  await expect(fab).toBeVisible();
+  await fab.click();
+  await expect(win).toBeVisible();
+  await expect(fab).toBeHidden();
+  await expect(win).toHaveAttribute("data-size", "small");
+  await expect(page.locator("#drawer-log")).toBeHidden();
+  await expect(page.locator("body")).not.toHaveClass(/drawer-open/);
+  const start = (await win.boundingBox())!;
+  expect(start.width).toBeLessThan(500);
+
+  const drag = async (from: { x: number; y: number }, to: { x: number; y: number }) => {
+    await page.mouse.move(from.x, from.y);
+    await page.mouse.down();
+    await page.mouse.move(to.x, to.y, { steps: 6 });
+    await page.mouse.up();
+  };
+  const title = (await page.locator("#drawer-head h2").boundingBox())!;
+  await drag({ x: title.x + 5, y: title.y + 5 }, { x: title.x - 300, y: title.y - 200 });
+  const moved = (await win.boundingBox())!;
+  expect(moved.x).toBeLessThan(start.x - 250);
+  expect(moved.y).toBeLessThan(start.y - 150);
+  const title2 = (await page.locator("#drawer-head h2").boundingBox())!;
+  await drag({ x: title2.x + 5, y: title2.y + 5 }, { x: -400, y: -400 });
+  const clamped = (await win.boundingBox())!;
+  expect(clamped.x).toBeGreaterThanOrEqual(0);
+  expect(clamped.y).toBeGreaterThanOrEqual(0);
+
+  await page.locator("#drawer-size").click();
+  await expect(win).toHaveAttribute("data-size", "large");
+  await expect(page.locator("#drawer-log")).toBeVisible();
+  const large = (await win.boundingBox())!;
+  expect(large.width).toBeGreaterThan(700);
+  const grip = (await page.locator("#drawer-grip").boundingBox())!;
+  await drag({ x: grip.x + 8, y: grip.y + 8 }, { x: grip.x + 108, y: grip.y + 58 });
+  const resized = (await win.boundingBox())!;
+  expect(resized.width).toBeGreaterThan(large.width + 80);
+  expect(resized.height).toBeGreaterThan(large.height + 30);
+
+  await page.locator("#drawer-close").click();
+  await expect(win).toBeHidden();
+  await fab.click();
+  expect(await win.boundingBox()).toEqual(resized);
+
+  await page.reload();
+  await expect(win).toBeVisible();
+  await expect(win).toHaveAttribute("data-size", "large");
+  expect(await win.boundingBox()).toEqual(resized);
+  await page.keyboard.press("Escape");
+  await expect(win).toBeHidden();
+  await page.reload();
+  await expect(fab).toBeVisible();
+  await expect(win).toBeHidden();
+});
+
+test("the job log docks to the bottom on phones @mobile", async ({ page }) => {
+  test.skip(page.viewportSize()!.width >= 720, "phones only");
+  await page.goto("/");
+  await page.locator("#jobs-fab").click();
+  await page.locator("#drawer-size").click();
+  const box = (await page.locator("#drawer").boundingBox())!;
+  const view = page.viewportSize()!;
+  expect(box.x).toBe(0);
+  expect(Math.round(box.width)).toBe(view.width);
+  expect(Math.round(box.y + box.height)).toBe(view.height);
+  await expect(page.locator("#drawer-grip")).toBeHidden();
+  await noHorizontalScroll(page);
 });

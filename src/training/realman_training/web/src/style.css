@@ -195,14 +195,27 @@ pre.card { max-height: 60vh; background: var(--card-sub); color: var(--text); }
 .markdown td:first-child { white-space: nowrap; color: var(--text-2); }
 details summary { cursor: pointer; color: var(--text-2); font-size: 12px; font-weight: 700; }
 
-.drawer { position: fixed; left: 0; right: 0; bottom: 0; z-index: 30; display: grid; grid-template-rows: auto minmax(0, 1fr); height: min(60vh, 520px); border-top: 1px solid var(--line-strong); background: var(--card-bg); box-shadow: 0 -10px 30px oklch(0.3 0.02 var(--hue) / 0.12); }
-.drawer-head { display: flex; align-items: center; gap: 10px; padding: 10px clamp(16px, 3vw, 42px); border-bottom: 1px solid var(--line); }
-.drawer-head h2 { margin: 0 auto 0 0; font-size: 15px; }
-.drawer-body { display: grid; grid-template-columns: minmax(220px, 300px) minmax(0, 1fr); min-height: 0; }
+.drawer { position: fixed; z-index: 30; display: grid; grid-template-rows: auto minmax(0, 1fr); overflow: hidden; border: 1px solid var(--line-strong); border-radius: var(--radius-card); background: var(--card-bg); box-shadow: var(--shadow-card-hover); }
+.drawer.moving { user-select: none; }
+.drawer-head { display: flex; align-items: center; gap: 8px; padding: 8px 10px 8px 14px; border-bottom: 1px solid var(--line); cursor: move; touch-action: none; user-select: none; }
+.drawer-title { display: flex; align-items: center; gap: 8px; min-width: 0; margin-right: auto; }
+.drawer-title h2 { margin: 0; font-size: 14px; white-space: nowrap; }
+.drawer-head .button { cursor: pointer; }
+.drawer-body { display: grid; grid-template-columns: minmax(200px, 260px) minmax(0, 1fr); min-height: 0; }
 .drawer-jobs { display: grid; align-content: start; gap: 6px; min-width: 0; padding: 8px; overflow-y: auto; border-right: 1px solid var(--line); }
-.drawer-log { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 6px; min-width: 0; min-height: 0; padding: 8px 12px; }
+.drawer-log { display: grid; grid-template-rows: auto minmax(0, 1fr); gap: 6px; min-width: 0; min-height: 0; padding: 8px 12px 14px; }
 .drawer-job-head { display: flex; flex-wrap: wrap; align-items: center; gap: 6px; font-size: 12px; }
 .drawer-log pre { height: 100%; }
+.drawer[data-size="small"] .drawer-body { grid-template-columns: minmax(0, 1fr); }
+.drawer[data-size="small"] .drawer-jobs { border-right: 0; }
+.drawer[data-size="small"] .drawer-log { display: none; }
+.drawer-grip { position: absolute; right: 2px; bottom: 2px; width: 14px; height: 14px; cursor: nwse-resize; touch-action: none; background: linear-gradient(135deg, transparent 0 50%, var(--line-strong) 50% 58%, transparent 58% 70%, var(--line-strong) 70% 78%, transparent 78%); }
+.jobs-fab { position: fixed; right: 16px; bottom: 16px; z-index: 30; display: inline-flex; align-items: center; gap: 8px; min-height: 44px; padding: 0 16px; border: 1px solid var(--line-strong); border-radius: 999px; background: var(--card-bg); color: var(--text); font: inherit; font-size: 13px; font-weight: 700; box-shadow: var(--shadow-card-hover); cursor: pointer; }
+.jobs-fab:hover { border-color: var(--primary); }
+.jobs-fab-count { min-width: 20px; padding: 1px 6px; border-radius: 999px; background: var(--primary); color: #fff; font-size: 11px; text-align: center; }
+.jobs-fab.busy { animation: jobs-fab-pulse 1.8s ease-in-out infinite; }
+@keyframes jobs-fab-pulse { 0%, 100% { box-shadow: var(--shadow-card-hover), 0 0 0 0 var(--primary); } 60% { box-shadow: var(--shadow-card-hover), 0 0 0 7px transparent; } }
+@media (prefers-reduced-motion: reduce) { .jobs-fab.busy { animation: none; } }
 
 dialog.confirm { width: min(520px, calc(100vw - 32px)); padding: 18px 20px; border: 1px solid var(--line); border-radius: var(--radius-card); background: var(--card-bg); color: var(--text); box-shadow: var(--shadow-card-hover); }
 dialog.confirm::backdrop { background: oklch(0.2 0.02 var(--hue) / 0.35); }
@@ -225,8 +238,8 @@ dialog.confirm .actions { justify-content: flex-end; margin-top: 12px; }
   .grid3 > .span2 { grid-column: auto; }
   .sticky-list { position: static; max-height: none; }
   .tab-arrow { display: none; }
-  .drawer-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
-  .drawer-jobs { grid-auto-flow: column; grid-auto-columns: minmax(170px, 1fr); overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
+  .drawer[data-size="large"] .drawer-body { grid-template-columns: minmax(0, 1fr); grid-template-rows: auto minmax(0, 1fr); }
+  .drawer[data-size="large"] .drawer-jobs { grid-auto-flow: column; grid-auto-columns: minmax(170px, 1fr); overflow-x: auto; border-right: 0; border-bottom: 1px solid var(--line); }
 }
 @media (max-width: 560px) {
   .cards, #card-gpus .gpu-list { grid-template-columns: minmax(0, 1fr); }
@@ -237,5 +250,9 @@ dialog.confirm .actions { justify-content: flex-end; margin-top: 12px; }
   .brand small { display: none; }
   .token-field input { width: 96px; }
 }
-body.drawer-open .page { padding-bottom: calc(min(60vh, 520px) + 24px); }
-html:has(body.drawer-open) { scroll-padding-bottom: calc(min(60vh, 520px) + 16px); }
+@media (max-width: 719px) {
+  .drawer { left: 0; right: 0; bottom: 0; height: 55vh; border-width: 1px 0 0; border-radius: 14px 14px 0 0; }
+  .drawer[data-size="small"] { height: 35vh; }
+  .drawer-head { cursor: default; }
+  .drawer-grip { display: none; }
+}

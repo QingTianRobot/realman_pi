@@ -1,5 +1,5 @@
-import type { Check, Gpus, JobRow } from "./api";
-import { fmtMae, fmtMiB, h, KIND_LABEL, STATE_LABEL, stateClass, type Child } from "./dom";
+import type { Check, Gpus, JobRow, Pace } from "./api";
+import { fmtMae, fmtMiB, fmtRate, fmtRemaining, fmtTime, h, KIND_LABEL, STATE_LABEL, stateClass, type Child } from "./dom";
 
 export function panel(title: string | null, ...children: (Child | Child[])[]): HTMLElement {
   return h("section", { class: "panel" }, title ? h("h2", {}, title) : null, ...children);
@@ -108,4 +108,27 @@ export function swapTable(evals: Evals, id = "swap-table"): HTMLElement | null {
       const value = fmtMae(swap[t][p]);
       return p === t ? h("strong", {}, value) : value;
     })]), { id, numeric: prompts.map((_, i) => i + 1) }));
+}
+
+function minutesSince(iso: string | null): number | null {
+  const t = iso ? Date.parse(iso) : NaN;
+  return Number.isNaN(t) ? null : Math.max(0, Math.round((Date.now() - t) / 60000));
+}
+
+/** Speed, time left and finish time of a run, for a kv list; a finished run shows its average speed. */
+export function paceRows(pace: Pace | null | undefined, live: boolean): [string, Child][] {
+  if (!pace) return live ? [["速度", "等待第一步"]] : [];
+  if (!live) return [["平均速度", fmtRate(pace.rate)]];
+  const rows: [string, Child][] = [["速度", fmtRate(pace.rate)], ["剩余", fmtRemaining(pace.remaining_sec)],
+    ["预计完成", pace.eta ? fmtTime(pace.eta) : "–"]];
+  if (pace.stale) rows.push(["日志", chip(`${minutesSince(pace.updated) ?? "?"} min 没更新，训练可能已停`, "warn")]);
+  return rows;
+}
+
+/** One line for a run list: "1.40 步/s · 剩 5 h 46 min · 21:21 完成". */
+export function paceLine(pace: Pace | null | undefined): string {
+  if (!pace?.rate) return "";
+  const rate = pace.rate >= 1 ? `${pace.rate.toFixed(2)} 步/s` : `${(1 / pace.rate).toFixed(1)} s/步`;
+  if (pace.remaining_sec === null) return rate;
+  return `${rate} · 剩 ${fmtRemaining(pace.remaining_sec)}${pace.eta ? ` · ${fmtTime(pace.eta).slice(-5)} 完成` : ""}${pace.stale ? " · 日志停了" : ""}`;
 }

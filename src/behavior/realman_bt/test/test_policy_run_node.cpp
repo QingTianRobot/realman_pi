@@ -659,8 +659,8 @@ void expectFaultAfterActivation(const std::function<void(FakeStack&)>& break_som
 void testAJointOutsideTheEnvelopeStopsTheBridge() {
   expectFaultAfterActivation(
       [](FakeStack& s) {
-        s.r[4] = 10.0;
-        s.r_target[4] = 10.0;
+        s.r[4] = 2.0;
+        s.r_target[4] = 2.0;
       },
       "J5");
 }
@@ -880,8 +880,8 @@ void testAFaultTraceNamesTheReason() {
   f.stack.serve();
   const auto script = [](FakeStack& s, double) {
     if (!s.activated()) return;
-    s.r[4] = 10.0;
-    s.r_target[4] = 10.0;
+    s.r[4] = 2.0;
+    s.r_target[4] = 2.0;
   };
   assert(f.run(5s, script) == NodeStatus::FAILURE);
 

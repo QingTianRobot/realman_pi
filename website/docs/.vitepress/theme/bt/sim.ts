@@ -20,7 +20,7 @@ export const outcomes: Record<string, { kind: OutcomeKind; reason: string; grasp
     reason: "the policy bridge paused itself after repeated inference failures (policy server timeout)",
     grasp: "",
   },
-  fault: { kind: "fault", reason: "joint J5 = 18.4 deg is outside [20.0, 108.2]", grasp: "" },
+  fault: { kind: "fault", reason: "joint J5 = 2.1 deg is outside [3.5, 108.2]", grasp: "" },
   wrong_task: { kind: "fault", reason: "the arm turned to the bin side although the task is lift-and-hold", grasp: "" },
 };
 

@@ -135,7 +135,7 @@ void testTheShippedYamlLoadsThroughRosAsALaunchFileWouldPassIt() {
 
   assert(loaded.cycles == 1 && loaded.attempts == 3);
   assert(loaded.activation == "auto" && loaded.arm == "r");
-  assert(loaded.joint_lo[4] == 20.0 && loaded.joint_hi[4] == 108.2);
+  assert(loaded.joint_lo[4] == 3.5 && loaded.joint_hi[4] == 108.2);
   assert(loaded.max_joint_speed_dps == 50.0);
   assert(loaded.release.joint_below_deg == -35.0);
   assert(loaded.gripper_for_arm.at("r") == "gripper_right");

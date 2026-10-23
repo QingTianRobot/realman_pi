@@ -148,8 +148,8 @@ struct PolicyTaskConfig {
   std::map<std::string, std::string> gripper_for_arm{
       {"l", "gripper_left"}, {"m", "gripper_mid"}, {"r", "gripper_right"}};
   // RealMan degrees. p1/p99 over all 130 demonstration episodes, each side widened by 10 degrees;
-  // the J5 floor is 20 (demos reach 5.6, but that is too close to the wrist singularity to allow).
-  std::array<double, 6> joint_lo{-73.4, 5.0, -16.2, -28.4, 20.0, -125.1};
+  // J5 by the same rule (p1 13.5 - 10 = 3.5), still above the wrist singularity at 0.
+  std::array<double, 6> joint_lo{-73.4, 5.0, -16.2, -28.4, 3.5, -125.1};
   std::array<double, 6> joint_hi{40.1, 107.0, 124.3, 70.8, 108.2, 49.0};
   double max_joint_speed_dps{50.0};
   double lm_drift_limit_deg{1.0};

@@ -21,7 +21,7 @@ from typing import Callable
 
 from aiohttp import web
 
-from . import catalog, gpus as gpu_mod, job_params, linkcheck, serving
+from . import catalog, gpus as gpu_mod, job_params, linkcheck, serve_dataset, serving
 from .steps import tags as tags_step
 from .catalog import BadRequest, NotFound
 from .config import ARMS, ConsoleConfig
@@ -35,6 +35,7 @@ TOKEN_HEADER = "X-Training-Token"
 TAGS_STATUS_TIMEOUT_SEC = 15
 _LOG_START_BYTES = 256 * 1024  # a WebSocket starts at most this far from the end of a long log
 _POLL_SEC = 0.5
+_SERVE_DATASET_TTL_SEC = 300.0  # a view never changes once written; this only bounds a moved/deleted one
 
 
 class TtlCache:
@@ -107,6 +108,8 @@ class Console:
         self.summaries = SummaryCache(config.quality)
         self.serve_cache = TtlCache(config.web.serve_status_ttl_sec, clock)
         self.gpu_cache = TtlCache(config.web.gpu_ttl_sec, clock)
+        self._clock = clock
+        self._serve_datasets: dict[tuple[str, int | None], tuple[float, dict]] = {}
         self.static_root = Path(static_root).resolve()
 
     @property
@@ -161,6 +164,7 @@ class Console:
         r.add_get("/api/gpus", self.gpus)
         r.add_get("/api/serve", self.serve)
         r.add_get("/api/serve/settings", self.settings)
+        r.add_get("/api/serve/dataset", self.serve_dataset)
         r.add_put("/api/serve/settings", self.save_settings)
         r.add_get("/api/linkcheck", self.linkcheck)
         r.add_get("/api/options", self.options)
@@ -250,6 +254,19 @@ class Console:
 
     async def settings(self, request):
         return _json(await self._blocking(self._settings_payload))
+
+    async def serve_dataset(self, request):
+        model = request.query.get("model", "")
+        try:
+            step = int(request.query["step"]) if request.query.get("step") else None
+        except ValueError:
+            raise BadRequest("step must be a number") from None
+        key = (model, step)
+        hit = self._serve_datasets.get(key)
+        if hit is None or self._clock() - hit[0] >= _SERVE_DATASET_TTL_SEC:
+            hit = (self._clock(), await self._blocking(serve_dataset.model_dataset, self.config, model, step))
+            self._serve_datasets[key] = hit
+        return _json(hit[1])
 
     async def linkcheck(self, request):
         history = await self._blocking(catalog.linkcheck_history, self.config, self.config.web.history_limit)

@@ -73,6 +73,38 @@ export interface ServeStatus {
 export interface Settings { model: string; checkpoint: string; gpu: number; port: number; task: string | null }
 export interface ServeModel { name: string; checkpoints: number[]; prompts: Record<string, string> }
 export interface SettingsPayload { defaults: Settings; saved: Partial<Settings>; effective: Settings; models: ServeModel[] }
+export interface NormBlock { labels: string[]; mean: number[]; std: number[]; q01: number[]; q99: number[] }
+export interface ServeDatasetTask {
+  task: string; prompt: string; episodes: number; frames: number; train: number; holdout: number; first: number; last: number;
+  duration_sec: number; length_sec: { min: number; median: number; mean: number; max: number };
+}
+export interface LineageRow {
+  path: string; kind: "view" | "clean" | "raw"; episodes: number | null; frames: number | null; created: string | null;
+  removed: number | null; reasons: Record<string, number> | null; removed_tasks: Record<string, number> | null;
+}
+/** The data a model was trained on (GET /api/serve/dataset); `error` instead of the rest when the view is gone. */
+export interface ServeDataset {
+  model: string; step: number | null; view: string; method: string | null; batch_size: number | null;
+  num_train_steps: number | null; norm_stats: ({ file: string; state?: NormBlock; actions?: NormBlock }) | null;
+  error?: string;
+  description?: {
+    arm: string | null; cameras: string[]; fps: number | null; state: string | null; action: string | null;
+    gripper_target: string | null; created: string | null; params: Record<string, number>;
+  };
+  totals?: { episodes: number; frames: number; duration_sec: number | null; train: number; holdout: number };
+  holdout_episodes?: number[]; tasks?: ServeDatasetTask[];
+  lengths?: { unit: "s" | "frames"; edges: number[]; counts: Record<string, number[]> };
+  lineage?: LineageRow[];
+  tags?: ServeDatasetTags;
+}
+export interface TagSlot {
+  value: unknown; episodes: number; frames: number; by_task: Record<string, number>; holdout: number; manual: number;
+}
+/** Recording tags of the view (<view>/episode_tags.json): missing until `realman-train tags refresh` writes it. */
+export type ServeDatasetTags =
+  | { state: "missing"; file: string }
+  | { state: "mismatch"; error: string }
+  | { state: "ok"; snapshot_at: string | null; keys: Record<string, TagSlot[]> };
 export interface Check { item: string; name: string; ok: boolean; value: string; threshold: string; detail: string }
 export interface LinkRun { at: string; ok: boolean; checks: Check[] }
 export interface LinkcheckPayload { latest: LinkRun | null; history: LinkRun[]; job: JobRow | null }
@@ -146,6 +178,8 @@ export const api = {
   serve: (refresh = false) => request<ServeStatus>("GET", `/api/serve${refresh ? "?refresh=1" : ""}`),
   settings: () => request<SettingsPayload>("GET", "/api/serve/settings"),
   saveSettings: (settings: Partial<Settings>) => request<SettingsPayload>("PUT", "/api/serve/settings", settings),
+  serveDataset: (model: string, step?: number | string | null) =>
+    request<ServeDataset>("GET", `/api/serve/dataset?model=${q(model)}${step ? `&step=${q(String(step))}` : ""}`),
   linkcheck: () => request<LinkcheckPayload>("GET", "/api/linkcheck"),
   options: () => request<Options>("GET", "/api/options"),
 };

@@ -167,6 +167,24 @@ def test_serve_settings_read(world):
     assert data["models"][0]["name"] == MODEL
 
 
+def test_serve_dataset_describes_the_model_s_training_data_and_is_cached(world):
+    async def scenario(client):
+        first = await client.get(f"/api/serve/dataset?model={MODEL}&step=29999")
+        world["paths"]["view"].rename(world["paths"]["view"].with_name("moved"))
+        cached = await client.get(f"/api/serve/dataset?model={MODEL}&step=29999")
+        world["clock"].t += 301
+        fresh = await client.get(f"/api/serve/dataset?model={MODEL}&step=29999")
+        bad = await client.get(f"/api/serve/dataset?model={MODEL}&step=x")
+        missing = await client.get(f"/api/serve/dataset?model={MODEL}&step=5")
+        return [await r.json() for r in (first, cached, fresh)] + [bad.status, missing.status]
+
+    first, cached, fresh, bad, missing = call(world["make"](), scenario)
+    assert first["totals"]["episodes"] == 3 and [r["kind"] for r in first["lineage"]] == ["view", "clean", "raw"]
+    assert cached == first
+    assert "error" in fresh
+    assert (bad, missing) == (400, 404)
+
+
 def test_the_ui_is_served_and_a_missing_build_says_so(world, tmp_path):
     async def scenario(client):
         index = await client.get("/")

@@ -14,10 +14,21 @@ description: server5090:8780 上的训练控制平台网页：数据集与质检
 | 页 | 内容 |
 |---|---|
 | 总览 | 三张等高状态卡：推理链路（服务状态、模型、GPU · 端口、任务、桥接，下面是最近一次链路检测：只列未通过的项，其余计数）、GPU 0–3（2×2 排列，显存和占用者，底部列出空闲的卡）、当前训练（进度、速度、剩余时间和预计完成时间）；第二行最近数据集（占两列）和最新模型；最近任务（表格，点一行打开日志） |
-| 服务 | 第一行三张卡：server5090 `openpi-serve`、realman_ts `policy_bridge`、桥接统计；第二行设置（模型、checkpoint、任务 prompt、GPU、端口；启动 / 关闭）和链路检测（四项结果，下面是历史） |
+| 服务 | 第一行三张卡：server5090 `openpi-serve`、realman_ts `policy_bridge`、桥接统计；第二行设置（模型、checkpoint、任务 prompt、GPU、端口；启动 / 关闭）和链路检测（四项结果，下面是历史）；第三行“训练数据集”：正在服务的模型（没在服务，或设置里换了模型 / checkpoint 时，是设置里选中的那个）训练用的数据，见下 |
 | 数据 | 数据集列表（最新的在前，各类型最新一份标"最新"；同名的多次拉取用所在目录作标题）；条数、帧数 / 时长、时间范围、格式 / fps、磁盘 / 编码；下面并排的来源、任务分布、特征与相机（同一张卡）；逐条质检表（含夹爪轨迹缩略图，建议剔除已预勾选）；"生成清洗版""生成训练视图"；训练视图有"用这个视图新建训练"，跳到训练页并选好数据集；数据页显示每条的标签（成功/失败、手臂、光照；人工值实色，默认值淡色，失败行标红，悬停看失败原因）和标签分布、快照时间；"检查更新"只读比对 realman_ts，"刷新标签"走确认和令牌；标签分布（标签 facet）中每个标签值显示计数、比例、按任务拆分的条形和人工/默认/自动来源分布；清洗区的"按标签保留"勾选框实时预览会剔除哪些条目（划掉），和手动勾选合在一起生成清洗版，条件写进清洗记录 |
 | 训练 | 新建训练（默认折叠，点"新建训练"展开；从数据页"用这个视图新建训练"过来或还没有训练时自动展开；"训练数据集"下拉列出全部数据集：训练视图可选，原始 / 清洗版灰显，要先在数据页生成训练视图；选中后显示路径、条数、时间、任务和来源；openpi 配置候选来自 openpi 仓库 `config.py` 里含 realman 的配置名和已有 checkpoint 目录）；训练列表（训练中的一行写速度、剩余时间和完成时刻）；选中训练的 step、loss、batch · GPU、速度（训练中）/ 平均速度（已结束）、剩余 · 预计完成、时间、checkpoints 概要；"训练曲线"卡（loss 和 grad norm 上下排）；"评估与登记"栏（GPU、评估、登记）；各 checkpoint 按任务的开环评估和 prompt 交换结果；"评估""登记" |
-| 模型 | 登记表、模型卡（每个任务的条数和 episode 范围）、`MODEL_CARD.md` 全文（折叠）、`MODELS.md`，两者都按 Markdown 渲染（表格、标题、代码；卡片里的 HTML 注释不显示，其他原始 HTML 只当文字显示，单个 `~` 不当删除线）；"部署到推理服务"跳到服务页并填好模型 |
+| 模型 | 登记表、模型卡（每个任务的条数和 episode 范围；下面是训练数据的标签分布，和服务页“训练数据集”卡的标签分布相同）、`MODEL_CARD.md` 全文（折叠）、`MODELS.md`，两者都按 Markdown 渲染（表格、标题、代码；卡片里的 HTML 注释不显示，其他原始 HTML 只当文字显示，单个 `~` 不当删除线）；"部署到推理服务"跳到服务页并填好模型 |
+
+服务页的“训练数据集”卡（`GET /api/serve/dataset?model=<config>/<exp>&step=<checkpoint>`，只读，服务端缓存 5 分钟）：
+
+- 概况：条数（训练 / 留出）、帧数 / 时长、任务数、手臂和相机、batch × 步数。
+- 数据集描述：训练视图目录、生成时间、fps、状态和动作的含义、夹爪目标怎么来的、转换参数（`linear_scale` 等）、训练方法、留出集编号，都取自视图的 `contract.json` 和模型的 `console_train.json` / 模型卡；“在数据页打开”跳到这个视图。
+- 任务分布：每个任务的条数和占比、episode 范围、帧数和时长、训练 / 留出条数（条形图深色 = 训练，浅色 = 留出）、单条时长范围和中位数、prompt。视图里只存 prompt，共用一个 prompt 的任务（`pick_only` 和 `pick_only_light-weak_1021`）按视图来源目录里的任务名区分。
+- 数据来源（自下而上）：训练视图 ← 清洗版 ← … ← 原始拉取，每一级的条数、帧数和时间；清洗那一级写从上一级剔除了几条、各是哪个任务、原因（同一类原因合并计数，读数换成 N）。
+- 标签分布：录制平台的 Episode 标签里的光照（`lighting_level` 1 较暗 / 2 正常 / 3 较亮）和录制日期（`date`），每个取值的条数和占比，按任务着色的条形，以及其中留出几条、人工标注几条。数据来自训练视图目录下的 `episode_tags.json`（`realman-train tags refresh` 写入，格式见 `docs/superpowers/specs/2026-10-23-training-episode-tags-design.md`）；没有这个文件时卡片提示先同步标签，文件和视图的条数或帧数对不上时显示错误、不显示分布。
+- 单条时长分布：按任务堆叠的直方图（秒）。
+- 状态 / 动作分布：所选 checkpoint 自带的 `assets/**/norm_stats.json`（openpi 推理时用它归一化），每一维画 q01–q99、均值 ± 标准差和均值，折叠的数值表给出原值。没有这个文件时不显示这一块。
+- 视图目录已经删除或移走时，卡片说明原因，仍显示 norm_stats。
 
 数据集概况和质检结果缓存在各数据集目录下的 `.console/summary.json`，数据文件或质检阈值变化才重算；第一次打开数据页要等每个数据集算一遍。
 
@@ -82,4 +93,4 @@ npm run build:training                                                 # 打包�
 npm run test:training                                                  # Playwright：桌面全流程 + 手机布局
 ```
 
-后端测试：`cd src/training/realman_training && PYTHONPATH=. python -m pytest -q test`（`test_web_server.py`、`test_job_params.py`、`test_catalog.py`、`test_summary_cache.py`、`test_gpus.py`、`test_container.py`）。接口约定见实现计划 `docs/superpowers/plans/2026-10-21-training-console-4-web-api-container.md`。
+后端测试：`cd src/training/realman_training && PYTHONPATH=. python -m pytest -q test`（`test_web_server.py`、`test_job_params.py`、`test_catalog.py`、`test_serve_dataset.py`、`test_summary_cache.py`、`test_gpus.py`、`test_container.py`）。接口约定见实现计划 `docs/superpowers/plans/2026-10-21-training-console-4-web-api-container.md`。

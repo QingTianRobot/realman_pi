@@ -1,5 +1,6 @@
 // Episode sidebar: search + task filter + episode list with hide/restore.
 // Owns the `/api/lerobot` dataset list that main.ts previously rendered inline.
+import { initTags } from "./tags";
 
 export type EpisodeQuality = {
   valid_frames?: number;
@@ -16,6 +17,8 @@ export type EpisodeMeta = {
   task?: string;
   session_number?: number;
   quality?: EpisodeQuality;
+  tags?: Record<string, string | boolean | number | null>;
+  complete?: boolean;
 };
 
 export type PendingMeta = {
@@ -23,6 +26,8 @@ export type PendingMeta = {
   session_number?: number;
   task?: string;
   state?: string;
+  tags?: Record<string, string | boolean | number | null>;
+  complete?: boolean;
 };
 
 export type SidebarCallbacks = {
@@ -66,6 +71,8 @@ function toast(message: string, error = false): void {
 export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   const searchEl = $<HTMLInputElement>("#replay-search");
   const filterEl = $<HTMLSelectElement>("#replay-filter");
+  const tagKeyEl = $<HTMLSelectElement>("#tag-filter-key");
+  const tagValueEl = $<HTMLInputElement>("#tag-filter-value");
   const durationMinEl = $<HTMLInputElement>("#replay-duration-min");
   const durationMaxEl = $<HTMLInputElement>("#replay-duration-max");
   const episodesEl = $("#replay-episodes");
@@ -79,6 +86,41 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   let pending: PendingMeta[] = [];
   let hidden: EpisodeMeta[] = [];
   let activeId: string | null = null;
+  let defaultTags: Record<string, string | boolean | number | null> = {};
+  let defaultsLoaded = false;
+  let filterValueEdited = false;
+  let defaultsRequestId = 0;
+  const tagEditor = initTags((scope, tags) => {
+    if (scope === "defaults") {
+      defaultsRequestId++;
+      defaultTags = tags;
+      defaultsLoaded = true;
+      filterValueEdited = false;
+      renderFilter();
+      setFilterToDefault();
+    }
+    void refresh();
+  });
+
+  function setFilterToDefault(): void {
+    const value = tagKeyEl.value ? defaultTags[tagKeyEl.value] : null;
+    tagValueEl.value = value == null ? "" : String(value);
+    render();
+  }
+
+  async function loadDefaults(): Promise<void> {
+    const requestId = ++defaultsRequestId;
+    try {
+      const response = await fetch("/api/recording/tag-defaults");
+      if (!response.ok) return;
+      const data = await response.json() as { tags?: typeof defaultTags };
+      if (requestId !== defaultsRequestId) return;
+      defaultTags = data.tags ?? {};
+      defaultsLoaded = true;
+      renderFilter();
+      if (!filterValueEdited) setFilterToDefault();
+    } catch { /* A missing defaults endpoint must not block the episode list. */ }
+  }
 
   function visibleEpisodes(): EpisodeMeta[] {
     const query = searchEl.value.trim().toLowerCase();
@@ -87,6 +129,11 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
     const maxSec = durationMaxEl.value ? Number(durationMaxEl.value) : null;
     return episodes.filter((episode) => {
       if (task && (episode.task ?? "") !== task) return false;
+      if (tagKeyEl.value) {
+        const actual = episode.tags?.[tagKeyEl.value] ?? null;
+        const wanted = tagValueEl.value.trim();
+        if (wanted === "" ? actual !== null : String(actual) !== wanted) return false;
+      }
       if (query) {
         const number = episode.episode_index !== undefined ? String(episode.episode_index + 1).padStart(6, "0") : "";
         const haystack = `${episode.session_id} ${episode.task ?? ""} ${number}`.toLowerCase();
@@ -108,6 +155,11 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
       '<option value="">全部 task</option>' +
       tasks.map((task) => `<option value="${escapeHtml(task)}">${escapeHtml(task)}</option>`).join("");
     if (tasks.includes(current)) filterEl.value = current;
+    const currentKey = tagKeyEl.value;
+    const custom = [...new Set([...episodes.flatMap((episode) => Object.keys(episode.tags ?? {})), ...Object.keys(defaultTags)])].filter((key) => !["success", "arm", "date", "lighting_level"].includes(key));
+    tagKeyEl.innerHTML = '<option value="">全部标签</option>' +
+      ["success", "arm", "date", "lighting_level", ...custom].map((key) => `<option value="${escapeHtml(key)}">${escapeHtml(key)}</option>`).join("");
+    tagKeyEl.value = currentKey;
   }
 
   function row(episode: EpisodeMeta, kind: "visible" | "hidden"): string {
@@ -115,17 +167,18 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
       ? String(episode.episode_index + 1).padStart(6, "0")
       : episode.session_id;
     const task = episode.task ? `<small>${escapeHtml(episode.task)}</small>` : "";
+    const badges = episode.tags ? `<small class="tag-badges">${episode.complete ? "已标注" : "待补齐"} · success=${episode.tags.success === true ? "true" : "false"} · arm=${escapeHtml(String(episode.tags.arm ?? "—"))} · light=${escapeHtml(String(episode.tags.lighting_level ?? "—"))}</small>` : "";
     const active = kind === "visible" && activeId === episode.session_id ? " active" : "";
     const buttons = kind === "visible"
-      ? `<div class="episode-actions"><button class="episode-action" data-action="edit" data-session="${escapeHtml(episode.session_id)}" title="编辑 task 标签">编辑</button><button class="episode-action" data-action="remove" data-session="${escapeHtml(episode.session_id)}" title="永久删除该 episode（不可恢复）">删除</button><button class="episode-action" data-action="hide" data-session="${escapeHtml(episode.session_id)}" title="隐藏该 episode">隐藏</button></div>`
+      ? `<div class="episode-actions"><button class="episode-action" data-action="tags" data-session="${escapeHtml(episode.session_id)}">标签</button><button class="episode-action" data-action="edit" data-session="${escapeHtml(episode.session_id)}" title="编辑 task 标签">编辑</button><button class="episode-action" data-action="remove" data-session="${escapeHtml(episode.session_id)}" title="永久删除该 episode（不可恢复）">删除</button><button class="episode-action" data-action="hide" data-session="${escapeHtml(episode.session_id)}" title="隐藏该 episode">隐藏</button></div>`
       : `<button class="episode-action" data-action="restore" data-session="${escapeHtml(episode.session_id)}" title="恢复该 episode">恢复</button>`;
-    return `<div class="episode-item${active}" data-session="${escapeHtml(episode.session_id)}" title="${escapeHtml(episode.session_id)}"><div class="episode-main"><strong>${escapeHtml(label)}</strong>${task}<small>${episode.frames} 帧 · ${episode.fps} Hz</small></div>${buttons}</div>`;
+    return `<div class="episode-item${active}" data-session="${escapeHtml(episode.session_id)}" title="${escapeHtml(episode.session_id)}"><div class="episode-main"><strong>${escapeHtml(label)}</strong>${task}<small>${episode.frames} 帧 · ${episode.fps} Hz</small>${badges}</div>${buttons}</div>`;
   }
 
   function pendingRow(item: PendingMeta, number: number): string {
     const label = String(number).padStart(6, "0");
     const task = item.task ? `<small>${escapeHtml(item.task)}</small>` : "";
-    return `<div class="episode-item" data-session="${escapeHtml(item.session_id)}" title="${escapeHtml(item.session_id)}"><div class="episode-main"><strong>${escapeHtml(label)}</strong>${task}<small>待转换</small></div><button class="episode-action" data-action="remove-pending" data-session="${escapeHtml(item.session_id)}" title="删除该 session（永久删除，不可恢复）">删除</button></div>`;
+    return `<div class="episode-item" data-session="${escapeHtml(item.session_id)}" title="${escapeHtml(item.session_id)}"><div class="episode-main"><strong>${escapeHtml(label)}</strong>${task}<small>待转换 · ${item.complete ? "已标注" : "待补齐"}</small></div><div class="episode-actions"><button class="episode-action" data-action="tags" data-session="${escapeHtml(item.session_id)}">标签</button><button class="episode-action" data-action="remove-pending" data-session="${escapeHtml(item.session_id)}" title="删除该 session（永久删除，不可恢复）">删除</button></div></div>`;
   }
 
   function render(): void {
@@ -176,13 +229,14 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
     callbacks.onRefreshed?.(episodes);
   }
 
-  async function postAction(sessionId: string, action: "delete" | "restore" | "remove"): Promise<boolean> {
+  async function postAction(sessionId: string, action: "delete" | "restore" | "remove"): Promise<{ ok: boolean; metaSynced: boolean }> {
     try {
       const response = await fetch(`/api/lerobot/${encodeURIComponent(sessionId)}/${action}`, { method: "POST" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
-      return true;
+      const result = await response.json();
+      return { ok: true, metaSynced: result.meta_synced !== false };
     } catch {
-      return false;
+      return { ok: false, metaSynced: false };
     }
   }
 
@@ -206,11 +260,12 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
     const label = episode?.session_id ?? sessionId;
     const warning = action === "remove" ? "（永久删除，不可恢复！）" : "";
     if (!window.confirm(`确定要${verb} episode ${label}${warning} 吗？`)) return;
-    const ok = await postAction(sessionId, action);
-    if (!ok) {
+    const result = await postAction(sessionId, action);
+    if (!result.ok) {
       toast(`${verb}失败`, true);
       return;
     }
+    if (!result.metaSynced) toast(`${verb}已完成，但索引待修复`, true);
     await refresh();
     callbacks.onChanged();
   }
@@ -253,6 +308,8 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
     try {
       const response = await fetch(`/api/lerobot/${encodeURIComponent(sessionId)}/remove`, { method: "POST" });
       if (!response.ok) throw new Error(`HTTP ${response.status}`);
+      const result = await response.json();
+      if (result.meta_synced === false) toast("删除已完成，但索引待修复", true);
     } catch {
       toast("删除失败", true);
       return;
@@ -293,7 +350,7 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
         throw new Error(message || `HTTP ${response.status}`);
       }
       const result = await response.json();
-      toast(`索引已更新：${result.total_episodes_before} → ${result.total_episodes_after} 个（清理 ${result.orphans_removed} 个孤儿）`);
+      toast(result.meta_synced === false ? "数据集已重新编排，但标签索引待修复" : `索引已更新：${result.total_episodes_before} → ${result.total_episodes_after} 个（清理 ${result.orphans_removed} 个孤儿）`, result.meta_synced === false);
     } catch (error) {
       toast(`更新索引失败：${error instanceof Error ? error.message : "未知错误"}`, true);
     } finally {
@@ -325,6 +382,7 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
       else if (action === "remove") void handleAction(sessionId, "remove");
       else if (action === "remove-pending") void handleRemovePending(sessionId);
       else if (action === "edit") void handleEdit(sessionId);
+      else if (action === "tags") void tagEditor.openEpisode(sessionId).catch((error) => toast(String(error), true));
       return;
     }
     // A 待转换 row has no LeRobot export yet, so it opens the raw preview
@@ -340,11 +398,20 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   pendingEl.addEventListener("click", onContainerClick);
   hiddenEl.addEventListener("click", onContainerClick);
   reindexButton.addEventListener("click", () => void handleReindex());
+  $("#tag-defaults-button").addEventListener("click", () => void tagEditor.openDefaults().catch((error) => toast(String(error), true)));
   searchEl.addEventListener("input", render);
   filterEl.addEventListener("change", render);
+  tagKeyEl.addEventListener("change", () => {
+    filterValueEdited = false;
+    if (defaultsLoaded) setFilterToDefault();
+    else void loadDefaults();
+    render();
+  });
+  tagValueEl.addEventListener("input", () => { filterValueEdited = true; render(); });
   durationMinEl.addEventListener("input", render);
   durationMaxEl.addEventListener("input", render);
 
+  void loadDefaults();
   void refresh();
 
   return {

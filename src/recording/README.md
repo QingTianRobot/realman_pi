@@ -367,3 +367,48 @@ ros2 service call /recording/manage realman_recording_msgs/srv/ManageRecording "
 ```
 
 所有运行时数据写入 `recording_root`（Compose 默认挂载到 `/data/realman-recordings`），不得写入仓库 `config/` 或源码目录。
+
+## Episode 标签与统一索引
+
+Recording Web 的已转换和待转换列表都有“标签”入口，列表顶部的“默认标签”
+保存未来 Session 的默认快照。全局默认位于
+`<recording_root>/episode_tag_defaults.json`；每条 Session 的快照、人工覆盖和
+revision 位于其 finalized `manifest.json` 的 `episode_tags`。标签保存使用
+revision 检查并拒绝覆盖另一位操作员的更新。`success` 出厂默认 `true`，只允许
+布尔 `true/false`，并同步写入旧字段 `annotations.success`；这不表示录制 STOP
+成功就是业务成功。`arm` 为 `left/right/both/null`，`lighting_level` 为
+`1/2/3/null`，`date` 取 `started_realtime_ns` 的上海时区日期，也允许单条
+人工覆盖。自定义键支持字符串、布尔、整数、有限浮点及 null。
+
+优先级是人工值、Session 默认快照、自动日期。人工 null 是有效覆盖；“恢复默认”
+只删除该键的人工覆盖。修改全局默认不会追溯更改旧 Session。默认标签面板的
+“应用到历史未手动字段”先预览影响，再要求确认，绝不覆盖人工值。任务 Task
+和帧级 Subtask 仍是独立字段。
+
+`<recording_root>/episode_meta.json` 是可重建索引，包含 `schema_version`、
+`path_base="."`、`episodes` 和 `errors`。每条记录以 `session_id` 为主键，
+`dataset_path`、`raw_session_path` 相对录制根目录；只有 receipt 有效且目录
+在根目录内的 `SUCCEEDED` 导出才有 `episode_index`。训练端应只选择
+`decision == "ADOPTED" && export_state == "SUCCEEDED" && dataset_path != null`，
+然后以 `recording_root / dataset_path` 和 `episode_index` 定位数据。索引从
+Manifest 和 `export/lerobot-v3.json` 重建；直接改索引会被覆盖。越界、缺失或
+损坏的 receipt 进入 `errors`，不会猜测 Episode 编号。不会改写已导出的
+Parquet、MP4、`meta/info.json` 或原始 MCAP/JPEG。
+
+API：`GET/PUT /api/recording/tag-defaults`、
+`GET/PUT /api/recording/{session_id}/tags`、
+`POST /api/recording/tags/backfill`（`{"dry_run":true}` 预览，执行时
+`{"dry_run":false,"confirm":true}`）、`GET /api/recording/episode-meta`、
+`POST /api/recording/episode-meta/rebuild`。旧 Manifest 的显式 success 布尔值
+保留；旧 null/缺失在索引中映射为默认 true。显式迁移旧 Manifest 可发送
+`POST /api/recording/episode-meta/rebuild`，请求体为
+`{"initialize_missing":true,"confirm":true}`。迁移前应备份录制根目录，
+先在数据副本验证；生产历史目录不会在部署时自动批量改写。标签或默认文件
+已保存但索引更新失败时 API 返回 `meta_synced=false`，可重试 rebuild。
+
+单条 PUT 请求使用 `{"revision":0,"set":{"success":false},"reset":["arm"],
+"delete":["object_type"]}`：`set` 创建人工值，`reset` 删除人工覆盖以恢复该
+Session 的默认快照，`delete` 隐藏该 Session 的自定义键（可再次 reset 恢复）。
+同一键不能在多个操作中出现；revision 过期返回 HTTP 409。旧数据全量迁移前
+先备份 `manifest.json` 和 `episode_tag_defaults.json`；丢失/损坏的索引可直接
+rebuild，不能用 `episode_meta.json` 反向覆盖 Manifest。

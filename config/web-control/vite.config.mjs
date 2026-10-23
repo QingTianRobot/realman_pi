@@ -108,8 +108,8 @@ function devApiPlugin() {
             response.end(JSON.stringify({ available: false }));
             return;
           }
-          if (url === "/api/bt/runtime") {
-            // Local UI development has no executor; production proxies bt_server's snapshot.
+          if (url === "/api/docker/restart" && request.method === "GET") {
+            // No host restart helper locally: the restart button stays hidden in dev.
             response.setHeader("Content-Type", "application/json");
             response.end(JSON.stringify({ available: false }));
             return;

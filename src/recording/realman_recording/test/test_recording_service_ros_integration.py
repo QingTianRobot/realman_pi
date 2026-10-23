@@ -39,6 +39,7 @@ def test_real_recorder_service_prepare_start_stop_and_discard(tmp_path):
             Parameter("arm_namespaces", value=["qa"]),
             Parameter("preflight_required_topics", value=["/qa/joint_states"]),
             Parameter("min_free_space_bytes", value=0),
+            Parameter("auto_export_on_stop", value=False),
         ]
         recorder = RecordingRecorderNode(parameter_overrides=parameters)
         assert len(recorder._subscriptions) == len(recorder._topic_types)
@@ -123,7 +124,7 @@ def test_real_recorder_service_prepare_start_stop_and_discard(tmp_path):
         repeated_stop = call(stop)
         assert repeated_stop.success is False
         assert "no active recording session" in repeated_stop.message
-        assert len(list((tmp_path / "sessions").iterdir())) == 1
+        assert len(list((tmp_path / "sessions").glob("*/manifest.json"))) == 1
 
         discard = ManageRecording.Request()
         discard.command = ManageRecording.Request.DISCARD

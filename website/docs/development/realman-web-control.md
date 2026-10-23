@@ -258,12 +258,20 @@ RM65_DRY_RUN=1 ./rm65 bt control
 
 `./rm65 bt <tree>` 运行期间，`bt-start` 在宿主网络 :8080 启动只读监视器 `bt_server`，执行器每个 tick
 原子重写一份运行快照（每个节点的 path、类型、名称和 `IDLE/RUNNING/SUCCESS/FAILURE` 状态及失败原因）。
-Web 服务把它代理为同源只读接口 `GET /api/bt/runtime`（`bt_runtime.py`）：去掉事件日志，只保留树结构和状态；
-监视器不可达、快照为空、或超过 `stale_after_sec` 未更新时返回 `{"available": false}`。树退出时
-`bt-start` 会停掉 :8080，所以“可达且有节点”就等价于“有树在运行”。地址和超时在
+Web 服务读取它并压缩成树视图（`bt_runtime.py`）：去掉事件日志，只保留树结构和状态；
+监视器不可达、快照为空、或超过 `stale_after_sec` 未更新时视为 `{"available": false}`。树退出时
+`bt-start` 会停掉 :8080，所以“可达且有节点”就等价于“有树在运行”。
+
+树视图是**推送**的，不再由页面轮询：只要有浏览器连着 `/ws`，Web 服务每 `poll_period_sec`（默认 50 ms）
+在本机读一次 :8080，树视图有可见变化时才向所有页面广播 `{"type": "bt_runtime", "runtime": {...}}`。
+执行器每个 tick 都会改写 `timestamp_ms` 和 `sequence`，这两个字段不算变化，所以树不动时没有流量。
+新页面在 `hello` 之后立即收到一份当前视图；没有页面连接时不读监视器。WebSocket 断开时页面立刻隐藏
+运行中的树，重连后由下一份推送恢复。从 tick 到页面变色的延迟约为一个 tick 加 `poll_period_sec`
+（10 Hz 树约 0.1 s 以内），以前 0.5 s 轮询时最多会晚半秒，短命节点常常看不到 RUNNING。
+`GET /api/bt/runtime` 仍返回同样的单次视图，供 curl 排查使用。地址、超时和读取周期在
 `config/ros/realman_web_control.yaml` 的 `behavior_tree_monitor` 中配置，`url` 置空即关闭该视图。
 
-页面每 0.5 s 轮询一次（页面不可见时暂停）：
+页面行为：
 
 - **独立卡片**：“行为树”是右列输入模式卡片下方的独立卡片，不在“运动/速度/夹爪/键盘”标签里，切换标签时始终可见。
   可以从本页启动行为树（见下文“启动行为树”）或有树在运行时卡片出现，两者都不可用时隐藏。树开始运行时卡片短暂高亮，
@@ -304,6 +312,35 @@ Web 服务把它代理为同源只读接口 `GET /api/bt/runtime`（`bt_runtime.
 `bt-start` 持有的 `/tmp/realman-bt.lock` 让 launcher 同时识别终端里 `./rm65 bt` 启动的树，不会并发启动第二棵。
 launcher 从不终止任何进程，停止仍走“终止行为树”。`realman_bringup_remote` 默认 `start_bt_launcher:=true`
 （`REALMAN_START_BT_LAUNCHER=false` 可关闭）；`realman_web_control.yaml` 的 `behavior_tree_launcher.url` 置空则隐藏启动菜单。
+
+### 重启 Docker（驱动容器）
+
+顶栏的“重启 Docker”按钮重启 `realman_bringup_remote`（三臂驱动、夹爪、相机健康、`bt_launcher` 都在这个容器里），
+用于驱动卡死、夹爪串口掉线等需要重启容器才能恢复的情况。控制页本身运行在独立的 `realman_web_control` 容器，
+重启期间页面不断开，可以看到进度和结果。
+
+- 第一次点击只变为“确认重启？”，4 s 内再点才发送 `POST /api/docker/restart`（同源校验，请求体为空）。
+  要重启的服务只来自 `realman_web_control.yaml` 的 `docker_restart.service`，浏览器不能指定其它服务。
+- 重启中按钮显示“重启中…”并禁用，旁边的状态胶囊显示 `RESTARTING <秒>`；完成后显示 `RESTARTED <时间>`，
+  失败显示 `RESTART FAILED <退出码>`，悬停可看 `docker compose` 输出末尾若干行。
+- 重启会中断该容器内正在执行的 Action 和行为树，机械臂驱动约 10–30 s 不可用。
+
+容器内没有 Docker socket（挂载它等于给容器宿主机 root），所以重启由宿主机上的 `scripts/docker_restart_helper.py`
+执行：它只用标准库、只监听 `127.0.0.1:8782`，提供 `GET /status` 与 `POST /restart {"service"}`，只接受
+`config/docker/restart_helper.json` 中 `services` 白名单里的服务，一次只跑一个重启，执行的就是
+`docker compose -f docker-compose.yml restart <service>`（不重建容器，镜像和环境保持不变，默认 120 s 超时）。
+Web 服务（`network_mode: host`）代理它，`GET /api/docker/restart` 返回 `available` 和 helper 状态。
+
+在机器人宿主机上安装一次（systemd 服务 `realman-restart-helper`，以当前用户运行，该用户需能执行 `docker`）：
+
+```bash
+./rm65 restart-helper install    # 写入 /etc/systemd/system 并 enable --now；需要 sudo
+./rm65 restart-helper status
+./rm65 restart-helper uninstall
+./rm65 restart-helper run        # 前台运行，调试用
+```
+
+helper 未运行时按钮灰显，悬停提示需要安装；`docker_restart.url` 置空则隐藏按钮。
 
 ## WebSocket 协议
 

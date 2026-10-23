@@ -19,7 +19,7 @@ def test_session_store_creates_minimal_layout_and_finalizes(tmp_path):
 
     manifest = json.loads(final.read_text(encoding="utf-8"))
     assert manifest["state"] == "READY"
-    assert manifest["annotations"]["success"] is None
+    assert manifest["annotations"]["success"] is True
     assert "pause_intervals" not in manifest
     assert (session.directory / "videos").is_dir()
     assert (session.directory / "export" / "lerobot").is_dir()

@@ -141,6 +141,8 @@ app.innerHTML = `
     <span id="mode" class="status-pill ready">CONTROL READY</span>
     <span id="auth-button" class="status-pill ready">CONTROL OPEN</span>
     <a href="/calibration.html" class="button ghost">相机标定</a>
+    <span id="docker-restart-state" class="status-pill" hidden></span>
+    <button id="docker-restart" class="button ghost" type="button" hidden>重启 Docker</button>
     <button id="cancel-motion" class="button ghost" type="button" disabled>取消 Action</button>
     <button id="recover-motion" class="button secondary" type="button" disabled>恢复机械臂</button>
     <button id="stop-button" class="button danger" type="button" disabled>■ 软件停止</button>
@@ -1886,6 +1888,10 @@ function handleMessage(message: Message) {
     result.textContent = `${arm.toUpperCase()} ${status} / ${message.message || "unknown error"}`;
     if (arm === selectedArm) actionState.textContent = status.toUpperCase();
     updateButtons();
+  } else if (message.type === "bt_runtime") {
+    // Pushed by the server on every visible change of the executor's snapshot, and once after hello.
+    btRuntime = message.runtime?.available === true ? message.runtime as BtRuntime : { available: false };
+    renderBehaviorTree();
   } else if (message.type === "behavior_tree_stop_result") {
     if (message.request_id !== btStopRequest) return;
     setBtStopStatus(message.success
@@ -1955,6 +1961,9 @@ function connect() {
     activeInputModeRequest = "";
     activeInputModeExecutorRequest = undefined;
     pendingInputModeId = "";
+    // Tree states only arrive over this socket; do not keep showing a frozen tree.
+    btRuntime = { available: false };
+    renderBehaviorTree();
     updateButtons();
     window.setTimeout(connect, 2000);
   });
@@ -2557,19 +2566,77 @@ async function pollBehaviorTreeLibrary() {
 }
 window.setInterval(pollBehaviorTreeLibrary, 2000);
 pollBehaviorTreeLibrary();
-let btPollInFlight = false;
-async function pollBehaviorTree() {
-  if (btPollInFlight || document.hidden) return;
-  btPollInFlight = true;
-  try {
-    const response = await fetch("/api/bt/runtime", { cache: "no-store" });
-    btRuntime = response.ok ? await response.json() as BtRuntime : { available: false };
-  } catch {
-    btRuntime = { available: false };
-  } finally {
-    btPollInFlight = false;
+// "重启 Docker": the host restart helper restarts realman_bringup_remote (drivers, grippers,
+// bt_launcher). This page lives in realman_web_control, so it stays up and shows the result.
+type DockerRestartHelper = { restarting: boolean; service?: string; started_at_ms?: number; finished_at_ms?: number; exit_code?: number; output_tail?: string[] };
+type DockerRestart = { available: boolean; service?: string; error?: string; helper?: DockerRestartHelper };
+const dockerRestartButton = $("#docker-restart") as HTMLButtonElement;
+const dockerRestartState = $("#docker-restart-state") as HTMLElement;
+let dockerRestart: DockerRestart = { available: false };
+let dockerRestartArmedUntil = 0;
+let dockerRestartPosting = false;
+function renderDockerRestart() {
+  const configured = dockerRestart.available || Boolean(dockerRestart.error);
+  dockerRestartButton.hidden = !configured;
+  const helper = dockerRestart.helper;
+  const busy = dockerRestartPosting || Boolean(helper?.restarting);
+  const armed = dockerRestartArmedUntil > Date.now() && !busy;
+  const service = dockerRestart.service ?? "realman_bringup_remote";
+  dockerRestartButton.disabled = !dockerRestart.available || busy;
+  dockerRestartButton.classList.toggle("danger", armed);
+  dockerRestartButton.classList.toggle("ghost", !armed);
+  dockerRestartButton.textContent = busy ? "重启中…" : armed ? "确认重启？" : "重启 Docker";
+  dockerRestartButton.title = dockerRestart.error
+    ? dockerRestart.error
+    : `docker compose restart ${service}：机械臂驱动、夹爪和行为树启动器会断开约 10–30 s，运行中的 Action 和行为树会中断`;
+  let text = "";
+  let tone = "";
+  let detail = "";
+  if (busy) {
+    const seconds = helper?.started_at_ms ? Math.max(0, Math.round((Date.now() - helper.started_at_ms) / 1000)) : 0;
+    text = `RESTARTING ${seconds}s`;
+  } else if (helper && typeof helper.exit_code === "number" && helper.finished_at_ms) {
+    const at = new Date(helper.finished_at_ms).toLocaleTimeString("zh-CN", { hour12: false });
+    text = helper.exit_code === 0 ? `RESTARTED ${at}` : `RESTART FAILED ${helper.exit_code}`;
+    tone = helper.exit_code === 0 ? "ready" : "offline";
+    detail = (helper.output_tail ?? []).join("\n");
   }
-  renderBehaviorTree();
+  dockerRestartState.hidden = !text;
+  dockerRestartState.textContent = text;
+  dockerRestartState.className = `status-pill${tone ? ` ${tone}` : ""}`;
+  dockerRestartState.title = detail;
 }
-window.setInterval(pollBehaviorTree, 500);
-pollBehaviorTree();
+let dockerRestartPollInFlight = false;
+async function pollDockerRestart() {
+  if (dockerRestartPollInFlight || document.hidden) return;
+  dockerRestartPollInFlight = true;
+  try {
+    const response = await fetch("/api/docker/restart", { cache: "no-store" });
+    dockerRestart = response.ok ? await response.json() as DockerRestart : { available: false };
+  } catch {
+    dockerRestart = { available: false };
+  } finally {
+    dockerRestartPollInFlight = false;
+  }
+  renderDockerRestart();
+}
+dockerRestartButton.addEventListener("click", async () => {
+  if (dockerRestartButton.disabled) return;
+  if (dockerRestartArmedUntil <= Date.now()) {
+    dockerRestartArmedUntil = Date.now() + 4000;
+    renderDockerRestart();
+    window.setTimeout(renderDockerRestart, 4100);
+    return;
+  }
+  dockerRestartArmedUntil = 0;
+  dockerRestartPosting = true;
+  renderDockerRestart();
+  const response = await fetch("/api/docker/restart", { method: "POST", headers: { "Content-Type": "application/json" }, body: "{}" })
+    .catch(() => undefined);
+  const payload = response && await response.json().catch(() => undefined);
+  dockerRestartPosting = false;
+  if (!response?.ok || !payload?.ok) window.alert(`重启失败：${payload?.error ?? "网络错误"}`);
+  await pollDockerRestart();
+});
+window.setInterval(pollDockerRestart, 1000);
+pollDockerRestart();

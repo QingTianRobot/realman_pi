@@ -8,10 +8,18 @@ def _make_session(root, session_id, export_state="SUCCEEDED"):
     directory = root / session_id
     directory.mkdir(parents=True)
     (directory / "manifest.json").write_text(json.dumps({
-        "state": "READY", "decision": "ADOPTED",
+        "session_id": session_id, "state": "READY", "decision": "ADOPTED",
+        "started_realtime_ns": 1_790_091_000_000_000_000,
         "export": {"state": export_state},
         "summary": {"write_errors": 0, "camera_write_errors": 0},
     }))
+    if export_state == "SUCCEEDED":
+        dataset = root / "lerobot" / "set-a"
+        dataset.mkdir(parents=True, exist_ok=True)
+        (directory / "export").mkdir()
+        (directory / "export" / "lerobot-v3.json").write_text(json.dumps({
+            "dataset_root": str(dataset), "episode_index": 0,
+        }))
     return directory
 
 
@@ -23,6 +31,7 @@ def test_delete_and_restore_endpoints(tmp_path):
     from aiohttp.test_utils import TestClient, TestServer
 
     from realman_recording.web_server import RecordingWebServer
+    from realman_recording.episode_tags import EpisodeTagStore
 
     root = tmp_path / "rec"
     root.mkdir()
@@ -35,6 +44,7 @@ def test_delete_and_restore_endpoints(tmp_path):
     server = object.__new__(RecordingWebServer)
     server._recording_root = root
     server._logger = _NullLogger()
+    server._tags = EpisodeTagStore(root)
 
     app = web.Application()
     app.router.add_post("/api/lerobot/{session_id}/delete", server._lerobot_delete)
@@ -46,13 +56,15 @@ def test_delete_and_restore_endpoints(tmp_path):
         try:
             deleted = await client.post("/api/lerobot/s1/delete")
             assert deleted.status == 200
-            assert await deleted.json() == {"ok": True}
+            assert (await deleted.json())["meta_synced"] is True
             assert json.loads((session / "manifest.json").read_text())["decision"] == "DELETED"
+            assert json.loads((root / "episode_meta.json").read_text())["episodes"][0]["decision"] == "DELETED"
 
             restored = await client.post("/api/lerobot/s1/restore")
             assert restored.status == 200
-            assert await restored.json() == {"ok": True}
+            assert (await restored.json())["meta_synced"] is True
             assert json.loads((session / "manifest.json").read_text())["decision"] == "ADOPTED"
+            assert json.loads((root / "episode_meta.json").read_text())["episodes"][0]["decision"] == "ADOPTED"
         finally:
             await client.close()
 

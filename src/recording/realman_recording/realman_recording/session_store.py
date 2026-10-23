@@ -9,6 +9,8 @@ from __future__ import annotations
 import json
 import os
 import shutil
+import threading
+from functools import wraps
 import time
 import uuid
 from dataclasses import dataclass
@@ -17,6 +19,16 @@ from pathlib import Path
 from typing import Any
 
 from .json_io import atomic_json_write
+
+
+def _episode_serialized(function):
+    """Serialize finalized-manifest mutations with episode tag edits."""
+    @wraps(function)
+    def wrapped(directory, *args, **kwargs):
+        from .episode_tags import _file_lock
+        with _file_lock(Path(directory).resolve().parent):
+            return function(directory, *args, **kwargs)
+    return wrapped
 
 
 def _timestamp_or_now(value: int | None, *, name: str) -> int:
@@ -198,6 +210,14 @@ class SessionStore:
             "decision": "PENDING",
             "files": {"state": "state.mcap", "videos": "videos/", "lerobot": "export/lerobot/"},
         }
+        # Bind defaults at session creation.  A corrupt optional defaults file
+        # must never stop the recorder from creating its raw session.
+        try:
+            from .episode_tags import EpisodeTagStore
+            defaults = EpisodeTagStore(self.root).defaults()
+        except Exception:
+            defaults = {"success": True, "arm": None, "lighting_level": None}
+        self._manifest["episode_tags"] = {"defaults": defaults, "manual": {}, "removed": [], "revision": 0}
         self._write_partial()
         return self.session
 
@@ -232,11 +252,28 @@ class SessionStore:
             ended_realtime_ns=ended_ns,
             summary=summary,
         )
+        # Business success comes from the saved default, never from the STOP
+        # operation's transport/recording success argument above.
+        if self._manifest["annotations"].get("success") is None:
+            self._manifest["annotations"]["success"] = self._manifest["episode_tags"]["defaults"]["success"]
         self._write_partial()
         partial = self.session.directory / "manifest.partial.json"
         final = self.session.directory / "manifest.json"
         os.replace(partial, final)
+        # Indexing is recoverable work after the finalized manifest is durable;
+        # it must not delay or fail STOP/MCAP finalization.
+        self._refresh_episode_index_async(self.root)
         return final
+
+    @staticmethod
+    def _refresh_episode_index_async(root: str | Path) -> None:
+        def refresh() -> None:
+            try:
+                from .episode_tags import EpisodeTagStore
+                EpisodeTagStore(root).rebuild()
+            except Exception:
+                pass  # Explicit /episode-meta/rebuild reports and repairs failures.
+        threading.Thread(target=refresh, name="episode-meta-refresh", daemon=True).start()
 
     def _write_partial(self) -> None:
         assert self.session is not None and self._manifest is not None
@@ -310,6 +347,7 @@ class SessionStore:
         return recovered
 
     @staticmethod
+    @_episode_serialized
     def update_final_manifest(directory: str | Path, **updates: Any) -> dict[str, Any]:
         """Atomically update decision/export metadata of a finalized session only.
 
@@ -325,9 +363,11 @@ class SessionStore:
             raise ValueError("recording manifest must be a JSON object")
         payload.update(updates)
         atomic_json_write(final, payload)
+        SessionStore._refresh_episode_index_async(final.parent.parent)
         return payload
 
     @staticmethod
+    @_episode_serialized
     def adopt_final_session(directory: str | Path, *, requested_realtime_ns: int | None = None) -> dict[str, Any]:
         """Atomically make one clean READY session eligible for asynchronous export."""
         final = Path(directory).resolve() / "manifest.json"
@@ -356,6 +396,7 @@ class SessionStore:
         return payload
 
     @staticmethod
+    @_episode_serialized
     def discard_final_session(directory: str | Path, *, discarded_realtime_ns: int | None = None) -> dict[str, Any]:
         """Atomically discard one clean READY session without deleting raw artifacts."""
         final = Path(directory).resolve() / "manifest.json"
@@ -389,6 +430,7 @@ class SessionStore:
         return SessionStore._set_decision(directory, "ADOPTED", None, None)
 
     @staticmethod
+    @_episode_serialized
     def remove_final_session(directory: str | Path) -> None:
         """Permanently delete one finalized session directory and its raw artifacts.
 
@@ -406,6 +448,7 @@ class SessionStore:
         shutil.rmtree(final)
 
     @staticmethod
+    @_episode_serialized
     def update_task(directory: str | Path, task: str) -> dict[str, Any]:
         """Atomically relabel one successfully exported session's ``metadata.task``.
 
@@ -444,6 +487,7 @@ class SessionStore:
         return int(receipt["frame_count"])
 
     @staticmethod
+    @_episode_serialized
     def update_subtasks(directory: str | Path, subtasks: list[dict[str, Any]]) -> dict[str, Any]:
         """Atomically annotate one successfully exported session with subtask segments.
 
@@ -470,6 +514,7 @@ class SessionStore:
         return payload
 
     @staticmethod
+    @_episode_serialized
     def _set_decision(
         directory: str | Path,
         decision: str,

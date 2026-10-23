@@ -1,9 +1,10 @@
 from __future__ import annotations
 
 import json
+from pathlib import Path
 
 import pytest
-from lerobot_fixture import Episode, build_dataset, build_view, gripper
+from lerobot_fixture import Episode, build_dataset, build_view, gripper, write_tags
 
 from realman_training.cli import main
 
@@ -276,3 +277,51 @@ def test_web_is_a_subcommand():
 
     args = make_parser().parse_args(["web", "--port", "9999"])
     assert (args.command, args.port, args.host) == ("web", 9999, None)
+
+
+def test_clean_where_needs_tags_and_then_filters(setup, tmp_path, capsys):
+    raw, _, config_path = setup
+    args = ["--config", str(config_path), "clean", str(raw), "--where", "success=true"]
+    assert main([*args, "--dst", str(tmp_path / "data" / "c1")]) == 1
+    assert "tags refresh" in capsys.readouterr().err
+    write_tags(raw, [{"success": True}, {"success": False, "failure_reason": "closed on nothing"}])
+    assert main([*args, "--dst", str(tmp_path / "data" / "c2")]) == 0
+    manifest = json.loads(Path(f"{tmp_path / 'data' / 'c2'}.clean_manifest.json").read_text())
+    assert manifest["where"] == ["success=true"]
+    assert manifest["removed"]["1"]["reason"] == "tag success=false (closed on nothing)"
+
+
+def test_clean_needs_some_selection(setup, capsys):
+    raw, _, config_path = setup
+    assert main(["--config", str(config_path), "clean", str(raw)]) == 2
+    assert "--where" in capsys.readouterr().err
+
+
+def test_inspect_shows_tag_counts(setup, capsys):
+    raw, _, config_path = setup
+    write_tags(raw, [{"success": True}, {"success": False}], sources=[{"success": "default"}, {"success": "manual"}])
+    assert main(["--config", str(config_path), "inspect", str(raw), "--no-quality"]) == 0
+    out = capsys.readouterr().out
+    assert "tags: snapshot 2026-10-23T09:30:00+08:00" in out
+    assert "success: false 1 (manual 1), true 1 (default 1)" in out
+    assert main(["--config", str(config_path), "inspect", str(raw), "--no-quality", "--json"]) == 0
+    assert json.loads(capsys.readouterr().out)["tags"]["episodes"]["1"]["tags"]["success"] is False
+
+
+def test_tags_refresh_of_a_cleaned_set_runs_as_a_job(setup, tmp_path, capsys):
+    raw, _, config_path = setup
+    write_tags(raw, [{"success": True}, {"success": False}])
+    dst = tmp_path / "data" / "c3"
+    assert main(["--config", str(config_path), "clean", str(raw), "--drop", "1", "--dst", str(dst)]) == 0
+    (dst / "episode_tags.json").unlink()
+    assert main(["--config", str(config_path), "tags", "refresh", str(dst)]) == 0
+    assert (dst / "episode_tags.json").is_file()
+
+
+def test_tags_status_prints_the_change(setup, monkeypatch, capsys):
+    raw, _, config_path = setup
+    monkeypatch.setattr("realman_training.cli.tags_step.status", lambda config, path, runner: {
+        "state": "changed", "raw": str(raw), "snapshot_at": "2026-10-23T09:30:00+08:00",
+        "episodes_changed": 2, "keys": {"success": 2}})
+    assert main(["--config", str(config_path), "tags", "status", str(raw)]) == 0
+    assert "2 episode(s) changed" in capsys.readouterr().out

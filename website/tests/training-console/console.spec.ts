@@ -226,6 +226,7 @@ test("serve: the served model's training data, its split and lineage", async ({ 
   await expect(panel.locator("#serve-dataset-lineage li")).toHaveCount(3);
   await expect(panel.locator("#serve-dataset-lineage")).toContainText("从上一级剔除 2 条");
   await expect(panel.locator("#serve-dataset-lengths rect")).not.toHaveCount(0);
+  await expect(panel.locator("#serve-dataset-tags")).toContainText("还没有标签文件 episode_tags.json");
   await panel.locator("#serve-dataset-open").click();
   await expect(page).toHaveURL(/#\/data\?path=realman_right_arm_multitask_view/);
 });

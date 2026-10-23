@@ -77,3 +77,39 @@ def test_bad_names_and_steps(world):
         serve_dataset.model_dataset(config, "pi05_realman_x/none")
     with pytest.raises(NotFound):
         serve_dataset.model_dataset(config, MODEL, 123)
+
+
+def _write_tags(view, rows):
+    (view / "episode_tags.json").write_text(json.dumps({"schema_version": 1, "snapshot_at": "2026-10-23T09:30:00+08:00",
+                                                        "episodes": rows}))
+
+
+def test_without_a_tag_file_the_card_says_so(world):
+    _, config = world
+    assert serve_dataset.model_dataset(config, MODEL)["tags"] == {"state": "missing", "file": "episode_tags.json"}
+
+
+def test_lighting_and_date_split_by_task_holdout_and_source(world):
+    paths, config = world
+    _write_tags(paths["view"], [
+        {"episode_index": 0, "length": 30, "tags": {"lighting_level": 2, "date": "2026-10-12"},
+         "tag_sources": {"lighting_level": "manual", "date": "derived"}},
+        {"episode_index": 1, "length": 30, "tags": {"lighting_level": 1, "date": "2026-10-21"},
+         "tag_sources": {"lighting_level": "manual", "date": "derived"}},
+        {"episode_index": 2, "length": 30, "tags": {"lighting_level": 2, "date": "2026-10-21"},
+         "tag_sources": {"lighting_level": "default", "date": "derived"}},
+    ])
+    tags = serve_dataset.model_dataset(config, MODEL)["tags"]
+    assert tags["state"] == "ok" and tags["snapshot_at"].startswith("2026-10-23")
+    lighting = {s["value"]: s for s in tags["keys"]["lighting_level"]}
+    assert [s["value"] for s in tags["keys"]["lighting_level"]] == [1, 2]
+    assert lighting[1] == {"value": 1, "episodes": 1, "frames": 30, "by_task": {"pick_only": 1}, "holdout": 1, "manual": 1}
+    assert lighting[2]["by_task"] == {"pick_and_place": 1, "pick_only": 1} and lighting[2]["manual"] == 1
+    assert [(s["value"], s["episodes"]) for s in tags["keys"]["date"]] == [("2026-10-12", 1), ("2026-10-21", 2)]
+
+
+def test_a_tag_file_that_does_not_match_the_view_is_not_shown(world):
+    paths, config = world
+    _write_tags(paths["view"], [{"episode_index": i, "length": 31, "tags": {}} for i in range(3)])
+    tags = serve_dataset.model_dataset(config, MODEL)["tags"]
+    assert tags["state"] == "mismatch" and "tags refresh" in tags["error"] and "keys" not in tags

@@ -83,7 +83,16 @@ export interface ServeDataset {
   holdout_episodes?: number[]; tasks?: ServeDatasetTask[];
   lengths?: { unit: "s" | "frames"; edges: number[]; counts: Record<string, number[]> };
   lineage?: LineageRow[];
+  tags?: ServeDatasetTags;
 }
+export interface TagSlot {
+  value: unknown; episodes: number; frames: number; by_task: Record<string, number>; holdout: number; manual: number;
+}
+/** Recording tags of the view (<view>/episode_tags.json): missing until `realman-train tags refresh` writes it. */
+export type ServeDatasetTags =
+  | { state: "missing"; file: string }
+  | { state: "mismatch"; error: string }
+  | { state: "ok"; snapshot_at: string | null; keys: Record<string, TagSlot[]> };
 export interface Check { item: string; name: string; ok: boolean; value: string; threshold: string; detail: string }
 export interface LinkRun { at: string; ok: boolean; checks: Check[] }
 export interface LinkcheckPayload { latest: LinkRun | null; history: LinkRun[]; job: JobRow | null }

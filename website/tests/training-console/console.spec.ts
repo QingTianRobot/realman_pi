@@ -216,6 +216,20 @@ test("serve: both ends, link checks with history and bridge stats", async ({ pag
   await expect(page.locator("#bridge-stats")).toContainText("26012");
 });
 
+test("serve: the served model's training data, its split and lineage", async ({ page }) => {
+  await page.goto("/#/serve");
+  const panel = page.locator("#serve-dataset");
+  await expect(panel.locator("#serve-dataset-model")).toContainText("服务中");
+  await expect(panel.locator("#serve-dataset-stats")).toContainText("3（训练 2 / 留出 1）");
+  await expect(panel.locator("#serve-dataset-tasks")).toContainText("pick_only");
+  await expect(panel.locator("#serve-dataset-tasks")).toContainText("训练 1 / 留出 1");
+  await expect(panel.locator("#serve-dataset-lineage li")).toHaveCount(3);
+  await expect(panel.locator("#serve-dataset-lineage")).toContainText("从上一级剔除 2 条");
+  await expect(panel.locator("#serve-dataset-lengths rect")).not.toHaveCount(0);
+  await panel.locator("#serve-dataset-open").click();
+  await expect(page).toHaveURL(/#\/data\?path=realman_right_arm_multitask_view/);
+});
+
 test("serve: settings are saved with the token and start asks first", async ({ page, request }) => {
   await page.goto("/#/serve");
   const form = page.locator("#serve-form");

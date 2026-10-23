@@ -14,6 +14,7 @@ import shlex
 import shutil
 from pathlib import Path
 
+from .. import episode_tags
 from ..config import RemoteConfig, load_config
 from ..datasets import summarize
 from ..jobs import StepFailed
@@ -129,12 +130,21 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
             raise StepFailed(f"the copy is not a valid dataset: {error}") from None
         if missing:
             raise StepFailed(f"{len(missing)} missing video file(s) after the copy, e.g. {missing[:3]}")
+
+        from .tags import remote_doc  # tags imports pull.remote: import here to avoid a cycle
+
+        log("tags: reading the recording's tag index")
+        tags_doc = remote_doc(config, dest, runner, remote_episodes=episode_tags.local_episodes(dest))
+        episode_tags.write(dest, tags_doc)
+        log(f"tags: {len(tags_doc['episodes'])} episodes, snapshot {tags_doc['snapshot_at']}")
+
         record = {
             "origin": origin,
             "pulled_at": datetime.datetime.now().astimezone().isoformat(timespec="seconds"),
             "episodes": summary.episodes,
             "frames": summary.frames,
             "bytes": copied,
+            "tags_snapshot_at": tags_doc["snapshot_at"],
         }
         (partial / "pull.json").write_text(json.dumps(record, indent=2), encoding="utf-8")
         partial.rename(target)
@@ -152,4 +162,5 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
         "frames": summary.frames,
         "bytes": copied,
         "origin": origin,
+        "tags_episodes": len(tags_doc["episodes"]),
     }

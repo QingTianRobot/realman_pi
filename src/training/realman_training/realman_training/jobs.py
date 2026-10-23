@@ -25,6 +25,7 @@ STEPS = {
     **{kind: f"realman_training.steps.{kind}:run" for kind in ("pull", "clean", "view", "norm", "train", "eval", "register")},
     "serve": "realman_training.serving:run",
     "linkcheck": "realman_training.linkcheck:run",
+    "tags_refresh": "realman_training.steps.tags:refresh",
 }
 ACTIVE = ("starting", "running")
 FINAL = ("succeeded", "failed", "cancelled", "interrupted")

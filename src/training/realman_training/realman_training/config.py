@@ -47,6 +47,7 @@ class RemoteConfig:
     dataset: str = "realman__pi05-three-arm"
     connect_timeout_sec: int = 10
     lock_wait_sec: int = 120  # wait this long for the recorder's append lock
+    tags_root: str = "/data/realman-recordings"  # inside the container: episode_meta.json + .episode_tags.lock
 
 
 @dataclasses.dataclass(frozen=True)

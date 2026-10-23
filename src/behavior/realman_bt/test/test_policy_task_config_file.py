@@ -58,7 +58,7 @@ def test_the_counts_and_the_activation_mode_are_the_reviewed_defaults():
 def test_the_safety_thresholds_are_the_reviewed_values():
     parameters = _parameters()
     # p1/p99 of the 130 demonstration episodes, each side widened by 10 degrees, J5 floored at 20.
-    assert parameters["joint_envelope_deg"]["lo"] == [-73.4, 5.0, -16.2, -28.4, 20.0, -125.1]
+    assert parameters["joint_envelope_deg"]["lo"] == [-73.4, 5.0, -16.2, -28.4, 3.5, -125.1]
     assert parameters["joint_envelope_deg"]["hi"] == [40.1, 107.0, 124.3, 70.8, 108.2, 49.0]
     assert parameters["max_joint_speed_dps"] == 50
     assert parameters["lm_drift_limit_deg"] == 1.0

@@ -37,8 +37,8 @@ void testDefaultsAreTheReviewedDesignValues() {
   assert(config.gripper_for_arm.at("r") == "gripper_right");
   assert(config.gripper_for_arm.at("l") == "gripper_left");
   assert(config.gripper_for_arm.at("m") == "gripper_mid");
-  // Demonstration p1/p99 widened by 10 degrees, J5 floored at 20 (design doc, 2026-10-14).
-  assert(config.joint_lo[4] == 20.0 && config.joint_hi[4] == 108.2);
+  // Demonstration p1/p99 widened by 10 degrees, J5 included (floored at 20, then 15, until 2026-10-23).
+  assert(config.joint_lo[4] == 3.5 && config.joint_hi[4] == 108.2);
   assert(config.joint_lo[0] == -73.4 && config.joint_hi[0] == 40.1);
   assert(config.max_joint_speed_dps == 50.0);
   assert(config.lm_drift_limit_deg == 1.0);

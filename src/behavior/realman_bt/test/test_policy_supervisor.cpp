@@ -117,7 +117,7 @@ void testAHealthyQuietAttemptKeepsRunning() {
 void testAJointOutsideTheEnvelopeIsAFaultAndStaysLatched() {
   Rig rig;
   rig.start();
-  rig.arm[4] = 18.0;  // J5 floor is 20
+  rig.arm[4] = 2.0;  // J5 floor is 3.5
   rig.step();
   assert(rig.verdict.finished && rig.verdict.outcome == AttemptOutcome::kFault);
   assert(rig.verdict.fault);
@@ -266,7 +266,7 @@ void testSilentBridgeStatsAreAPolicyTimeout() {
 void testAFaultBeatsAPolicyTimeoutThatHappensAtTheSameTime() {
   Rig rig;
   rig.start();
-  rig.arm[4] = 10.0;  // J5 below the envelope
+  rig.arm[4] = 2.0;  // J5 below the envelope
   rig.stats.paused = true;
   rig.step();
   assert(rig.verdict.outcome == AttemptOutcome::kFault);
@@ -278,7 +278,7 @@ void testAFaultBeatsATimeoutThatHappensAtTheSameTime() {
   config.max_attempt_sec = 1.0;
   Rig rig(config);
   rig.start();
-  rig.arm[4] = 10.0;
+  rig.arm[4] = 2.0;
   rig.run(2.0);
   assert(rig.verdict.outcome == AttemptOutcome::kFault);
 }
@@ -444,7 +444,7 @@ void testAMissingGripperReadingGivesAnUnknownVerdictThatIsRetried() {
 void testTheVerdictIsFinalOnceReached() {
   Rig rig;
   rig.start();
-  rig.arm[4] = 10.0;
+  rig.arm[4] = 2.0;
   rig.step();
   const std::string reason = rig.verdict.reason;
   rig.arm[4] = 60.0;
@@ -464,7 +464,7 @@ void testAStartedAttemptUsesTheArmsPositionAtStartAsTheDriftReference() {
 void testRestartingClearsTheLatchedState() {
   Rig rig;
   rig.start();
-  rig.arm[4] = 10.0;
+  rig.arm[4] = 2.0;
   rig.step();
   assert(rig.verdict.finished);
 
@@ -559,7 +559,7 @@ void testSnapshotKeepsTheLatestGripperReadingAcrossAReset() {
 void testSnapshotMarksAFinishedAttempt() {
   Rig rig;
   rig.start();
-  rig.arm[4] = 10.0;
+  rig.arm[4] = 2.0;
   rig.step();
   assert(rig.sup.snapshot(rig.t).finished);
 }
@@ -817,7 +817,7 @@ void testPickFaultsStillWin() {
   Rig rig;
   rig.start("pick");
   reachAndGrasp(rig, 5700.0, true);
-  rig.arm[4] = 15.0;  // below the J5 floor
+  rig.arm[4] = 2.0;  // below the J5 floor
   rig.step();
   assert(rig.verdict.outcome == AttemptOutcome::kFault);
 }

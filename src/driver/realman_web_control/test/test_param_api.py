@@ -200,3 +200,9 @@ def test_successful_bringup_restart_clears_pending(tmp_path):
     assert body(asyncio.run(server._params(None)))["pending_restart"] == ["main/speed"]
     asyncio.run(server._docker_restart(FakeRequest({})))
     assert body(asyncio.run(server._params(None)))["pending_restart"] == []
+
+
+def test_compose_mounts_config_ros_read_write_into_web_control():
+    compose = yaml.safe_load((ROOT / "config/docker/compose.yaml").read_text())
+    volumes = compose["services"]["realman_web_control"]["volumes"]
+    assert "./config/ros:/opt/rm65_ws/config/ros:rw" in volumes

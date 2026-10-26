@@ -1,4 +1,4 @@
-import"./theme-Cqnpw2CK.js";const dt="realman.params.staged.v1",yt=2e3,vt=5e3,U=4e3,Y=["#","参数","备注","文件","基线值","文件值","运行值","暂存","新值","最小","最大","单位","生效"],lt={bt_start:"下次启动行为树",bringup_restart:"重启 bringup"},$t=document.querySelector("#app");$t.innerHTML=`
+import"./theme-SxNs_qlC.js";const dt="realman.params.staged.v1",yt=2e3,vt=5e3,U=4e3,Y=["#","参数","备注","文件","基线值","文件值","运行值","暂存","新值","最小","最大","单位","生效"],lt={bt_start:"下次启动行为树",bringup_restart:"重启 bringup"},$t=document.querySelector("#app");$t.innerHTML=`
   <header class="topbar">
     <div><span class="eyebrow">REALMAN / PARAMETERS</span><h1>参数调试</h1><p>白名单参数 · 暂存后写入配置 · 运行值读回</p></div>
     <div class="top-actions"><a href="/" class="button ghost">运动控制</a><a href="/calibration.html" class="button ghost">相机标定</a></div>

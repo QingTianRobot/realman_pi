@@ -1,0 +1,239 @@
+# Parameters the :8765 parameter page (/params.html) may show and write. Values are never stored here:
+# the page reads them from the files below and writes them back in place (comments and layout kept).
+# Design: docs/superpowers/specs/2026-10-26-web-param-tuning-design.md; manual:
+# website/docs/development/web-parameter-tuning.md. test_param_tuning.py checks every entry against the real files.
+#
+# Group: id, title, file (ros/*.yaml under the config root), prefix (dotted path to the parameters), applies
+# (bt_start | bringup_restart), optional instances ({i} in prefix/key), optional readback {node, param: "..{key}.."}.
+# Param: key, type (int | float | bool | int[] | float[]), labels (arrays: one per element), min / max (closed range,
+# scalar or per element), special (values allowed outside the range, e.g. -1 = no limit), max_ref / min_ref (another
+# key of the same group and instance: "key" = <= / >=, {key, strict: true} = < / >), unit, label (display name),
+# note (required, shown in the 备注 column).
+schema_version: 1
+applies:
+  bt_start: 下次启动行为树生效
+  bringup_restart: 重启 bringup 后生效（行为树随之停止，需要重新启动）
+groups:
+  - id: policy_attempt
+    title: 策略任务 · 尝试与重试
+    file: ros/policy_task.yaml
+    prefix: realman_bt_executor.ros__parameters.policy_task
+    applies: bt_start
+    readback: {node: /realman_bt_executor, param: "policy_task.{key}"}
+    params:
+      - {key: cycles, type: int, min: 1, max: 1000, special: [-1], unit: 次,
+         note: 需要成功的循环数；-1 = 不限。}
+      - {key: attempts, type: int, min: 1, max: 20, special: [-1], unit: 次,
+         note: 一个循环里允许失败的尝试次数（首次也算）；-1 = 不限。}
+      - {key: timeout_retry.attempts, type: int, min: 1, max: 20, special: [-1], unit: 次,
+         note: 策略服务超时的重试预算，不占 attempts；-1 = 不限。}
+      - {key: timeout_retry.backoff_sec, type: float, min: 0.0, max: 120.0, unit: s,
+         note: 超时重试前停桥等待的时间；要盖过服务重启后首次推理的 JIT 编译。}
+      - {key: max_attempt_sec, type: float, min: 5.0, max: 300.0, unit: s,
+         note: 单次尝试在这段时间内没有成功即判超时（可重试）。}
+      - {key: service_wait_sec, type: float, min: 1.0, max: 60.0, unit: s,
+         note: 预检等待停止 / 启动服务和数据的上限，超时算故障。}
+      - {key: service_call_timeout_sec, type: float, min: 0.1, max: 30.0, unit: s,
+         note: 单次服务调用等回复的上限；停止流程超时后继续往下走。}
+      - {key: router_release_sec, type: float, min: 0.0, max: 10.0, unit: s,
+         note: 停止后等路由释放速度会话的时间，避免下一次 MoveJ 被拒。}
+  - id: policy_safety
+    title: 策略任务 · 安全监督
+    file: ros/policy_task.yaml
+    prefix: realman_bt_executor.ros__parameters.policy_task
+    applies: bt_start
+    readback: {node: /realman_bt_executor, param: "policy_task.{key}"}
+    params:
+      - {key: joint_envelope_deg.lo, type: "float[]", labels: [J1, J2, J3, J4, J5, J6], min: -180.0, max: 180.0,
+         max_ref: joint_envelope_deg.hi, unit: deg,
+         note: 策略运行时各关节下限，越界即故障停止（不重试）；来自示教数据 p1 再放宽 10°。}
+      - {key: joint_envelope_deg.hi, type: "float[]", labels: [J1, J2, J3, J4, J5, J6], min: -180.0, max: 180.0,
+         min_ref: joint_envelope_deg.lo, unit: deg,
+         note: 策略运行时各关节上限，越界即故障停止（不重试）；来自示教数据 p99 再放宽 10°。}
+      - {key: max_joint_speed_dps, type: float, min: 5.0, max: 180.0, unit: deg/s,
+         note: 相邻 joint_states 折算的关节速度上限，超过即故障。}
+      - {key: lm_drift_limit_deg, type: float, min: 0.1, max: 10.0, unit: deg,
+         note: 未被驱动的两条手臂允许偏离起始位置的角度。}
+      - {key: joint_state_stale_sec, type: float, min: 0.1, max: 10.0, unit: s,
+         note: 任一手臂 joint_states 超过这么久没更新即故障。}
+      - {key: stats_stale_sec, type: float, min: 1.0, max: 60.0, unit: s,
+         note: /policy/stats（1 Hz）超过这么久没更新即判策略服务超时。}
+      - {key: stall.cmd_lin_mps_below, type: float, min: 0.0, max: 0.1, unit: m/s,
+         note: 停滞判定：夹爪闭合且命令线速度低于它（角速度也低于下一项）持续 stall.sec。}
+      - {key: stall.cmd_ang_radps_below, type: float, min: 0.0, max: 0.5, unit: rad/s,
+         note: 停滞判定的命令角速度阈值。}
+      - {key: stall.sec, type: float, min: 1.0, max: 60.0, unit: s,
+         note: 停滞持续这么久即停下重试。}
+      - {key: current_guard.enabled, type: bool,
+         note: 关节电流保护开关；false 只记录电流，不因过流停止。}
+      - {key: current_guard.limits_ma, type: "int[]", labels: [J1, J2, J3, J4, J5, J6], min: 500, max: 20000,
+         unit: mA, note: 被监督手臂任一关节电流持续 sustain_sec 超过它即停下重试（overcurrent）。}
+      - {key: current_guard.sustain_sec, type: float, min: 0.1, max: 5.0, unit: s,
+         note: 过流要连续保持这么久才判定。}
+  - id: policy_verdict
+    title: 策略任务 · 成功判定
+    file: ros/policy_task.yaml
+    prefix: realman_bt_executor.ros__parameters.policy_task
+    applies: bt_start
+    readback: {node: /realman_bt_executor, param: "policy_task.{key}"}
+    params:
+      - {key: release.open_above, type: float, min: 0.0, max: 1.0,
+         note: 释放判定：策略夹爪命令高于它算张开。}
+      - {key: release.closed_below, type: float, min: 0.0, max: 1.0,
+         max_ref: {key: release.open_above, strict: true}, note: 策略夹爪命令低于它算闭合。}
+      - {key: release.min_closed_sec, type: float, min: 0.0, max: 30.0, unit: s,
+         note: 释放前夹爪累计闭合至少这么久。}
+      - {key: release.joint_below_deg, type: float, min: -180.0, max: 180.0, unit: deg,
+         note: 释放时 release.joint_index 关节须低于它（料箱一侧），防止在桌垫上方张开被当成完成。}
+      - {key: release.settle_sec, type: float, min: 0.0, max: 10.0, unit: s,
+         note: 释放命令后继续监督这么久，确认夹爪真的张开。}
+      - {key: lift.min_closed_sec, type: float, min: 0.0, max: 30.0, unit: s,
+         note: 抬起判定：夹爪命令闭合至少这么久。}
+      - {key: lift.joint_delta_deg, type: float, min: -90.0, max: 90.0, unit: deg,
+         note: 抬起判定：lift.joint_index 关节相对闭合时的变化量（负数 = 减小；J2 抬起时减小）。}
+      - {key: lift.hold_sec, type: float, min: 0.0, max: 30.0, unit: s,
+         note: 抬起状态保持这么久算成功。}
+      - {key: lift.wrong_side_below_deg, type: float, min: -180.0, max: 180.0, unit: deg,
+         note: 闭合后 wrong_side_joint_index 关节低于它算拿错任务（故障，不重试）。}
+      - {key: verdict.window_sec, type: float, min: 0.5, max: 10.0, unit: s,
+         note: 抓取判定取闭合阶段最后这么久的夹爪位置中位数。}
+      - {key: verdict.empty_position_min, type: float, min: 0.0, max: 10000.0, unit: 设备单位,
+         note: 位置中位数不低于它（且没有到达力矩）算空抓。}
+      - {key: gripper_ready.open_position_max, type: float, min: 0.0, max: 10000.0, unit: 设备单位,
+         note: GripperReady：夹爪位置不高于它算已张开。}
+      - {key: gripper_ready.timeout_sec, type: float, min: 1.0, max: 120.0, unit: s,
+         note: GripperReady 等夹爪张开的上限。}
+      - {key: gripper_ready.position_stale_sec, type: float, min: 0.1, max: 10.0, unit: s,
+         note: 夹爪位置超过这么久没更新即不可信。}
+  - id: policy_detection
+    title: 策略任务 · 清台检测
+    file: ros/policy_task.yaml
+    prefix: realman_bt_executor.ros__parameters.policy_task.object_detection
+    applies: bt_start
+    readback: {node: /realman_bt_executor, param: "policy_task.object_detection.{key}"}
+    params:
+      - {key: roi_xywh, type: "int[]", labels: [x, y, w, h], min: 0, max: 640, unit: px,
+         note: 全局 D435 图像（640×480）里桌垫的区域；挪过相机要重新量。}
+      - {key: min_channel, type: int, min: 0, max: 255,
+         note: 像素最小 RGB 通道不低于它才可能算白色。}
+      - {key: max_chroma, type: int, min: 0, max: 255,
+         note: 像素 RGB 通道最大减最小不超过它才算白色。}
+      - {key: erode_px, type: int, min: 1, max: 31, unit: px,
+         note: 腐蚀窗口边长，去掉细白线缆。}
+      - {key: min_pixels, type: int, min: 1, max: 100000, unit: px,
+         note: 腐蚀后白色像素不少于它即认为桌上还有物体。}
+      - {key: settle_sec, type: float, min: 0.0, max: 10.0, unit: s,
+         note: 开始检测后等这么久再取图（手臂先停稳）。}
+      - {key: timeout_sec, type: float, min: 0.5, max: 30.0, unit: s,
+         note: 之后这么久还没有图像即任务失败。}
+  - id: bt_executor
+    title: 行为树执行器
+    file: ros/behavior_tree.yaml
+    prefix: realman_bt_executor.ros__parameters
+    applies: bt_start
+    readback: {node: /realman_bt_executor, param: "{key}"}
+    params:
+      - {key: tick_rate_hz, type: float, min: 1.0, max: 50.0, unit: Hz,
+         note: 每秒 tick 次数；每次 tick 重新评估输入模式选择。}
+      - {key: switch_timeout_ms, type: int, min: 500, max: 30000, unit: ms,
+         note: 等网页 / 选择器切换的上限，超时 FAILED 并回到安全模式。}
+      - {key: shutdown_drain_timeout_sec, type: float, min: 1.0, max: 60.0, unit: s,
+         note: ~/shutdown 等 MoveJ 和速度会话取消完成的上限。}
+  - id: motion
+    title: 运动限速 · 驱动
+    file: ros/realman_motion.yaml
+    prefix: "robots.{i}"
+    instances: [l, m, r]
+    applies: bringup_restart
+    params:
+      - {key: max_linear_speed_mps, type: float, min: 0.005, max: 0.25, max_ref: hard_max_linear_speed_mps, unit: m/s,
+         note: 笛卡尔平移速度上限，普通运动和速度会话都受它限制。}
+      - {key: max_angular_speed_radps, type: float, min: 0.01, max: 0.6, max_ref: hard_max_angular_speed_radps,
+         unit: rad/s, note: 笛卡尔旋转速度上限。}
+      - {key: max_linear_accel_mps2, type: float, min: 0.01, max: 2.0, max_ref: hard_max_linear_accel_mps2,
+         unit: m/s², note: 笛卡尔平移加速度上限，限制负载冲击。}
+      - {key: max_angular_accel_radps2, type: float, min: 0.05, max: 4.0, max_ref: hard_max_angular_accel_radps2,
+         unit: rad/s², note: 笛卡尔旋转加速度上限，限制腕部冲击。}
+      - {key: velocity_watchdog_ms, type: int, min: 20, max: 1000, unit: ms,
+         note: 速度控制超过这么久没有刷新即停止（失效保护）。}
+      - {key: joint_goal_tolerance_deg, type: float, min: 0.01, max: 5.0, unit: deg,
+         note: 关节运动到位判定的容差。}
+      - {key: pose_max_joint_speed_dps, type: float, min: 1.0, max: 180.0, unit: deg/s,
+         note: 位姿运动折算的关节速度上限。}
+      - {key: default_timeout_sec, type: float, min: 1.0, max: 120.0, unit: s,
+         note: 动作的默认截止时间，避免卡住的操作无限等待。}
+      - {key: stop_timeout_sec, type: float, min: 0.5, max: 30.0, unit: s,
+         note: 停止请求等待机械臂停稳的上限。}
+  - id: policy_router
+    title: 运动限速 · 策略路由
+    file: ros/policy_router.yaml
+    prefix: policy_control_router.ros__parameters
+    applies: bt_start
+    readback: {node: /policy_control_router, param: "{key}"}
+    params:
+      - {key: max_linear_speed_mps, type: float, min: 0.005, max: 0.25, unit: m/s,
+         note: 策略速度会话的平移速度上限，独立于策略本身的第二道保护。}
+      - {key: max_angular_speed_radps, type: float, min: 0.01, max: 0.6, unit: rad/s,
+         note: 策略速度会话的旋转速度上限。}
+      - {key: max_linear_accel_mps2, type: float, min: 0.01, max: 2.0, unit: m/s², note: 策略速度会话的平移加速度上限。}
+      - {key: max_angular_accel_radps2, type: float, min: 0.05, max: 4.0, unit: rad/s², note: 策略速度会话的旋转加速度上限。}
+      - {key: stale_ms, type: int, min: 10, max: 1000, max_ref: {key: input_timeout_ms, strict: true}, unit: ms,
+         note: 时间戳早于它的命令被丢弃；数据流中断这么久后归零。}
+      - {key: input_timeout_ms, type: int, min: 50, max: 5000, min_ref: {key: stale_ms, strict: true}, unit: ms,
+         note: 数据流中断这么久后释放速度会话。}
+      - {key: drift_limit_deg, type: float, min: 0.1, max: 10.0, unit: deg,
+         note: 会话开始后窗口内任一关节自行移动超过它即取消会话。}
+      - {key: drift_window_sec, type: float, min: 0.1, max: 10.0, unit: s, note: 上一项的检测窗口。}
+      - {key: gripper_max_hz, type: float, min: 0.5, max: 20.0, unit: Hz, note: 转发夹爪命令的最高频率。}
+  - id: pika_velocity
+    title: 运动限速 · Pika 速度
+    file: ros/pika_config.yaml
+    prefix: pika_velocity
+    applies: bt_start
+    readback: {node: /pika_control_router, param: "pika_velocity_{key}"}
+    params:
+      - {key: stale_ms, type: int, min: 10, max: 2000, max_ref: {key: input_timeout_ms, strict: true}, unit: ms,
+         note: Pika 命令早于它被丢弃；中断这么久后归零。}
+      - {key: input_timeout_ms, type: int, min: 50, max: 10000, min_ref: {key: stale_ms, strict: true}, unit: ms,
+         note: Pika 数据流中断这么久后释放速度会话。}
+      - {key: max_linear_speed_mps, type: float, min: 0.005, max: 0.25, unit: m/s, note: Pika 速度会话的平移速度上限。}
+      - {key: max_angular_speed_radps, type: float, min: 0.01, max: 0.6, unit: rad/s, note: Pika 速度会话的旋转速度上限。}
+      - {key: max_linear_accel_mps2, type: float, min: 0.01, max: 2.0, unit: m/s², note: Pika 速度会话的平移加速度上限。}
+      - {key: max_angular_accel_radps2, type: float, min: 0.05, max: 4.0, unit: rad/s², note: Pika 速度会话的旋转加速度上限。}
+  - id: pika_mixed
+    title: 运动限速 · Pika 混合
+    file: ros/pika_config.yaml
+    prefix: pika_mixed
+    applies: bt_start
+    readback: {node: /pika_control_router, param: "pika_mixed_{key}"}
+    params:
+      - {key: stale_ms, type: int, min: 10, max: 2000, max_ref: {key: input_timeout_ms, strict: true}, unit: ms,
+         note: 混合模式命令早于它被丢弃。}
+      - {key: input_timeout_ms, type: int, min: 50, max: 10000, min_ref: {key: stale_ms, strict: true}, unit: ms,
+         note: 混合模式数据流中断这么久后释放会话。}
+      - {key: max_linear_speed_mps, type: float, min: 0.005, max: 0.25, unit: m/s, note: 混合模式平移速度上限。}
+      - {key: max_linear_accel_mps2, type: float, min: 0.01, max: 2.0, unit: m/s², note: 混合模式平移加速度上限。}
+      - {key: max_angular_speed_radps, type: float, min: 0.01, max: 0.6, unit: rad/s, note: 混合模式旋转速度上限。}
+      - {key: max_position_lead_m, type: float, min: 0.005, max: 0.5, unit: m, note: 目标位置最多领先当前位置这么多。}
+      - {key: max_orientation_lead_rad, type: float, min: 0.01, max: 1.0, unit: rad, note: 目标姿态最多领先当前姿态这么多。}
+      - {key: pose_poll_hz, type: float, min: 1.0, max: 50.0, unit: Hz, note: 读取当前位姿的频率。}
+  - id: gripper
+    title: 夹爪
+    file: ros/gripper.yaml
+    prefix: "buses[port=/dev/realman/gripper_{i}]"
+    instances: [right, left, mid]
+    applies: bringup_restart
+    params:
+      - {key: "grippers[name=gripper_{i}].speed_pct", label: speed_pct, type: int, min: 1, max: 100, unit: "%",
+         note: 夹爪运动速度百分比。}
+      - {key: "grippers[name=gripper_{i}].force_pct", label: force_pct, type: int, min: 20, max: 100, unit: "%",
+         note: 夹持力百分比。}
+      - {key: "grippers[name=gripper_{i}].accel", label: accel, type: int, min: 100, max: 10000, note: 加速度（设备单位）。}
+      - {key: "grippers[name=gripper_{i}].decel", label: decel, type: int, min: 100, max: 10000, note: 减速度（设备单位）。}
+      - {key: min_command_interval_s, type: float, min: 0.05, max: 2.0, unit: s,
+         note: 连续目标的最小触发间隔；实测 20 Hz 触发夹爪不动，4 Hz 最快。}
+      - {key: command_deadband, type: float, min: 0.0, max: 0.2,
+         note: 与上次目标相差小于行程的这个比例就不重发（全开 / 全闭端点除外）。}
+      - {key: streaming_poll_interval, type: float, min: 0.05, max: 5.0, unit: s,
+         note: 连续控制期间的反馈轮询周期，越大下发越稳。}
+      - {key: command_quiet_s, type: float, min: 0.05, max: 2.0, unit: s, note: 目标持续到达的判定间隔。}

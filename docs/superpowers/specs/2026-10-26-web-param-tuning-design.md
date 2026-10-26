@@ -162,10 +162,11 @@ groups:
 
 ### 3. 读回
 
-读回逻辑放在不依赖 ROS 的 `realman_web_control/param_readback.py`：类 `ParameterReadback(client_factory,
-request_factory, timeout_sec)`，方法 `read(requests) -> {node: {available, values}}`，`requests` 是 `{node: [param, ...]}`。
-`web_control_node.py` 只负责注入 `create_client(GetParameters, f"{node}/get_parameters")` 和
-`GetParameters.Request`，并把 `readback.read` 作为 `param_reader` 传给 `WebControlServer`。每个节点缓存一个客户端；
+读回逻辑放在不依赖 ROS 的 `realman_web_control/param_readback.py`：类 `ParameterReadback(get_clients,
+get_request, list_clients, list_request, timeout_sec)`，方法 `read(requests) -> {node: {available, values}}`，`requests` 是
+`{node: [param, ...]}`。`web_control_node.py` 在启动时为清单里的每个节点建好 `GetParameters`（`<node>/get_parameters`）和
+`ListParameters`（`<node>/list_parameters`）客户端，连同两个 `Request` 类型注入，并把 `readback.read` 作为 `param_reader`
+传给 `WebControlServer`；aiohttp 线程不新建 ROS 实体。
 服务没准备好就是「未运行」；否则 `call_async` 后用 `threading.Event` 等，最多 `param_tuning.readback_timeout_sec`
 （默认 0.5 s），超时也算「未运行」。`ParameterValue` 按 `type` 字段的数字常量（1 bool、2 int、3 double、6/7/8 三种数组）
 转成 Python 值，其他类型记为 `None`。服务端在 `asyncio.to_thread` 里调它，不阻塞 aiohttp 线程；节点本来就跑在
@@ -175,6 +176,9 @@ request_factory, timeout_sec)`，方法 `read(requests) -> {node: {available, va
 
 - 有读回、节点在运行：运行值 = 文件值 → 「已生效」；不等 → 「待生效」（浮点按 1e-9 相对误差比较）。
 - 有读回、节点不在：「未运行」。
+- 有读回、节点在但没有声明这个参数：「未声明」（执行中发现：`GetParameters` 只要有一个名字未声明，rclcpp / rclpy
+  都会丢掉整个请求、返回空列表；所以收到长度不符的回复后用 `ListParameters` 查一次节点声明了哪些名字，之后只问这些，
+  节点消失后清掉缓存。2026-10-26 在 server5090 的 Humble 容器里用真实 rclpy 验证过）。
 - 没有读回：生效列只显示时机；如果这个文件有页面写入后还没重启 bringup 的改动，标「待重启」。
 
 「待重启」来自 `state.json` 的待办列表：写入 `bringup_restart` 类参数时加入；通过 :8765 的「重启 bringup」
@@ -261,7 +265,7 @@ request_factory, timeout_sec)`，方法 `read(requests) -> {node: {available, va
   不可写时 409；撤回；导出；读回用假的 `param_reader`（可用、不可用、超时）；`catalog_file` 为空时 404；
   `load_server_config` 校验 `param_tuning`。
 - `test/test_param_readback.py`（无 ROS，进 CI）：用假客户端测服务未就绪、正常返回（标量、数组、未设置）、超时、
-  同一节点只建一次客户端。
+  有未声明的名字时列一次节点参数并缓存、节点消失后清缓存。
 - `website/tests/web-control/params.spec.ts`（Playwright，桌面 + 手机）：加载清单渲染分组和列；键盘暂存、取消、超范围
   标红；写入的 dry_run 弹窗内容和最终请求体；409 后刷新保留暂存；运行值三种状态；行为树运行中的提示；待重启条和
   「知道了」；历史撤回的请求；手机宽度页面无横向滚动。主页面顶栏有「参数调试」链接。

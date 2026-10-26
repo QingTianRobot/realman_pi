@@ -814,8 +814,11 @@ class ParamStore:
             value = node.get("values", {}).get(target["param"]) if node.get("available") else None
             if target["element"] is not None and isinstance(value, list):
                 value = value[target["element"]] if target["element"] < len(value) else None
-            if not node.get("available") or value is None:
+            if not node.get("available"):
                 states[row_id] = {"state": "offline", "value": None}
+            elif value is None:
+                # The node runs but has no such parameter (an older build, or a renamed key).
+                states[row_id] = {"state": "undeclared", "value": None}
             else:
                 states[row_id] = {"state": "applied" if same_value(value, row["value"]) else "pending", "value": value}
         return {"nodes": {node: {"available": bool(info.get("available"))} for node, info in nodes.items()},

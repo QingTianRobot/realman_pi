@@ -403,7 +403,9 @@ def test_readback_states(store):
     rows = store.readback(reader)["rows"]
     assert rows["main/speed"] == {"state": "applied", "value": 0.10}
     assert rows["main/limits[1]"] == {"state": "pending", "value": 7100}
-    assert rows["main/count"] == {"state": "offline", "value": None}
+    # The node runs but did not declare it (e.g. an older executor build): not the same as "not running".
+    assert rows["main/count"] == {"state": "undeclared", "value": None}
+    assert rows["main/enabled"] == {"state": "undeclared", "value": None}
     assert "grip@a/interval" not in rows
     offline = store.readback(lambda requests: {"/sample_node": {"available": False, "values": {}}})["rows"]
     assert offline["main/speed"]["state"] == "offline"

@@ -19,7 +19,7 @@ type Snapshot = {
   files: Record<string, { sha: string; baseline: boolean; external_change: boolean }>;
   writable: boolean; writable_error: string; errors: string[]; pending_restart: string[];
 };
-type RuntimeState = { state: "applied" | "pending" | "offline"; value: unknown };
+type RuntimeState = { state: "applied" | "pending" | "offline" | "undeclared"; value: unknown };
 type Change = { id: string; label: string; file: string; applies: string; before: Value; after: Value };
 type WriteResult = { id?: string; time?: string; reverts?: string | null; changes: Change[]; diff: string;
   applies?: string[]; changed_since?: string[] };
@@ -316,6 +316,9 @@ function updateRow(row: Row, cells: RowCells): void {
   } else if (live.state === "offline") {
     cells.runtime.textContent = "未运行";
     cells.runtime.title = `${row.readback.node} 没有运行或没有应答`;
+  } else if (live.state === "undeclared") {
+    cells.runtime.textContent = "未声明";
+    cells.runtime.title = `${row.readback.node} 在运行，但没有声明 ${row.readback.param}（版本较旧或键名改过）`;
   } else {
     cells.runtime.textContent = fmt(row, live.value);
     cells.runtime.title = `${row.readback.node} ${row.readback.param}`;
@@ -348,6 +351,7 @@ function updateRow(row: Row, cells: RowCells): void {
   if (live?.state === "applied") badge = ["已生效", "ok"];
   else if (live?.state === "pending") badge = ["待生效", "warn"];
   else if (live?.state === "offline") badge = ["未运行", ""];
+  else if (live?.state === "undeclared") badge = ["未声明", "warn"];
   if (snapshot?.pending_restart.includes(row.id)) badge = ["待重启", "warn"];
   if (badge) cells.applies.append(el("span", badge[0], `badge ${badge[1]}`.trim()));
   const error = rowErrors.get(row.id);

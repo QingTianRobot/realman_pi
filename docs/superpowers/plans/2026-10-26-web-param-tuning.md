@@ -3886,3 +3886,20 @@ The node wiring cannot run on macOS. When a ROS Humble image with the workspace 
 - [ ] **Step 5: Report**
 
 List the commits, the test counts, what was not verified (node on ROS, writes inside a real container with the read-write mount), and the deployment note: the web_control container must be **recreated** (not restarted) for the new `./config/ros` mount; until then the page is read-only.
+
+---
+
+## Execution notes (2026-10-26)
+
+Executed inline in the session that wrote the plan; Tasks 1–6 went as written. Deviations found while executing:
+
+- **Readback with undeclared names (Task 7 Step 4 found it).** On real rclpy (server5090, `rm65-humble-rviz:local`,
+  throwaway `--network none` container) `GetParameters` returns an empty list for the whole request when any name is
+  undeclared (rclcpp drops it the same way), so one parameter an older executor build lacks blanked every runtime value of
+  that node. `ParameterReadback` now takes `(get_clients, get_request, list_clients, list_request, timeout_sec)`: after a
+  short reply it lists the node once with `ListParameters` (`prefixes=[]`, `depth=0`), caches the declared names and asks
+  only for those until the node disappears. `ParamStore.readback` reports such rows as `undeclared` and the page shows
+  「未声明」. The node creates both clients at startup. Verified on real rclpy: one WARN on the first poll only, ~10 ms per
+  read, no pending requests left after 20 polls.
+- `params.css`: the search box got `font-size: 12px` (it rendered larger than the other controls).
+

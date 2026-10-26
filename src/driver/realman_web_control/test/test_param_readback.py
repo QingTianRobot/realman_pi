@@ -22,19 +22,39 @@ class FakeFuture:
         return self.response
 
 
-class FakeClient:
-    def __init__(self, ready=True, future=None):
-        self.ready, self.future, self.requests, self.removed = ready, future, [], []
+class FakeGetClient:
+    """GetParameters like rclcpp/rclpy: any undeclared name drops the whole answer (empty values)."""
+
+    def __init__(self, declared=None, ready=True, future=None):
+        self.declared, self.ready, self.future = declared or {}, ready, future
+        self.requests, self.removed = [], []
 
     def service_is_ready(self):
         return self.ready
 
     def call_async(self, request):
         self.requests.append(list(request.names))
-        return self.future
+        if self.future is not None:
+            return self.future
+        if any(name not in self.declared for name in request.names):
+            return FakeFuture(SimpleNamespace(values=[]))
+        return FakeFuture(SimpleNamespace(values=[self.declared[name] for name in request.names]))
 
     def remove_pending_request(self, future):
         self.removed.append(future)
+
+
+class FakeListClient:
+    def __init__(self, get_client, ready=True):
+        self.get_client, self.ready, self.calls = get_client, ready, 0
+
+    def service_is_ready(self):
+        return self.ready
+
+    def call_async(self, request):
+        assert request.prefixes == [] and request.depth == 0
+        self.calls += 1
+        return FakeFuture(SimpleNamespace(result=SimpleNamespace(names=sorted(self.get_client.declared))))
 
 
 def value(kind, **fields):
@@ -43,8 +63,16 @@ def value(kind, **fields):
     return SimpleNamespace(type=kind, **(defaults | fields))
 
 
-def request():
+def get_request():
     return SimpleNamespace(names=[])
+
+
+def list_request():
+    return SimpleNamespace(prefixes=None, depth=None)
+
+
+def reader_for(get_clients, list_clients=None, timeout=0.2):
+    return ParameterReadback(get_clients, get_request, list_clients or {}, list_request, timeout)
 
 
 def test_parameter_values_convert_by_type():
@@ -59,9 +87,8 @@ def test_parameter_values_convert_by_type():
 
 
 def test_read_returns_values_per_node_and_unavailable_nodes():
-    response = SimpleNamespace(values=[value(3, double_value=0.1), value(8, double_array_value=[1.0, 2.0])])
-    ready = FakeClient(future=FakeFuture(response))
-    reader = ParameterReadback({"/a": ready, "/b": FakeClient(ready=False)}, request, 0.2)
+    ready = FakeGetClient({"x": value(3, double_value=0.1), "y": value(8, double_array_value=[1.0, 2.0])})
+    reader = reader_for({"/a": ready, "/b": FakeGetClient(ready=False)})
     result = reader.read({"/a": ["x", "y"], "/b": ["z"], "/c": ["w"]})
     assert result["/a"] == {"available": True, "values": {"x": 0.1, "y": [1.0, 2.0]}}
     assert result["/b"] == {"available": False, "values": {}}
@@ -69,10 +96,33 @@ def test_read_returns_values_per_node_and_unavailable_nodes():
     assert ready.requests == [["x", "y"]]
 
 
+def test_an_undeclared_name_lists_the_node_once_and_asks_only_declared_names():
+    get = FakeGetClient({"x": value(3, double_value=0.1)})
+    listing = FakeListClient(get)
+    reader = reader_for({"/a": get}, {"/a": listing})
+    first = reader.read({"/a": ["x", "new_param"]})
+    assert first == {"/a": {"available": True, "values": {"x": 0.1, "new_param": None}}}
+    assert get.requests == [["x", "new_param"], ["x"]]
+    second = reader.read({"/a": ["x", "new_param"]})
+    assert second == first
+    assert get.requests[-1] == ["x"] and listing.calls == 1   # cached: no repeated listing or warnings
+    get.ready = False
+    assert reader.read({"/a": ["x"]})["/a"]["available"] is False
+    get.ready = True
+    get.declared["new_param"] = value(2, integer_value=5)   # a newer node build came up
+    assert reader.read({"/a": ["x", "new_param"]})["/a"]["values"] == {"x": 0.1, "new_param": 5}
+
+
+def test_without_a_list_client_undeclared_answers_read_as_unknown_values():
+    get = FakeGetClient({"x": value(3, double_value=0.1)})
+    result = reader_for({"/a": get}).read({"/a": ["x", "new_param"]})
+    assert result == {"/a": {"available": True, "values": {"x": None, "new_param": None}}}
+
+
 def test_timeouts_and_failed_calls_read_as_unavailable():
-    slow = FakeClient(future=FakeFuture(complete=False))
-    broken = FakeClient(future=FakeFuture(error=RuntimeError("gone")))
-    reader = ParameterReadback({"/slow": slow, "/broken": broken}, request, 0.05)
+    slow = FakeGetClient(future=FakeFuture(complete=False))
+    broken = FakeGetClient(future=FakeFuture(error=RuntimeError("gone")))
+    reader = reader_for({"/slow": slow, "/broken": broken}, timeout=0.05)
     result = reader.read({"/slow": ["x"], "/broken": ["y"]})
     assert result == {"/slow": {"available": False, "values": {}}, "/broken": {"available": False, "values": {}}}
     assert slow.removed == [slow.future]

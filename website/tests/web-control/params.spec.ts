@@ -57,7 +57,7 @@ const READBACK = {
   "policy_safety/joint_envelope_deg.hi[4]": { state: "applied", value: 108.2 },
   "policy_safety/stall.sec": { state: "pending", value: 10 },
   "policy_safety/current_guard.enabled": { state: "offline", value: null },
-  "policy_safety/attempts": { state: "applied", value: 3 },
+  "policy_safety/attempts": { state: "undeclared", value: null },
 };
 
 type Api = {
@@ -124,6 +124,8 @@ test("renders the catalog as a sheet with file, baseline and runtime values", as
   await expect(cell(page, stall, 12)).toContainText("待生效");
   await expect(cell(page, "policy_safety/joint_envelope_deg.lo[4]", 12)).toContainText("已生效");
   await expect(cell(page, "policy_safety/current_guard.enabled", 6)).toHaveText("未运行");
+  await expect(cell(page, "policy_safety/attempts", 6)).toHaveText("未声明");
+  await expect(cell(page, "policy_safety/attempts", 12)).toContainText("未声明");
   const speed = "motion@r/max_linear_speed_mps";
   await expect(cell(page, speed, 6)).toHaveText("—");
   await expect(cell(page, speed, 10)).toHaveText("0.2");

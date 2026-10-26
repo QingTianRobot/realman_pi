@@ -17,7 +17,7 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import TwistStamped
-from rcl_interfaces.srv import GetParameters
+from rcl_interfaces.srv import GetParameters, ListParameters
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -393,14 +393,22 @@ class WebControlNode(Node):
                 param_store_error = str(error)
                 self.get_logger().error(f"Parameter page disabled: {error}")
             else:
+                readback_nodes = param_store.readback_requests()
                 param_reader = ParameterReadback(
                     {
                         node: self.create_client(
                             GetParameters, f"{node}/get_parameters", callback_group=self._callback_group,
                         )
-                        for node in param_store.readback_requests()
+                        for node in readback_nodes
                     },
                     GetParameters.Request,
+                    {
+                        node: self.create_client(
+                            ListParameters, f"{node}/list_parameters", callback_group=self._callback_group,
+                        )
+                        for node in readback_nodes
+                    },
+                    ListParameters.Request,
                     web_config.param_readback_timeout_sec,
                 ).read
         self._server = WebControlServer(

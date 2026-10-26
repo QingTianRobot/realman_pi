@@ -47,7 +47,8 @@ description: :8765 的 /params.html：按白名单清单查看和写入 config/r
 2. 点「写入配置」。服务端先演练一遍（`dry_run`），弹窗列出每项旧值 → 新值、要重启 bringup 的项数和 unified diff；
    确认后才真正写入。
 3. 看「生效」列：
-   - 能读回的参数：运行值等于文件值显示「已生效」，不等显示「待生效」，节点没在运行显示「未运行」。
+   - 能读回的参数：运行值等于文件值显示「已生效」，不等显示「待生效」，节点没在运行显示「未运行」，
+     节点在运行但没有这个参数（版本较旧或键名改过）显示「未声明」。
    - 驱动和夹爪参数：写入后显示「待重启」，页面顶部出现「重启 bringup」按钮（和控制页的重启按钮是同一个接口，
      两次点击确认）。用别的方式重启过的，点「知道了」清掉提示。
    - 行为树正在运行时，暂存或待生效的参数会提示「运行中的树不会使用新值」。
@@ -109,7 +110,7 @@ description: :8765 的 /params.html：按白名单清单查看和写入 config/r
 | 方法 | 路径 | 作用 |
 | --- | --- | --- |
 | GET | `/api/params` | 清单展开后的行、文件 sha、是否可写、清单错误、页面外修改、待重启 |
-| GET | `/api/params/readback` | 每行的运行值和「已生效 / 待生效 / 未运行」 |
+| GET | `/api/params/readback` | 每行的运行值和「已生效 / 待生效 / 未运行 / 未声明」 |
 | POST | `/api/params/apply` | `{changes: [{id, value}], expected_sha, dry_run}`；400 逐项原因，409 文件已变或只读 |
 | POST | `/api/params/revert` | `{entry, expected_sha, dry_run}` |
 | GET | `/api/params/history` | 最近 100 条记录 |
@@ -124,6 +125,9 @@ description: :8765 的 /params.html：按白名单清单查看和写入 config/r
 - **一直「待生效」**：写入后还没重启行为树。停止当前的树再启动。
 - **运行值一直「未运行」**：对应节点没起来（行为树没在运行时三个节点都不在），或者 `GetParameters` 超过
   `param_tuning.readback_timeout_sec` 没应答。
+- **运行值显示「未声明」**：节点在运行，但它的版本没有声明这个参数（比如机器人上的执行器比仓库旧）。
+  `GetParameters` 只要有一个名字未声明就整个请求不回值，所以页面会先用 `ListParameters` 查出节点声明了哪些参数，
+  只读这些，其余标「未声明」；节点消失再出现时重新查。
 - **写入时提示文件已被修改**：别人刚改过同一个文件（另一个浏览器、手改）。页面已经重新读取，确认 diff 后再写一次。
 
 ## 代码在哪
@@ -131,7 +135,7 @@ description: :8765 的 /params.html：按白名单清单查看和写入 config/r
 | 位置 | 内容 |
 | --- | --- |
 | `src/driver/realman_web_control/realman_web_control/param_tuning.py` | 清单解析、精确改写、校验、写入、历史、基线、补丁（不依赖 ROS） |
-| `src/driver/realman_web_control/realman_web_control/param_readback.py` | `GetParameters` 读回（不依赖 rclpy，节点注入客户端） |
+| `src/driver/realman_web_control/realman_web_control/param_readback.py` | `GetParameters` / `ListParameters` 读回（不依赖 rclpy，节点注入客户端） |
 | `src/driver/realman_web_control/realman_web_control/web_server.py` | `/api/params*` 接口 |
 | `src/driver/realman_web_control/web/params.html`、`web/src/params.ts`、`web/src/params.css` | 页面 |
 | `src/driver/realman_web_control/test/test_param_tuning.py`、`test_param_readback.py`、`test_param_api.py` | pytest（无 ROS，CI 运行） |

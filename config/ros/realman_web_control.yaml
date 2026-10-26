@@ -42,3 +42,7 @@ docker_restart:
   url: http://127.0.0.1:8782  # Empty string hides the button.
   timeout_sec: 2.0  # Per-request limit; the restart itself runs in the helper.
   service: realman_bringup_remote
+
+param_tuning:
+  catalog_file: web-control/param_catalog.yaml  # The /params.html page; empty string disables it. Writes need ./config/ros mounted read-write.
+  readback_timeout_sec: 0.5  # Per-node GetParameters wait for the 运行值 column.

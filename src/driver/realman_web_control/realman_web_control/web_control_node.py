@@ -17,6 +17,7 @@ import yaml
 
 from ament_index_python.packages import get_package_share_directory
 from geometry_msgs.msg import TwistStamped
+from rcl_interfaces.srv import GetParameters, ListParameters
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
@@ -50,6 +51,8 @@ from .joint_records import JointRecordStore
 from .keyboard_control import KeyboardArmCommand, load_keyboard_control_config
 from .keyboard_control_bridge import KeyboardControlBridge
 from .model_manifest import build_manifest
+from .param_readback import ParameterReadback
+from .param_tuning import CatalogError, ParamStore
 from .protocol import ProtocolError, reject_if_read_only
 from .tf_pose import transform_stamped_pose
 from .web_server import WebControlServer, load_server_config
@@ -377,6 +380,37 @@ class WebControlNode(Node):
                 )
             )
 
+        param_store, param_store_error, param_reader = None, "", None
+        if web_config.param_catalog_file is not None:
+            try:
+                # Same config root load_server_config resolves the catalog against.
+                param_store = ParamStore(
+                    web_config.param_catalog_file,
+                    Path(web_config_file).resolve().parent.parent,
+                    Path(calibration_log_root) / "param-tuning",
+                )
+            except CatalogError as error:
+                param_store_error = str(error)
+                self.get_logger().error(f"Parameter page disabled: {error}")
+            else:
+                readback_nodes = param_store.readback_requests()
+                param_reader = ParameterReadback(
+                    {
+                        node: self.create_client(
+                            GetParameters, f"{node}/get_parameters", callback_group=self._callback_group,
+                        )
+                        for node in readback_nodes
+                    },
+                    GetParameters.Request,
+                    {
+                        node: self.create_client(
+                            ListParameters, f"{node}/list_parameters", callback_group=self._callback_group,
+                        )
+                        for node in readback_nodes
+                    },
+                    ListParameters.Request,
+                    web_config.param_readback_timeout_sec,
+                ).read
         self._server = WebControlServer(
             config=web_config,
             manifest=self._manifest,
@@ -387,6 +421,9 @@ class WebControlNode(Node):
             on_command=self._enqueue_command,
             on_client_connected=lambda client_id: self._enqueue_command(client_id, {"type": "client_connected"}),
             logger=self.get_logger(),
+            param_store=param_store,
+            param_store_error=param_store_error,
+            param_reader=param_reader,
         )
         self._server.start()
         self._mode_discovery_timer = self.create_timer(

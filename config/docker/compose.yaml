@@ -263,12 +263,16 @@ services:
   realman_web_control:
     <<: *realman-common
     volumes:
-      # Joint records are operator-created config/web-control YAML files; the
-      # rest of the root config tree remains read-only.
+      # Joint records are operator-created config/web-control YAML files and the
+      # parameter page writes config/ros; the rest of the root config tree
+      # remains read-only.
       - ./config:/opt/rm65_ws/config:ro
       - ./config/web-control/joint-records:/opt/rm65_ws/config/web-control/joint-records:rw
       # Shared behavior-tree favorites written by the :8765 page.
       - ./config/web-control/behavior-trees:/opt/rm65_ws/config/web-control/behavior-trees:rw
+      # The /params.html page writes catalog values back into config/ros/*.yaml
+      # (same mount as the bringup container).
+      - ./config/ros:/opt/rm65_ws/config/ros:rw
       - ./logs:/opt/rm65_ws/logs
     command:
       - ros2

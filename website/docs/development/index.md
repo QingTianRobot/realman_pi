@@ -26,6 +26,7 @@ description: realman_pi 开发者入口：按任务找到对应页面，了解�
 | 改 Pika 遥操作（位置 / 速度 / Mixed / replay） | [Pika 遥操作](./pika-teleop) | `config/ros/pika_config.yaml` |
 | 写新的行为树节点或任务树 | [行为树节点参考](./behavior-tree-nodes)（执行模型、节点语义、可交互的树与逐拍模拟），[行为树机械臂移动 Demo](./behavior-tree-motion) | `config/behavior-trees/`、`src/behavior/realman_bt/` |
 | 改浏览器控制台、URDF 影子、WebSocket 协议 | [WebSocket 浏览器控制](./realman-web-control) | `config/ros/realman_web_control.yaml` |
+| 在网页上调参数（策略任务阈值、限速、夹爪）、看运行值、导出补丁 | [网页参数调试](./web-parameter-tuning) | `config/web-control/param_catalog.yaml` |
 | 改夹爪、串口、流式控制 | [Changingtek 夹爪控制](./gripper-control) | `config/ros/gripper.yaml` |
 | 录制示教数据、导出 LeRobot、在网页回放与整理 episode | [独立数据录制平台](./recording-platform) | `config/ros/recording.yaml`、`config/python/recording-requirements.txt` |
 | 数据集质检、清洗、训练、评估、模型登记（命令行） | [训练控制平台（命令行）](./training-console) | `config/training/training_console.yaml` |

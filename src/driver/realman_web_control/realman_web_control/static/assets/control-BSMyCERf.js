@@ -4128,6 +4128,7 @@ No loader available`)}}const up=["#e5484d","#30a46c","#3e63dd"],Vn=1e4,Bl=600;fu
     <span id="mode" class="status-pill ready">CONTROL READY</span>
     <span id="auth-button" class="status-pill ready">CONTROL OPEN</span>
     <a href="/calibration.html" class="button ghost">相机标定</a>
+    <a href="/params.html" class="button ghost">参数调试</a>
     <span id="docker-restart-state" class="status-pill" hidden></span>
     <button id="docker-restart" class="button ghost" type="button" hidden>重启 Docker</button>
     <button id="cancel-motion" class="button ghost" type="button" disabled>取消 Action</button>

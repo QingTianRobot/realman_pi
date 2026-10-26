@@ -354,6 +354,12 @@ Web 服务（`network_mode: host`）代理它，`GET /api/docker/restart` 返回
 
 helper 未运行时按钮灰显，悬停提示需要安装；`docker_restart.url` 置空则隐藏按钮。
 
+### 参数调试页
+
+顶栏的「参数调试」打开 `/params.html`：按白名单清单 `config/web-control/param_catalog.yaml` 列出策略任务、行为树执行器、
+运动限速和夹爪参数，暂存后确认 diff 再写回 `config/ros/*.yaml`，并从运行中的节点读回实际值。用法、生效时机、历史和
+补丁见 [网页参数调试](./web-parameter-tuning)。写入需要 web_control 容器以读写方式挂载 `./config/ros`。
+
 ## WebSocket 协议
 
 连接 `/ws` 后首先收到 `hello`，其中包含 `read_only=false`、`client_id` 和完整的 `layout`。

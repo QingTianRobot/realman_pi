@@ -20,6 +20,7 @@ import yaml
 from .bt_library import list_trees, set_favorite
 from .bt_runtime import UNAVAILABLE as BT_RUNTIME_UNAVAILABLE, compact_runtime_snapshot
 from .model_manifest import resolve_model_asset
+from .param_tuning import ChangeError, ConflictError, ParamWriteError
 from .protocol import ProtocolError, parse_message
 
 
@@ -47,6 +48,9 @@ class WebServerConfig:
     docker_restart_url: str = ""
     docker_restart_timeout_sec: float = 2.0
     docker_restart_service: str = ""
+    # Catalog of the /params.html parameter page; None disables the page and its /api/params* routes.
+    param_catalog_file: Path | None = None
+    param_readback_timeout_sec: float = 0.5
 
 
 def load_server_config(path: str | Path) -> WebServerConfig:
@@ -114,6 +118,16 @@ def load_server_config(path: str | Path) -> WebServerConfig:
     restart_service = restart.get("service", "")
     if restart_url and (not isinstance(restart_service, str) or not restart_service):
         raise ValueError("docker_restart.service must name a Compose service")
+    tuning = document.get("param_tuning", {})
+    if not isinstance(tuning, dict):
+        raise ValueError("param_tuning must be a mapping")
+    catalog_file = tuning.get("catalog_file", "")
+    if not isinstance(catalog_file, str):
+        raise ValueError("param_tuning.catalog_file must be a path or empty")
+    readback_timeout = tuning.get("readback_timeout_sec", 0.5)
+    if (isinstance(readback_timeout, bool) or not isinstance(readback_timeout, (int, float))
+            or not math.isfinite(readback_timeout) or not 0 < readback_timeout <= 5):
+        raise ValueError("param_tuning.readback_timeout_sec must be above 0 and at most 5")
     bind_host = server.get("bind_host")
     origins = server.get("allowed_origins")
     if not isinstance(bind_host, str) or not bind_host:
@@ -136,6 +150,8 @@ def load_server_config(path: str | Path) -> WebServerConfig:
         docker_restart_url=restart_url.rstrip("/"),
         docker_restart_timeout_sec=float(restart_timeout),
         docker_restart_service=restart_service if isinstance(restart_service, str) else "",
+        param_catalog_file=(config_root / catalog_file) if catalog_file else None,
+        param_readback_timeout_sec=float(readback_timeout),
         **timing,
     )
     if not 1 <= config.port <= 65535:
@@ -162,6 +178,9 @@ class WebControlServer:
         on_command: Callable[[str, dict[str, Any]], None],
         on_client_connected: Callable[[str], None] | None,
         logger: Any,
+        param_store: Any = None,
+        param_store_error: str = "",
+        param_reader: Callable[[dict[str, list[str]]], dict[str, Any]] | None = None,
     ) -> None:
         self.config = config
         self.manifest = manifest
@@ -172,6 +191,10 @@ class WebControlServer:
         self.on_command = on_command
         self.on_client_connected = on_client_connected
         self.logger = logger
+        # param_tuning.ParamStore (None when the catalog is disabled or broken) and the ROS readback.
+        self.param_store = param_store
+        self.param_store_error = param_store_error
+        self.param_reader = param_reader
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
@@ -252,6 +275,14 @@ class WebControlServer:
         app.router.add_post("/api/bt/start", self._bt_start)
         app.router.add_get("/api/docker/restart", self._docker_restart_status)
         app.router.add_post("/api/docker/restart", self._docker_restart)
+        app.router.add_get("/api/params", self._params)
+        app.router.add_get("/api/params/readback", self._params_readback)
+        app.router.add_get("/api/params/history", self._params_history)
+        app.router.add_get("/api/params/export", self._params_export)
+        app.router.add_post("/api/params/apply", self._params_apply)
+        app.router.add_post("/api/params/revert", self._params_revert)
+        app.router.add_post("/api/params/baseline/reset", self._params_baseline_reset)
+        app.router.add_post("/api/params/pending/clear", self._params_pending_clear)
         app.router.add_get("/api/calibration", self._calibration)
         app.router.add_get("/api/calibration/sessions", self._calibration_sessions)
         app.router.add_delete(
@@ -471,9 +502,114 @@ class WebControlServer:
             raise web.HTTPNotFound(text="docker restart is disabled")
         service = self.config.docker_restart_service
         status_code, payload = await self._docker_restart_call("POST", "/restart", {"service": service})
+        if status_code == 200 and self.param_store is not None:
+            # The parameter page's "needs a bringup restart" list is satisfied by this restart.
+            await asyncio.to_thread(self.param_store.clear_pending)
         log = getattr(self.logger, "warning", None) or self.logger.error
         log(f"Web restart of Docker service {service!r} from {request.remote} -> {status_code} {payload.get('error', '')}")
         return web.json_response(payload, status=status_code)
+
+    def _param_store_or_raise(self) -> Any:
+        from aiohttp import web
+
+        if self.config.param_catalog_file is None:
+            raise web.HTTPNotFound(text="parameter tuning is disabled")
+        if self.param_store is None:
+            raise web.HTTPServiceUnavailable(text=self.param_store_error or "parameter catalog unavailable")
+        return self.param_store
+
+    async def _params(self, _request: Any) -> Any:
+        from aiohttp import web
+
+        store = self._param_store_or_raise()
+        snapshot = await asyncio.to_thread(store.snapshot)
+        return web.json_response(snapshot, headers={"Cache-Control": "no-store"})
+
+    async def _params_readback(self, _request: Any) -> Any:
+        from aiohttp import web
+
+        store = self._param_store_or_raise()
+        result = await asyncio.to_thread(store.readback, self.param_reader)
+        return web.json_response(result, headers={"Cache-Control": "no-store"})
+
+    async def _params_history(self, _request: Any) -> Any:
+        from aiohttp import web
+
+        store = self._param_store_or_raise()
+        entries = await asyncio.to_thread(store.history)
+        return web.json_response({"entries": entries}, headers={"Cache-Control": "no-store"})
+
+    async def _params_export(self, _request: Any) -> Any:
+        from aiohttp import web
+
+        store = self._param_store_or_raise()
+        patch = await asyncio.to_thread(store.export_patch)
+        return web.Response(
+            text=patch,
+            content_type="text/x-diff",
+            headers={"Content-Disposition": 'attachment; filename="param-tuning.patch"', "Cache-Control": "no-store"},
+        )
+
+    async def _params_body(self, request: Any) -> tuple[Any, dict[str, Any]]:
+        from aiohttp import web
+
+        if not self._origin_allowed(request):
+            raise web.HTTPForbidden(text="origin is not allowed")
+        store = self._param_store_or_raise()
+        try:
+            body = await request.json()
+        except ValueError:
+            body = None
+        if not isinstance(body, dict):
+            raise web.HTTPBadRequest(text="request body must be a JSON object")
+        return store, body
+
+    async def _params_write(self, request: Any, action: str, call: Callable[[], dict[str, Any]], dry_run: bool) -> Any:
+        from aiohttp import web
+
+        try:
+            result = await asyncio.to_thread(call)
+        except ChangeError as error:
+            return web.json_response({"error": str(error), "errors": error.errors}, status=400)
+        except ConflictError as error:
+            return web.json_response({"error": str(error), "files": error.files}, status=409)
+        except ParamWriteError as error:
+            self.logger.error(f"Parameter page {action} failed: {error}")
+            return web.json_response({"error": str(error)}, status=500)
+        if not dry_run:
+            summary = ", ".join(f"{c['id']}={c['before']!r}->{c['after']!r}" for c in result.get("changes", []))
+            log = getattr(self.logger, "warning", None) or self.logger.error
+            log(f"Parameter page {action} {result.get('id')} from {request.remote}: {summary}")
+        return web.json_response(result)
+
+    async def _params_apply(self, request: Any) -> Any:
+        store, body = await self._params_body(request)
+        dry_run = body.get("dry_run") is True
+        return await self._params_write(
+            request, "write", lambda: store.apply(body.get("changes"), body.get("expected_sha"), dry_run), dry_run,
+        )
+
+    async def _params_revert(self, request: Any) -> Any:
+        store, body = await self._params_body(request)
+        dry_run = body.get("dry_run") is True
+        return await self._params_write(
+            request, "revert", lambda: store.revert(body.get("entry"), body.get("expected_sha"), dry_run), dry_run,
+        )
+
+    async def _params_baseline_reset(self, request: Any) -> Any:
+        from aiohttp import web
+
+        store, _body = await self._params_body(request)
+        result = await asyncio.to_thread(store.reset_baseline)
+        log = getattr(self.logger, "warning", None) or self.logger.error
+        log(f"Parameter page baseline reset from {request.remote}: {result['files']}")
+        return web.json_response(result)
+
+    async def _params_pending_clear(self, request: Any) -> Any:
+        from aiohttp import web
+
+        store, _body = await self._params_body(request)
+        return web.json_response(await asyncio.to_thread(store.clear_pending))
 
     async def _calibration(self, _request: Any) -> Any:
         from aiohttp import web

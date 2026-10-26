@@ -102,6 +102,7 @@ export default withMermaid(defineConfig({
           { text: "行为树节点参考", link: "/development/behavior-tree-nodes" },
           { text: "Pika 遥操作", link: "/development/pika-teleop" },
           { text: "Web 控制与 URDF 影子", link: "/development/realman-web-control" },
+          { text: "网页参数调试", link: "/development/web-parameter-tuning" },
           { text: "Xbox 手柄输入", link: "/development/xbox-controller" },
           { text: "笛卡尔速度跟随测试", link: "/development/velocity-follow-test" },
         ],

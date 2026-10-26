@@ -125,6 +125,7 @@ groups:
 - `readback`：组级模板，`{key}` 换成参数键；参数自己也可以写 `readback` 覆盖（Pika 用 `pika_velocity_{leaf}`
   这类改名，见首批清单）。没有 `readback` 的组不读回。
 - `note`：中文备注，页面「备注」列显示。
+- `label`：可选的显示名，默认就是 `key`（夹爪参数的键带选择器，用 `label` 显示成 `force_pct`）。
 
 每一行的 id 是 `<group>/<key>`，有实例时是 `<group>@<instance>/<key>`，数组元素再加 `[n]`，例如
 `motion@r/max_linear_speed_mps`、`policy_safety/joint_envelope_deg.lo[4]`。
@@ -209,7 +210,8 @@ request_factory, timeout_sec)`，方法 `read(requests) -> {node: {available, va
   按钮（复用现有确认流程）和「知道了」；清单错误和页面外修改也在这里。
 - 表格：分组横条（标题 + 项数），列为
   `# | 参数 | 备注 | 文件 | 基线值 | 文件值 | 运行值 | 暂存 | 新值 | 最小 | 最大 | 单位 | 生效`。
-  文件值 ≠ 基线值时高亮；数组元素行的参数名写成 `joint_envelope_deg.lo · J5`；实例组的参数名前加实例标签（`r ·`）。
+  文件值 ≠ 基线值时高亮；数组元素行的参数名写成 `joint_envelope_deg.lo · J5`；有实例的组每个实例单独一条分组横条
+  （`运动限速 · 驱动（r）`），参数名可以用清单的 `label` 简写（夹爪的 `force_pct`）。
   「最大」列有 `max_ref` 时显示引用键的生效后的值并在 title 里写出键名。
 - 新值单元格（golf 同款键盘操作）：回车暂存并跳到下一行，Shift+回车跳到上一行，Esc 清空，↑/↓ 换行，空单元格按
   Delete / Backspace 取消暂存；暂存列里的 × 也能取消。`bool` 用下拉框（true / false），选了即暂存。输入超范围时单元格

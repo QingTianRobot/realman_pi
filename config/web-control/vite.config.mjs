@@ -177,6 +177,7 @@ export default defineConfig({
       input: {
         control: resolve(webDirectory, "index.html"),
         calibration: resolve(webDirectory, "calibration.html"),
+        params: resolve(webDirectory, "params.html"),
       },
     },
   },

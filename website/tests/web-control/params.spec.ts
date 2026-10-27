@@ -216,7 +216,14 @@ test("a typed value is staged when the cell loses focus, so 写入配置 works w
   await page.goto("params.html");
   const stall = rowOf(page, "policy_safety/stall.sec").locator("input");
   await stall.fill("9");
+  // A valid value still in the cell already counts: the button must not look disabled while typing.
+  await expect(page.locator("#write-config")).toBeEnabled();
+  await stall.fill("-5");
   await expect(page.locator("#write-config")).toBeDisabled();
+  await stall.fill("9");
+  await stall.press("Escape");
+  await expect(page.locator("#write-config")).toBeDisabled();
+  await stall.fill("9");
   await stall.blur();
   await expect(page.locator("#staged-count")).toHaveText("暂存 1 项");
   await expect(stall).toHaveValue("");

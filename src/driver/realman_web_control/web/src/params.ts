@@ -105,6 +105,8 @@ let runtime: Record<string, RuntimeState> = {};
 let launcher: { running?: boolean; tree?: string } = {};
 let restartAvailable = false;
 let rowErrors = new Map<string, string>();
+// Valid values typed into a cell but not staged yet (still focused), with the function that stages each.
+const drafts = new Map<string, () => boolean>();
 let armed: { action: string; until: number } | null = null;
 let busy = false;
 let noticeKey = "";
@@ -265,6 +267,7 @@ function buildRow(row: Row, index: number): RowCells {
     markInput(field, "");
     // Stage a valid typed value; a bad one stays in the cell, marked. False when it was refused.
     const commit = (): boolean => {
+      drafts.delete(row.id);
       if (field.value === "") return true;
       const reason = problem(row, Number(field.value));
       markInput(field, reason);
@@ -273,7 +276,13 @@ function buildRow(row: Row, index: number): RowCells {
       field.value = "";
       return true;
     };
-    field.addEventListener("input", () => markInput(field, field.value === "" ? "" : problem(row, Number(field.value))));
+    field.addEventListener("input", () => {
+      const reason = field.value === "" ? "" : problem(row, Number(field.value));
+      markInput(field, reason);
+      if (field.value !== "" && !reason && !same(Number(field.value), row.value)) drafts.set(row.id, commit);
+      else drafts.delete(row.id);
+      refresh();
+    });
     // Leaving the cell (Tab, a click elsewhere, the 写入配置 button) stages too, not only Enter.
     field.addEventListener("change", () => void commit());
     field.addEventListener("keydown", (event) => {
@@ -282,6 +291,8 @@ function buildRow(row: Row, index: number): RowCells {
         if (commit()) moveFocus(field, event.shiftKey ? -1 : 1);
       } else if (event.key === "Escape") {
         field.value = "";
+        drafts.delete(row.id);
+        refresh();
         markInput(field, "");
       } else if (event.key === "ArrowDown" || event.key === "ArrowUp") {
         event.preventDefault();
@@ -366,6 +377,7 @@ function updateRow(row: Row, cells: RowCells): void {
 
 function buildSheet(groups: Group[]): void {
   cellsById = new Map();
+  drafts.clear();
   const table = el("table", undefined, "sheet");
   const head = el("thead");
   const headRow = el("tr");
@@ -482,7 +494,7 @@ function refresh(): void {
   const count = [...staged.keys()].filter((id) => rowsById.has(id)).length;
   stagedLabel.textContent = `暂存 ${count} 项`;
   stagedLabel.classList.toggle("warn", count > 0);
-  writeButton.disabled = busy || count === 0 || !snapshot.writable;
+  writeButton.disabled = busy || (count === 0 && drafts.size === 0) || !snapshot.writable;
   clearButton.disabled = count === 0;
   resetButton.disabled = busy || !Object.values(snapshot.files).some((info) => info.baseline);
   renderNotices();
@@ -649,6 +661,7 @@ async function runWrite(action: string, url: string, body: Record<string, unknow
 }
 
 async function writeConfig(): Promise<void> {
+  for (const commit of [...drafts.values()]) commit();
   const changes = [...staged].filter(([id]) => rowsById.has(id)).map(([id, value]) => ({ id, value }));
   if (!changes.length) return;
   const result = await runWrite("写入", "/api/params/apply", { changes }, "写入配置", "确认写入");

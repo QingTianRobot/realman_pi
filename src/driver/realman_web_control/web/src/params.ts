@@ -263,18 +263,23 @@ function buildRow(row: Row, index: number): RowCells {
     if (row.min !== null) field.min = String(row.min);
     if (row.max !== null) field.max = String(row.max);
     markInput(field, "");
+    // Stage a valid typed value; a bad one stays in the cell, marked. False when it was refused.
+    const commit = (): boolean => {
+      if (field.value === "") return true;
+      const reason = problem(row, Number(field.value));
+      markInput(field, reason);
+      if (reason) return false;
+      stage(row, Number(field.value));
+      field.value = "";
+      return true;
+    };
     field.addEventListener("input", () => markInput(field, field.value === "" ? "" : problem(row, Number(field.value))));
+    // Leaving the cell (Tab, a click elsewhere, the 写入配置 button) stages too, not only Enter.
+    field.addEventListener("change", () => void commit());
     field.addEventListener("keydown", (event) => {
       if (event.key === "Enter") {
         event.preventDefault();
-        if (field.value !== "") {
-          const reason = problem(row, Number(field.value));
-          markInput(field, reason);
-          if (reason) return;
-          stage(row, Number(field.value));
-          field.value = "";
-        }
-        moveFocus(field, event.shiftKey ? -1 : 1);
+        if (commit()) moveFocus(field, event.shiftKey ? -1 : 1);
       } else if (event.key === "Escape") {
         field.value = "";
         markInput(field, "");

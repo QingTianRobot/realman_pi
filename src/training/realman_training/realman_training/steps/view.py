@@ -14,7 +14,7 @@ import shutil
 from pathlib import Path
 
 from .. import episode_tags
-from ..config import OpenpiConfig, load_config
+from ..config import OpenpiConfig, QualityConfig, load_config
 from ..datasets import summarize
 from ..jobs import StepFailed, now
 from ..lerobot_io import read_columns, read_episodes
@@ -26,9 +26,20 @@ def default_dst(data_root: str | Path, src: str | Path) -> Path:
     return Path(data_root).expanduser() / f"{Path(src).name}_view"
 
 
-def view_command(openpi: OpenpiConfig, src: Path, dst: Path, arm: str, prompts: dict[str, str]) -> list[str]:
+def view_command(
+    openpi: OpenpiConfig, src: Path, dst: Path, arm: str, prompts: dict[str, str], quality: QualityConfig = QualityConfig()
+) -> list[str]:
     shared = os.path.commonpath([str(src), str(dst.parent)])
-    args = ["--src", str(src), "--dst", str(dst), "--arm", arm, "--task-prompt", *[f"{t}={p}" for t, p in prompts.items()]]
+    # The gripper target is derived with the same thresholds the quality rules judge the episode by.
+    thresholds = [
+        "--closed-threshold-raw", f"{quality.closed_threshold_raw:g}",
+        "--wide-grasp-threshold-raw", f"{quality.wide_grasp_threshold_raw:g}",
+        "--wide-grasp-max-raw", f"{quality.wide_grasp_max_raw:g}",
+    ]
+    args = [
+        "--src", str(src), "--dst", str(dst), "--arm", arm, *thresholds,
+        "--task-prompt", *[f"{t}={p}" for t, p in prompts.items()],
+    ]
     return [
         "docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
         "-e", "HOME=/tmp", "-e", "UV_PROJECT_ENVIRONMENT=/.venv",
@@ -126,7 +137,7 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
         raise StepFailed(f"no prompt for task(s) {missing}: add them to prompts in the config or pass task=prompt")
     prompts = {task: prompts[task] for task in summary.tasks}
     # Pass partial as --dst so make_realman_view writes there; rename to dst at the end.
-    argv = view_command(config.openpi, src, partial, params.get("arm") or config.quality.arm, prompts)
+    argv = view_command(config.openpi, src, partial, params.get("arm") or config.quality.arm, prompts, config.quality)
     log("$ " + shlex.join(argv))
     if params.get("dry_run"):
         return {"dry_run": True, "command": argv}

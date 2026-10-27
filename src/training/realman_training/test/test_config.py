@@ -33,6 +33,8 @@ def test_the_reviewed_defaults():
     q = QualityConfig()
     assert q.arm == "r"
     assert (q.gripper_open_raw, q.closed_threshold_raw, q.gripper_close_raw) == (50.0, 4275.0, 8500.0)
+    # Wide grasps hold the adapter body at 3600-4300; an episode never above 4575 is judged at 3200.
+    assert (q.wide_grasp_threshold_raw, q.wide_grasp_max_raw) == (3200.0, 4575.0)
     # Recordings carry no torque: held plateaus reached 7904 on 2026-10-16, empty grasps 8414-8550.
     assert q.empty_position_min == 8300.0
     # 2 s: raw 2026-10-16 #209 settled at 8448 only for its last ~2.5 s (3 s median 7802).
@@ -63,6 +65,8 @@ def test_the_environment_variable_picks_the_file(tmp_path, monkeypatch):
         ("training_console:\n  quality:\n    empty_position: 1\n", "empty_position"),
         ("training_console:\n  quality:\n    arm: x\n", "arm"),
         ("training_console:\n  quality:\n    closed_threshold_raw: 9000\n", "closed_threshold_raw"),
+        ("training_console:\n  quality:\n    wide_grasp_threshold_raw: 4300\n", "wide_grasp_threshold_raw"),
+        ("training_console:\n  quality:\n    wide_grasp_max_raw: 4000\n", "wide_grasp_max_raw"),
         ("training_console:\n  quality:\n    start_pose_deg: [1, 2]\n", "start_pose_deg"),
         ("training_console:\n  quality:\n    glitch_max_frames: 0\n", "glitch_max_frames"),
         ("training_console:\n  quality:\n    release_tasks: pick_and_place\n", "release_tasks"),

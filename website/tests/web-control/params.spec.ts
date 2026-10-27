@@ -211,6 +211,38 @@ test("writing shows the dry-run diff, then sends the staged values with the file
   await expect(cell(page, "motion@r/max_linear_speed_mps", 12)).toContainText("待重启");
 });
 
+test("a typed value is staged when the cell loses focus, so 写入配置 works without Enter", async ({ page }) => {
+  const api = await mockApi(page);
+  await page.goto("params.html");
+  const stall = rowOf(page, "policy_safety/stall.sec").locator("input");
+  await stall.fill("9");
+  // A valid value still in the cell already counts: the button must not look disabled while typing.
+  await expect(page.locator("#write-config")).toBeEnabled();
+  await stall.fill("-5");
+  await expect(page.locator("#write-config")).toBeDisabled();
+  await stall.fill("9");
+  await stall.press("Escape");
+  await expect(page.locator("#write-config")).toBeDisabled();
+  await stall.fill("9");
+  await stall.blur();
+  await expect(page.locator("#staged-count")).toHaveText("暂存 1 项");
+  await expect(stall).toHaveValue("");
+  const hi = rowOf(page, "policy_safety/joint_envelope_deg.hi[4]").locator("input");
+  await hi.fill("200");
+  await hi.blur();
+  await expect(hi).toHaveClass(/invalid/);
+  await expect(page.locator("#staged-count")).toHaveText("暂存 1 项");
+  await hi.press("Escape");
+  const speed = rowOf(page, "motion@r/max_linear_speed_mps").locator("input");
+  await speed.fill("0.18");
+  api.reply = (_url, body) => ({ status: 200, json: { changes: [], diff: "", applies: [], id: body.dry_run ? undefined : "x" } });
+  await page.locator("#write-config").click();
+  await expect(page.locator("#confirm-dialog")).toBeVisible();
+  expect(api.posts[0].body.changes).toEqual([
+    { id: "policy_safety/stall.sec", value: 9 }, { id: "motion@r/max_linear_speed_mps", value: 0.18 },
+  ]);
+});
+
 test("cancelling the dialog writes nothing", async ({ page }) => {
   const api = await mockApi(page);
   await page.goto("params.html");

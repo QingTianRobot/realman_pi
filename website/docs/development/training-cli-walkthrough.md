@@ -50,6 +50,8 @@ rt inspect $D/raw_realman_ts_20261021_152817/realman__pi05-three-arm
 
 输出每个任务的条数和逐条质检。本次：`pick_and_place` 122、`pick_only` 108、`pick_only_light-weak_1021` 112；建议剔除 14 条，其中 13 条与 10-16 人工剔除完全相同，新数据只有 #290（`regrasp`，两次闭合）。`start_partial` 等警告不剔除。
 
+（2026-10-27 起质检按条识别宽抓取，#216 不再被建议剔除，见[质检规则 · 宽抓取](./training-console.md#宽抓取)。）
+
 ## 3. 清洗
 
 ```bash

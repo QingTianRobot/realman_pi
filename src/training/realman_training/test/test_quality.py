@@ -40,8 +40,29 @@ def test_closing_twice_is_a_regrasp():
 
 
 def test_never_closing():
-    # raw #216: maximum reading 3931, below the closed threshold.
-    assert codes("pick_only", gripper((50, 60), (3931, 100))) == {"never_closed"}
+    # 2026-10-26 raw #363: the gripper only reached 1774, below even the wide-grasp threshold.
+    assert codes("pick_only", gripper((50, 60), (1774, 100))) == {"never_closed"}
+
+
+def test_a_wide_grasp_is_held_not_never_closed():
+    # raw #216 (2026-10-16) and 17 grasps of 2026-10-26 hold the adapter across its body at 3600-4300, below the
+    # halfway threshold; the wrist camera shows them lifting it.
+    assert codes("pick_only", gripper((50, 60), (3931, 100))) == set()
+
+
+def test_a_hold_just_above_the_closed_threshold_does_not_flicker():
+    # 2026-10-26 raw #462 held at 4262-4279: one grasp, not two closing events.
+    assert codes("pick_only", gripper((50, 60), (4279, 20), (4262, 20), (4279, 20), (4262, 20))) == set()
+
+
+def test_a_regrasp_that_reopens_only_part_way_is_still_a_regrasp():
+    # raw #130: closed to 6682, reopened to ~3650, closed again to 5748.
+    assert "regrasp" in codes("pick_only", gripper((50, 60), (6682, 60), (3650, 30), (5748, 60)))
+
+
+def test_a_release_cut_off_while_opening_still_counts():
+    # raw #39/#83/#119: the recording ends while the gripper opens again (last readings ~3700).
+    assert codes("pick_and_place", gripper((50, 60), (7900, 100), (3700, 5))) == set()
 
 
 def test_closing_on_nothing():
@@ -94,6 +115,14 @@ def test_messages_carry_the_numbers():
         CONFIG,
     )
     assert "8450" in findings[0].message and "8300" in findings[0].message
+
+
+def test_the_never_closed_message_names_the_wide_grasp_threshold():
+    findings = check_episode(
+        "pick_only", np.asarray(gripper((50, 60), (1774, 100)), dtype=float), np.tile(np.asarray(HOME_DEG), (160, 1)),
+        FPS, CONFIG,
+    )
+    assert findings[0].message == "never closed: max reading 1774 <= 3200"
 
 
 def test_inspect_gives_one_verdict_per_episode_and_the_drop_list(tmp_path):

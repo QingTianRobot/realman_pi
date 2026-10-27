@@ -27,6 +27,10 @@ class QualityConfig:
     gripper_open_raw: float = 50.0
     gripper_close_raw: float = 8500.0
     closed_threshold_raw: float = 4275.0  # halfway between open and closed
+    # A wide grasp holds the adapter across its body at 3600-4300 (2026-10-16 #216, 17 grasps of 2026-10-26): an
+    # episode whose readings never pass wide_grasp_max_raw is judged at this lower threshold instead.
+    wide_grasp_threshold_raw: float = 3200.0
+    wide_grasp_max_raw: float = 4575.0  # 300 above closed_threshold_raw: a hold at 4262-4279 must not flicker
     start_closed_sec: float = 1.0
     glitch_max_frames: int = 2
     plateau_window_sec: float = 2.0  # 3 s missed raw 2026-10-16 #209 (slow creep, settled at 8448)
@@ -245,6 +249,10 @@ def _validate(q: QualityConfig, source: Path) -> None:
         fail("arm", f"must be one of {ARMS}")
     if not q.gripper_open_raw < q.closed_threshold_raw < q.gripper_close_raw:
         fail("closed_threshold_raw", "must lie between gripper_open_raw and gripper_close_raw")
+    if not q.gripper_open_raw < q.wide_grasp_threshold_raw < q.closed_threshold_raw:
+        fail("wide_grasp_threshold_raw", "must lie between gripper_open_raw and closed_threshold_raw")
+    if not q.closed_threshold_raw <= q.wide_grasp_max_raw < q.gripper_close_raw:
+        fail("wide_grasp_max_raw", "must lie in [closed_threshold_raw, gripper_close_raw)")
     if not q.gripper_open_raw < q.empty_position_min <= q.gripper_close_raw:
         fail("empty_position_min", "must lie in (gripper_open_raw, gripper_close_raw]")
     if q.glitch_max_frames < 1:

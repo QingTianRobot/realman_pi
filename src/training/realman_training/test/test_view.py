@@ -60,6 +60,14 @@ def test_view_runs_make_realman_view_in_the_openpi_image_and_checks_labels(clean
     assert json.loads((dst / "label_check.json").read_text())["failures"] == []
 
 
+def test_the_view_judges_the_gripper_with_the_quality_thresholds(clean, tmp_path):
+    runner = fake_make_view([GOOD_PLACE, GOOD_PICK])
+    view.run({"src": str(clean), "dst": str(tmp_path / "data" / "v")}, RecordingLog(), runner=runner)
+    inner = shlex.split(runner.calls[0][-1].split("make_realman_view.py", 1)[1])
+    flags = {flag: inner[inner.index(flag) + 1] for flag in ("--closed-threshold-raw", "--wide-grasp-threshold-raw", "--wide-grasp-max-raw")}
+    assert flags == {"--closed-threshold-raw": "4275", "--wide-grasp-threshold-raw": "3200", "--wide-grasp-max-raw": "4575"}
+
+
 def test_wrong_gripper_labels_fail_the_job_and_name_the_episodes(clean, tmp_path):
     runner = fake_make_view([GOOD_PICK, GOOD_PICK])  # the place episode never releases
     with pytest.raises(StepFailed, match=r"1 episode\(s\).*\b0\b"):

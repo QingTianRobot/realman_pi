@@ -55,6 +55,15 @@ def runs(mask: np.ndarray) -> list[tuple[bool, int, int]]:
 _runs = runs  # backwards compatibility
 
 
+def closed_threshold(gripper: np.ndarray, config: QualityConfig) -> float:
+    """The reading above which this episode's gripper counts as closed. Opening again is judged at the same level,
+    so episodes that pass the halfway mark keep it (a regrasp may reopen only to ~3650); a wide grasp that never
+    gets clearly past it is judged at the lower wide-grasp threshold."""
+    if len(gripper) and gripper.max() <= config.wide_grasp_max_raw:
+        return config.wide_grasp_threshold_raw
+    return config.closed_threshold_raw
+
+
 def check_episode(
     task: str, gripper: np.ndarray, joints_deg: np.ndarray, fps: float, config: QualityConfig
 ) -> tuple[Finding, ...]:
@@ -69,7 +78,7 @@ def check_episode(
     if len(gripper) == 0:
         return (Finding("empty", "drop", "episode has no frames"),)
 
-    threshold = config.closed_threshold_raw
+    threshold = closed_threshold(gripper, config)
     closed = gripper > threshold
     start_frames = max(1, int(round(config.start_closed_sec * fps)))
     starts_closed = bool(closed[:start_frames].any())

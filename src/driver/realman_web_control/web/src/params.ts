@@ -1,5 +1,6 @@
 import "./theme.css";
 import "./params.css";
+import { ARM_ICON_SVG } from "./arm_icon";
 
 // Parameter page: catalog rows from /api/params, staged in this browser, written to config/ros/*.yaml after a
 // dry-run diff, with runtime values read back from the running ROS nodes.
@@ -40,7 +41,7 @@ const APPLIES_SHORT: Record<string, string> = { bt_start: "下次启动行为树
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <header class="topbar">
-    <div><span class="eyebrow">REALMAN / PARAMETERS</span><h1>参数调试</h1><p>白名单参数 · 暂存后写入配置 · 运行值读回</p></div>
+    <div class="brand"><span class="brand-mark">${ARM_ICON_SVG}</span><div><span class="eyebrow">REALMAN / PARAMETERS</span><h1>参数调试</h1><p>白名单参数 · 暂存后写入配置 · 运行值读回</p></div></div>
     <div class="top-actions"><a href="/" class="button ghost">运动控制</a><a href="/calibration.html" class="button ghost">相机标定</a></div>
   </header>
   <main class="params-main">

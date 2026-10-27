@@ -348,3 +348,13 @@ test("the control page links to the parameter page", async ({ page }) => {
   await page.goto("/");
   await expect(page.locator('.topbar a[href="/params.html"]')).toHaveText("参数调试");
 });
+
+test("every page shows the robot-arm mark and the favicon", async ({ page }) => {
+  await mockApi(page);
+  for (const path of ["/", "calibration.html", "params.html"]) {
+    await page.goto(path);
+    await expect(page.locator('link[rel="icon"]'), path).toHaveAttribute("href", "/favicon.svg");
+    await expect(page.locator(".topbar .brand-mark svg.arm-icon"), path).toBeVisible();
+  }
+  expect((await page.request.get("/favicon.svg")).ok()).toBe(true);
+});

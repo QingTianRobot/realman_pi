@@ -47,7 +47,7 @@ PYTHONPATH=. python -m realman_training register <openpi 配置名> <实验名>
 |---|---|---|
 | `pull` | 经 `ssh realman_local` 在录制容器里 `tar`：先在录制锁（`.<数据集>.lock`，`flock -s`）下拷 `meta`、`data`，再拷视频；拷完校验每条的视频都在 | 新目录 `raw_realman_ts_<时间>/<数据集>/` + `pull.json`（来源、条数、字节数）；目标已存在就拒绝 |
 | `clean` | 剔除条目、重新编号、视频硬链接、按 LeRobot 方法重算 `stats.json`；没写原因的条目用质检结论当原因 | 新目录 + `<目录>.clean_manifest.json`（剔除清单、原因、旧→新编号） |
-| `view` | 在 `openpi:dev` 镜像里跑 `make_realman_view.py --task-prompt`（prompt 取配置 `prompts` 段，可用 `--task-prompt task=prompt` 覆盖），再检查夹爪目标：`pick_and_place` 必须 开→闭→开，`pick_only` 开→闭 | `<清洗版>_view/` + `label_check.json`；有问题的条目让任务失败并列出 |
+| `view` | 在 `openpi:dev` 镜像里跑 `make_realman_view.py --task-prompt`（prompt 取配置 `prompts` 段，可用 `--task-prompt task=prompt` 覆盖；夹爪目标按质检的同一组闭合阈值推导，见[宽抓取](#宽抓取)），再检查夹爪目标：`pick_and_place` 必须 开→闭→开，`pick_only` 开→闭 | `<清洗版>_view/` + `label_check.json`；有问题的条目让任务失败并列出 |
 | `norm` | `opic-norm`（norm stats 已存在就跳过，`--force` 重算）；容器不分配 GPU，JAX 用 `JAX_PLATFORMS=cpu` 在 CPU 上算 | `openpi-docker-data/assets/<配置>/<asset_id>/norm_stats.json`（`asset_id` 取自配置，通常与 `repo_id` 相同） |
 | `train` | 检查 GPU（被别人占用超过 2000 MiB 就拒绝）、缺 norm 就先算、在独立容器 `openpi-console-train-<实验名>` 里训练，多卡自动加 NCCL/XLA 环境；跟随 `Step N:` 日志显示进度；取消任务会停容器；`--attach` 重新跟随仍在跑的容器；训练结束后从整个（追加模式）日志文件解析 `metrics.csv`，所以重跑时历史步数也保留在 csv 里。`--init-from <配置>/<实验名>/<步数>` 用之前某个 run 的 checkpoint（`checkpoints/.../<步数>/params`，宿主机上必须存在）代替 `openpi.weights`（pi05_base）作为初始权重；`--share-gpus` 不按"已占用 > 2000 MiB"拒绝，改为检查每张卡剩余显存 ≥ `openpi.train_need_mib`（18000 MiB，action-only 训练峰值约 17.3 GiB），用于和 openpi-serve 共用一张卡。必须加 `--yes`（先用 `--dry-run` 看命令） | `openpi-docker-data/wandb/<实验名>.log`（追加，重跑保留历史日志）、`checkpoints/<配置>/<实验名>/metrics.csv`（从整个日志解析）、`console_train.json` |
 | `eval` | 把配置的留出集按任务拆开，逐个 checkpoint 跑 `eval_open_loop.py`；多任务时再做 prompt 交换测试；共用同一个 prompt 的任务（如 `pick_only` 和 `pick_only_light-weak_1021`）按视图来源（清洗版）里的任务名分开统计；`--share-gpus` 和训练一样改为检查剩余显存 ≥ `openpi.eval_need_mib`（12000 MiB）；对同一 checkpoint/任务重跑会替换那项结果文件，`summary.json` 以合并方式更新（其他 checkpoint 的结果保留） | `checkpoints/<配置>/<实验名>/eval/`（每项结果 + `summary.json`） |
@@ -118,7 +118,7 @@ PYTHONPATH=. python -m realman_training linkcheck [--only pika,link,inference,br
 | 代码 | 级别 | 判断 |
 |---|---|---|
 | `start_closed` | 剔除 | 开头 1 s 内夹爪处于闭合 |
-| `never_closed` | 剔除 | 读数从未超过闭合阈值 4275 |
+| `never_closed` | 剔除 | 读数从未超过闭合阈值（4275；整条最高读数不超过 4575 的按宽抓取用 3200） |
 | `regrasp` | 剔除 | 闭合事件 ≥ 2 |
 | `glitch` | 剔除 | 闭合中间夹着 ≤ 2 帧的张开读数 |
 | `closed_on_nothing` | 剔除 | 最后一段闭合的平台（末 2 s 中位数）≥ 8300：两爪合拢，没夹住东西 |
@@ -131,4 +131,16 @@ PYTHONPATH=. python -m realman_training linkcheck [--only pika,link,inference,br
 
 窗口取 2 s：10-16 的 #209 在最后约 2.5 s 才稳定在 8448，之前在 7400–7600 爬升，3 s 中位数只有 7802，会漏判；保留的条目里 2 s 中位数最高的是 #21（8244）。
 
-在 10-16 的原始数据上，规则建议剔除的正好是当时人工剔除的 13 条（13、28、44、61、69、78、120、121、130、181、189、209、216），由 `test_real_data.py` 固定。
+在 10-16 的原始数据上，规则建议剔除的是当时人工剔除的 13 条（13、28、44、61、69、78、120、121、130、181、189、209、216）中除 #216 以外的 12 条，由 `test_real_data.py` 固定。#216 当时按"从未完全闭合（最高 3931）"剔除，其实是宽抓取（见下）。
+
+### 宽抓取
+
+夹爪横着夹住电源适配器机身时，读数停在 3600–4300，低于一般的闭合阈值 4275（正常夹住是 5000–7900）。10-16 的 #216 和 10-26 新录的 17 条都是这样：读数稳定、随后抬起 25–53° 一直夹到结尾，手腕相机上能看到适配器被提起。按 4275 判断，质检会把它们当成 `never_closed` 剔除，训练视图也会把它们的夹爪目标标成全程张开。
+
+所以闭合阈值按条决定：整条最高读数不超过 `wide_grasp_max_raw`（4575）的条目按宽抓取处理，用 `wide_grasp_threshold_raw`（3200）判断开合；其余条目仍用 `closed_threshold_raw`（4275）。
+
+- 不全局改成 3200，是因为判断重新张开和松开也用同一个阈值：#130 闭合到 6682 后只张开到约 3650 再夹，#39/#83/#119 录制在夹爪张开途中就结束（末尾约 3700）。全局 3200 会漏掉 #69/#130/#290 的重抓，新增 #39/#83/#119 的 `no_release` 和 #111 的 `regrasp`，多任务视图里 4 条 `pick_and_place` 的松开标签也会错。
+- 4575 比 4275 高 300：10-26 的 #462 夹在 4262–4279，用 4275 会在闭合和张开之间来回跳。
+- 在 10-16、10-21、10-26 三份原始数据上，按条规则相比只用 4275 的唯一变化是 #216 和这 17 条不再被剔除；用它重建的多任务 v2 视图与原视图逐帧相同，pick v3 视图 332 条都是 开→闭。
+
+`view` 把这三个数作为 `--closed-threshold-raw`、`--wide-grasp-threshold-raw`、`--wide-grasp-max-raw` 传给 openpi 的 `make_realman_view.py`，所以 server5090 上的 openpi 需要有这几个参数（`feat/realman-multitask-v2` 分支 ddb2cd0 起）。

@@ -64,6 +64,13 @@ class InputModeCoordinator {
   std::string selectForTick(Clock::time_point now);
   void activate(const std::string& mode_id, Clock::time_point now);
   void fail(std::string detail, Clock::time_point now);
+  // The requested mode's branch is moving the arms to its start pose ahead of ActivateInputMode
+  // (ThreeArmMoveJ with its goals running), which takes far longer than the switch timeout when the
+  // arms start far away: restart the deadline. The move's own timeout bounds it. No-op otherwise.
+  void keepSwitchAlive(Clock::time_point now);
+  // Called after every tree tick. A requested branch that stopped without activating (its entry
+  // failed) fails the switch at once instead of being re-entered every tick until the deadline.
+  void afterTick(bool tree_running, Clock::time_point now);
 
   const InputModeSnapshot& snapshot() const noexcept { return snapshot_; }
 

@@ -21,6 +21,7 @@ from rcl_interfaces.srv import GetParameters, ListParameters
 import rclpy
 from rclpy.action import ActionClient
 from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.clock import Clock, ClockType
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
@@ -28,6 +29,7 @@ from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from rclpy.time import Time
 from realman_msgs.action import CartesianVelocity, ExecuteMotion, ExecuteTrajectory
 from realman_msgs.msg import CartesianVelocityState, InputModeState, MotionWaypoint
+from realman_recording_msgs.msg import QualityMark, RecordingStatus
 from realman_msgs.srv import (
     CaptureCalibrationSample,
     ForwardKinematics,
@@ -54,6 +56,7 @@ from .model_manifest import build_manifest
 from .param_readback import ParameterReadback
 from .param_tuning import CatalogError, ParamStore
 from .protocol import ProtocolError, reject_if_read_only
+from .quality_marks import MARK_KINDS, recording_view, view_changed
 from .tf_pose import transform_stamped_pose
 from .web_server import WebControlServer, load_server_config
 
@@ -119,6 +122,10 @@ class WebControlNode(Node):
             str(config_root / "ros" / "policy_task.yaml"),
         )
         self.declare_parameter(
+            "quality_reasons_config_file",
+            str(config_root / "recording" / "quality_reasons.yaml"),
+        )
+        self.declare_parameter(
             "gripper_config_file",
             str(config_root / "ros" / "gripper.yaml"),
         )
@@ -152,7 +159,9 @@ class WebControlNode(Node):
             description_root,
             self._parameter("end_effectors_config_file"),
             self._parameter("policy_task_config_file"),
+            self._parameter("quality_reasons_config_file"),
         )
+        self._quality_reason_ids = {reason["id"] for reason in self._manifest["quality_reasons"]}
         self._robots = {robot["id"]: robot for robot in self._manifest["robots"]}
         self._keyboard_config = load_keyboard_control_config(
             keyboard_file, motion_file, coordinates_file
@@ -323,6 +332,21 @@ class WebControlNode(Node):
                 String,
                 "/camera_calibration/camera_health",
                 self._camera_health_message,
+                10,
+                callback_group=self._callback_group,
+            )
+        )
+        # Live deviation marks for the recorder (annotation only: never starts a recording) and the
+        # recorder's status, condensed for the page's marking strip.
+        self._wall_clock = Clock(clock_type=ClockType.SYSTEM_TIME)
+        self._quality_mark_publisher = self.create_publisher(QualityMark, "/recording/quality_mark", 50)
+        self._recording_lock = threading.Lock()
+        self._recording_view: dict[str, Any] | None = None
+        self._web_subscriptions.append(
+            self.create_subscription(
+                RecordingStatus,
+                "/recording/status",
+                self._recording_status_message,
                 10,
                 callback_group=self._callback_group,
             )
@@ -527,6 +551,8 @@ class WebControlNode(Node):
             self._capture_calibration_sample(client_id, message)
         elif message_type == "solve_calibration":
             self._solve_calibration(client_id, message)
+        elif message_type == "quality_mark":
+            self._quality_mark(client_id, message)
         else:
             raise ProtocolError("unsupported_type", f"unsupported message type: {message_type}")
 
@@ -1498,6 +1524,10 @@ class WebControlNode(Node):
                 )
             self._send_joint_records(client_id, arm)
         self._send_tf_frames(client_id)
+        with self._recording_lock:
+            recording = self._recording_view
+        if recording is not None:
+            self._server.send_event({"type": "recording_state", "recording": recording}, client_id)
 
     def _default_reference(self, arm: str) -> tuple[int, str]:
         state = self._coordinate_state.get(arm, {})
@@ -1989,6 +2019,34 @@ class WebControlNode(Node):
             self._server.send_event(event, client_id)
 
         self._bt_shutdown_client.call_async(Trigger.Request()).add_done_callback(done)
+
+    def _recording_status_message(self, message: RecordingStatus) -> None:
+        view = recording_view(
+            state=int(message.state),
+            session_id=message.session_id,
+            elapsed_sec=message.elapsed_sec,
+            diagnostics_json=message.diagnostics_json,
+        )
+        with self._recording_lock:
+            changed = view_changed(self._recording_view, view)
+            self._recording_view = view
+        if changed:
+            self._server.send_event({"type": "recording_state", "recording": view}, None)
+
+    def _quality_mark(self, client_id: str, message: dict[str, Any]) -> None:
+        reason = message["reason"]
+        if reason and reason not in self._quality_reason_ids:
+            raise ProtocolError("invalid_reason", f"unknown deviation reason: {reason}", message["request_id"])
+        mark = QualityMark()
+        mark.kind = MARK_KINDS[message["kind"]]
+        mark.stamp = self._wall_clock.now().to_msg()
+        mark.reason = reason
+        self._quality_mark_publisher.publish(mark)
+        self._server.send_event(
+            {"type": "quality_mark_result", "request_id": message["request_id"],
+             "kind": message["kind"], "reason": reason},
+            client_id,
+        )
 
     def _recover_motion(self, client_id: str, message: dict[str, Any]) -> None:
         arm = message["arm"]

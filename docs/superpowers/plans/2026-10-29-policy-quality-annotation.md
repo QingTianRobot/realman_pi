@@ -47,8 +47,8 @@ humble() {
   ssh server5090 "docker run --rm -e ROS_LOCALHOST_ONLY=1 -e ROS_DOMAIN_ID=231 \
     -v \$HOME/scratch/quality/repo:/w -w /w rm65-humble-rviz:local bash -lc '
       source /opt/ros/humble/setup.bash && source /opt/rm65_ws/install/setup.bash &&
-      colcon build --base-paths src/recording src/behavior/realman_bt src/driver/realman_web_control \
-        --packages-select realman_recording_msgs realman_recording realman_bt realman_web_control \
+      colcon build --base-paths src/driver/realman_msgs src/recording src/behavior/realman_bt src/driver/realman_web_control \
+        --packages-select realman_msgs realman_recording_msgs realman_recording realman_bt realman_web_control \
         --build-base /w/.build --install-base /w/.install \
         --cmake-args -DBUILD_TESTING=ON -DCMAKE_BUILD_TYPE=Release > /w/.build.log 2>&1 ||
         { tail -40 /w/.build.log; exit 1; }

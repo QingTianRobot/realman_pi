@@ -1,0 +1,11 @@
+# Deviation reasons for live marking (:8765) and replay editing. One file for the recorder,
+# the recording web page and realman_web_control. Order sets the :8765 digit keys (first
+# entry = key 1), so keep at most 9. The id is what manifests store: renaming an id orphans
+# the reason on every interval already labelled with it; change labels freely.
+reasons:
+  - {id: grasp_miss, label: 抓偏}
+  - {id: wrong_target, label: 目标错}
+  - {id: collision_risk, label: 碰撞风险}
+  - {id: stall, label: 卡住犹豫}
+  - {id: drop, label: 掉落}
+  - {id: other, label: 其他}

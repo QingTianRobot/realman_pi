@@ -61,6 +61,7 @@ jobs:
             src/recording/realman_recording:test/test_episode_tags_auto.py \
             src/recording/realman_recording:test/test_attempt_recording.py \
             src/recording/realman_recording:test/test_web_quality_events.py \
+            src/recording/realman_recording:test/test_lerobot_reindex.py \
             src/sensor/realman_camera_calibration:test/test_config.py \
             src/training/realman_training:test \
             .:tests/test_docker_restart_helper.py \

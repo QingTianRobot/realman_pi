@@ -762,6 +762,7 @@ void testHaltingWhileWaitingForTheOperatorSendsNothing() {
   f.settle();
 
   assert(f.stack.calls.empty());
+  assert(f.stack.attempts.empty());  // no START was sent, so the halt announces nothing
 }
 
 void testANewAttemptStartsCleanAfterAnAttempt() {
@@ -1227,6 +1228,29 @@ void testAHaltedAttemptIsAnnouncedAsHaltedOnce() {
   assert(!f.stack.attempts[1].succeeded);
 }
 
+void testOperatorModeAnnouncesTheAttemptOnlyOnceActivated() {
+  PolicyTaskConfig config = fastConfig();
+  config.activation = "operator";
+  Fixture f(false, config);
+  f.stack.serve();
+
+  // Waiting for a person can outlast the recorder's deadline, so nothing is announced yet.
+  assert(f.run(700ms) == NodeStatus::RUNNING);
+  f.settle();
+  assert(f.stack.attempts.empty());
+
+  f.stack.stats_allow_publish = true;
+  GraspScenario scenario(true);
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::SUCCESS);
+  f.settle();
+
+  assert(f.stack.attempts.size() == 2);
+  assert(f.stack.attempts[0].kind == AttemptEvent::START);
+  assert(f.stack.attempts[1].kind == AttemptEvent::RESULT);
+  assert(f.stack.attempts[0].attempt_id == f.stack.attempts[1].attempt_id);
+  assert(f.stack.attempts[1].outcome == "released_held");
+}
+
 void testADryRunAnnouncesNothing() {
   Fixture f(true);
   f.stack.serve();
@@ -1289,6 +1313,7 @@ int main(int argc, char** argv) {
   testARetryableFailureIsAnnouncedWithItsOutcome();
   testAFailedPreflightAnnouncesNothing();
   testAHaltedAttemptIsAnnouncedAsHaltedOnce();
+  testOperatorModeAnnouncesTheAttemptOnlyOnceActivated();
   testADryRunAnnouncesNothing();
   rclcpp::shutdown();
   return 0;

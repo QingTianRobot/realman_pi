@@ -360,7 +360,9 @@ bt_core::NodeStatus PolicyRunNode::tickPreflight(Clock::time_point now) {
   if (missing.text.empty()) {
     phase_ = Phase::kArming;
     phase_started_ = now;
-    publishAttemptStart();
+    // In operator mode the wait for a person is unbounded and would eat the recorder's deadline,
+    // so START is sent once the operator's activation is seen (see tickArming).
+    if (config_->activation != "operator") publishAttemptStart();
     return tickArming(now);
   }
   if (std::chrono::duration<double>(now - phase_started_).count() > config_->service_wait_sec) {
@@ -381,6 +383,7 @@ bt_core::NodeStatus PolicyRunNode::tickArming(Clock::time_point now) {
     }
     if (!allowed) return bt_core::NodeStatus::RUNNING;  // waiting for a person; nothing moves
     stop_needed_ = true;
+    publishAttemptStart();
     arm(now);
     return bt_core::NodeStatus::RUNNING;
   }

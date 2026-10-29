@@ -10,12 +10,17 @@ of ``None`` means the deviation never recovered before the recording ended.
 """
 from __future__ import annotations
 
+import argparse
+import json
 import re
+import time
 from dataclasses import dataclass
 from pathlib import Path
 from typing import Any, Iterable
 
 import yaml
+
+from .json_io import atomic_json_write
 
 REASON_ID_RE = re.compile(r"^[a-z][a-z0-9_]{0,31}$")
 MAX_REASONS = 9  # one digit key per reason on :8765
@@ -23,6 +28,7 @@ MAX_INTERVALS = 200
 SOURCES = frozenset({"live", "replay"})
 # Index = realman_recording_msgs/QualityMark.kind.
 MARK_KINDS = ("deviate_start", "recover", "reason")
+SIDECAR_SCHEMA = "realman.quality_events.v1"
 # Slack for interval bounds against the session's start/end wall time.
 BOUND_TOLERANCE_NS = 1_000_000_000
 # A live mark stamped further than this after its receipt is a clock problem, not a mark.
@@ -219,3 +225,177 @@ class LiveQualityTracker:
             }
             for item in self._intervals
         ]
+
+
+def frame_step_ns(fps: float) -> int:
+    """The exporter's integer policy-grid step (lerobot_exporter rounds the same way)."""
+    if not fps or fps <= 0:
+        raise QualityError("fps must be positive")
+    return round(1_000_000_000 / fps)
+
+
+def frame_time_ns(first_walltime_ns: int, fps: float, index: int) -> int:
+    return first_walltime_ns + index * frame_step_ns(fps)
+
+
+def interval_frames(
+    interval: dict[str, Any], *, first_walltime_ns: int, fps: float, frame_count: int,
+) -> tuple[int | None, int | None]:
+    """Inclusive frame range an interval covers, or ``(None, None)`` outside the episode."""
+    step = frame_step_ns(fps)
+    begin = parse_ns(interval["start_ns"], "start_ns")
+    start_frame = max(0, -(-(begin - first_walltime_ns) // step))
+    if interval["end_ns"] is None:
+        end_frame = frame_count - 1
+    else:
+        finish = parse_ns(interval["end_ns"], "end_ns")
+        end_frame = min(frame_count - 1, -(-(finish - first_walltime_ns) // step) - 1)
+    if frame_count <= 0 or start_frame > end_frame:
+        return None, None
+    return start_frame, end_frame
+
+
+def frame_labels(
+    intervals: list[dict[str, Any]], *, first_walltime_ns: int, fps: float, frame_count: int,
+) -> tuple[list[int], list[int]]:
+    """Per-frame ``deviating`` (0/1) and ``frames_to_deviation`` (0 inside, -1 none ahead)."""
+    deviating = [0] * frame_count
+    for interval in intervals:
+        start, end = interval_frames(
+            interval, first_walltime_ns=first_walltime_ns, fps=fps, frame_count=frame_count,
+        )
+        if start is not None and end is not None:
+            for index in range(start, end + 1):
+                deviating[index] = 1
+    frames_to_deviation = [-1] * frame_count
+    upcoming = -1
+    for index in range(frame_count - 1, -1, -1):
+        if deviating[index]:
+            frames_to_deviation[index] = 0
+            upcoming = index
+        elif upcoming >= 0:
+            frames_to_deviation[index] = upcoming - index
+    return deviating, frames_to_deviation
+
+
+def read_receipt(directory: Path) -> dict[str, Any] | None:
+    path = Path(directory) / "export" / "lerobot-v3.json"
+    if not path.is_file():
+        return None
+    payload = json.loads(path.read_text(encoding="utf-8"))
+    return payload if isinstance(payload, dict) else None
+
+
+def receipt_frames(receipt: dict[str, Any] | None) -> dict[str, Any] | None:
+    """``{fps, first_walltime_ns, frame_count}`` from an export receipt, or None."""
+    if not receipt:
+        return None
+    try:
+        fps = float(receipt["fps"])
+        first = int(receipt["first_walltime_ns"])
+        count = int(receipt["frame_count"])
+    except (KeyError, TypeError, ValueError):
+        return None
+    if fps <= 0 or first < 0 or count < 0:
+        return None
+    return {"fps": fps, "first_walltime_ns": first, "frame_count": count}
+
+
+def with_frames(intervals: list[dict[str, Any]], frames: dict[str, Any] | None) -> list[dict[str, Any]]:
+    """Copy of ``intervals`` with ``start_frame``/``end_frame`` (None without an export)."""
+    result = []
+    for interval in intervals:
+        start = end = None
+        if frames is not None:
+            start, end = interval_frames(
+                interval, first_walltime_ns=frames["first_walltime_ns"], fps=frames["fps"],
+                frame_count=frames["frame_count"],
+            )
+        result.append({**interval, "start_frame": start, "end_frame": end})
+    return result
+
+
+def session_document(directory: Path, reasons: Iterable[QualityReason]) -> dict[str, Any]:
+    """GET payload for one finalized session: quality block, frame grid and reason list."""
+    manifest = json.loads((Path(directory) / "manifest.json").read_text(encoding="utf-8"))
+    if not isinstance(manifest, dict):
+        raise QualityError("recording manifest must be a JSON object")
+    block = quality_block(manifest)
+    frames = receipt_frames(read_receipt(directory))
+    return {
+        "session_id": Path(directory).name,
+        "revision": block["revision"],
+        "attempt": block["attempt"],
+        "intervals": with_frames(block["intervals"], frames),
+        "frames": None if frames is None else {**frames, "first_walltime_ns": str(frames["first_walltime_ns"])},
+        "reasons": [{"id": reason.id, "label": reason.label} for reason in reasons],
+    }
+
+
+def build_sidecar(recording_root: Path, repo_id: str, *, generated_at_ns: int) -> dict[str, Any]:
+    """``episode_quality_events.json`` for one dataset, keyed by its episode_index.
+
+    Only exported (SUCCEEDED), not discarded or hidden sessions whose receipt names ``repo_id``
+    count. A broken session or a duplicate episode_index goes to ``errors`` instead of failing.
+    """
+    root = Path(recording_root)
+    episodes: dict[str, Any] = {}
+    errors: list[dict[str, str]] = []
+    for directory in (sorted(root.iterdir()) if root.is_dir() else []):
+        if not directory.is_dir() or directory.name.startswith(".") or not (directory / "manifest.json").is_file():
+            continue
+        try:
+            manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+            if not isinstance(manifest, dict):
+                raise QualityError("recording manifest must be a JSON object")
+            export = manifest.get("export") or {}
+            if export.get("state") != "SUCCEEDED" or manifest.get("decision") in {"DISCARDED", "DELETED"}:
+                continue
+            receipt = read_receipt(directory)
+            if not receipt or receipt.get("repo_id") != repo_id:
+                continue
+            frames = receipt_frames(receipt)
+            if frames is None:
+                raise QualityError("export receipt has no frame grid")
+            index = receipt.get("episode_index")
+            if type(index) is not int or index < 0:
+                raise QualityError("export receipt has no episode_index")
+            key = str(index)
+            if key in episodes:
+                raise QualityError(f"episode_index {index} already used by {episodes[key]['session_id']}")
+            block = quality_block(manifest)
+            episodes[key] = {
+                "session_id": directory.name,
+                "fps": frames["fps"],
+                "first_walltime_ns": str(frames["first_walltime_ns"]),
+                "frame_count": frames["frame_count"],
+                "attempt": block["attempt"],
+                "intervals": with_frames(block["intervals"], frames),
+            }
+        except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:
+            errors.append({"session_id": directory.name, "error": str(error)})
+    return {
+        "schema": SIDECAR_SCHEMA,
+        "repo_id": repo_id,
+        "generated_at_ns": str(generated_at_ns),
+        "episodes": dict(sorted(episodes.items(), key=lambda item: int(item[0]))),
+        "errors": errors,
+    }
+
+
+def main(argv: list[str] | None = None) -> int:
+    parser = argparse.ArgumentParser(prog="python3 -m realman_recording.quality_events")
+    commands = parser.add_subparsers(dest="command", required=True)
+    dump = commands.add_parser("dump", help="write episode_quality_events.json for one dataset")
+    dump.add_argument("--recording-root", required=True)
+    dump.add_argument("--repo-id", required=True)
+    dump.add_argument("-o", "--output", required=True)
+    args = parser.parse_args(argv)
+    sidecar = build_sidecar(Path(args.recording_root), args.repo_id, generated_at_ns=time.time_ns())
+    atomic_json_write(Path(args.output), sidecar)
+    print(f"wrote {len(sidecar['episodes'])} episodes ({len(sidecar['errors'])} errors) to {args.output}")
+    return 0
+
+
+if __name__ == "__main__":
+    raise SystemExit(main())

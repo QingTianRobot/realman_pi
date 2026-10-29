@@ -7,6 +7,7 @@ from realman_recording.attempt_recording import (
     NO_RESULT,
     attempt_goal,
     attempt_tags,
+    dataset_routing_error,
     finished_attempt,
     parse_profile_repo_ids,
     repo_id_for_profile,
@@ -56,3 +57,17 @@ def test_attempt_records_and_tags():
     assert finished_attempt(attempt, outcome="", succeeded=False, reason="")["outcome"] == NO_RESULT
     with pytest.raises(ValueError):
         started_attempt(attempt_id="", task="t", arm="r", prompt="", stamp_ns=0)
+
+
+def test_a_routed_profile_is_refused_when_the_export_dir_is_itself_a_dataset(tmp_path):
+    # The exporter appends to export_dir itself once it holds meta/info.json, whatever the
+    # repo_id, so a policy episode would land in the teleop dataset.
+    default = "realman/pi05-three-arm"
+    assert dataset_routing_error(tmp_path, "realman/pi05-policy-rollouts", default) is None
+    (tmp_path / "meta").mkdir()
+    (tmp_path / "meta" / "info.json").write_text("{}", encoding="utf-8")
+    message = dataset_routing_error(tmp_path, "realman/pi05-policy-rollouts", default)
+    assert message is not None
+    assert "realman/pi05-policy-rollouts" in message and str(tmp_path) in message
+    # The default dataset keeps exporting into such a directory as before.
+    assert dataset_routing_error(tmp_path, default, default) is None

@@ -32,6 +32,7 @@ from .attempt_recording import (
     NO_RESULT,
     attempt_goal,
     attempt_tags,
+    dataset_routing_error,
     finished_attempt,
     parse_profile_repo_ids,
     repo_id_for_profile,
@@ -820,6 +821,11 @@ class RecordingRecorderNode(Node):
                 },
             )
         try:
+            default_repo_id = str(self.get_parameter("lerobot_repo_id").value)
+            repo_id = repo_id_for_profile(profile, self._profile_repo_ids, default_repo_id)
+            routing_error = dataset_routing_error(output_dir, repo_id, default_repo_id)
+            if routing_error:
+                raise RuntimeError(routing_error)
             result = LeRobotExporter().export(
                 ExportRequest(
                     session_dir=directory,
@@ -827,9 +833,7 @@ class RecordingRecorderNode(Node):
                     target_fps=float(self.get_parameter("export_target_fps").value),
                     max_gap_sec=float(self.get_parameter("export_max_gap_sec").value),
                     schema=schema_from_parameters(
-                        repo_id=repo_id_for_profile(
-                            profile, self._profile_repo_ids, str(self.get_parameter("lerobot_repo_id").value)
-                        ),
+                        repo_id=repo_id,
                         fps=float(self.get_parameter("export_target_fps").value),
                         arms=self._arms,
                         arm_action_topics=self.get_parameter("arm_action_topics").value,

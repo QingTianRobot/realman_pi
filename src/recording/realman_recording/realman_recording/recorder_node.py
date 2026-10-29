@@ -536,6 +536,8 @@ class RecordingRecorderNode(Node):
             store.transition(self._state)
             self._session_profile = goal.profile.strip()
             self._attempt = None
+            self._attempt_open = False
+            self._auto_session = False
             self._quality_tracker = LiveQualityTracker(session_start_ns=now_wall_ns, reasons=self._quality_reasons)
             self._deadline_monotonic_ns = (
                 time.monotonic_ns() + int(goal.duration_sec) * 1_000_000_000
@@ -681,8 +683,10 @@ class RecordingRecorderNode(Node):
             finished = finished_attempt(unanswered, outcome=NO_RESULT, succeeded=False, reason=reason)
             try:
                 store.record_attempt_outcome(finished, auto_tags=attempt_tags(finished))
-            except OSError as error:
-                self._quality_write_errors += 1
+            except Exception as error:  # noqa: BLE001 - bad data must not wedge FINALIZING
+                if isinstance(error, OSError):
+                    with self._lock:
+                        self._quality_write_errors += 1
                 self.get_logger().error(
                     f"attempt outcome write failed for {session_id}: {error}"
                 )
@@ -1037,8 +1041,9 @@ class RecordingRecorderNode(Node):
             self._attempt_open = False
             try:
                 store.record_attempt_outcome(finished, auto_tags=attempt_tags(finished))
-            except OSError as error:
-                self._quality_write_errors += 1
+            except Exception as error:  # noqa: BLE001 - bad data must not skip the stop
+                if isinstance(error, OSError):
+                    self._quality_write_errors += 1
                 self.get_logger().error(
                     f"attempt outcome write failed for {store.session.session_id}: {error}"
                 )

@@ -191,9 +191,9 @@ def test_a_failed_mark_write_does_not_stop_the_recording(tmp_path, monkeypatch):
 ATTEMPT = "policy_attempt_20261029_031500_r"
 
 
-def _attempt(publisher, wall, kind, attempt_id=ATTEMPT, **fields):
+def _attempt(publisher, wall, kind, attempt_id=ATTEMPT, task="pick_only", **fields):
     from realman_recording_msgs.msg import AttemptEvent
-    message = AttemptEvent(kind=kind, attempt_id=attempt_id, task="pick_only", arm="r",
+    message = AttemptEvent(kind=kind, attempt_id=attempt_id, task=task, arm="r",
                            prompt="pick up the white object", **fields)
     message.stamp = wall.now().to_msg()
     publisher.publish(message)
@@ -274,4 +274,31 @@ def test_an_attempt_is_not_recorded_while_another_session_records(tmp_path):
         assert _wait(lambda: recorder._auto_record_counters["ignored_busy"] == 1)
         assert recorder._attempt is None
         assert recorder._store.session.session_id == started.session_id
+        stopped = _manage(driver, ManageRecording.Request.STOP)
+        assert stopped.success
+        path = tmp_path / "sessions" / started.session_id / "manifest.json"
+        assert _wait(path.is_file, timeout=3.0)
+        assert _read_manifest(path).get("decision") == "PENDING"
+
+
+def test_an_attempt_with_an_over_long_task_still_finalizes(tmp_path):
+    extra = {"auto_record_cameras": False, "auto_record_stop_margin_sec": 5,
+             "lerobot_profile_repo_ids": ["policy_rollout=realman/pi05-policy-rollouts"]}
+    with recorder_graph(tmp_path, extra) as (recorder, driver):
+        from rclpy.clock import Clock, ClockType
+        from realman_recording_msgs.msg import AttemptEvent
+        from realman_recording_msgs.srv import ManageRecording
+        wall = Clock(clock_type=ClockType.SYSTEM_TIME)
+        attempts, _ = _publishers(driver)
+        long_task = "x" * 600
+        _attempt(attempts, wall, AttemptEvent.START, max_duration_sec=30, task=long_task)
+        assert _wait(lambda: recorder._store is not None)
+        session_id = recorder._store.session.session_id
+        _attempt(attempts, wall, AttemptEvent.RESULT, outcome="lifted_held", succeeded=True, task=long_task)
+        path = tmp_path / "sessions" / session_id / "manifest.json"
+        assert _wait(path.is_file, timeout=8.0), "session never finalized"
+        manifest = _read_manifest(path)
+        assert manifest.get("state") == "READY", f"expected READY, got {manifest.get('state')}"
+        started = _manage(driver, ManageRecording.Request.START, profile="manual", task="teleop", record_cameras=False)
+        assert started.success, f"manual START after bad-attempt session failed: {started.message}"
         assert _manage(driver, ManageRecording.Request.STOP).success

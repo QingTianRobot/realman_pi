@@ -86,7 +86,7 @@ LeRobot v3 的每个向量 feature 都在 `features.<key>.names` 中声明分量
 两个 ROS 节点的订阅实体由 `rclpy.Node` 自身登记和销毁；不要覆盖或重复 append
 `self._subscriptions`。在 Humble 中重复登记同一个 Subscription 会导致节点退出时二次销毁并抛出异常。
 
-`/recording/manage` 是人工和 Pika 的会话控制入口，类型为 `realman_recording_msgs/srv/ManageRecording`。策略尝试另走 `/recording/attempt`（见下文"策略尝试自动录制与偏离打点"）。录制平台不提供 `recording/manage_session` Action；网页也只读取状态，不发起录制控制：
+`/recording/manage` 是人工和 Pika 的会话控制入口，类型为 `realman_recording_msgs/srv/ManageRecording`。策略尝试另走 `/recording/attempt`（见下文“策略尝试自动录制与偏离打点”）。录制平台不提供 `recording/manage_session` Action；网页也只读取状态，不发起录制控制：
 
 | 命令 | 所需字段 | 行为 |
 | --- | --- | --- |

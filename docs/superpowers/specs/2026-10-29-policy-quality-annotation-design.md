@@ -70,9 +70,10 @@ string attempt_id               # 与 policy trace CSV 文件名（去掉 .csv�
 string task                     # policy_task.tasks 里的任务名
 string arm
 string prompt
-uint32 max_duration_sec         # 仅 START：本次尝试最长会持续多久（准备 + 运行）
-string result                   # 仅 RESULT：SUCCESS / FAILURE / HALTED
-string failure_reason           # 仅 RESULT：PolicyRunNode 的 policy_failure_reason，成功时为空
+uint32 max_duration_sec         # 仅 START：从 START 起本次尝试最长会持续多久（激活 + 运行 + 停止）
+string outcome                  # 仅 RESULT：PolicyRun 的结果名（lifted_held、dropped、timeout……）或 halted
+bool succeeded                  # 仅 RESULT：这次尝试是否成功
+string reason                   # 仅 RESULT：PolicyRun 给出的原因说明，成功时为空
 
 # msg/QualityMark.msg —— 话题 /recording/quality_mark，reliable，depth 50，volatile
 uint8 DEVIATE_START=0
@@ -90,9 +91,10 @@ string reason                   # quality_reasons 里的 id，或空
   这样 recorder 有一秒以上的时间完成预检和开录。准备检查就失败的尝试不发任何事件。
 - `attempt_id`：trace 打开成功时用 trace 文件名去掉 `.csv`（`policy_attempt_<UTC>_<arm>[_n]`）；
   trace 打开失败时用 `policy_attempt_<UTC>_<arm>`。
-- `max_duration_sec` = ceil(`service_wait_sec` + `max_attempt_sec`)。
-- 在写 trace 结尾行的同一个位置发 `RESULT`：成功或失败时 `result` 用 outcome 名，`failure_reason`
-  取自黑板上的 `policy_failure_reason`。`halt()` 发 `RESULT result=HALTED`。
+- `max_duration_sec` = ceil(`max_attempt_sec` + 4 × `service_call_timeout_sec` + `router_release_sec`)。
+  START 在预检通过之后才发，所以不含预检等待；4 次服务调用是激活加 3 个停止步骤。
+- 在写 trace 结尾行的同一个位置发 `RESULT`：`outcome` 是结果名，`succeeded` 是是否成功，`reason` 是原因说明。
+  `halt()` 发 `outcome=halted`、`succeeded=false`。
 - 发布不等待、不抛异常，失败只记日志，不影响尝试本身。
 
 ## recorder 的行为
@@ -102,6 +104,9 @@ string reason                   # quality_reasons 里的 id，或空
 | 参数 | 默认 | 说明 |
 |---|---|---|
 | `auto_record_enabled` | `true` | 关掉后不订阅 `/recording/attempt`，打点仍然照收 |
+| `attempt_topic` | `/recording/attempt` | 尝试事件话题 |
+| `quality_mark_topic` | `/recording/quality_mark` | 打点话题；空字符串表示不订阅 |
+| `auto_record_cameras` | `true` | 自动开录时是否录相机（没有相机的测试环境设为 false） |
 | `auto_record_profile` | `policy_rollout` | 自动开录时用的 profile |
 | `auto_record_stop_margin_sec` | `10` | 兜底停录时间 = `max_duration_sec` + 这个余量 |
 | `auto_record_adopt_on_stop` | `true` | 自动 session 干净停录后立即 ADOPT；全局 `auto_export_on_stop` 不变 |
@@ -121,11 +126,12 @@ string reason                   # quality_reasons 里的 id，或空
   抛出 "already active"，就忽略这次 START，计数 `auto_record_ignored_busy`。
   预检失败记 WARN，原因写进 status 的 `auto_record_last_error`，计数 `auto_record_start_failed`。
 - `RESULT`：只在当前 session 是自动 session 并且 `attempt_id` 一致时处理，否则忽略并计数 `attempt_result_ignored`。
-  处理顺序：把 result 和 failure_reason 写进 `quality.attempt`，用 `_stop_session` 停录（这里的 success 表示
+  处理顺序：把 outcome、succeeded、reason 写进 `quality.attempt`，用 `_stop_session` 停录（这里的 success 表示
   收尾是否干净，不是任务成败），finalize 后写 auto 标签。`auto_record_adopt_on_stop` 打开时，自动 session 跟
   `auto_export_on_stop` 走同一条 ADOPT 入队路径（`should_auto_export` 的判断里加上这个开关），FAILED 的 session 照旧不导出。
-- 兜底：到了 `duration_sec` 还没收到 RESULT，由现有的自动结束逻辑停录，finalize 时写
-  `quality.attempt.result = "TIMEOUT_NO_RESULT"`，auto 标签 `success=false`、`failure_reason=no_result`。
+- 兜底：没收到 RESULT 就停录了（到 `duration_sec` 由现有的自动结束逻辑停录，或者被 `/recording/manage` STOP、
+  节点退出），finalize 前写 `quality.attempt.outcome = "no_result"`、`succeeded=false`，auto 标签 `success=false`、
+  `failure_reason=no_result`。
 
 打点（只要有 session 在 RECORDING 就收，不限于自动 session）：
 
@@ -141,7 +147,7 @@ string reason                   # quality_reasons 里的 id，或空
 - 停录时如果还有未恢复的区间，它的 `end_ns` 保持 `null`。
 
 状态（不改 `RecordingStatus.msg`）：在 `diagnostics_json` 里加一个 `quality` 对象：
-`{"profile", "attempt_id", "deviating": bool, "deviation_start_ns", "reason", "rejected_marks", "dropped_marks", "auto_record_last_error"}`。
+`{"profile", "attempt_id", "deviating": bool, "deviation_start_ns", "reason", "rejected_marks", "dropped_marks", "auto_record_last_error", "auto_record": {"ignored_busy", "start_failed", "result_ignored"}}`。
 
 ## manifest 的 `quality` 块
 
@@ -151,7 +157,8 @@ string reason                   # quality_reasons 里的 id，或空
 "quality": {
   "revision": 0,
   "attempt": {"attempt_id": "policy_attempt_20261029_031500_r", "task": "pick_only", "arm": "r",
-              "prompt": "pick up the white object", "result": "FAILURE", "failure_reason": "dropped"},
+              "prompt": "pick up the white object", "started_ns": "1792984499000000000",
+              "outcome": "dropped", "succeeded": false, "reason": "the object slipped out of the closed jaws"},
   "intervals": [
     {"start_ns": "1792984500123000000", "end_ns": "1792984503456000000", "reason": "grasp_miss", "source": "live"},
     {"start_ns": "1792984507000000000", "end_ns": null, "reason": null, "source": "live"}
@@ -170,8 +177,8 @@ string reason                   # quality_reasons 里的 id，或空
 
 - `episode_tags` 新增 `auto` 层，effective = defaults 快照 → auto → manual，最后去掉 removed。
   `tag_sources` 里 auto 层的键显示为 `auto`。
-- recorder 在 RESULT 或兜底停录时写：`success`（result == SUCCESS）、`failure_reason`（成功时不写）、
-  `policy_task`、`attempt_id`。
+- recorder 在 RESULT 或兜底停录时写：`success`（= succeeded）、`failure_reason`（= outcome，成功时不写）、
+  `policy_task`、`attempt_id`。同时把 manifest 的 `annotations.success` / `annotations.failure_reason` 设成同样的值。
 - 新增派生标签 `deviation_count` = `quality.intervals` 的条数，`tag_sources` 显示为 `derived`。
   区间改了就跟着重算，并刷新 `episode_meta.json`。跟 `date` 一样，`deviation_count` 不能手动改，也不能设为全局默认值，
   `validate_tags` 遇到会拒绝。
@@ -180,7 +187,7 @@ string reason                   # quality_reasons 里的 id，或空
 
 纯函数，不依赖 ROS，回放接口、sidecar 导出和测试共用：
 
-- 第 i 帧的时间 `t_i = first_walltime_ns + round(i × 1e9 / fps)`，两个值取自导出回执。
+- 第 i 帧的时间 `t_i = first_walltime_ns + i × round(1e9 / fps)`，两个值取自导出回执（与导出器和回放的整数网格一致）。
 - `deviating[i] = 1`：存在某个区间满足 `start_ns ≤ t_i < end_ns`（end 为 null 时按 +∞）。
 - `frames_to_deviation[i]`：在区间内为 0；否则是到下一个区间第一帧的帧数；后面没有区间为 -1。
 - 区间对应的帧：`start_frame` 是第一个满足 `t_i ≥ start_ns` 的 i；`end_frame` 是最后一个满足 `t_i < end_ns` 的 i
@@ -193,7 +200,7 @@ sidecar `episode_quality_events.json`：
 ```json
 {"schema": "realman.quality_events.v1", "repo_id": "realman/pi05-policy-rollouts", "generated_at_ns": "...",
  "episodes": {"12": {"session_id": "...", "fps": 15, "first_walltime_ns": "...", "frame_count": 270,
-                     "attempt": {"attempt_id": "...", "result": "FAILURE", "failure_reason": "dropped"},
+                     "attempt": {"attempt_id": "...", "outcome": "dropped", "succeeded": false},
                      "intervals": [{"start_ns": "...", "end_ns": "...", "start_frame": 40, "end_frame": 88,
                                     "reason": "grasp_miss", "source": "replay"}]}}}
 ```
@@ -206,7 +213,7 @@ sidecar `episode_quality_events.json`：
 
 - **WS 指令** `quality_mark {kind: "deviate_start" | "recover" | "reason", reason?: string}`：
   - 在 `protocol.py` 里校验：kind 只能是三者之一；reason 必须是列表里的 id 或省略；`reason` 这个 kind 必须带 reason。
-  - 需要写权限（`REALMAN_WEB_CONTROL_TOKEN`）。
+  - 和其他写操作一样，只在页面可写时发送（前端 `canWrite()`；服务端当前没有只读模式）。
   - web_control 用节点时钟盖戳后发 `QualityMark`，并给浏览器回执。
 - **状态**：web_control 订阅 `/recording/status`，把 `state`、`session_id`、`elapsed_sec` 和 `diagnostics_json.quality`
   精简成 `recording` 状态推给浏览器。原因列表从 `quality_reasons_path` 读，放进页面 manifest。
@@ -228,8 +235,9 @@ sidecar `episode_quality_events.json`：
 - **右侧面板**：列出每段的起止帧和时间、原因下拉框、来源。
 - **按键**：现有的 Q/R 留给 subtask，不改。
   - `D`：当前帧不在区间内就新开一段（结束点暂时为 null）；在区间内就把结束点设到包含当前帧；
-  - `[` `]`：把选中的边界挪一帧；
-  - `Delete`：删掉选中的区间。
+  - `[` `]`：把当前帧所在区间的起点 / 终点设到当前帧；当前帧不在区间里时，`[` 改后面最近一段的起点，
+    `]` 改前面最近一段的终点（用来延长）；
+  - `Delete`：删掉当前帧所在的区间。
 - **保存**：
   - `GET /api/recording/{sid}/quality_events` 返回 `{intervals, attempt, revision, frames}`，其中
     `frames = {fps, first_walltime_ns, frame_count}` 来自导出回执，每段区间额外带上算好的 `start_frame`/`end_frame`；
@@ -256,7 +264,7 @@ sidecar `episode_quality_events.json`：
 - `config/ros/recording.yaml`：recorder 段加上面的 `auto_record_*`、`lerobot_profile_repo_ids`、`quality_reasons_path`；
   web server 段加 `quality_reasons_path`。
 - `config/ros/realman_web_control.yaml`：加 `quality_reasons_path`。
-- Compose：recorder、recording web、web_control 三个容器挂载 `config/recording`（只读）。
+- Compose 不用改：所有容器已经把整个 `./config` 只读挂到 `/opt/rm65_ws/config`（`REALMAN_CONFIG_ROOT`）。
 
 ## 异常处理汇总
 
@@ -266,7 +274,7 @@ sidecar `episode_quality_events.json`：
 | 已经有 session 在 RECORDING | 忽略 START，计数 `auto_record_ignored_busy` |
 | 上一次 STOP 还在收尾 | START 在串行 worker 里排队，收尾完成后开录 |
 | RESULT 的 attempt_id 对不上，或当前不是自动 session | 忽略，计数 `attempt_result_ignored` |
-| 没收到 RESULT | 到 `duration_sec` 自动停录，`TIMEOUT_NO_RESULT`，`success=false` |
+| 没收到 RESULT 就停录（超时、手动 STOP、节点退出） | `outcome=no_result`，`success=false` |
 | 打点顺序、时间或原因不合法 | 忽略，计数 `rejected_marks` |
 | 不在录制中时收到打点 | 计入 recorder 诊断的 `dropped_marks` |
 | 停录时还在偏离 | `end_ns = null` |
@@ -315,4 +323,4 @@ sidecar `episode_quality_events.json`：
 
 - 新消息要求重建所有带 `realman_recording_msgs` 的镜像：recorder、recording web、bringup（realman_bt）、web_control。
   Pika 那台机器不用动。
-- 部署前在 realman_ts 上确认 compose 已经挂载 `config/recording`，并确认新数据集目录可写。
+- 部署前确认 realman_ts 的 `lerobot_export_dir` 下能新建 `realman__pi05-policy-rollouts` 目录。

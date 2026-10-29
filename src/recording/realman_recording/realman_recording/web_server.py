@@ -9,6 +9,7 @@ from __future__ import annotations
 import asyncio
 import json
 import threading
+import time
 from pathlib import Path
 from typing import Any, Callable
 
@@ -16,6 +17,7 @@ from .lerobot_web_replay import LeRobotReplayCatalog, queue_from_manifests
 from .lerobot_reindex import reindex_dataset
 from .episode_tags import EpisodeTagStore, TagConflict, tag_types
 from .session_store import SessionStore
+from .quality_events import QualityConflict, QualityReason, build_sidecar, session_document
 
 
 def _parse_range(header: str | None, size: int) -> tuple[int, int] | None:
@@ -95,6 +97,7 @@ class RecordingWebServer:
         lerobot_export_dir: str | Path,
         logger: Any,
         export_all: Callable[[], dict[str, Any]] | None = None,
+        quality_reasons: tuple[QualityReason, ...] = (),
     ) -> None:
         self._bind_host = bind_host
         self._port = port
@@ -106,6 +109,7 @@ class RecordingWebServer:
         self._replay = LeRobotReplayCatalog(recording_root, lerobot_export_dir)
         self._tags = EpisodeTagStore(recording_root)
         self._export_all = export_all
+        self._quality_reasons = tuple(quality_reasons)
         self._logger = logger
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -216,6 +220,7 @@ class RecordingWebServer:
         app.router.add_get("/api/lerobot", self._lerobot_list)
         app.router.add_get("/api/lerobot/queue", self._lerobot_queue)
         app.router.add_get("/api/lerobot/pending", self._lerobot_pending)
+        app.router.add_get("/api/lerobot/quality_events", self._quality_sidecar)
         app.router.add_get("/api/recording/tag-defaults", self._tag_defaults_get)
         app.router.add_put("/api/recording/tag-defaults", self._tag_defaults_put)
         app.router.add_post("/api/recording/tags/backfill", self._tags_backfill)
@@ -223,6 +228,8 @@ class RecordingWebServer:
         app.router.add_post("/api/recording/episode-meta/rebuild", self._episode_meta_rebuild)
         app.router.add_get("/api/recording/{session_id}/tags", self._tags_get)
         app.router.add_put("/api/recording/{session_id}/tags", self._tags_put)
+        app.router.add_get("/api/recording/{session_id}/quality_events", self._quality_get)
+        app.router.add_put("/api/recording/{session_id}/quality_events", self._quality_put)
         app.router.add_post("/api/lerobot/export-all", self._lerobot_export_all)
         app.router.add_post("/api/lerobot/reindex", self._lerobot_reindex)
         app.router.add_get("/api/lerobot/{session_id}/summary", self._lerobot_summary)
@@ -724,6 +731,51 @@ class RecordingWebServer:
         except RuntimeError as error:
             raise web.HTTPConflict(text=str(error)) from error
         return web.json_response({"ok": True})
+
+    async def _quality_get(self, request: Any) -> Any:
+        """Deviation intervals of one finalized session, with frames and the reason list."""
+        from aiohttp import web
+        try:
+            directory = self._session_directory(request.match_info["session_id"])
+            document = await asyncio.to_thread(session_document, directory, self._quality_reasons)
+        except (OSError, ValueError) as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        return web.json_response(document)
+
+    async def _quality_put(self, request: Any) -> Any:
+        """Replace one session's deviation intervals (compare-and-set on ``revision``)."""
+        from aiohttp import web
+        body = await self._tag_body(request)
+        try:
+            directory = self._session_directory(request.match_info["session_id"])
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        try:
+            await asyncio.to_thread(
+                SessionStore.update_quality_intervals, directory, body.get("intervals"), body.get("revision"),
+                reasons=[reason.id for reason in self._quality_reasons],
+            )
+            document = await asyncio.to_thread(session_document, directory, self._quality_reasons)
+        except QualityConflict as error:
+            raise web.HTTPConflict(text=str(error)) from error
+        except ValueError as error:
+            raise web.HTTPBadRequest(text=str(error)) from error
+        except OSError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        return web.json_response(document)
+
+    async def _quality_sidecar(self, request: Any) -> Any:
+        """``episode_quality_events.json`` for one exported dataset, as a download."""
+        from aiohttp import web
+        repo_id = request.query.get("repo_id", "")
+        if "/" not in repo_id:
+            raise web.HTTPBadRequest(text="repo_id must be an owner/dataset identifier")
+        sidecar = await asyncio.to_thread(
+            build_sidecar, self._recording_root, repo_id, generated_at_ns=time.time_ns(),
+        )
+        return web.json_response(
+            sidecar, headers={"Content-Disposition": 'attachment; filename="episode_quality_events.json"'},
+        )
 
     async def _lerobot_frames(self, request: Any) -> Any:
         from aiohttp import web

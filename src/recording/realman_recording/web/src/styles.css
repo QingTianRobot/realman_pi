@@ -209,3 +209,20 @@
 .tags-actions{justify-content:flex-start;flex-wrap:wrap;margin-top:14px}
 .tags-actions #tags-save{margin-left:auto;background:#245a85}
 @media(max-width:560px){.tag-row,.tag-row:has(.tag-type){grid-template-columns:1fr 1fr}.tag-row label{grid-column:1/-1}.tag-row small{grid-column:1/-1}.tags-actions #tags-save{margin-left:0}}
+.replay-timeline .quality-track{position:relative;height:6px;margin-top:6px;background:#101826;border-radius:3px;overflow:hidden}
+.replay-timeline .quality-band{position:absolute;top:0;bottom:0;background:var(--red);opacity:.85}
+.replay-timeline .quality-band.open{background:repeating-linear-gradient(135deg,var(--red) 0 4px,transparent 4px 8px)}
+.replay-timeline .quality-bar{display:flex;align-items:center;gap:10px;margin-top:9px;padding-top:9px;border-top:1px solid var(--line)}
+.replay-timeline .quality-bar button{background:#1c2d45;color:var(--text);border:1px solid #2b4665;border-radius:6px;padding:5px 12px;cursor:pointer;font:11px inherit}
+.replay-timeline .quality-bar button.active{border-color:var(--red);color:var(--red)}
+.replay-timeline .quality-status{flex:1;color:var(--muted);font:11px ui-monospace,Menlo,monospace}
+.replay-timeline .quality-status b{color:var(--amber);font-weight:600}
+.replay-timeline .quality-panel{display:none;margin-top:9px}
+.replay-timeline .quality-panel:not([hidden]){display:block}
+.replay-timeline .quality-attempt{color:var(--muted);font:11px ui-monospace,Menlo,monospace;margin-bottom:6px}
+.replay-timeline .quality-list{display:grid;gap:5px;max-height:150px;overflow:auto}
+.replay-timeline .quality-row{display:flex;align-items:center;gap:8px;background:#0d1420;border:1px solid #202c40;border-radius:6px;padding:6px 9px;font:11px ui-monospace,Menlo,monospace}
+.replay-timeline .quality-range{min-width:84px}
+.replay-timeline .quality-source{color:var(--muted)}
+.replay-timeline .quality-remove{margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px}
+@media (max-width:720px){.replay-timeline .quality-bar{flex-wrap:wrap}.replay-timeline .quality-status{flex-basis:100%}}

@@ -10,6 +10,7 @@ import { renderAnalysis } from "./replay/analysis";
 import { initVideo, type VideoContext } from "./replay/video";
 import { initCharts, renderHealth } from "./replay/charts";
 import { initAnnotation } from "./replay/annotation";
+import { initQuality } from "./replay/quality";
 
 type ArmId = "l" | "m" | "r";
 type Robot = {
@@ -551,6 +552,7 @@ async function selectReplaySession(sessionId: string) {
     video.load();
     renderHealth(summary.quality ?? session?.quality);
     void annotation.load(sessionId);
+    quality.load(sessionId);
     renderReplayFrame(0);
   } catch (error) {
     console.error("selectReplaySession failed:", error);
@@ -562,6 +564,7 @@ function exitReplay() {
   video.clear();
   charts.clear();
   annotation.clear();
+  quality.clear();
   renderHealth(undefined);
   sidebar.setActive(null);
   replay = null;
@@ -607,6 +610,7 @@ function renderReplayFrame(frameIndex: number) {
     .join("");
   charts.render(frame, replay.frames, replay.index);
   annotation.onFrameChange(frameIndex);
+  quality.onFrameChange(frameIndex);
 }
 
 function refreshProgress(): void {
@@ -675,6 +679,11 @@ const charts = initCharts();
 const annotation = initAnnotation({
   getSessionId: () => replay?.session ?? null,
   getCurrentFrame: () => replay?.index ?? 0,
+  notify,
+});
+const quality = initQuality({
+  getCurrentFrame: () => replay?.index ?? 0,
+  getRepoId: () => (replay ? sidebar.getSession(replay.session)?.repo_id ?? null : null),
   notify,
 });
 const rawViewer = initRawViewer({ notify });

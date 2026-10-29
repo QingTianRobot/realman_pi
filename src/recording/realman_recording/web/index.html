@@ -68,7 +68,7 @@
 
     <nav class="tabs">
       <button class="tab active" data-tab="record">录制</button>
-      <button class="tab" data-tab="replay">转换</button>
+      <button class="tab" data-tab="replay">回放</button>
     </nav>
 
     <!-- 录制 tab：只展示状态与实时监控，转换队列/转换进度移到「转换」页 -->
@@ -140,7 +140,7 @@
             <label>速度 <select id="replay-speed"><option value="0.25">0.25×</option><option value="0.5">0.5×</option><option value="1" selected>1×</option><option value="2">2×</option></select></label>
             <span id="replay-frame-label" class="frame-label">— / —</span>
           </section>
-          <section class="panel replay-timeline"><input id="replay-slider" type="range" min="0" max="0" value="0" step="1"><div class="timeline-meta"><span id="replay-time-label">—</span><span>LeRobot policy timeline</span></div><div class="annotation-bar"><button id="annotation-toggle" type="button" title="进入标注模式，Q 标记起点，R 标记终点">标注</button><span id="annotation-status" class="annotation-status"></span><span id="annotation-frame" class="annotation-frame"></span></div><div id="annotation-panel" class="annotation-panel" hidden><div id="annotation-list" class="annotation-list"><div class="annotation-empty">暂无已标注段</div></div><div class="annotation-actions"><button id="annotation-save" type="button" title="保存当前标注">保存</button><button id="annotation-cancel" type="button" title="取消当前未完成段">取消当前段</button></div></div></section>
+          <section class="panel replay-timeline"><input id="replay-slider" type="range" min="0" max="0" value="0" step="1"><div id="quality-track" class="quality-track" aria-label="偏离区间"></div><div class="timeline-meta"><span id="replay-time-label">—</span><span>LeRobot policy timeline</span></div><div class="annotation-bar"><button id="annotation-toggle" type="button" title="进入标注模式，Q 标记起点，R 标记终点">标注</button><span id="annotation-status" class="annotation-status"></span><span id="annotation-frame" class="annotation-frame"></span></div><div id="annotation-panel" class="annotation-panel" hidden><div id="annotation-list" class="annotation-list"><div class="annotation-empty">暂无已标注段</div></div><div class="annotation-actions"><button id="annotation-save" type="button" title="保存当前标注">保存</button><button id="annotation-cancel" type="button" title="取消当前未完成段">取消当前段</button></div></div><div class="quality-bar"><button id="quality-toggle" type="button" title="编辑偏离区间：D 开始/结束，[ ] 改起止，Delete 删除">偏离</button><span id="quality-status" class="quality-status"></span><button id="quality-export" type="button" title="下载当前数据集的 episode_quality_events.json">导出偏离标注</button></div><div id="quality-panel" class="quality-panel" hidden><div id="quality-attempt" class="quality-attempt"></div><div id="quality-list" class="quality-list"></div></div></section>
         </section>
         </div>
         <aside class="studio-inspector panel">
@@ -149,6 +149,7 @@
             <div id="replay-health" class="replay-health"><div class="empty">选择 Episode 后显示健康统计</div></div>
             <div class="inspector-selectors">
               <label>字段 <select id="replay-feature-select" class="studio-select" aria-label="选择要绘制的状态/动作字段"></select></label>
+              <label>分量 <select id="replay-feature-component" class="studio-select" aria-label="选择向量分量" hidden></select></label>
             </div>
             <div class="chart-toolbar"><button id="replay-split-toggle" type="button" title="把每个维度拆成一张迷你图">拆分视图</button><button id="replay-zoom-reset" type="button" title="重置缩放（也可双击图表）" style="display:none">重置缩放</button></div>
             <div id="replay-joint-filter" class="joint-dropdown"></div>

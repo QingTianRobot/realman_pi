@@ -48,6 +48,21 @@ def test_attempt_outcome_sets_tags_and_business_success(tmp_path):
     assert session.session_id == final["session_id"]
 
 
+def test_bad_auto_tags_leave_the_attempt_and_annotations_untouched(tmp_path):
+    store = SessionStore(tmp_path)
+    session = store.create({"profile": "policy_rollout"}, started_realtime_ns=START, started_monotonic_ns=1)
+    store.update_quality(live_quality())
+    attempt = {"attempt_id": "policy_attempt_x", "task": "pick_only", "outcome": "dropped", "succeeded": False}
+    with pytest.raises(ValueError):
+        store.record_attempt_outcome(attempt, auto_tags={"success": "no"})
+    final = json.loads(store.finalize(True, ended_realtime_ns=START + 5 * SECOND).read_text(encoding="utf-8"))
+    assert final["quality"] == live_quality()  # attempt still None
+    assert final["episode_tags"].get("auto") in (None, {})
+    assert final["annotations"]["failure_reason"] is None
+    assert final["annotations"]["success"] == final["episode_tags"]["defaults"]["success"]
+    assert session.session_id == final["session_id"]
+
+
 def test_an_interrupted_session_keeps_its_quality_block(tmp_path):
     store = SessionStore(tmp_path)
     session = store.create({"profile": "policy_rollout"}, started_realtime_ns=START, started_monotonic_ns=1)

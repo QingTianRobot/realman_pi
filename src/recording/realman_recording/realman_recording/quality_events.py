@@ -79,7 +79,7 @@ def parse_ns(value: Any, field: str) -> int:
         raise QualityError(f"{field} must be nanoseconds")
     if isinstance(value, int):
         number = value
-    elif isinstance(value, str) and value.isdigit():
+    elif isinstance(value, str) and value.isascii() and value.isdigit():
         number = int(value)
     else:
         raise QualityError(f"{field} must be nanoseconds as an integer or decimal string")

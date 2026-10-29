@@ -2027,11 +2027,13 @@ class WebControlNode(Node):
             elapsed_sec=message.elapsed_sec,
             diagnostics_json=message.diagnostics_json,
         )
+        # Broadcast under the lock: send_event only schedules onto the server loop (FIFO), so
+        # concurrent status callbacks reach clients in the order they updated the view.
         with self._recording_lock:
             changed = view_changed(self._recording_view, view)
             self._recording_view = view
-        if changed:
-            self._server.send_event({"type": "recording_state", "recording": view}, None)
+            if changed:
+                self._server.send_event({"type": "recording_state", "recording": view}, None)
 
     def _quality_mark(self, client_id: str, message: dict[str, Any]) -> None:
         reason = message["reason"]

@@ -256,10 +256,12 @@ class SessionStore:
             raise RuntimeError("no active recording session")
         from .episode_tags import validate_tags
         from .quality_events import quality_block
+        # Validate first so bad tags leave quality.attempt and annotations untouched.
+        clean_tags = validate_tags(auto_tags)
         quality = quality_block(self._manifest)
         quality["attempt"] = attempt
         self._manifest["quality"] = quality
-        self._manifest["episode_tags"]["auto"] = validate_tags(auto_tags)
+        self._manifest["episode_tags"]["auto"] = clean_tags
         annotations = self._manifest["annotations"]
         annotations["success"] = bool(attempt.get("succeeded"))
         annotations["failure_reason"] = None if attempt.get("succeeded") else attempt.get("outcome")

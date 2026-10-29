@@ -15,6 +15,7 @@ from realman_recording.quality_events import (
     interval_frames,
     load_quality_reasons,
     main,
+    parse_ns,
     quality_block,
     session_document,
     validate_intervals,
@@ -82,6 +83,17 @@ def test_valid_intervals_are_normalized_to_decimal_strings():
 def test_invalid_intervals_are_refused(intervals):
     with pytest.raises(QualityError):
         validate_intervals(intervals, start_ns=START, end_ns=START + 10 * SECOND, reasons=REASONS)
+
+
+@pytest.mark.parametrize("value", ["\u0661\u0662\u0663", "\u00b2", "1\uff10"])  # Arabic-Indic, superscript, fullwidth
+def test_non_ascii_digit_strings_are_not_nanoseconds(value):
+    with pytest.raises(QualityError):
+        parse_ns(value, "start_ns")
+
+
+def test_ascii_decimal_strings_and_ints_are_nanoseconds():
+    assert parse_ns("123", "start_ns") == 123
+    assert parse_ns(123, "start_ns") == 123
 
 
 def test_quality_block_defaults_for_sessions_without_one():

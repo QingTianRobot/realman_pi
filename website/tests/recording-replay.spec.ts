@@ -134,14 +134,14 @@ test("replay workspace synchronizes camera tiles and exposes added canonical fea
   await page.getByRole("button", { name: "回放" }).click();
   await expect(page.locator("#replay-search")).toBeVisible();
   await expect(page.locator('#replay-filter option[value="pick the object"]')).toHaveCount(1);
-  await expect(page.locator('.episode-item[data-session="episode-1"] .episode-action[data-action="hide"]')).toHaveText("隐藏");
+  await expect(page.locator('.episode-item[data-session="episode-1"] .episode-action')).toHaveText("隐藏");
   await page.locator('.episode-item[data-session="episode-1"] .episode-main').click();
 
   await expect(page.locator("#replay-cameras .camera-card")).toHaveCount(2);
   await expect(page.locator('#replay-cameras .camera-card[data-camera="front"] video')).toHaveAttribute("src", /\/api\/lerobot\/episode-1\/video\/front$/);
-  await expect(page.locator('#replay-feature-select option[value="action.command.gripper"]')).toHaveCount(1);
+  await expect(page.locator('#replay-feature-select option[value="action.command.gripper"]')).toHaveCount(0);
   await expect(page.locator('#replay-feature-select option[value="observation.user_added_scalar"]')).toHaveCount(1);
-  await page.locator("#replay-feature-select").selectOption("observation.joint_position");
+  await expect(page.locator('#replay-action-select option[value="action.command.gripper"]')).toHaveCount(1);
   const dimensionSelect = page.locator("#replay-feature-component");
   await expect(dimensionSelect.locator("option")).toHaveCount(18);
   await dimensionSelect.selectOption("r.joint_6");
@@ -163,9 +163,8 @@ test("replay workspace synchronizes camera tiles and exposes added canonical fea
   await expect(page.locator("#replay-feature-component option")).toHaveText(["valid"]);
   await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").state_value).toEqual([true]);
   await expect(page.locator("#replay-feature-chart .chart-state")).toBeVisible();
-  // Tab-based design: replay tab is visible, record tab (with #viewer and #previews) is hidden
-  await expect(page.locator("#tab-replay")).toBeVisible();
-  await expect(page.locator("#tab-record")).toBeHidden();
+  await expect(page.locator(".layout.replay-layout #viewer")).toBeVisible();
+  await expect(page.locator(".layout.replay-layout #previews")).toBeHidden();
   const pageWidth = await page.evaluate(() => ({
     document: document.documentElement.scrollWidth,
     viewport: window.innerWidth,
@@ -197,6 +196,8 @@ test("replay marks deviation intervals on frames and saves them in nanoseconds",
     { session_id: "episode-q", repo_id: "realman/pi05-policy-rollouts", episode_index: 0, frames: 4, fps: 10,
       task: "pick_only", quality: { invalid_frames: 0 } },
   ] } }));
+  await page.route("**/api/lerobot/pending", (route) => route.fulfill({ json: { sessions: [] } }));
+  await page.route("**/api/lerobot/trash", (route) => route.fulfill({ json: { sessions: [] } }));
   await page.route("**/api/lerobot/episode-q/summary", (route) => route.fulfill({ json: {
     features: { "observation.images.front": { dtype: "video", shape: [] } }, quality: { invalid_frames: 0 }, canonical: {},
   } }));
@@ -219,7 +220,7 @@ test("replay marks deviation intervals on frames and saves them in nanoseconds",
   });
 
   await page.goto("/");
-  await page.getByRole("button", { name: "回放" }).click();
+  await page.locator('.tab[data-tab="replay"]').click();
   await page.locator('.episode-item[data-session="episode-q"] .episode-main').click();
   await expect(page.locator("#replay-frame-label")).toHaveText("1 / 4");
   await page.locator("#quality-toggle").click();

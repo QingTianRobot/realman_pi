@@ -125,7 +125,6 @@ const SPLIT_HEIGHT = 48;
 
 export function initCharts(): ChartApi {
   const featureSelect = $<HTMLSelectElement>("#replay-feature-select");
-  const componentSelect = $<HTMLSelectElement>("#replay-feature-component");
   const jointFilterEl = $("#replay-joint-filter");
   const legendEl = $("#replay-chart-legend");
   const chartEl = $("#replay-feature-chart");
@@ -147,10 +146,6 @@ export function initCharts(): ChartApi {
   let plot: uPlot | null = null;
   let lastSeriesSignature = "";
   let markerIndex = -1;
-  let componentIndex = 0;
-  let chartStateSvg: SVGSVGElement | null = null;
-  let chartStatePolyline: SVGPolylineElement | null = null;
-  chartEl.style.position = "relative";
 
   function setFeatures(features: string[], nextSummary?: ChartSummary): void {
     summary = nextSummary?.features ?? {};
@@ -170,11 +165,6 @@ export function initCharts(): ChartApi {
     dimensions = [];
     selected = new Set();
     lastSeriesSignature = "";
-    componentIndex = 0;
-    chartStateSvg = null;
-    chartStatePolyline = null;
-    componentSelect.innerHTML = "";
-    componentSelect.hidden = true;
     countEl.textContent = `${features.length} fields`;
     jointFilterEl.innerHTML = "";
     legendEl.innerHTML = "";
@@ -370,90 +360,26 @@ export function initCharts(): ChartApi {
     resetZoomBtn.style.display = splitMode ? "none" : "";
   }
 
-  function ensureChartState(): SVGPolylineElement {
-    if (!chartStateSvg || !chartEl.contains(chartStateSvg)) {
-      chartStateSvg = document.createElementNS("http://www.w3.org/2000/svg", "svg");
-      Object.assign(chartStateSvg.style, { position: "absolute", inset: "0", pointerEvents: "none" });
-      chartStatePolyline = document.createElementNS("http://www.w3.org/2000/svg", "polyline");
-      chartStatePolyline.setAttribute("class", "chart-state");
-      chartStatePolyline.setAttribute("fill", "none");
-      chartStatePolyline.setAttribute("stroke-width", "2");
-      chartStatePolyline.setAttribute("vector-effect", "non-scaling-stroke");
-      chartStateSvg.appendChild(chartStatePolyline);
-      chartEl.appendChild(chartStateSvg);
-    }
-    return chartStatePolyline!;
-  }
-
-  function updateChartState(dimIndex: number): void {
-    if (!selectedFeature || !lastFrames.length || splitMode) {
-      if (chartStateSvg) chartStateSvg.style.display = "none";
-      return;
-    }
-    const polyline = ensureChartState();
-    const values = lastFrames.map((frame) => numericComponents(frame.features?.[selectedFeature])[dimIndex] ?? Number.NaN);
-    const finite = values.filter((v) => Number.isFinite(v));
-    if (!finite.length) {
-      polyline.setAttribute("points", "");
-      if (chartStateSvg) chartStateSvg.style.display = "none";
-      return;
-    }
-    const min = Math.min(...finite);
-    const max = Math.max(...finite);
-    const span = max - min || 1;
-    const w = chartEl.clientWidth || 800;
-    const h = chartEl.clientHeight || 240;
-    const pts = values.map((v, i) => {
-      if (!Number.isFinite(v)) return null;
-      const px = PAD + (i / Math.max(1, values.length - 1)) * (w - PAD * 2);
-      const py = h - PAD - ((v - min) / span) * (h - PAD * 2);
-      return `${px.toFixed(1)},${py.toFixed(1)}`;
-    }).filter(Boolean).join(" ");
-    chartStateSvg!.setAttribute("viewBox", `0 0 ${w} ${h}`);
-    chartStateSvg!.setAttribute("width", String(w));
-    chartStateSvg!.setAttribute("height", String(h));
-    chartStateSvg!.style.display = "";
-    polyline.setAttribute("points", pts);
-    polyline.setAttribute("stroke", colorFor(dimIndex));
-  }
-
   function render(frame: ChartFrame, frames: ChartFrame[], index: number): void {
-    const newFeature = featureSelect.value;
-    if (!newFeature) return;
-    if (newFeature !== selectedFeature) componentIndex = 0;
-    selectedFeature = newFeature;
+    selectedFeature = featureSelect.value;
+    if (!selectedFeature) return;
     lastFrames = frames;
     lastIndex = index;
     const values = numericComponents(frame.features?.[selectedFeature]);
     const labels = componentLabels(selectedFeature, values.length, summary, canonical);
     renderJointFilter(labels);
 
-    // Populate component dimension select
-    componentSelect.innerHTML = labels.map((label, i) => `<option value="${i}">${escapeHtml(label)}</option>`).join("");
-    if (componentIndex >= labels.length) componentIndex = 0;
-    componentSelect.value = String(componentIndex);
-    componentSelect.hidden = labels.length < 2;
-    const selectedComponent = labels[componentIndex] ?? "";
-    const stateValues = numericComponents(frame.features?.[selectedFeature]);
-    const stateComponent = stateValues[componentIndex] ?? null;
-
-    rawEl.textContent = JSON.stringify({
-      state_value: frame.features?.[selectedFeature],
-      component: selectedComponent,
-      component_index: componentIndex,
-      state_component: stateComponent,
-      source_timestamps_ns: frame.source_timestamps_ns ?? {},
-    }, null, 2);
+    rawEl.textContent = JSON.stringify(
+      { feature: selectedFeature, value: frame.features?.[selectedFeature], frame_index: frame.frame_index, dimensions: labels },
+      null,
+      2,
+    );
 
     renderChart();
-    updateChartState(componentIndex);
   }
 
   function clear(): void {
     if (plot) { plot.destroy(); plot = null; }
-    chartStateSvg = null;
-    chartStatePolyline = null;
-    componentIndex = 0;
     selectedFeature = "";
     renderedFeature = "";
     dimensions = [];
@@ -463,8 +389,6 @@ export function initCharts(): ChartApi {
     lastSeriesSignature = "";
     markerIndex = -1;
     featureSelect.innerHTML = "";
-    componentSelect.innerHTML = "";
-    componentSelect.hidden = true;
     jointFilterEl.innerHTML = "";
     legendEl.innerHTML = "";
     chartEl.innerHTML = "";
@@ -476,18 +400,10 @@ export function initCharts(): ChartApi {
     resetZoomBtn.style.display = "none";
   }
 
-  componentSelect.addEventListener("change", () => {
-    componentIndex = Number(componentSelect.value);
-    if (lastFrames.length && selectedFeature) {
-      const frame = lastFrames[lastIndex];
-      if (frame) render(frame, lastFrames, lastIndex);
-    }
-  });
   splitToggle.addEventListener("click", () => {
     splitMode = !splitMode;
     splitToggle.classList.toggle("active", splitMode);
     renderChart();
-    updateChartState(componentIndex);
   });
   resetZoomBtn.addEventListener("click", resetZoom);
   chartEl.addEventListener("dblclick", () => {

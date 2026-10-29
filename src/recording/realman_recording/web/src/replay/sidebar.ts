@@ -210,17 +210,16 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
         fetch("/api/lerobot/trash"),
       ]);
       if (!visibleResponse.ok) throw new Error(`HTTP ${visibleResponse.status}`);
-      const visibleData = await visibleResponse.json();
+      if (!pendingResponse.ok) throw new Error(`HTTP ${pendingResponse.status}`);
+      if (!trashResponse.ok) throw new Error(`HTTP ${trashResponse.status}`);
+      const [visibleData, pendingData, trashData] = await Promise.all([
+        visibleResponse.json(),
+        pendingResponse.json(),
+        trashResponse.json(),
+      ]);
       episodes = (visibleData.sessions ?? []) as EpisodeMeta[];
-      // pending and trash are supplementary; a 404 (e.g. in the Vite dev server) is not fatal.
-      if (pendingResponse.ok) {
-        const pendingData = await pendingResponse.json();
-        pending = (pendingData.sessions ?? []) as PendingMeta[];
-      }
-      if (trashResponse.ok) {
-        const trashData = await trashResponse.json();
-        hidden = (trashData.sessions ?? []) as EpisodeMeta[];
-      }
+      pending = (pendingData.sessions ?? []) as PendingMeta[];
+      hidden = (trashData.sessions ?? []) as EpisodeMeta[];
     } catch {
       countEl.textContent = "转换不可用";
       // keep the last known lists on a transient failure

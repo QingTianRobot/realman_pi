@@ -94,9 +94,9 @@ def quality_block(manifest: dict[str, Any]) -> dict[str, Any]:
         if type(block.get("revision")) is int and block["revision"] >= 0:
             result["revision"] = block["revision"]
         if isinstance(block.get("attempt"), dict):
-            result["attempt"] = block["attempt"]
+            result["attempt"] = dict(block["attempt"])
         if isinstance(block.get("intervals"), list):
-            result["intervals"] = block["intervals"]
+            result["intervals"] = list(block["intervals"])
         if type(block.get("rejected_marks")) is int:
             result["rejected_marks"] = block["rejected_marks"]
     return result

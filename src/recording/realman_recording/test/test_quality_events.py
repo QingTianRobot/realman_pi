@@ -111,3 +111,25 @@ def test_live_marks_that_break_the_rules_are_counted_and_ignored():
     assert not tracker.apply("jump", START + 4 * SECOND, "", now_ns=now)
     assert tracker.rejected == 7
     assert tracker.deviating
+
+
+def test_quality_block_returns_copies_not_the_manifest_lists():
+    """Ensure quality_block() doesn't return references that mutate the manifest."""
+    manifest = {
+        "quality": {
+            "revision": 1,
+            "attempt": {"attempt_id": "test_attempt", "other_key": "initial"},
+            "intervals": [{"start_ns": str(START), "end_ns": str(START + SECOND), "reason": "stall", "source": "live"}],
+            "rejected_marks": 0,
+        }
+    }
+    result = quality_block(manifest)
+
+    # Mutate the returned structures
+    result["intervals"].append({"start_ns": str(START + 2 * SECOND), "end_ns": None, "reason": None, "source": "live"})
+    result["attempt"]["new_key"] = "mutated_value"
+
+    # Verify the original manifest is unchanged
+    assert len(manifest["quality"]["intervals"]) == 1
+    assert "new_key" not in manifest["quality"]["attempt"]
+    assert manifest["quality"]["attempt"]["other_key"] == "initial"

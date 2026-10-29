@@ -37,15 +37,17 @@ rec()  { (cd "$WT/src/recording/realman_recording" && PYTHONPATH=. "$PY" -m pyte
 webc() { (cd "$WT/src/driver/realman_web_control" && PYTHONPATH=. "$PY" -m pytest -q "$@" -p no:cacheprovider); }
 lint() { (cd "$WT" && "$(dirname "$PY")/ruff" check --config config/python/ruff.toml src tools scripts docker); }
 
-# ROS 2 Humble runs on server5090 in the stock image rm65-humble-rviz:local (the Mac has no ROS).
+# ROS 2 Humble runs on server5090 in rm65-humble-rviz:quality-test = the stock rm65-humble-rviz:local plus
+# ros-humble-rosbag2-storage-mcap (Dockerfile in server5090:scratch/quality/image; the Mac has no ROS).
 # The scratch tree is repo-shaped because realman_bt's CMake reads third_party/ and config/.
 # .build/.install persist across runs (rsync --delete leaves excluded paths alone).
 ssh server5090 'mkdir -p scratch/quality/repo' < /dev/null
 humble() {
   rsync -rlc --delete --exclude .git --exclude website/node_modules --exclude .build --exclude .install \
+    --exclude log --exclude __pycache__ --exclude .pytest_cache \
     "$WT/" server5090:scratch/quality/repo/ &&
-  ssh server5090 "docker run --rm -e ROS_LOCALHOST_ONLY=1 -e ROS_DOMAIN_ID=231 \
-    -v \$HOME/scratch/quality/repo:/w -w /w rm65-humble-rviz:local bash -lc '
+  ssh server5090 "docker run --rm -e ROS_LOCALHOST_ONLY=1 -e ROS_DOMAIN_ID=231 -e PYTHONDONTWRITEBYTECODE=1 \
+    -v \$HOME/scratch/quality/repo:/w -w /w rm65-humble-rviz:quality-test bash -lc '
       source /opt/ros/humble/setup.bash && source /opt/rm65_ws/install/setup.bash &&
       colcon build --base-paths src/driver/realman_msgs src/recording src/behavior/realman_bt src/driver/realman_web_control \
         --packages-select realman_msgs realman_recording_msgs realman_recording realman_bt realman_web_control \

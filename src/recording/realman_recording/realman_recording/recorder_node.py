@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import queue
 import os
 import shutil
 import threading
@@ -24,9 +25,18 @@ from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
-from realman_recording_msgs.msg import QualityMark, RecordingStatus
+from realman_recording_msgs.msg import AttemptEvent, QualityMark, RecordingStatus
 from realman_recording_msgs.srv import ManageRecording as ManageRecordingService
 
+from .attempt_recording import (
+    NO_RESULT,
+    attempt_goal,
+    attempt_tags,
+    finished_attempt,
+    parse_profile_repo_ids,
+    repo_id_for_profile,
+    started_attempt,
+)
 from .camera_workers import (
     CameraSource,
     RosImageArchive,
@@ -122,6 +132,18 @@ class RecordingRecorderNode(Node):
             "quality_reasons_path",
             str(Path(os.environ.get("REALMAN_CONFIG_ROOT", "/opt/rm65_ws/config")) / "recording" / "quality_reasons.yaml"),
         )
+        # One session per policy attempt, driven by realman_bt PolicyRun on attempt_topic. Besides
+        # /recording/manage this is the only lifecycle input; it takes the same serialized START/STOP
+        # path and never interrupts a session someone else started (that attempt is not recorded).
+        self.declare_parameter("auto_record_enabled", True)
+        self.declare_parameter("attempt_topic", "/recording/attempt")
+        self.declare_parameter("auto_record_profile", "policy_rollout")
+        self.declare_parameter("auto_record_stop_margin_sec", 10)
+        self.declare_parameter("auto_record_adopt_on_stop", True)
+        # Camera-less test graphs set this false; on the robot attempts are recorded with cameras.
+        self.declare_parameter("auto_record_cameras", True)
+        # profile=owner/dataset entries; a profile not listed exports to lerobot_repo_id.
+        self.declare_parameter("lerobot_profile_repo_ids", [""])
 
         self._root = Path(str(self.get_parameter("recording_root").value)).expanduser().resolve()
         # Explicit SYSTEM_TIME ignores simulated ROS time: bag records have one stable
@@ -195,6 +217,11 @@ class RecordingRecorderNode(Node):
         self._session_profile = ""
         # The policy attempt the active session records (auto_record_* parameters, Task 7).
         self._attempt: dict[str, Any] | None = None
+        self._attempt_open = False  # the attempt still waits for its RESULT
+        self._auto_session = False  # the active session was opened for an attempt
+        self._auto_record_last_error = ""
+        self._auto_record_counters = {"ignored_busy": 0, "start_failed": 0, "result_ignored": 0}
+        self._profile_repo_ids = parse_profile_repo_ids(self.get_parameter("lerobot_profile_repo_ids").value)
 
         self._topic_types: dict[str, str] = {}
         self._register_subscriptions()
@@ -207,11 +234,24 @@ class RecordingRecorderNode(Node):
             self._manage_service,
             callback_group=self._callback_group,
         )
+        # Attempt events are handled in arrival order on one worker that takes the same lifecycle
+        # lock as /recording/manage, so an attempt START never races a service STOP.
+        self._attempt_events: queue.Queue[Any] = queue.Queue()
+        self._attempt_worker = threading.Thread(
+            target=self._attempt_worker_main, name="recording-attempt-worker", daemon=True,
+        )
+        self._attempt_worker.start()
+        if bool(self.get_parameter("auto_record_enabled").value):
+            self.create_subscription(
+                AttemptEvent, str(self.get_parameter("attempt_topic").value), self._attempt_events.put, 10,
+                callback_group=self._quality_callback_group,
+            )
         self.get_logger().info(
             "Recording recorder ready: subscribes only to existing ROS outputs; no RealMan SDK ownership."
         )
 
     def destroy_node(self) -> bool:
+        self._attempt_events.put(None)
         self._stop_session(success=False, reason="recording node shutdown")
         return super().destroy_node()
 
@@ -421,7 +461,9 @@ class RecordingRecorderNode(Node):
                         ),
                     },
                     "canonical_config": {
-                        "repo_id": str(self.get_parameter("lerobot_repo_id").value),
+                        "repo_id": repo_id_for_profile(
+                            goal.profile, self._profile_repo_ids, str(self.get_parameter("lerobot_repo_id").value)
+                        ),
                         "arms": list(self._arms),
                         "arm_action_topics": [str(item) for item in self.get_parameter("arm_action_topics").value if str(item)],
                         "arm_velocity_topics": [str(item) for item in self.get_parameter("arm_velocity_topics").value if str(item)],
@@ -605,7 +647,9 @@ class RecordingRecorderNode(Node):
 
         The durable writers are stopped outside the lock so a slow archive/rosbag close
         cannot block subscription callbacks.  The final READY/FAILED state reflects both
-        the requested ``success`` and whether the archive reported write errors.
+        the requested ``success`` and whether the archive reported write errors.  An attempt
+        session that ends before its RESULT (countdown, service STOP, shutdown) records the
+        outcome ``no_result``.
         """
         with self._lock:
             store, archive, camera_worker = self._store, self._archive, self._camera_worker
@@ -620,6 +664,10 @@ class RecordingRecorderNode(Node):
             self._deadline_monotonic_ns = None
             self._quality_tracker = None
             self._session_profile = ""
+            unanswered = self._attempt if self._attempt_open else None
+            auto_session = self._auto_session
+            self._attempt_open = False
+            self._auto_session = False
         archive_stats = archive.stop() if archive is not None else None
         camera_summary = camera_worker.stop() if camera_worker is not None else {}
         archive_write_errors = archive_stats.write_errors if archive_stats else 1
@@ -629,6 +677,15 @@ class RecordingRecorderNode(Node):
             f"{reason}; MCAP write/close errors: {archive_write_errors}; "
             f"camera JPEG write errors: {camera_write_errors}"
         )
+        if unanswered is not None:
+            finished = finished_attempt(unanswered, outcome=NO_RESULT, succeeded=False, reason=reason)
+            try:
+                store.record_attempt_outcome(finished, auto_tags=attempt_tags(finished))
+            except OSError as error:
+                self._quality_write_errors += 1
+                self.get_logger().error(
+                    f"attempt outcome write failed for {session_id}: {error}"
+                )
         store.finalize(
             final_success,
             ended_realtime_ns=self._receipt_wall_clock.now().nanoseconds,
@@ -647,9 +704,10 @@ class RecordingRecorderNode(Node):
             self._state = SessionState.READY if final_success else SessionState.FAILED
         # Auto-export enqueues a clean STOP for conversion; a FAILED session (write
         # errors) is never adopted.  auto_export_on_stop=false restores the manual
-        # ADOPT-only flow.
+        # ADOPT-only flow; attempt sessions follow auto_record_adopt_on_stop instead.
         if should_auto_export(
-            auto_export_on_stop=bool(self.get_parameter("auto_export_on_stop").value),
+            auto_export_on_stop=bool(self.get_parameter("auto_export_on_stop").value)
+            or (auto_session and bool(self.get_parameter("auto_record_adopt_on_stop").value)),
             final_success=final_success,
         ):
             self._adopt_session(session_id)
@@ -735,10 +793,13 @@ class RecordingRecorderNode(Node):
         # ``_decision_lock``, so it can only land before this critical section (skip)
         # or after it (rejected: the session is already RUNNING); it can never
         # interleave the re-check and the mark to slip a discarded session into export.
+        profile = ""
         with self._decision_lock:
             try:
                 manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
                 decision = manifest.get("decision") if isinstance(manifest, dict) else None
+                metadata = manifest.get("metadata") if isinstance(manifest, dict) else None
+                profile = str(metadata.get("profile", "")) if isinstance(metadata, dict) else ""
             except (OSError, json.JSONDecodeError):
                 decision = None
             if decision == "DISCARDED":
@@ -762,7 +823,9 @@ class RecordingRecorderNode(Node):
                     target_fps=float(self.get_parameter("export_target_fps").value),
                     max_gap_sec=float(self.get_parameter("export_max_gap_sec").value),
                     schema=schema_from_parameters(
-                        repo_id=str(self.get_parameter("lerobot_repo_id").value),
+                        repo_id=repo_id_for_profile(
+                            profile, self._profile_repo_ids, str(self.get_parameter("lerobot_repo_id").value)
+                        ),
                         fps=float(self.get_parameter("export_target_fps").value),
                         arms=self._arms,
                         arm_action_topics=self.get_parameter("arm_action_topics").value,
@@ -886,7 +949,100 @@ class RecordingRecorderNode(Node):
             "rejected_marks": tracker.rejected if tracker is not None else 0,
             "dropped_marks": self._dropped_marks,
             "quality_write_errors": self._quality_write_errors,
+            "auto_record_last_error": self._auto_record_last_error,
+            "auto_record": dict(self._auto_record_counters),
         }
+
+    def _attempt_worker_main(self) -> None:
+        """Handle /recording/attempt events one at a time, in arrival order."""
+        while True:
+            message = self._attempt_events.get()
+            if message is None:
+                return
+            try:
+                with self._service_lock:
+                    if message.kind == AttemptEvent.START:
+                        self._attempt_started(message)
+                    elif message.kind == AttemptEvent.RESULT:
+                        self._attempt_finished(message)
+            except Exception as error:  # noqa: BLE001 - one bad event must not stop the worker
+                self.get_logger().error(f"policy attempt event failed: {error}")
+
+    def _attempt_started(self, message: AttemptEvent) -> None:
+        """Open one session for a policy attempt, unless something else is recording."""
+        # A countdown stop runs on its own thread; give its finalization a moment to finish.
+        deadline = time.monotonic() + 10.0
+        while time.monotonic() < deadline:
+            with self._lock:
+                if self._state is not SessionState.FINALIZING:
+                    break
+            time.sleep(0.05)
+        with self._lock:
+            busy = self._store is not None or self._state in {SessionState.SCHEDULED, SessionState.FINALIZING}
+            if busy:
+                self._auto_record_counters["ignored_busy"] += 1
+        if busy:
+            self.get_logger().warning(f"policy attempt {message.attempt_id} not recorded: another session is active")
+            return
+        try:
+            attempt = started_attempt(
+                attempt_id=message.attempt_id, task=message.task, arm=message.arm, prompt=message.prompt,
+                stamp_ns=message.stamp.sec * 1_000_000_000 + message.stamp.nanosec,
+            )
+            goal = attempt_goal(
+                task=message.task,
+                max_duration_sec=int(message.max_duration_sec),
+                profile=str(self.get_parameter("auto_record_profile").value),
+                stop_margin_sec=int(self.get_parameter("auto_record_stop_margin_sec").value),
+                record_cameras=bool(self.get_parameter("auto_record_cameras").value),
+            )
+            self._prepare(goal)
+            if self._last_preflight is None or not self._last_preflight.ready:
+                summary = self._last_preflight.summary if self._last_preflight else "preflight unavailable"
+                raise RuntimeError(f"preflight failed: {summary}")
+            self._start_session(goal)
+        except Exception as error:  # noqa: BLE001 - an unrecorded attempt still runs
+            with self._lock:
+                self._auto_record_counters["start_failed"] += 1
+                self._auto_record_last_error = str(error)
+            self.get_logger().warning(f"policy attempt {message.attempt_id} not recorded: {error}")
+            return
+        with self._lock:
+            self._attempt = attempt
+            self._attempt_open = True
+            self._auto_session = True
+            self._auto_record_last_error = ""
+            if self._store is not None:
+                try:
+                    self._store.update_quality(self._quality_payload_locked())
+                except OSError as error:
+                    self._quality_write_errors += 1
+                    self.get_logger().error(
+                        f"attempt quality write failed for {self._store.session.session_id}: {error}"
+                    )
+        self.get_logger().info(f"recording policy attempt {message.attempt_id}")
+
+    def _attempt_finished(self, message: AttemptEvent) -> None:
+        """Write the attempt's outcome into its own session, then stop that session."""
+        with self._lock:
+            store, attempt = self._store, self._attempt
+            if (store is None or attempt is None or not self._attempt_open
+                    or attempt["attempt_id"] != message.attempt_id):
+                self._auto_record_counters["result_ignored"] += 1
+                return
+            finished = finished_attempt(
+                attempt, outcome=message.outcome, succeeded=message.succeeded, reason=message.reason,
+            )
+            self._attempt = finished
+            self._attempt_open = False
+            try:
+                store.record_attempt_outcome(finished, auto_tags=attempt_tags(finished))
+            except OSError as error:
+                self._quality_write_errors += 1
+                self.get_logger().error(
+                    f"attempt outcome write failed for {store.session.session_id}: {error}"
+                )
+        self._stop_session(success=True, reason=f"policy attempt ended: {finished['outcome']}")
 
     def _tick(self) -> None:
         """Periodic timer: fire due scheduled starts and countdown stops, then publish.

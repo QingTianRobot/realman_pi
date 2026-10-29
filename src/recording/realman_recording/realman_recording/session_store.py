@@ -16,7 +16,7 @@ import uuid
 from dataclasses import dataclass
 from enum import Enum
 from pathlib import Path
-from typing import Any
+from typing import Any, Iterable
 
 from .json_io import atomic_json_write
 
@@ -237,6 +237,34 @@ class SessionStore:
         if not isinstance(metadata, dict):
             raise RuntimeError("recording metadata is malformed")
         metadata.update(updates)
+        self._write_partial()
+
+    def update_quality(self, quality: dict[str, Any]) -> None:
+        """Atomically replace the active session's ``quality`` block (live marks, attempt)."""
+        if self._manifest is None:
+            raise RuntimeError("no active recording session")
+        self._manifest["quality"] = quality
+        self._write_partial()
+
+    def record_attempt_outcome(self, attempt: dict[str, Any], *, auto_tags: dict[str, Any]) -> None:
+        """Store the finished policy attempt, its machine-written tags and its business success.
+
+        ``finalize`` keeps ``annotations.success`` once it is set, so the attempt's verdict
+        wins over the saved default.
+        """
+        if self._manifest is None:
+            raise RuntimeError("no active recording session")
+        from .episode_tags import validate_tags
+        from .quality_events import quality_block
+        # Validate first so bad tags leave quality.attempt and annotations untouched.
+        clean_tags = validate_tags(auto_tags)
+        quality = quality_block(self._manifest)
+        quality["attempt"] = attempt
+        self._manifest["quality"] = quality
+        self._manifest["episode_tags"]["auto"] = clean_tags
+        annotations = self._manifest["annotations"]
+        annotations["success"] = bool(attempt.get("succeeded"))
+        annotations["failure_reason"] = None if attempt.get("succeeded") else attempt.get("outcome")
         self._write_partial()
 
     def finalize(self, success: bool, *, ended_realtime_ns: int | None = None, **summary: Any) -> Path:
@@ -512,6 +540,49 @@ class SessionStore:
         payload["subtasks"] = subtasks
         atomic_json_write(final, payload)
         return payload
+
+    @staticmethod
+    @_episode_serialized
+    def update_quality_intervals(
+        directory: str | Path, intervals: Any, revision: Any, *, reasons: Iterable[str],
+    ) -> dict[str, Any]:
+        """Replace a finalized session's deviation intervals from a replay edit.
+
+        ``revision`` must match the stored one (compare-and-set, like episode tags). An interval
+        whose bounds and reason equal a stored live one stays ``live``; anything else becomes
+        ``replay``, whatever the client sent.
+        """
+        from .quality_events import QualityConflict, quality_block, validate_intervals
+        if type(revision) is not int or revision < 0:
+            raise ValueError("revision must be a non-negative integer")
+        final = Path(directory).resolve() / "manifest.json"
+        if not final.is_file():
+            raise ValueError("recording session has no finalized manifest.json")
+        payload = json.loads(final.read_text(encoding="utf-8"))
+        if not isinstance(payload, dict):
+            raise ValueError("recording manifest must be a JSON object")
+        quality = quality_block(payload)
+        if quality["revision"] != revision:
+            raise QualityConflict("deviation intervals changed in another editor; reload before saving")
+        started = payload.get("started_realtime_ns")
+        if type(started) is not int:
+            raise ValueError("recording manifest has no started_realtime_ns")
+        ended = payload.get("ended_realtime_ns")
+        normalized = validate_intervals(
+            intervals, start_ns=started, end_ns=ended if type(ended) is int else None, reasons=reasons,
+        )
+        live = {
+            (item.get("start_ns"), item.get("end_ns"), item.get("reason"))
+            for item in quality["intervals"]
+            if isinstance(item, dict) and item.get("source") == "live"
+        }
+        for item in normalized:
+            item["source"] = "live" if (item["start_ns"], item["end_ns"], item["reason"]) in live else "replay"
+        quality.update(intervals=normalized, revision=revision + 1)
+        payload["quality"] = quality
+        atomic_json_write(final, payload)
+        SessionStore._refresh_episode_index_async(final.parent.parent)
+        return quality
 
     @staticmethod
     @_episode_serialized

@@ -68,9 +68,18 @@ export function initTags(onSaved: (scope: "defaults" | "episode", tags: TagMap) 
       kind.addEventListener("change", () => { if (kind.value === "bool") input.value = "true"; if (kind.value === "null") input.value = ""; });
     }
     input.classList.add("tag-value"); if (!input.isConnected) row.append(input);
-    const origin = document.createElement("small"); origin.textContent = source === "manual" ? "人工" : source === "derived" ? "自动日期" : "默认";
+    // deviation_count is derived from the deviation intervals: shown, never edited here.
+    const derived = source === "derived" && key !== "date";
+    if (derived) {
+      row.dataset.derived = "true";
+      input.disabled = true;
+      row.querySelector<HTMLSelectElement>(".tag-type")?.setAttribute("disabled", "");
+    }
+    const origin = document.createElement("small");
+    origin.textContent = source === "manual" ? "人工" : source === "derived" ? (key === "date" ? "自动日期" : "自动派生")
+      : source === "auto" ? "机器写入" : "默认";
     row.append(origin);
-    if (sessionId) {
+    if (sessionId && !derived) {
       const reset = document.createElement("label"); reset.className = "tag-reset";
       const checkbox = document.createElement("input"); checkbox.type = "checkbox"; checkbox.className = "tag-reset-check";
       checkbox.addEventListener("change", () => { input.disabled = checkbox.checked; });
@@ -106,6 +115,7 @@ export function initTags(onSaved: (scope: "defaults" | "episode", tags: TagMap) 
   function collect(): { set: TagMap; reset: string[]; deleteKeys: string[]; setTypes: Record<string, string> } {
     const set: TagMap = {}; const reset: string[] = []; const deleteKeys: string[] = []; const setTypes: Record<string, string> = {}; const seen = new Set<string>();
     for (const row of fields.querySelectorAll<HTMLElement>(".tag-row")) {
+      if (row.dataset.derived === "true") continue;
       const keyInput = row.querySelector<HTMLInputElement>(".tag-key");
       const key = keyInput ? keyInput.value.trim() : row.querySelector("label")?.firstChild?.textContent || "";
       if (!key || seen.has(key)) throw new Error(`重复或空 Key: ${key}`);

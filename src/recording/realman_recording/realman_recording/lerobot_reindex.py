@@ -32,10 +32,19 @@ def load_json(path: Path) -> dict | None:
     return payload if isinstance(payload, dict) else None
 
 
-def discover_dataset_root(recording_root: Path) -> Path | None:
-    """Return the dataset root recorded in the first session receipt, if any."""
+def _resolve(root: str | Path) -> Path:
+    return Path(root).expanduser().resolve()
+
+
+def discover_dataset_roots(recording_root: Path) -> list[Path]:
+    """Return every distinct dataset root named by a session receipt, sorted.
+
+    One recording root can feed several LeRobot datasets (teleop and policy
+    rollouts); each is re-indexed separately against its own sessions.
+    """
+    roots: set[Path] = set()
     if not recording_root.is_dir():
-        return None
+        return []
     for directory in recording_root.iterdir():
         if not directory.is_dir() or directory.name.startswith("."):
             continue
@@ -44,16 +53,25 @@ def discover_dataset_root(recording_root: Path) -> Path | None:
             continue
         root = receipt.get("dataset_root")
         if isinstance(root, str) and root:
-            return Path(root)
-    return None
+            roots.add(_resolve(root))
+    return sorted(roots)
 
 
-def session_receipts(recording_root: Path) -> dict[int, dict]:
+def discover_dataset_root(recording_root: Path) -> Path | None:
+    """Return the first dataset root named by a session receipt, if any."""
+    roots = discover_dataset_roots(recording_root)
+    return roots[0] if roots else None
+
+
+def session_receipts(recording_root: Path, dataset_root: Path | None = None) -> dict[int, dict]:
     """Return ``{episode_index: receipt}`` for every session with a completed export.
 
     Only sessions whose manifest is still ADOPTED/DELETED and whose export succeeded
     are considered valid; hard-deleted sessions (no directory) contribute nothing.
+    With ``dataset_root``, only receipts exported into that dataset count: episode
+    indices are per dataset and collide across datasets.
     """
+    wanted = _resolve(dataset_root) if dataset_root is not None else None
     receipts: dict[int, dict] = {}
     if not recording_root.is_dir():
         return receipts
@@ -69,6 +87,10 @@ def session_receipts(recording_root: Path) -> dict[int, dict]:
         receipt = load_json(directory / "export" / "lerobot-v3.json")
         if not receipt:
             continue
+        if wanted is not None:
+            root = receipt.get("dataset_root")
+            if not isinstance(root, str) or not root or _resolve(root) != wanted:
+                continue
         index = receipt.get("episode_index")
         if isinstance(index, int):
             receipts[index] = {
@@ -144,7 +166,7 @@ def reindex(
             raise RuntimeError(f"missing info.json in {dataset_root}")
         total_episodes = int(info.get("total_episodes", 0))
 
-        receipts = session_receipts(recording_root)
+        receipts = session_receipts(recording_root, dataset_root)
         old_to_new, orphans = plan_remap(total_episodes, receipts)
 
         if dry_run:
@@ -221,12 +243,26 @@ def reindex(
 
 
 def reindex_dataset(recording_root: str | Path, export_root: str | Path) -> dict[str, Any]:
-    """Discover the dataset root and re-index it; the web endpoint's entry point."""
+    """Discover every dataset root and re-index each; the web endpoint's entry point.
+
+    With one dataset the result is that dataset's ``reindex`` result.  With several,
+    the counters are summed and ``datasets`` lists each dataset's own result.
+    """
     recording_root = Path(recording_root)
-    export_root = Path(export_root).expanduser().resolve()
-    dataset_root = discover_dataset_root(recording_root)
-    if dataset_root is None:
+    export_root = _resolve(export_root)
+    dataset_roots = discover_dataset_roots(recording_root)
+    if not dataset_roots:
         raise RuntimeError("no exported LeRobot dataset found to re-index")
-    if export_root not in dataset_root.parents:
-        raise RuntimeError(f"dataset root {dataset_root} is outside export dir {export_root}")
-    return reindex(dataset_root, recording_root)
+    for dataset_root in dataset_roots:
+        if export_root not in dataset_root.parents:
+            raise RuntimeError(f"dataset root {dataset_root} is outside export dir {export_root}")
+    results = [reindex(dataset_root, recording_root) for dataset_root in dataset_roots]
+    if len(results) == 1:
+        return results[0]
+    summed = ("total_episodes_before", "total_episodes_after", "total_frames", "orphans_removed")
+    combined: dict[str, Any] = {"dry_run": False}
+    combined.update({key: sum(int(result[key]) for result in results) for key in summed})
+    combined["datasets"] = [
+        {"dataset_root": str(dataset_root), **result} for dataset_root, result in zip(dataset_roots, results)
+    ]
+    return combined

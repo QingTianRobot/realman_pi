@@ -44,13 +44,16 @@ def atomic_json_write(path: Path, payload: dict) -> None:
     temporary.replace(path)
 
 
-def session_receipts(recording_root: Path) -> dict[int, dict]:
-    """Return ``{episode_index: receipt}`` for every session with a completed export.
+def session_receipts(recording_root: Path, dataset_root: Path) -> dict[int, dict]:
+    """Return ``{episode_index: receipt}`` for every session exported into ``dataset_root``.
 
     A receipt is read from ``<session>/export/lerobot-v3.json``.  Only sessions whose
     manifest is still ADOPTED/DELETED and whose export succeeded are considered valid;
-    hard-deleted sessions (no directory) simply contribute nothing.
+    hard-deleted sessions (no directory) simply contribute nothing.  Receipts for other
+    datasets in the same recording root (teleop vs policy rollouts) are ignored, since
+    episode indices collide across datasets.
     """
+    wanted = dataset_root.expanduser().resolve()
     receipts: dict[int, dict] = {}
     if not recording_root.is_dir():
         return receipts
@@ -65,6 +68,9 @@ def session_receipts(recording_root: Path) -> dict[int, dict]:
             continue
         receipt = load_json(directory / "export" / "lerobot-v3.json")
         if not receipt:
+            continue
+        root = receipt.get("dataset_root")
+        if not isinstance(root, str) or not root or Path(root).expanduser().resolve() != wanted:
             continue
         index = receipt.get("episode_index")
         if isinstance(index, int):
@@ -162,7 +168,7 @@ def reindex(
         raise RuntimeError(f"missing info.json in {dataset_root}")
     total_episodes = int(info.get("total_episodes", 0))
 
-    receipts = session_receipts(recording_root)
+    receipts = session_receipts(recording_root, dataset_root)
     old_to_new, orphans = plan_remap(total_episodes, receipts)
 
     if dry_run:

@@ -27,6 +27,7 @@ from realman_recording_msgs.msg import RecordingStatus
 from realman_recording_msgs.srv import ManageRecording
 from .camera_workers import LatestFramePreview, PreviewFrame, downscale_jpeg, image_to_jpeg, load_camera_sources
 from .layout_manifest import build_recording_manifest
+from .quality_events import load_quality_reasons
 from .rerun_adapter import RerunVisualizationAdapter
 from .web_server import RecordingWebServer
 from .web_protocol import safe_coordinate_subset
@@ -66,6 +67,8 @@ class RecordingWebBridgeNode(Node):
         self.declare_parameter("static_root", str(package_share / "static"))
         self.declare_parameter("recording_root", "/data/realman-recordings")
         self.declare_parameter("lerobot_export_dir", "/data/realman-recordings/lerobot")
+        # Deviation reasons shown and accepted by the replay editor (same file as the recorder).
+        self.declare_parameter("quality_reasons_path", str(config_root / "recording" / "quality_reasons.yaml"))
 
         self._callback_group = ReentrantCallbackGroup()
         # Explicitly retain the same ROS 2 SYSTEM_TIME domain used by the recorder.
@@ -143,6 +146,11 @@ class RecordingWebBridgeNode(Node):
         )
         self._manifest = build_recording_manifest(self.get_parameter("layout_config_file").value)
         self._recording_client = self.create_client(ManageRecording, "/recording/manage")
+        try:
+            quality_reasons = load_quality_reasons(str(self.get_parameter("quality_reasons_path").value))
+        except Exception as error:  # noqa: BLE001 - replay still works without reasons
+            self.get_logger().error(f"deviation reasons unavailable: {error}")
+            quality_reasons = ()
         self._server = RecordingWebServer(
             bind_host=str(self.get_parameter("bind_host").value),
             port=int(self.get_parameter("port").value),
@@ -153,6 +161,7 @@ class RecordingWebBridgeNode(Node):
             lerobot_export_dir=self.get_parameter("lerobot_export_dir").value,
             logger=self.get_logger(),
             export_all=self._export_all,
+            quality_reasons=quality_reasons,
         )
         self._server.start()
         if self._preview_worker is not None:

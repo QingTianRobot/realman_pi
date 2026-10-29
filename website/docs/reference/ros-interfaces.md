@@ -93,8 +93,10 @@ HTTP / WebSocket `:8765`，浏览器不直接访问 ROS。它调用上面的 Act
 
 | 名称 | 类型 | 说明 |
 | --- | --- | --- |
-| `/recording/manage` | `realman_recording_msgs/ManageRecording`（Service） | 唯一的会话控制入口：`PREPARE` / `START` / `STOP` / `ADOPT` / `DISCARD` |
+| `/recording/manage` | `realman_recording_msgs/ManageRecording`（Service） | 人工 / Pika 的会话控制入口：`PREPARE` / `START` / `STOP` / `ADOPT` / `DISCARD`（策略尝试走下面的 `/recording/attempt`） |
 | `/recording/status` | `realman_recording_msgs/RecordingStatus` | 网页状态的唯一权威来源（倒计时、session、导出状态） |
+| `/recording/attempt` | `realman_recording_msgs/AttemptEvent` | 行为树 PolicyRun 发布：`START` 时 recorder 为这次尝试开一个 session，`RESULT` 时写结果并停录（详见[策略运行偏离标注](../development/quality-annotation)） |
+| `/recording/quality_mark` | `realman_recording_msgs/QualityMark` | :8765 发布的现场偏离打点（开始偏离 / 恢复 / 原因），只作标注，不会开录或停录 |
 | `:8770` HTTP / WebSocket | — | 实时只读页与 LeRobot 回放页；`/api/lerobot/*` 见专题页 |
 
 ## VLA 策略桥 `policy_bridge`

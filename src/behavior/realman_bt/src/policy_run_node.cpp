@@ -4,6 +4,7 @@
 #include <cmath>
 #include <cstdio>
 #include <cstdlib>
+#include <filesystem>
 #include <stdexcept>
 #include <utility>
 
@@ -42,6 +43,46 @@ void PolicyRunNode::publishPrompt(Clock::time_point now) {
   message.data = task_.prompt;
   prompt_pub_->publish(message);
   prompt_sent_at_ = now;
+}
+
+void PolicyRunNode::publishAttemptStart() {
+  realman_recording_msgs::msg::AttemptEvent event;
+  event.kind = realman_recording_msgs::msg::AttemptEvent::START;
+  event.stamp = rclcpp::Clock(RCL_SYSTEM_TIME).now();
+  event.attempt_id = attempt_id_;
+  event.task = task_name_;
+  event.arm = arm_;
+  event.prompt = task_.prompt;
+  // From here: the activation call, the run, three stop calls and the router release.
+  event.max_duration_sec = static_cast<uint32_t>(std::ceil(
+      config_->max_attempt_sec + 4.0 * config_->service_call_timeout_sec + config_->router_release_sec));
+  try {
+    attempt_pub_->publish(event);
+    attempt_announced_ = true;
+  } catch (const std::exception& error) {
+    recordPolicyEvent(blackboard(), "WARN", name(), "attempt_event", error.what());
+  }
+}
+
+void PolicyRunNode::publishAttemptResult(const std::string& outcome, bool succeeded,
+                                         const std::string& reason) {
+  if (!attempt_announced_) return;
+  attempt_announced_ = false;
+  realman_recording_msgs::msg::AttemptEvent event;
+  event.kind = realman_recording_msgs::msg::AttemptEvent::RESULT;
+  event.stamp = rclcpp::Clock(RCL_SYSTEM_TIME).now();
+  event.attempt_id = attempt_id_;
+  event.task = task_name_;
+  event.arm = arm_;
+  event.prompt = task_.prompt;
+  event.outcome = outcome;
+  event.succeeded = succeeded;
+  event.reason = reason;
+  try {
+    attempt_pub_->publish(event);
+  } catch (const std::exception& error) {
+    recordPolicyEvent(blackboard(), "WARN", name(), "attempt_event", error.what());
+  }
 }
 
 double PolicyRunNode::nowSec() const {
@@ -167,6 +208,9 @@ void PolicyRunNode::initialize() {
   bridge_estop_ = ros_node_->create_client<Trigger>("/policy/emergency_stop");
   router_estop_ = ros_node_->create_client<Trigger>("/policy_router/emergency_stop");
   prompt_pub_ = ros_node_->create_publisher<std_msgs::msg::String>(config_->prompt_topic, 10);
+  // Reliable so the recorder never misses the START/RESULT pair of an attempt.
+  attempt_pub_ = ros_node_->create_publisher<realman_recording_msgs::msg::AttemptEvent>(
+      "/recording/attempt", rclcpp::QoS(10).reliable());
 }
 
 void PolicyRunNode::resetAttempt() {
@@ -178,6 +222,7 @@ void PolicyRunNode::resetAttempt() {
   pending_ = Verdict();
   dry_run_logged_ = false;
   prompt_sent_at_ = Clock::time_point{};
+  attempt_announced_ = false;
   blackboard()->set<bool>(kPolicyArmedKey, false);
 }
 
@@ -288,6 +333,9 @@ bt_core::NodeStatus PolicyRunNode::tick() {
     }
     blackboard()->set<bool>(kPolicyArmedKey, false);
     openTrace();
+    attempt_id_ = trace_.isOpen()
+                      ? std::filesystem::path(trace_.path()).stem().string()
+                      : "policy_attempt_" + utcStamp(std::chrono::system_clock::now()) + "_" + arm_;
   }
   switch (phase_) {
     case Phase::kPreflight:
@@ -312,6 +360,7 @@ bt_core::NodeStatus PolicyRunNode::tickPreflight(Clock::time_point now) {
   if (missing.text.empty()) {
     phase_ = Phase::kArming;
     phase_started_ = now;
+    publishAttemptStart();
     return tickArming(now);
   }
   if (std::chrono::duration<double>(now - phase_started_).count() > config_->service_wait_sec) {
@@ -491,6 +540,7 @@ bt_core::NodeStatus PolicyRunNode::finalize() {
                     "task=" + task_name_ + " result=" + outcomeName(verdict.outcome) +
                         " grasp=" + (verdict.grasp_verdict.empty() ? "n/a" : verdict.grasp_verdict) +
                         " seconds=" + std::to_string(verdict.attempt_sec));
+  publishAttemptResult(outcomeName(verdict.outcome), verdict.succeeded, verdict.reason);
   resetAttempt();
   if (verdict.succeeded) {
     setFailureReason("");
@@ -539,6 +589,7 @@ void PolicyRunNode::onHalted() {
     recordPolicyEvent(blackboard(), "WARN", name(), "halted",
                       "halted while the policy could be running; stop requests sent");
   }
+  publishAttemptResult("halted", false, "halted by the behavior tree");
   resetAttempt();
 }
 

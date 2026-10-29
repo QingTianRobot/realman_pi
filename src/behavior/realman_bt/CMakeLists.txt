@@ -6,6 +6,7 @@ find_package(rclcpp REQUIRED)
 find_package(rclcpp_action REQUIRED)
 find_package(rcl_interfaces REQUIRED)
 find_package(realman_msgs REQUIRED)
+find_package(realman_recording_msgs REQUIRED)
 find_package(std_msgs REQUIRED)
 find_package(std_srvs REQUIRED)
 find_package(geometry_msgs REQUIRED)
@@ -69,7 +70,7 @@ target_compile_features(policy_task_nodes PUBLIC cxx_std_17)
 target_link_libraries(policy_task_nodes
   policy_task_core move_j_nodes runtime_snapshot bt::core)
 ament_target_dependencies(policy_task_nodes
-  rclcpp std_msgs std_srvs sensor_msgs diagnostic_msgs geometry_msgs)
+  rclcpp std_msgs std_srvs sensor_msgs diagnostic_msgs geometry_msgs realman_recording_msgs)
 
 add_library(motion_monitor_nodes src/motion_dwell_monitor_node.cpp)
 target_include_directories(motion_monitor_nodes PUBLIC
@@ -266,7 +267,7 @@ if(BUILD_TESTING)
     "${BT_VENDOR_ROOT}" "${BT_VENDOR_ROOT}/bt_nodes")
   target_link_libraries(test_policy_run_node policy_task_nodes)
   ament_target_dependencies(test_policy_run_node
-    rclcpp std_msgs std_srvs sensor_msgs diagnostic_msgs geometry_msgs)
+    rclcpp std_msgs std_srvs sensor_msgs diagnostic_msgs geometry_msgs realman_recording_msgs)
   add_test(NAME test_policy_run_node COMMAND test_policy_run_node)
   set_tests_properties(test_policy_run_node PROPERTIES
     TIMEOUT 240 ENVIRONMENT "ROS_DOMAIN_ID=219;ROS_LOCALHOST_ONLY=1")

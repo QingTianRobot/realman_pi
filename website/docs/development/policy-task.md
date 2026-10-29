@@ -270,6 +270,12 @@ timeout_retry:
 ssh realman_ts 'ls -t ~/realman_pi/logs/policy-attempts | head -3'     # 最近三次
 ```
 
+## 录制与偏离标注
+
+PolicyRun 每次尝试都会在 `/recording/attempt` 上通知录制服务：预检通过、准备激活策略时发 `START`，尝试结束或被 halt 时发一次 `RESULT`（`outcome` 是上面的结果名，被 halt 时是 `halted`）。`attempt_id` 就是本次尝试的轨迹文件名（去掉 `.csv`），所以录制的 session 和[轨迹记录](#轨迹记录)能一一对上。`START` 带上这次尝试最多还会持续多久（`max_attempt_sec` 加 4 次服务调用超时和路由释放时间），录制服务超过这个时间还没收到 `RESULT` 就自己停录。dry-run 和预检就失败的尝试什么都不发。
+
+录制服务（`realman_recording`）收到 `START` 后为这次尝试单独录一个 session，导出到 `realman/pi05-policy-rollouts` 数据集；操作员在 :8765 上标注的偏离区间写进同一个 session。没有启动录制服务时，这些通知没人接收，尝试照常运行。详见[策略运行偏离标注](./quality-annotation)。
+
 ## 配置与激活方式
 
 各阈值的来源都写在 `policy_task.yaml` 的注释中；修改阈值时需要同时参考示教数据，改完后需重启 `./rm65 bt`。YAML 中写错的键不会被 ROS 报错（ROS 会忽略未声明的参数），因此 `test_policy_task_config_file` 要求文件中的键与加载器声明的键完全一致。

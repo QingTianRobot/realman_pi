@@ -24,6 +24,7 @@
 #include "realman_bt/policy_run_node.hpp"
 #include "realman_bt/policy_task_blackboard.hpp"
 #include "realman_bt/policy_task_config.hpp"
+#include "realman_recording_msgs/msg/attempt_event.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32.hpp"
@@ -102,6 +103,12 @@ struct FakeStack {
         "/policy/prompt", 10, [this](std_msgs::msg::String::ConstSharedPtr message) {
           prompts_received.push_back({message->data, Clock::now()});
           if (follow_prompt) bridge_prompt = message->data;
+        });
+    // Like the recorder: collects PolicyRun's attempt announcements.
+    attempt_sub = node->create_subscription<realman_recording_msgs::msg::AttemptEvent>(
+        "/recording/attempt", rclcpp::QoS(10).reliable(),
+        [this](realman_recording_msgs::msg::AttemptEvent::ConstSharedPtr message) {
+          attempts.push_back(*message);
         });
   }
 
@@ -254,6 +261,8 @@ struct FakeStack {
   rclcpp::Publisher<geometry_msgs::msg::TwistStamped>::SharedPtr velocity_pub;
   rclcpp::Publisher<diagnostic_msgs::msg::DiagnosticArray>::SharedPtr stats_pub;
   rclcpp::Subscription<std_msgs::msg::String>::SharedPtr prompt_sub;
+  rclcpp::Subscription<realman_recording_msgs::msg::AttemptEvent>::SharedPtr attempt_sub;
+  std::vector<realman_recording_msgs::msg::AttemptEvent> attempts;
   rclcpp::Service<std_srvs::srv::SetBool>::SharedPtr activate_service, deactivate_service,
       silent_activate_service;
   rclcpp::Service<std_srvs::srv::Trigger>::SharedPtr bridge_estop_service, router_estop_service;
@@ -1143,6 +1152,91 @@ void testPortsAreDeclared() {
   assert(ports.count("dry_run") == 1);
 }
 
+// ---- announcements for the recorder -----------------------------------------------------------
+
+using AttemptEvent = realman_recording_msgs::msg::AttemptEvent;
+
+void testASuccessfulAttemptIsAnnouncedForTheRecorder() {
+  Fixture f;
+  f.stack.serve();
+  GraspScenario scenario(true);
+
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::SUCCESS);
+  f.settle();
+
+  assert(f.stack.attempts.size() == 2);
+  const auto& start = f.stack.attempts[0];
+  const auto& result = f.stack.attempts[1];
+  assert(start.kind == AttemptEvent::START);
+  assert(result.kind == AttemptEvent::RESULT);
+  assert(start.attempt_id == result.attempt_id);
+  assert(start.attempt_id.rfind("policy_attempt_", 0) == 0);
+  assert(start.task == "place");
+  assert(start.arm == "r");
+  assert(start.prompt == kPlacePrompt);
+  assert(start.max_duration_sec >= static_cast<uint32_t>(f.config.max_attempt_sec));
+  assert(result.outcome == "released_held");
+  assert(result.succeeded);
+  // The id names the attempt's trace file, so a recording and its trace can be matched.
+  bool trace_found = false;
+  for (const auto& entry : fs::directory_iterator(f.config.trace.dir)) {
+    if (entry.path().stem().string() == start.attempt_id) trace_found = true;
+  }
+  assert(trace_found);
+}
+
+void testARetryableFailureIsAnnouncedWithItsOutcome() {
+  PolicyTaskConfig config = fastConfig();
+  config.max_attempt_sec = 0.8;
+  Fixture f(false, config);
+  f.stack.serve();
+
+  assert(f.run(5s) == NodeStatus::FAILURE);
+  f.settle();
+
+  assert(f.stack.attempts.size() == 2);
+  assert(f.stack.attempts[1].outcome == "timeout");
+  assert(!f.stack.attempts[1].succeeded);
+  assert(!f.stack.attempts[1].reason.empty());
+}
+
+void testAFailedPreflightAnnouncesNothing() {
+  Fixture f;
+  f.stack.serve(true, true, true, /*router_estop=*/false);
+
+  assert(f.run(3s) == NodeStatus::FAILURE);
+  f.settle();
+
+  assert(f.stack.attempts.empty());
+}
+
+void testAHaltedAttemptIsAnnouncedAsHaltedOnce() {
+  Fixture f;
+  f.stack.serve();
+  assert(f.run(4s, nullptr, [&](NodeStatus) { return f.stack.activated(); }) ==
+         NodeStatus::RUNNING);
+
+  f.node->halt();
+  f.settle();
+  f.node->halt();  // halting again announces nothing more
+  f.settle();
+
+  assert(f.stack.attempts.size() == 2);
+  assert(f.stack.attempts[1].kind == AttemptEvent::RESULT);
+  assert(f.stack.attempts[1].outcome == "halted");
+  assert(!f.stack.attempts[1].succeeded);
+}
+
+void testADryRunAnnouncesNothing() {
+  Fixture f(true);
+  f.stack.serve();
+
+  assert(f.run(1s) == NodeStatus::SUCCESS);
+  f.settle();
+
+  assert(f.stack.attempts.empty());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1191,6 +1285,11 @@ int main(int argc, char** argv) {
   testTheTraceNamesTheTaskAndItsPrompt();
   testItNeedsTheConfigurationToRun();
   testPortsAreDeclared();
+  testASuccessfulAttemptIsAnnouncedForTheRecorder();
+  testARetryableFailureIsAnnouncedWithItsOutcome();
+  testAFailedPreflightAnnouncesNothing();
+  testAHaltedAttemptIsAnnouncedAsHaltedOnce();
+  testADryRunAnnouncesNothing();
   rclcpp::shutdown();
   return 0;
 }

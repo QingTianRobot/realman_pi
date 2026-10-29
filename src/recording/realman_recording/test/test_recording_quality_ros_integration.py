@@ -146,3 +146,41 @@ def test_live_marks_become_session_intervals_and_status(tmp_path):
 
         mark(QualityMark.DEVIATE_START)  # nothing records now
         assert _wait(lambda: recorder._dropped_marks == 1)
+
+
+def test_a_failed_mark_write_does_not_stop_the_recording(tmp_path, monkeypatch):
+    with recorder_graph(tmp_path) as (recorder, driver):
+        from rclpy.clock import Clock, ClockType
+        from realman_recording_msgs.msg import QualityMark
+        from realman_recording_msgs.srv import ManageRecording
+        wall = Clock(clock_type=ClockType.SYSTEM_TIME)
+        marks = driver.create_publisher(QualityMark, "/recording/quality_mark", 50)
+        assert _wait(lambda: marks.get_subscription_count() >= 1)
+
+        def mark(kind, reason=""):
+            message = QualityMark(kind=kind, reason=reason)
+            message.stamp = wall.now().to_msg()
+            marks.publish(message)
+            time.sleep(0.05)
+
+        started = _manage(driver, ManageRecording.Request.START, profile="manual", task="write_fail", record_cameras=False)
+        assert started.success, started.message
+
+        import realman_recording.session_store as ss_mod
+        monkeypatch.setattr(ss_mod.SessionStore, "update_quality", lambda self, q: (_ for _ in ()).throw(OSError("disk full")))
+
+        mark(QualityMark.DEVIATE_START)
+        mark(QualityMark.RECOVER)
+        assert _wait(lambda: recorder._quality_tracker is not None and not recorder._quality_tracker.deviating)
+
+        with recorder._lock:
+            status = json.loads(recorder._diagnostics_json())["quality"]
+        assert status["quality_write_errors"] == 2
+
+        monkeypatch.undo()
+
+        stopped = _manage(driver, ManageRecording.Request.STOP)
+        assert stopped.success, stopped.message
+        manifest = _read_manifest(tmp_path / "sessions" / started.session_id / "manifest.json")
+        intervals = manifest["quality"]["intervals"]
+        assert len(intervals) == 1

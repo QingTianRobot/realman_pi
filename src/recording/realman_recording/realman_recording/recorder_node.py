@@ -190,6 +190,8 @@ class RecordingRecorderNode(Node):
         # Live marks of the active session; None while nothing records.
         self._quality_tracker: LiveQualityTracker | None = None
         self._dropped_marks = 0
+        # Counts OSError failures writing the partial manifest; recording continues.
+        self._quality_write_errors = 0
         self._session_profile = ""
         # The policy attempt the active session records (auto_record_* parameters, Task 7).
         self._attempt: dict[str, Any] | None = None
@@ -616,8 +618,15 @@ class RecordingRecorderNode(Node):
             self._archive = None
             self._camera_worker = None
             self._deadline_monotonic_ns = None
+            final_quality_payload = self._quality_payload_locked()
             self._quality_tracker = None
             self._session_profile = ""
+        # Seal the in-memory manifest with the final quality state so finalize writes it
+        # even if some incremental partial writes failed (e.g. transient disk errors).
+        try:
+            store.update_quality(final_quality_payload)
+        except OSError as error:
+            self.get_logger().error(f"quality finalization write failed for {session_id}: {error}")
         archive_stats = archive.stop() if archive is not None else None
         camera_summary = camera_worker.stop() if camera_worker is not None else {}
         archive_write_errors = archive_stats.write_errors if archive_stats else 1
@@ -852,7 +861,13 @@ class RecordingRecorderNode(Node):
                 return
             tracker.apply(kind, stamp_ns, message.reason, now_ns=receipt_wall_ns)
             # Rejected marks change rejected_marks, so the partial is rewritten either way.
-            store.update_quality(self._quality_payload_locked())
+            try:
+                store.update_quality(self._quality_payload_locked())
+            except OSError as error:
+                self._quality_write_errors += 1
+                self.get_logger().error(
+                    f"quality mark write failed for {store.session.session_id}: {error}"
+                )
 
     def _quality_payload_locked(self) -> dict[str, Any]:
         """The active session's quality block; callers hold ``self._lock``."""
@@ -877,6 +892,7 @@ class RecordingRecorderNode(Node):
             "reason": "" if current is None or current["reason"] is None else current["reason"],
             "rejected_marks": tracker.rejected if tracker is not None else 0,
             "dropped_marks": self._dropped_marks,
+            "quality_write_errors": self._quality_write_errors,
         }
 
     def _tick(self) -> None:

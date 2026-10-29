@@ -9,6 +9,7 @@ from __future__ import annotations
 
 import importlib.util
 import json
+import os
 import shutil
 import threading
 import time
@@ -17,13 +18,13 @@ from pathlib import Path
 from typing import Any
 
 import rclpy
-from rclpy.callback_groups import ReentrantCallbackGroup
+from rclpy.callback_groups import MutuallyExclusiveCallbackGroup, ReentrantCallbackGroup
 from rclpy.clock import Clock, ClockType
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from sensor_msgs.msg import Image
 
-from realman_recording_msgs.msg import RecordingStatus
+from realman_recording_msgs.msg import QualityMark, RecordingStatus
 from realman_recording_msgs.srv import ManageRecording as ManageRecordingService
 
 from .camera_workers import (
@@ -38,6 +39,7 @@ from .kinematics import urdf_joint_limits
 from .lerobot_schema import schema_from_parameters
 from .preflight import PreflightChecker, PreflightRequirements, PreflightResult, configured_required_topics
 from .provenance import snapshot_optional_file
+from .quality_events import MARK_KINDS, LiveQualityTracker, load_quality_reasons
 from .session_store import SessionState, SessionStore
 from .state_archive import McapStateArchive
 from .topic_catalog import build_topic_catalog
@@ -111,6 +113,15 @@ class RecordingRecorderNode(Node):
         self.declare_parameter("alignment_enabled", True)
         self.declare_parameter("preflight_valid_sec", 10.0)
         self.declare_parameter("min_free_space_bytes", 5_000_000_000)
+        # Live deviation marks from :8765 (realman_recording_msgs/QualityMark). They are archived
+        # to MCAP like any input and folded into the session's quality.intervals; an empty topic
+        # disables the subscription.
+        self.declare_parameter("quality_mark_topic", "/recording/quality_mark")
+        # config/recording/quality_reasons.yaml: the reason ids a mark may carry.
+        self.declare_parameter(
+            "quality_reasons_path",
+            str(Path(os.environ.get("REALMAN_CONFIG_ROOT", "/opt/rm65_ws/config")) / "recording" / "quality_reasons.yaml"),
+        )
 
         self._root = Path(str(self.get_parameter("recording_root").value)).expanduser().resolve()
         # Explicit SYSTEM_TIME ignores simulated ROS time: bag records have one stable
@@ -165,6 +176,23 @@ class RecordingRecorderNode(Node):
             max_workers=int(self.get_parameter("export_workers").value),
         )
         self._export_worker.start()
+
+        self._quality_topic = str(self.get_parameter("quality_mark_topic").value)
+        try:
+            self._quality_reasons = tuple(
+                reason.id for reason in load_quality_reasons(str(self.get_parameter("quality_reasons_path").value))
+            )
+        except Exception as error:  # noqa: BLE001 - a bad reason file must not stop recording
+            self.get_logger().error(f"deviation reasons unavailable, marks carry no reason: {error}")
+            self._quality_reasons = ()
+        # Marks are applied in arrival order: a reentrant group could run D and its reason at once.
+        self._quality_callback_group = MutuallyExclusiveCallbackGroup()
+        # Live marks of the active session; None while nothing records.
+        self._quality_tracker: LiveQualityTracker | None = None
+        self._dropped_marks = 0
+        self._session_profile = ""
+        # The policy attempt the active session records (auto_record_* parameters, Task 7).
+        self._attempt: dict[str, Any] | None = None
 
         self._topic_types: dict[str, str] = {}
         self._register_subscriptions()
@@ -252,9 +280,16 @@ class RecordingRecorderNode(Node):
             gripper_action_topics=self.get_parameter("gripper_action_topics").value,
             gripper_torque_topics=self.get_parameter("gripper_torque_topics").value,
             gripper_alarm_topics=self.get_parameter("gripper_alarm_topics").value,
+            quality_mark_topic=self._quality_topic,
         )
         self._topic_types = {spec.topic: spec.type_name for spec in catalog.values()}
         for spec in catalog.values():
+            if spec.topic == self._quality_topic:
+                self.create_subscription(
+                    spec.message_type, spec.topic, self._record_quality_mark, 50,
+                    callback_group=self._quality_callback_group,
+                )
+                continue
             connected_arm = _connected_arm_from_topic(spec.topic)
             self.create_subscription(
                 spec.message_type,
@@ -455,6 +490,9 @@ class RecordingRecorderNode(Node):
             self._recorded_topics = set(self._topic_types)
             self._state = SessionState.RECORDING
             store.transition(self._state)
+            self._session_profile = goal.profile.strip()
+            self._attempt = None
+            self._quality_tracker = LiveQualityTracker(session_start_ns=now_wall_ns, reasons=self._quality_reasons)
             self._deadline_monotonic_ns = (
                 time.monotonic_ns() + int(goal.duration_sec) * 1_000_000_000
                 if goal.duration_sec > 0
@@ -488,6 +526,8 @@ class RecordingRecorderNode(Node):
                     )
                     self._store = None
                     self._archive = None
+                    self._quality_tracker = None
+                    self._session_profile = ""
                     self._state = SessionState.FAILED
                     raise
         return session.session_id
@@ -553,7 +593,10 @@ class RecordingRecorderNode(Node):
         }
 
     def _diagnostics_json(self) -> str:
-        return json.dumps(self._preflight_payload(), separators=(",", ":"))
+        """Preflight diagnostics plus the live marking state; callers hold ``self._lock``."""
+        payload = self._preflight_payload()
+        payload["quality"] = self._quality_status_locked()
+        return json.dumps(payload, separators=(",", ":"))
 
     def _stop_session(self, *, success: bool, reason: str) -> str | None:
         """Finalize the session: stop archive/camera writers and write the final manifest.
@@ -573,6 +616,8 @@ class RecordingRecorderNode(Node):
             self._archive = None
             self._camera_worker = None
             self._deadline_monotonic_ns = None
+            self._quality_tracker = None
+            self._session_profile = ""
         archive_stats = archive.stop() if archive is not None else None
         camera_summary = camera_worker.stop() if camera_worker is not None else {}
         archive_write_errors = archive_stats.write_errors if archive_stats else 1
@@ -793,6 +838,46 @@ class RecordingRecorderNode(Node):
             # MCAP/rosbag2 record time is the same epoch-based ROS SYSTEM_TIME receipt
             # domain used by the JPEG archive and LeRobot exporter alignment.
             archive.enqueue(topic, message, receipt_wall_ns)
+
+    def _record_quality_mark(self, message: QualityMark) -> None:
+        """Archive a live mark like any input, then fold it into the session's intervals."""
+        self._record_message(self._quality_topic, message)
+        receipt_wall_ns = self._receipt_wall_clock.now().nanoseconds
+        stamp_ns = message.stamp.sec * 1_000_000_000 + message.stamp.nanosec
+        kind = MARK_KINDS[message.kind] if message.kind < len(MARK_KINDS) else ""
+        with self._lock:
+            tracker, store = self._quality_tracker, self._store
+            if tracker is None or store is None:
+                self._dropped_marks += 1
+                return
+            tracker.apply(kind, stamp_ns, message.reason, now_ns=receipt_wall_ns)
+            # Rejected marks change rejected_marks, so the partial is rewritten either way.
+            store.update_quality(self._quality_payload_locked())
+
+    def _quality_payload_locked(self) -> dict[str, Any]:
+        """The active session's quality block; callers hold ``self._lock``."""
+        tracker = self._quality_tracker
+        return {
+            "revision": 0,
+            "attempt": self._attempt,
+            "intervals": tracker.intervals() if tracker is not None else [],
+            "rejected_marks": tracker.rejected if tracker is not None else 0,
+        }
+
+    def _quality_status_locked(self) -> dict[str, Any]:
+        """Marking state for /recording/status (the :8765 strip); callers hold ``self._lock``."""
+        tracker = self._quality_tracker
+        current = tracker.open_interval() if tracker is not None else None
+        attempt = self._attempt if self._store is not None else None
+        return {
+            "profile": self._session_profile,
+            "attempt_id": str((attempt or {}).get("attempt_id", "")),
+            "deviating": current is not None,
+            "deviation_start_ns": "" if current is None else str(current["start_ns"]),
+            "reason": "" if current is None or current["reason"] is None else current["reason"],
+            "rejected_marks": tracker.rejected if tracker is not None else 0,
+            "dropped_marks": self._dropped_marks,
+        }
 
     def _tick(self) -> None:
         """Periodic timer: fire due scheduled starts and countdown stops, then publish.

@@ -166,8 +166,10 @@ def test_a_failed_mark_write_does_not_stop_the_recording(tmp_path, monkeypatch):
         started = _manage(driver, ManageRecording.Request.START, profile="manual", task="write_fail", record_cameras=False)
         assert started.success, started.message
 
-        import realman_recording.session_store as ss_mod
-        monkeypatch.setattr(ss_mod.SessionStore, "update_quality", lambda self, q: (_ for _ in ()).throw(OSError("disk full")))
+        def raising(*args, **kwargs):
+            raise OSError("disk full")
+
+        monkeypatch.setattr("realman_recording.session_store.atomic_json_write", raising)
 
         mark(QualityMark.DEVIATE_START)
         mark(QualityMark.RECOVER)

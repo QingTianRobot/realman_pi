@@ -618,15 +618,8 @@ class RecordingRecorderNode(Node):
             self._archive = None
             self._camera_worker = None
             self._deadline_monotonic_ns = None
-            final_quality_payload = self._quality_payload_locked()
             self._quality_tracker = None
             self._session_profile = ""
-        # Seal the in-memory manifest with the final quality state so finalize writes it
-        # even if some incremental partial writes failed (e.g. transient disk errors).
-        try:
-            store.update_quality(final_quality_payload)
-        except OSError as error:
-            self.get_logger().error(f"quality finalization write failed for {session_id}: {error}")
         archive_stats = archive.stop() if archive is not None else None
         camera_summary = camera_worker.stop() if camera_worker is not None else {}
         archive_write_errors = archive_stats.write_errors if archive_stats else 1

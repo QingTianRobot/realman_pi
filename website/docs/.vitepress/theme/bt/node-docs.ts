@@ -250,7 +250,7 @@ export const nodeDocs: Record<string, NodeDoc> = {
   },
   MoveJointTo: {
     category: "action",
-    summary: "单关节绝对定位：与 RotateJoint 实现相同，但把关节 joint 转到 target_degrees，其余关节保持当前角度。control_pick.xml 用它把右臂 J1 转到放置侧（-135°）。",
+    summary: "单关节绝对定位：与 RotateJoint 实现相同，但把关节 joint 转到 target_degrees，其余关节保持当前角度。control_pick.xml 用它把右臂 J1 转到放置侧（-163°）。",
     success: "MoveJ 成功；完成后保持 SUCCESS，直到被 halt()",
     failure: "端口无效或无法解析、读取关节角失败或超时、MoveJ 失败或超时",
     running: "正在读取关节角，或 MoveJ 执行中",

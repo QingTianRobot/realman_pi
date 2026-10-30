@@ -87,7 +87,7 @@ def test_the_pick_cycle_settings_are_the_reviewed_values():
     pika = yaml.safe_load((ROOT / "config/ros/pika_config.yaml").read_text(encoding="utf-8"))
     assert pick_cycle["lift_joint_degrees"] == pika["pika_default_pose"]["right"]["joint_degrees"]
     assert pick_cycle["release_joint"] == 1
-    assert pick_cycle["release_joint_deg"] == -135.0
+    assert pick_cycle["release_joint_deg"] == -163.0
     detection = policy_task["object_detection"]
     assert detection["image_topic"] == "/camera_global/d435/color/image_raw"
     assert detection["erode_px"] % 2 == 1

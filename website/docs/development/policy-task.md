@@ -90,11 +90,11 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 
 1. **抓起**：与 `control.xml` 相同的尝试结构（张开夹爪、三臂回位、`PolicyRun`），只是 `task="pick"`，以 `lift_and_hold` 判定成功：夹住物体并抬起后保持，夹爪仍然闭合。重试、故障和超时规则与上文相同。
 2. **抬升到固定位姿**：右臂 `MoveJ` 到 `pick_cycle.lift_joint_degrees`。目前取右臂起始位姿（`pika_config.yaml`），等测出专门的抬升位姿后在配置里修改即可，不用改 XML。
-3. **转到放置侧**：`MoveJointTo` 只把 J1（`pick_cycle.release_joint`）转到 `pick_cycle.release_joint_deg`（-135°），其余关节保持不动。从上往下看是顺时针转动（J1 角度减小约 125°）。2026-10-20 在真机上空载、以 5% 速度从抬升位姿转到 -135° 再转回，现场确认路径上没有障碍。
+3. **转到放置侧**：`MoveJointTo` 只把 J1（`pick_cycle.release_joint`）转到 `pick_cycle.release_joint_deg`（-163°），以 20% 速度转动（2026-10-30 起，原为 10%），其余关节保持不动。从上往下看是顺时针转动（J1 角度减小约 153°）。2026-10-20 在真机上空载、以 5% 速度从抬升位姿转到 -135° 再转回，现场确认路径上没有障碍；2026-10-30 起放置角改为 -163°，沿同一方向多转 28°，-135° 到 -163° 这一段还没有空载确认过。
 4. **松开**：`GripperReady` 张开右夹爪，物体落在放置侧。
 5. **检测**：`WhiteObjectsRemain` 读一帧全局相机（D435）图像，判断垫子上是否还有白色物体。有物体就返回 `SUCCESS`，`Repeat` 开始下一个周期；没有物体就写入 `pick_table_clear=true` 并返回失败，以此结束 `Repeat`。
 
-`Repeat` 结束后由 `CheckBool` 判断结束原因：如果是桌面已清空，先由 `pick_done_home` 让三臂回到起始位姿，再停在 `PolicyInputStub`（policy 模式空闲，桥接已停止）。回位这一步不能省：进入 policy 模式的第一步回位受输入模式切换超时（`behavior_tree.yaml` 的 `switch_timeout_ms`，5 s）限制，如果右臂停在 -135°，回位约需 8 s，会超时并退回 none（2026-10-20 真机上出现过）。其他原因（尝试次数用完、故障、某个 MoveJ 失败、相机没有图像）都不会写入 `pick_table_clear`，于是经 `FailInputMode` 进入 `FAILED`；这条路径不会自动回位，再次进入前如果右臂不在起始位姿附近，需要先手动回位（见下文操作流程）。注意抬升、转动这两步的 MoveJ 失败不会更新 `policy_failure_reason`，此时 `FAILED` 的说明可能是上一次失败尝试留下的原因（如果没有，就是默认的 `policy task failed`），具体原因需查看诊断事件。
+`Repeat` 结束后由 `CheckBool` 判断结束原因：如果是桌面已清空，先由 `pick_done_home` 让三臂回到起始位姿，再停在 `PolicyInputStub`（policy 模式空闲，桥接已停止）。回位这一步不能省：进入 policy 模式的第一步回位受输入模式切换超时（`behavior_tree.yaml` 的 `switch_timeout_ms`，5 s）限制，如果右臂停在放置侧（-135° 时回位约需 8 s，-163° 更久），会超时并退回 none（2026-10-20 真机上出现过）。其他原因（尝试次数用完、故障、某个 MoveJ 失败、相机没有图像）都不会写入 `pick_table_clear`，于是经 `FailInputMode` 进入 `FAILED`；这条路径不会自动回位，再次进入前如果右臂不在起始位姿附近，需要先手动回位（见下文操作流程）。注意抬升、转动这两步的 MoveJ 失败不会更新 `policy_failure_reason`，此时 `FAILED` 的说明可能是上一次失败尝试留下的原因（如果没有，就是默认的 `policy task failed`），具体原因需查看诊断事件。
 
 ### 白色物体检测（WhiteObjectsRemain）
 
@@ -113,7 +113,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 - 实时画面中，三个适配器计数为 1709，只剩一个时约 620；抹掉适配器、保留线缆时为 91，判为已清空。
 - 光斑腐蚀后的范围约为 x 388–460、y 176–350，排除区取 `[392, 170, 75, 185]`，与最近的适配器（右边缘 x 391）不重叠。
 
-检测时手臂必须离开垫子区域：右臂停在 J1=-135° 时应位于画面之外，这一点尚待带物体运行时确认。相机、垫子或灯光挪动后，需要重新标定 ROI 和排除区。
+检测时手臂必须离开垫子区域：右臂停在放置侧（J1=-163°）时应位于画面之外，这一点尚待带物体运行时确认。相机、垫子或灯光挪动后，需要重新标定 ROI 和排除区。
 
 dry-run 时不读相机，直接报告桌面已清空，因此 dry-run 只跑一个周期就结束。
 
@@ -124,7 +124,7 @@ dry-run 时不读相机，直接报告桌面已清空，因此 dry-run 只跑一
 - 确认机器人栈正常：三条臂的 `joint_states` 都在约 10 Hz，`/l|m|r/execute_motion` 都在线，全局相机 `/camera_global/d435/color/image_raw` 有图像（`rgb8`）。
 - 检查右夹爪：读 `/gripper_right/position` 和 `/gripper_right/alarm`。重建容器后，夹爪常会停在半开的位置（如 900）且报警为 32（0x20），不响应指令。依次调用 `/gripper_right/reset` 和 `/gripper_right/enable` 即可恢复（必要时再调用 `open`）。报警值会一直保持 32，但 policy 链路上的任何环节都不检查它，不影响运行。
 - 布置场景：适配器放在绿色垫子上，避开右侧的反光排除区（`object_detection.exclude_xywh`）；收纳盒放在放置侧；清空工作区；有人手持急停。
-- 确认右臂在起始位姿附近。进入 policy 模式的第一步回位受 5 s 的切换超时限制。正常结束时 `pick_done_home` 会自动回位；如果上一次以 `FAILED` 结束、手臂停在远处（例如 J1 = -135°），需要先在 :8765 的运动面板把右臂移回起始位姿。
+- 确认右臂在起始位姿附近。进入 policy 模式的第一步回位受 5 s 的切换超时限制。正常结束时 `pick_done_home` 会自动回位；如果上一次以 `FAILED` 结束、手臂停在远处（例如 J1 = -163°），需要先在 :8765 的运动面板把右臂移回起始位姿。
 
 **2. 先跑一遍 dry-run**
 
@@ -140,7 +140,7 @@ REALMAN_BT_DRY_RUN=true ./rm65 bt control_pick
 REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 ```
 
-在 :8765 上，勾选真实运动后启动也可以。然后选择"Policy / 抓取清台"。`activation: auto` 下，选择即开始运动：三臂回到起始位姿，然后每轮依次执行抓取（约 10–15 s）、抬升、J1 转到 -135°、松爪、检测，有物体就继续下一轮；桌面清空后三臂回到起始位姿，停在 policy 空闲。
+在 :8765 上，勾选真实运动后启动也可以。然后选择"Policy / 抓取清台"。`activation: auto` 下，选择即开始运动：三臂回到起始位姿，然后每轮依次执行抓取（约 10–15 s）、抬升、J1 转到 -163°、松爪、检测，有物体就继续下一轮；桌面清空后三臂回到起始位姿，停在 policy 空闲。
 
 **4. 结束**
 

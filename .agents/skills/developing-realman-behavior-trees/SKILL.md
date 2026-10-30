@@ -36,7 +36,7 @@ The executor currently registers `Sequence`, `ReactiveSequence`, `ReactiveFallba
 | `rotate_joint.xml` | Right-arm J6 `RotateJoint` ccw 10° then cw 10° | One-shot |
 | `tool_x.xml` | Timed Cartesian velocity in a configured logical frame | One-shot |
 | `control.xml` | Global Web/Policy/Pika/None input router | Persistent |
-| `control_pick.xml` | `control.xml` with a pick-and-clear policy branch (pick, lift pose, J1 to -135, release, white-blob check, repeat) | Persistent |
+| `control_pick.xml` | `control.xml` with a pick-and-clear policy branch (pick, lift pose, J1 to -163, release, white-blob check, repeat) | Persistent |
 
 `approach_and_grasp.xml` and `pick_task.xml` contain task-template tags that the current executor does not register. Do not present them as runnable production trees unless all referenced nodes and controls are implemented, registered, and tested.
 

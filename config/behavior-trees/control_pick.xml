@@ -69,7 +69,7 @@
                              velocity_percent="10" blend_radius_percent="0" timeout_sec="60"/>
                       <MoveJointTo name="pick_turn_to_release" arm_id="r" dry_run="{dry_run}"
                                    joint="{pick_release_joint}" target_degrees="{pick_release_joint_deg}"
-                                   velocity_percent="10" timeout_sec="60"/>
+                                   velocity_percent="20" timeout_sec="60"/>
                       <GripperReady name="pick_release" arm_id="r" dry_run="{dry_run}"/>
                       <WhiteObjectsRemain name="objects_remain" dry_run="{dry_run}"
                                           table_clear="{pick_table_clear}"/>

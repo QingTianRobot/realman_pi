@@ -99,7 +99,17 @@ def test_the_tasks_are_the_two_prompts_of_the_multitask_model():
         "prompt": "pick up the power adapter and put it in the blue bin",
         "completion": "release_over_bin",
     }
-    assert parameters["tasks"]["pick"] == {"prompt": "pick up the power adapter", "completion": "lift_and_hold"}
+    assert parameters["tasks"]["pick"] == {"prompt": "pick up the power adapter", "completion": "grasp_check"}
+
+
+def test_the_grasp_check_thresholds_are_the_reviewed_values():
+    # 86 closes of the 2026-10-20..11-01 pick traces: firm holds settle within 0.8 s / 200 units.
+    assert _parameters()["grasp_check"] == {
+        "confirm_sec": 0.8,
+        "steady_position_range": 200.0,
+        "timeout_sec": 6.0,
+        "carry_lost_sec": 0.3,
+    }
 
 
 def test_the_lift_thresholds_are_the_reviewed_values():

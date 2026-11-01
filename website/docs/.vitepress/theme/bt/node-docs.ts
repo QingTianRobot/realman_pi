@@ -268,6 +268,16 @@ export const nodeDocs: Record<string, NodeDoc> = {
     blackboard: "table_clear 输出到 {pick_table_clear}；阈值取自 policy_task.yaml 的 object_detection",
     page: "./policy-task#白色物体检测-whiteobjectsremain",
   },
+  WhileGraspHeld: {
+    category: "decorator",
+    summary: "抓取清台树中包住搬运运动（竖直抬起、抬升位姿、转到放置侧）：子节点执行期间每个 tick 先读夹爪位置，物体掉落就停止运动，让外层 RetryUnlessFault 重新运行策略。",
+    success: "子节点成功，且夹爪仍夹着物体",
+    failure: "夹爪位置在 verdict.empty_position_min 以上持续 grasp_check.carry_lost_sec（物体掉落）：可重试；子节点失败或超过 gripper_ready.position_stale_sec 读不到夹爪位置：判为故障（置位 policy_fault）",
+    running: "子节点返回 RUNNING，夹爪仍夹着物体",
+    halt: "halt 子节点并清空掉落计时",
+    blackboard: "掉落时写入 policy_failure_reason；故障时还写入 policy_fault",
+    page: "./policy-task#抓取清台树-control-pick-xml",
+  },
   CartesianVelocityForDuration: {
     category: "action",
     summary: "在指定参考系中以给定的线速度和角速度运动一段时间后停止，用于调试和演示树。",
@@ -290,8 +300,8 @@ export const nodeDocs: Record<string, NodeDoc> = {
   PolicyRun: {
     category: "action",
     summary: "运行并监督一次策略尝试：预检（包括切换到 task 对应的 prompt，并确认桥接已采用）、激活桥接、按任务的完成条件判定，最后按固定顺序停止。",
-    success: "release_over_bin：在收纳盒一侧放手，且曾夹住物体；lift_and_hold：抬起后仍夹住物体",
-    failure: "可重试的失败（抓空、掉落、超时、卡死）只写入原因；策略服务超时（桥接因推理超时而暂停、统计中断、预检时桥接未就绪、激活无回应）还会置位 policy_timeout；不可重试的失败（越界、数据丢失、执行了错误的任务）还会置位 policy_fault",
+    success: "release_over_bin：在收纳盒一侧放手，且曾夹住物体；lift_and_hold：抬起后仍夹住物体；grasp_check：闭合后夹牢",
+    failure: "可重试的失败（抓空、闭合时没夹牢、掉落、超时、卡死）只写入原因；策略服务超时（桥接因推理超时而暂停、统计中断、预检时桥接未就绪、激活无回应）还会置位 policy_timeout；不可重试的失败（越界、数据丢失、执行了错误的任务）还会置位 policy_fault",
     running: "正在预检、等待激活、监督，或执行停止顺序",
     halt: "立即发出 deactivate 和两个急停调用（不等待回应），轨迹文件记为 result=halted",
     blackboard: "写入 policy_attempt_result、policy_grasp_verdict、policy_attempt_sec、policy_armed；失败时写入 policy_failure_reason（故障时还会写入 policy_fault，策略服务超时还会写入 policy_timeout）",

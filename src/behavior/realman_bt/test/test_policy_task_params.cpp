@@ -146,8 +146,9 @@ void testTheShippedYamlLoadsThroughRosAsALaunchFileWouldPassIt() {
   assert(loaded.gripper_for_arm.at("r") == "gripper_right");
   assert(loaded.tasks.size() == 2);
   assert(loaded.task("pick").prompt == "pick up the power adapter");
-  assert(loaded.task("pick").completion == PolicyTaskConfig::Completion::kLiftAndHold);
+  assert(loaded.task("pick").completion == PolicyTaskConfig::Completion::kGraspCheck);
   assert(loaded.task("place").completion == PolicyTaskConfig::Completion::kReleaseOverBin);
+  assert(loaded.grasp_check.confirm_sec == 0.8 && loaded.grasp_check.timeout_sec == 6.0);
   assert(loaded.lift.joint_delta_deg == -10.0 && loaded.lift.hold_sec == 2.0);
   assert(loaded.prompt_topic == "/policy/prompt");
 }
@@ -156,7 +157,7 @@ void testWithoutOverridesBothDefaultTasksExist() {
   const PolicyTaskConfig loaded = load();
   assert(loaded.tasks.size() == PolicyTaskConfig().tasks.size());
   assert(loaded.task("place").prompt == PolicyTaskConfig().task("place").prompt);
-  assert(loaded.task("pick").completion == PolicyTaskConfig::Completion::kLiftAndHold);
+  assert(loaded.task("pick").completion == PolicyTaskConfig::Completion::kGraspCheck);
 }
 
 void testANewTaskIsDeclaredThroughTaskNames() {

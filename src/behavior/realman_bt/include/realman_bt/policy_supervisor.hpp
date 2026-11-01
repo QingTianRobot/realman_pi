@@ -21,6 +21,8 @@ enum class AttemptOutcome {
   kDropped,        // lift_and_hold: held the object, then it slipped out of the closed jaws: retryable
   kWrongTask,      // lift_and_hold: turned to the bin side holding the object, i.e. ran the place task: not retryable
   kWrongSideEmpty, // lift_and_hold: turned to the bin side after closing on nothing (jaws met): retryable
+  kGraspHeld,      // grasp_check: the closed jaws hold the object firmly: success, the tree carries it
+  kGraspMissed,    // grasp_check: the jaws met, or no firm hold in time after the close: retryable
   kTimeout,        // no success in max_attempt_sec: retryable
   kStall,          // gripper closed and the policy stopped moving: retryable
   kPolicyTimeout,  // the policy server or its bridge timed out: retryable on its own budget
@@ -80,8 +82,8 @@ struct SupervisorSnapshot {
 // reading arrives, so a reading that is bad for one sample between two ticks is still caught, and
 // the first one latches; so is an overcurrent (current_guard). Then, in this order of priority:
 // fault, overcurrent, a policy-server timeout (the bridge paused itself after its inference
-// requests timed out, or its stats went silent), the task's completion (release settled, or wrong
-// side / dropped / lifted and held), timeout, stall.
+// requests timed out, or its stats went silent), the task's completion (release settled; wrong
+// side / dropped / lifted and held; grasp held / missed), timeout, stall.
 class PolicySupervisor {
  public:
   explicit PolicySupervisor(PolicyTaskConfig config);
@@ -133,6 +135,7 @@ class PolicySupervisor {
   // release is settling (nothing else may end the attempt then).
   bool evaluateRelease(double now);
   void evaluateLift(double now, bool closed);
+  void evaluateGraspCheck(double now);
 
   PolicyTaskConfig config_;
   std::map<std::string, ArmReading> arms_;
@@ -141,6 +144,7 @@ class PolicySupervisor {
   double stats_received_{0.0};
   double policy_gripper_{1.0};
   bool policy_gripper_valid_{false};
+  double policy_gripper_time_{0.0};
   double cmd_linear_{0.0};
   double cmd_angular_{0.0};
   double cmd_time_{0.0};
@@ -161,6 +165,7 @@ class PolicySupervisor {
   std::optional<double> lift_reference_deg_;  // lift.joint_index when the gripper first closed
   std::optional<double> lifted_since_;
   bool held_once_{false};  // lift_and_hold: the closed jaws held something at least once
+  std::optional<double> grasp_check_since_;  // grasp_check: when the policy's current close began
   std::optional<double> stall_since_;
   std::optional<std::string> latched_fault_;
   std::optional<std::string> latched_overcurrent_;

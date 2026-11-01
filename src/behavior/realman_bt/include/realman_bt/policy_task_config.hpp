@@ -31,10 +31,11 @@ inline constexpr char kPickReleaseJointDegKey[] = "pick_release_joint_deg";
 // docs/superpowers/specs/2026-10-14-policy-task-in-bt-design.md.
 struct PolicyTaskConfig {
   // How an attempt of a task ends successfully. The thresholds of each live in their own block
-  // below (`release`, `lift`), shared by every task that uses that completion.
+  // below (`release`, `lift`, `grasp_check`), shared by every task that uses that completion.
   enum class Completion {
     kReleaseOverBin,  // pick and place: the policy lets go over the bin with the object held
     kLiftAndHold,     // pick only: the policy lifts the grasped object and keeps holding it
+    kGraspCheck,      // pick only: the policy closes the gripper on the object; the tree carries it
   };
   // One task the policy was trained on. `prompt` selects it at inference time and must equal the
   // training view's task text verbatim (one character off puts the model out of distribution).
@@ -69,6 +70,22 @@ struct PolicyTaskConfig {
     double hold_sec{2.0};
     int wrong_side_joint_index{0};
     double wrong_side_below_deg{-25.0};
+  };
+  // grasp_check: judged as soon as the policy closes the gripper, so a miss is retried at once
+  // instead of after the policy fumbles on. Held: torque with the position below
+  // verdict.empty_position_min, unbroken and within steady_position_range for confirm_sec; the
+  // attempt then ends and the tree lifts and carries the object. Missed (retryable): the jaws met
+  // (position at or above empty_position_min), or no hold within timeout_sec of the close. The
+  // policy opening again before a verdict cancels the check. While the tree carries the object,
+  // WhileGraspHeld treats carry_lost_sec of positions at or above empty_position_min as a drop.
+  // Measured on the 86 closes of the 2026-10-20..11-01 pick traces that stayed closed for 3 s:
+  // held ones settle 0.6-2.9 s after the close (46 of 47 pass 0.8 s / 200 within 4.8 s), empty
+  // ones reach 7800 in 1.3-4.8 s and often show torque blips under 1 s while the jaws travel.
+  struct GraspCheck {
+    double confirm_sec{0.8};
+    double steady_position_range{200.0};
+    double timeout_sec{6.0};
+    double carry_lost_sec{0.3};
   };
   struct Verdict {
     double window_sec{3.0};
@@ -152,10 +169,10 @@ struct PolicyTaskConfig {
   // task's prompt there and only starts once /policy/stats reports that the bridge uses it.
   std::string prompt_topic{"/policy/prompt"};
   // Tasks by name; PolicyRun's `task` port picks one. The defaults are the two tasks of the
-  // multitask model m_multitask_b16_2gpu (2026-10-16).
+  // multitask model m_multitask_b16_2gpu (2026-10-16); pick is judged at the close since 2026-11-01.
   std::map<std::string, Task> tasks{
       {"place", {"pick up the power adapter and put it in the blue bin", Completion::kReleaseOverBin}},
-      {"pick", {"pick up the power adapter", Completion::kLiftAndHold}}};
+      {"pick", {"pick up the power adapter", Completion::kGraspCheck}}};
   std::map<std::string, std::string> gripper_for_arm{
       {"l", "gripper_left"}, {"m", "gripper_mid"}, {"r", "gripper_right"}};
   // RealMan degrees. p1/p99 over all 130 demonstration episodes, each side widened by 10 degrees;
@@ -172,6 +189,7 @@ struct PolicyTaskConfig {
   Stall stall;
   Release release;
   Lift lift;
+  GraspCheck grasp_check;
   Verdict verdict;
   CurrentGuard current_guard;
   GripperReady gripper_ready;
@@ -186,7 +204,7 @@ struct PolicyTaskConfig {
   const Task& task(const std::string& name) const;
 };
 
-// "release_over_bin" / "lift_and_hold"; parseCompletion throws std::invalid_argument otherwise.
+// "release_over_bin" / "lift_and_hold" / "grasp_check"; parseCompletion throws std::invalid_argument otherwise.
 const char* completionName(PolicyTaskConfig::Completion completion);
 PolicyTaskConfig::Completion parseCompletion(const std::string& text);
 

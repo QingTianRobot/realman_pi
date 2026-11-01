@@ -19,9 +19,17 @@ using realman_bt::Joints;
 using realman_bt::PolicySupervisor;
 using realman_bt::PolicyTaskConfig;
 
+// The default tasks plus "lift", a lift_and_hold pick, so that completion keeps its own tests now
+// that the default pick task is judged at the close (grasp_check).
+PolicyTaskConfig liftConfig() {
+  PolicyTaskConfig config;
+  config.tasks["lift"] = {"pick up the power adapter and hold it", PolicyTaskConfig::Completion::kLiftAndHold};
+  return config;
+}
+
 // Feeds a PolicySupervisor the way the ROS wrapper does: sensors at 10 Hz, one evaluation per step.
 struct Rig {
-  explicit Rig(PolicyTaskConfig cfg = PolicyTaskConfig()) : config(std::move(cfg)), sup(config) {}
+  explicit Rig(PolicyTaskConfig cfg = liftConfig()) : config(std::move(cfg)), sup(config) {}
 
   void start(const std::string& task = "place") {
     feed();
@@ -660,6 +668,8 @@ void testOutcomeNamesAreStable() {
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kDropped)) == "dropped");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kWrongTask)) == "wrong_task");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kWrongSideEmpty)) == "wrong_side_empty");
+  assert(std::string(realman_bt::outcomeName(AttemptOutcome::kGraspHeld)) == "grasp_held");
+  assert(std::string(realman_bt::outcomeName(AttemptOutcome::kGraspMissed)) == "grasp_missed");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kTimeout)) == "timeout");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kStall)) == "stall");
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kPolicyTimeout)) == "policy_timeout");
@@ -667,15 +677,16 @@ void testOutcomeNamesAreStable() {
   assert(std::string(realman_bt::outcomeName(AttemptOutcome::kFault)) == "fault");
 }
 
-void testOnlyTheTwoHeldOutcomesAreSuccessesAndOnlyFaultAndWrongTaskEndTheTask() {
+void testOnlyTheHeldOutcomesAreSuccessesAndOnlyFaultAndWrongTaskEndTheTask() {
   using realman_bt::isFault;
   using realman_bt::isSuccess;
-  for (auto outcome : {AttemptOutcome::kReleasedHeld, AttemptOutcome::kLiftedHeld}) {
+  for (auto outcome : {AttemptOutcome::kReleasedHeld, AttemptOutcome::kLiftedHeld, AttemptOutcome::kGraspHeld}) {
     assert(isSuccess(outcome) && !isFault(outcome));
   }
   using realman_bt::isPolicyTimeout;
   for (auto outcome : {AttemptOutcome::kReleasedEmpty, AttemptOutcome::kDropped, AttemptOutcome::kTimeout,
-                       AttemptOutcome::kStall, AttemptOutcome::kWrongSideEmpty, AttemptOutcome::kOvercurrent}) {
+                       AttemptOutcome::kStall, AttemptOutcome::kWrongSideEmpty, AttemptOutcome::kOvercurrent,
+                       AttemptOutcome::kGraspMissed}) {
     assert(!isSuccess(outcome) && !isFault(outcome) && !isPolicyTimeout(outcome));
   }
   for (auto outcome : {AttemptOutcome::kFault, AttemptOutcome::kWrongTask}) {
@@ -686,7 +697,7 @@ void testOnlyTheTwoHeldOutcomesAreSuccessesAndOnlyFaultAndWrongTaskEndTheTask() 
          isPolicyTimeout(AttemptOutcome::kPolicyTimeout));
 }
 
-// ---- tasks: lift_and_hold (pick) --------------------------------------------------------------
+// ---- tasks: lift_and_hold (the "lift" task of liftConfig) --------------------------------------------------------------
 
 // Moves one joint of the supervised arm to `target` at 20 deg/s (well under the 50 deg/s limit).
 void moveJoint(Rig& rig, int joint, double target) {
@@ -705,7 +716,7 @@ void reachAndGrasp(Rig& rig, double plateau, bool torque, double closed_sec = 3.
 
 void testPickLiftedAndStillHeldIsASuccess() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 5700.0, true);
   assert(!rig.verdict.finished);
   moveJoint(rig, 1, 52.0);  // lifted 13 deg
@@ -719,7 +730,7 @@ void testPickLiftedAndStillHeldIsASuccess() {
 
 void testPickWaitsForTheHoldTimeAfterTheLift() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 5700.0, true);
   moveJoint(rig, 1, 54.0);  // exactly past -10 deg
   const double lifted_at = rig.t;
@@ -732,7 +743,7 @@ void testPickWaitsForTheHoldTimeAfterTheLift() {
 
 void testPickTooSmallALiftIsNotYetASuccess() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 5700.0, true);
   moveJoint(rig, 1, 58.0);  // only 7 deg
   rig.run(4.0);
@@ -740,9 +751,8 @@ void testPickTooSmallALiftIsNotYetASuccess() {
 }
 
 void testPickTheLiftCountsFromWhereTheGripperClosed() {
-  PolicyTaskConfig config;
-  Rig rig(config);
-  rig.start("pick");
+  Rig rig;
+  rig.start("lift");
   moveJoint(rig, 1, 65.0);
   rig.policy_gripper = 0.0;  // closes at J2 = 65; the reference is taken now
   rig.step();
@@ -758,7 +768,7 @@ void testPickTheLiftCountsFromWhereTheGripperClosed() {
 
 void testPickClosingOnNothingAndLiftingIsNoSuccess() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 8450.0, false);
   moveJoint(rig, 1, 40.0);
   rig.run(50.0);
@@ -769,7 +779,7 @@ void testPickClosingOnNothingAndLiftingIsNoSuccess() {
 
 void testPickAPartialCloseWithoutTorqueIsNotHeld() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 5700.0, false);
   moveJoint(rig, 1, 45.0);
   rig.run(5.0);
@@ -778,7 +788,7 @@ void testPickAPartialCloseWithoutTorqueIsNotHeld() {
 
 void testPickNeedsTheMinimumClosedTime() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 5700.0, true, 0.5);
   moveJoint(rig, 1, 52.0);  // ~0.7 s more closed: 1.2 s in total, below 3 s
   rig.run(1.0);
@@ -791,7 +801,7 @@ void testPickNeedsTheMinimumClosedTime() {
 
 void testPickTheObjectSlippingOutIsARetryableDrop() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 5450.0, true);
   moveJoint(rig, 1, 58.0);
   rig.gripper_position = 8745.0;  // 2026-10-19 pick attempt 1: lost it during the lift
@@ -806,7 +816,7 @@ void testPickTheObjectSlippingOutIsARetryableDrop() {
 
 void testPickOpeningOnPurposeAfterAHoldIsNotADrop() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 5700.0, true);
   rig.policy_gripper = 1.0;  // the policy opens again (a re-grasp)
   rig.gripper_position = 50.0;
@@ -817,7 +827,7 @@ void testPickOpeningOnPurposeAfterAHoldIsNotADrop() {
 
 void testPickTurningToTheBinIsAWrongTaskFault() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 5700.0, true);
   driveJ1To(rig, -30.0);
   assert(rig.verdict.finished);
@@ -831,7 +841,7 @@ void testPickTurningToTheBinIsAWrongTaskFault() {
 // to the bin side. Nothing is carried away, so this is a retryable miss, not a wrong task.
 void testPickTurningToTheBinWithEmptyJawsIsARetryableMiss() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 8431.0, false);
   driveJ1To(rig, -30.0);
   assert(rig.verdict.finished);
@@ -845,7 +855,7 @@ void testPickTurningToTheBinWithEmptyJawsIsARetryableMiss() {
 // Partly closed (something between the jaws) is still the wrong task, torque or not.
 void testPickTurningToTheBinPartlyClosedIsStillAWrongTask() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 6000.0, false);
   driveJ1To(rig, -30.0);
   assert(rig.verdict.outcome == AttemptOutcome::kWrongTask);
@@ -854,7 +864,7 @@ void testPickTurningToTheBinPartlyClosedIsStillAWrongTask() {
 
 void testPickJ1OnTheBinSideBeforeAnyGraspIsNotAWrongTask() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   driveJ1To(rig, -30.0);  // reaching, gripper still open
   rig.run(1.0);
   assert(!rig.verdict.finished);
@@ -883,7 +893,7 @@ void testTheDefaultTaskIsPlace() {
 
 void testAnUnknownTaskIsRejectedAndChangesNothing() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   try {
     rig.sup.start(rig.t, "stack");
     assert(false);
@@ -896,7 +906,7 @@ void testAnUnknownTaskIsRejectedAndChangesNothing() {
 
 void testPickFaultsStillWin() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 5700.0, true);
   rig.arm[4] = 2.0;  // below the J5 floor
   rig.step();
@@ -905,15 +915,154 @@ void testPickFaultsStillWin() {
 
 void testRestartingWithAnotherTaskForgetsTheLiftState() {
   Rig rig;
-  rig.start("pick");
+  rig.start("lift");
   reachAndGrasp(rig, 5700.0, true);
   rig.policy_gripper = 1.0;  // GripperReady opened it before the next attempt
   rig.gripper_position = 50.0;
   rig.torque_reached = false;
-  rig.start("pick");  // a new attempt
+  rig.start("lift");  // a new attempt
   moveJoint(rig, 1, 50.0);  // no close in this attempt yet: no reference, no success
   rig.run(3.0);
   assert(!rig.verdict.finished);
+}
+
+
+// ---- tasks: grasp_check (pick) ------------------------------------------------------------------
+
+// The policy closes the gripper; the jaws travel from open to `plateau` in ~1 s (the measured close),
+// with torque from `torque_from` on (negative: never).
+void closeOn(Rig& rig, double plateau, double torque_from = 0.9) {
+  rig.policy_gripper = 0.0;
+  const double closed_at = rig.t;
+  while (rig.t - closed_at < 1.0 - 1e-9 && !rig.verdict.finished) {
+    const double progress = (rig.t - closed_at + 0.1) / 1.0;
+    rig.gripper_position = 50.0 + (plateau - 50.0) * std::min(1.0, progress);
+    rig.torque_reached = torque_from >= 0.0 && rig.t - closed_at + 0.1 >= torque_from - 1e-9;
+    rig.step();
+  }
+  rig.gripper_position = plateau;
+  rig.torque_reached = torque_from >= 0.0;
+}
+
+void testGraspHeldFirmlyRightAfterTheCloseIsASuccess() {
+  Rig rig;
+  rig.start("pick");
+  moveJoint(rig, 1, 65.0);
+  const double closed_at = rig.t;
+  closeOn(rig, 5700.0);
+  rig.run(3.0);
+  assert(rig.verdict.finished);
+  assert(rig.verdict.outcome == AttemptOutcome::kGraspHeld);
+  assert(rig.verdict.succeeded && !rig.verdict.fault);
+  assert(rig.verdict.grasp_verdict == "held" && rig.verdict.reason.empty());
+  // Torque from 0.9 s on and the plateau from 1.0 s: 0.8 s steady ends it ~1.8 s after the close,
+  // with no lift needed.
+  assert(rig.t - closed_at >= 1.7 && rig.t - closed_at <= 2.1);
+}
+
+void testGraspTheJawsMeetingIsAnImmediateRetryableMiss() {
+  Rig rig;
+  rig.start("pick");
+  moveJoint(rig, 1, 65.0);
+  const double closed_at = rig.t;
+  closeOn(rig, 8450.0, -1.0);
+  rig.run(1.0);
+  assert(rig.verdict.finished);
+  assert(rig.verdict.outcome == AttemptOutcome::kGraspMissed);
+  assert(!rig.verdict.succeeded && !rig.verdict.fault && !rig.verdict.policy_timeout);
+  assert(rig.verdict.grasp_verdict == "empty");
+  assert(rig.verdict.reason.find("closed on nothing") != std::string::npos);
+  assert(rig.t - closed_at <= 1.15);  // the reading that reached 7800 ended it
+}
+
+void testGraspATorqueBlipWhileTheJawsTravelIsNotAHold() {
+  // 2026-11-01 06:32:37: torque at 5085 for <1 s while closing, then the jaws met at 8244.
+  Rig rig;
+  rig.start("pick");
+  rig.policy_gripper = 0.0;
+  for (double position : {1570.0, 5085.0, 5600.0, 6100.0, 6716.0, 7300.0, 8244.0}) {
+    rig.gripper_position = position;
+    rig.torque_reached = position >= 5085.0 && position <= 6100.0;
+    rig.step();
+    if (position < 8244.0) assert(!rig.verdict.finished);
+  }
+  assert(rig.verdict.outcome == AttemptOutcome::kGraspMissed);
+}
+
+void testGraspAHoldThatIsStillCreepingIsNotYetConfirmed() {
+  Rig rig;
+  rig.start("pick");
+  rig.policy_gripper = 0.0;
+  rig.torque_reached = true;
+  for (int i = 0; i < 15; ++i) {  // torque, but the object is squeezed 100 per 0.1 s for 1.5 s
+    rig.gripper_position = 5000.0 + 100.0 * i;
+    rig.step();
+    assert(!rig.verdict.finished);
+  }
+  rig.run(1.0);  // now it stays put
+  assert(rig.verdict.outcome == AttemptOutcome::kGraspHeld);
+}
+
+void testGraspAPartialCloseWithoutTorqueTimesOutAsAMiss() {
+  Rig rig;
+  rig.start("pick");
+  rig.policy_gripper = 0.0;
+  rig.gripper_position = 4000.0;
+  rig.torque_reached = false;
+  rig.run(5.8);
+  assert(!rig.verdict.finished);
+  rig.run(0.5);
+  assert(rig.verdict.outcome == AttemptOutcome::kGraspMissed);
+  assert(rig.verdict.reason.find("no firm grasp within 6.0 s") != std::string::npos);
+}
+
+void testGraspThePolicyOpeningAgainCancelsTheCheck() {
+  Rig rig;
+  rig.start("pick");
+  rig.policy_gripper = 0.0;
+  rig.gripper_position = 3000.0;
+  rig.run(4.0);
+  rig.policy_gripper = 1.0;  // the policy lets go before a verdict and tries again
+  rig.gripper_position = 50.0;
+  rig.run(5.0);
+  assert(!rig.verdict.finished);  // the 6 s count starts again at the next close
+  closeOn(rig, 5700.0);
+  rig.run(2.0);
+  assert(rig.verdict.outcome == AttemptOutcome::kGraspHeld);
+}
+
+void testGraspTheLastCloseOfThePreviousAttemptDoesNotCount() {
+  // Every 2026-11-01 trace began with the bridge's last command of the previous attempt (closed)
+  // until the policy published again.
+  PolicyTaskConfig config;
+  PolicySupervisor sup(config);
+  sup.onPolicyGripperCommand(0.0, 99.0);  // the previous attempt's close
+  sup.onGripperReading(50.0, false, 100.0);
+  const Joints arm{-9.89, 18.05, 79.07, 15.5, 79.6, -6.2};
+  for (const char* name : {"l", "m", "r"}) sup.onJoints(name, arm, 100.0, 100.0);
+  sup.onBridgeStats({true, true, false}, 100.0);
+  sup.start(100.0, "pick");
+  for (double t = 100.1; t < 108.0; t += 0.1) {
+    for (const char* name : {"l", "m", "r"}) sup.onJoints(name, arm, t, t);
+    sup.onBridgeStats({true, true, false}, t);
+    sup.onGripperReading(50.0, false, t);
+    sup.onDriverCommand(0.05, 0.1, t);
+    assert(!sup.evaluate(t).finished);  // no 6 s timeout of a close that never happened
+  }
+}
+
+void testGraspFaultsStillWin() {
+  Rig rig;
+  rig.start("pick");
+  rig.policy_gripper = 0.0;
+  rig.gripper_position = 8450.0;
+  rig.arm[4] = 2.0;  // below the J5 floor in the same step
+  rig.step();
+  assert(rig.verdict.outcome == AttemptOutcome::kFault);
+}
+
+void testTheDefaultPickTaskIsJudgedAtTheClose() {
+  assert(PolicyTaskConfig().task("pick").completion == PolicyTaskConfig::Completion::kGraspCheck);
 }
 
 }  // namespace
@@ -966,7 +1115,7 @@ int main() {
   testSnapshotMarksAFinishedAttempt();
   testSnapshotLeavesMissingReadingsAsNaN();
   testOutcomeNamesAreStable();
-  testOnlyTheTwoHeldOutcomesAreSuccessesAndOnlyFaultAndWrongTaskEndTheTask();
+  testOnlyTheHeldOutcomesAreSuccessesAndOnlyFaultAndWrongTaskEndTheTask();
   testPickLiftedAndStillHeldIsASuccess();
   testPickWaitsForTheHoldTimeAfterTheLift();
   testPickTooSmallALiftIsNotYetASuccess();
@@ -985,5 +1134,14 @@ int main() {
   testAnUnknownTaskIsRejectedAndChangesNothing();
   testPickFaultsStillWin();
   testRestartingWithAnotherTaskForgetsTheLiftState();
+  testGraspHeldFirmlyRightAfterTheCloseIsASuccess();
+  testGraspTheJawsMeetingIsAnImmediateRetryableMiss();
+  testGraspATorqueBlipWhileTheJawsTravelIsNotAHold();
+  testGraspAHoldThatIsStillCreepingIsNotYetConfirmed();
+  testGraspAPartialCloseWithoutTorqueTimesOutAsAMiss();
+  testGraspThePolicyOpeningAgainCancelsTheCheck();
+  testGraspTheLastCloseOfThePreviousAttemptDoesNotCount();
+  testGraspFaultsStillWin();
+  testTheDefaultPickTaskIsJudgedAtTheClose();
   return 0;
 }

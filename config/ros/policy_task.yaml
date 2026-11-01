@@ -158,7 +158,7 @@ realman_bt_executor:
       # above) was run on the robot at 5% without an object on 2026-10-20 and the operator saw no obstacle on the path.
       # 2026-10-30: release at J1 -163 instead (user decision), turning further the same way; -135..-163 not yet path-checked.
       # regrasp_attempts: policy runs within one attempt (the first counts; -1 = no limit). After a miss (or another
-      # retryable stop of the policy) the gripper opens, the arm lifts ~2 cm and the policy continues from there; when
+      # retryable stop of the policy) the gripper opens, the arm lifts ~4 cm and the policy continues from there; when
       # they are used up, or the object drops while carried, the attempt fails and the next one starts from the start
       # pose. 2026-11-01 (user decision): 3 attempts x 3 regrasps.
       pick_cycle:

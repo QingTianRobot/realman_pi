@@ -40,7 +40,7 @@
                  grasp_check) runs until it closes the gripper, and the grasp is judged right then.
                  Regrasp (inner RetryUnlessFault, pick_cycle.regrasp_attempts policy runs): closed on nothing, the
                  policy stopped for another retryable reason (overcurrent, stall, attempt timeout): the gripper opens,
-                 the arm lifts ~2 cm straight up and the policy continues from there, without going home.
+                 the arm lifts ~4 cm straight up and the policy continues from there, without going home.
                  Attempt (outer RetryUnlessFault, policy_task.attempts): the regrasps are used up, or the object
                  drops while carried: the gripper opens and the arms go back to the start pose, and a fresh round of
                  regrasps starts. A policy-server timeout is handed from the inner retry to the outer one
@@ -72,7 +72,7 @@
                                          r_joint_degrees="{pika_r_joint_degrees}"
                                          velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
                           <!-- pick_regrasp=false: the first policy run of this attempt starts from the start pose
-                               as is; every later one first opens the gripper and lifts ~2 cm (0.02 m/s for 1 s,
+                               as is; every later one first opens the gripper and lifts ~4 cm (0.02 m/s for 2 s,
                                less with the ramps) so the policy sees the object again instead of the closed jaws
                                on the table. -->
                           <SetBool key="pick_regrasp" value="false"/>
@@ -88,7 +88,7 @@
                                                                 reference="work/pikabase"
                                                                 linear_velocity_mps="0,0,0.02"
                                                                 angular_velocity_radps="0,0,0"
-                                                                duration_sec="1.0"/>
+                                                                duration_sec="2.0"/>
                                 </Sequence>
                               </Fallback>
                               <SetBool key="pick_regrasp" value="true"/>

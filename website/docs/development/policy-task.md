@@ -93,7 +93,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
                     <Sequence name="pick_regrasp_back_off">
                       <GripperReady name="pick_regrasp_open" arm_id="r" .../>
                       <CartesianVelocityForDuration name="pick_regrasp_lift" reference="work/pikabase"
-                                                    linear_velocity_mps="0,0,0.02" duration_sec="1.0" .../>
+                                                    linear_velocity_mps="0,0,0.02" duration_sec="2.0" .../>
                     </Sequence>
                   </Fallback>
                   <SetBool key="pick_regrasp" value="true"/>
@@ -127,7 +127,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 每个周期依次执行：
 
 1. **抓取**：`task="pick"`，以 `grasp_check` 判定：策略一闭合夹爪就判断有没有夹牢。夹牢则策略停下，夹爪保持闭合，进入搬运。没有成功时分两级重试（2026-11-01 起，原来只有一级，每次都回位）：
-   - **小重试**（内层 `RetryUnlessFault pick_regrasps`，`pick_cycle.regrasp_attempts` 次，含第一次，默认 3）：抓空，或策略因其他可重试的原因停下（电流过大、停滞、超过 `max_attempt_sec`），先张开夹爪，再在 `work/pikabase` 中以 0.02 m/s 竖直抬起 1 s（含加减速约 2 cm），然后不回位，从当前位置继续运行策略。黑板键 `pick_regrasp` 记录这是不是本次大重试中的第一次策略运行：第一次直接从起始位姿开始，不张开、不抬起。
+   - **小重试**（内层 `RetryUnlessFault pick_regrasps`，`pick_cycle.regrasp_attempts` 次，含第一次，默认 3）：抓空，或策略因其他可重试的原因停下（电流过大、停滞、超过 `max_attempt_sec`），先张开夹爪，再在 `work/pikabase` 中以 0.02 m/s 竖直抬起 2 s（含加减速约 4 cm，2026-11-01 由约 2 cm 加高），然后不回位，从当前位置继续运行策略。黑板键 `pick_regrasp` 记录这是不是本次大重试中的第一次策略运行：第一次直接从起始位姿开始，不张开、不抬起。
    - **大重试**（外层 `RetryUnlessFault`，`attempts` 次，默认 3）：小重试用完，或搬运途中物体掉落（见第 3 步），张开夹爪、三臂回到起始位姿，再开始新一轮小重试。因此一个周期最多运行 3 × 3 = 9 次策略。
    - 策略服务超时不在原地重试：内层设置了 `timeouts_to_parent="true"`，带着 `policy_timeout` 立即交给外层，由外层按 `timeout_retry` 等待、回位并单独计数，与原来的行为相同。故障（`policy_fault`）使两层都立即放弃。
 2. **竖直抬起**：`CartesianVelocityForDuration` 在恒等工作坐标系 `work/pikabase`（即右臂竖直安装的基座系，+Z 向上）中以 0.03 m/s 向上运动 2 s（含加减速约 5.5 cm）。策略停下时夹爪还贴着桌面，先竖直离开桌面，后面的关节空间 MoveJ 就不会拖着物体扫过垫子。

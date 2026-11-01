@@ -82,8 +82,9 @@ def test_policy_branch_picks_carries_while_held_releases_and_checks_the_table():
     assert regrasp_lift.attrib["angular_velocity_radps"] == "0,0,0"
     vx, vy, vz = (float(value) for value in regrasp_lift.attrib["linear_velocity_mps"].split(","))
     assert vx == vy == 0.0 and 0.0 < vz <= 0.03
-    # "A little": clear of the table, well below the carry's lift.
-    assert 0.01 <= vz * float(regrasp_lift.attrib["duration_sec"]) <= 0.03
+    # "A little": clear of the table (2 cm was too low, 2026-11-01), still below the carry's lift.
+    regrasp_rise = vz * float(regrasp_lift.attrib["duration_sec"])
+    assert 0.03 <= regrasp_rise <= 0.05
 
     carry = attempt.find("WhileGraspHeld")
     assert carry.attrib["arm_id"] == "r"
@@ -92,9 +93,10 @@ def test_policy_branch_picks_carries_while_held_releases_and_checks_the_table():
     # Straight up in the identity work frame of the upright r base, slowly, a few centimetres.
     assert up.attrib["reference"] == "work/pikabase"
     assert up.attrib["angular_velocity_radps"] == "0,0,0"
-    vx, vy, vz = (float(value) for value in up.attrib["linear_velocity_mps"].split(","))
-    assert vx == vy == 0.0 and 0.0 < vz <= 0.05
-    assert 0.03 <= vz * float(up.attrib["duration_sec"]) <= 0.08
+    vx, vy, vz_carry = (float(value) for value in up.attrib["linear_velocity_mps"].split(","))
+    assert vx == vy == 0.0 and 0.0 < vz_carry <= 0.05
+    assert 0.03 <= vz_carry * float(up.attrib["duration_sec"]) <= 0.08
+    assert regrasp_rise < vz_carry * float(up.attrib["duration_sec"])
     assert lift.tag == "MoveJ" and lift.attrib["arm_id"] == "r"
     assert lift.attrib["joint_degrees"] == "{pick_lift_joint_degrees}"
     assert turn.tag == "MoveJointTo" and turn.attrib["arm_id"] == "r"

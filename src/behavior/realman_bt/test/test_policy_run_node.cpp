@@ -69,6 +69,16 @@ PolicyTaskConfig fastConfig() {
   c.max_joint_speed_dps = 400.0;
   c.lift.min_closed_sec = 0.3;
   c.lift.hold_sec = 0.2;
+  // The pick tests below exercise lift_and_hold; grasp_check (the default) uses graspConfig().
+  c.tasks["pick"].completion = PolicyTaskConfig::Completion::kLiftAndHold;
+  return c;
+}
+
+PolicyTaskConfig graspConfig() {
+  PolicyTaskConfig c = fastConfig();
+  c.tasks["pick"].completion = PolicyTaskConfig::Completion::kGraspCheck;
+  c.grasp_check.confirm_sec = 0.2;
+  c.grasp_check.timeout_sec = 1.0;
   return c;
 }
 
@@ -1110,6 +1120,33 @@ void testThePickTaskTurningToTheBinWithEmptyJawsIsARetryableFailure() {
   assert(f.text(realman_bt::kPolicyGraspVerdictKey) == "empty");
 }
 
+void testAFirmGraspEndsThePickAtTheCloseAndStopsTheBridge() {
+  Fixture f(false, graspConfig(), "pick");
+  f.stack.serve();
+  PickScenario scenario;
+
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::SUCCESS);
+
+  assert(!f.faultRaised());
+  expectStopsInOrder(f.stack);
+  assert(f.text(realman_bt::kPolicyAttemptResultKey) == "grasp_held");
+  assert(f.text(realman_bt::kPolicyGraspVerdictKey) == "held");
+}
+
+void testClosingOnNothingEndsThePickAsARetryableMiss() {
+  Fixture f(false, graspConfig(), "pick");
+  f.stack.serve();
+  PickScenario scenario(false, 8450.0, false);
+
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::FAILURE);
+
+  assert(!f.faultRaised());
+  expectStopsInOrder(f.stack);
+  assert(f.text(realman_bt::kPolicyAttemptResultKey) == "grasp_missed");
+  assert(f.text(realman_bt::kPolicyGraspVerdictKey) == "empty");
+  assert(f.text(realman_bt::kPolicyFailureReasonKey).find("closed on nothing") != std::string::npos);
+}
+
 void testAnUnknownTaskStopsBeforeTouchingAnything() {
   Fixture f(false, fastConfig(), "stack");
   f.stack.serve();
@@ -1305,6 +1342,8 @@ int main(int argc, char** argv) {
   testABridgeThatDoesNotReportItsPromptIsAFault();
   testThePickTaskTurningToTheBinIsAFaultAndStopsTheBridge();
   testThePickTaskTurningToTheBinWithEmptyJawsIsARetryableFailure();
+  testAFirmGraspEndsThePickAtTheCloseAndStopsTheBridge();
+  testClosingOnNothingEndsThePickAsARetryableMiss();
   testAnUnknownTaskStopsBeforeTouchingAnything();
   testTheTraceNamesTheTaskAndItsPrompt();
   testItNeedsTheConfigurationToRun();

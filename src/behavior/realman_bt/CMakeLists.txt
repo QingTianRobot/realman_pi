@@ -62,6 +62,7 @@ add_library(policy_task_nodes
   src/gripper_ready_node.cpp
   src/policy_run_node.cpp
   src/policy_task_params.cpp
+  src/while_grasp_held_node.cpp
   src/white_objects_remain_node.cpp)
 target_include_directories(policy_task_nodes PUBLIC
   $<BUILD_INTERFACE:${CMAKE_CURRENT_SOURCE_DIR}/include>
@@ -261,6 +262,15 @@ if(BUILD_TESTING)
   add_test(NAME test_gripper_ready_node COMMAND test_gripper_ready_node)
   set_tests_properties(test_gripper_ready_node PROPERTIES
     TIMEOUT 60 ENVIRONMENT "ROS_DOMAIN_ID=218;ROS_LOCALHOST_ONLY=1")
+
+  add_executable(test_while_grasp_held_node test/test_while_grasp_held_node.cpp)
+  target_include_directories(test_while_grasp_held_node PRIVATE
+    "${BT_VENDOR_ROOT}" "${BT_VENDOR_ROOT}/bt_nodes")
+  target_link_libraries(test_while_grasp_held_node policy_task_nodes)
+  ament_target_dependencies(test_while_grasp_held_node rclcpp std_msgs)
+  add_test(NAME test_while_grasp_held_node COMMAND test_while_grasp_held_node)
+  set_tests_properties(test_while_grasp_held_node PROPERTIES
+    TIMEOUT 60 ENVIRONMENT "ROS_DOMAIN_ID=224;ROS_LOCALHOST_ONLY=1")
 
   add_executable(test_policy_run_node test/test_policy_run_node.cpp)
   target_include_directories(test_policy_run_node PRIVATE

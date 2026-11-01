@@ -47,11 +47,22 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 | 字段 | 作用 |
 | --- | --- |
 | `prompt` | 发送给桥接的任务文本，必须与训练数据视图中的任务文本逐字一致；哪怕相差一个字符，模型的输入也会偏离训练分布 |
-| `completion` | 一次尝试的成功判定方式：`release_over_bin`（在收纳盒一侧放手，且曾夹住物体）或 `lift_and_hold`（抬起后仍夹住物体） |
+| `completion` | 一次尝试的成功判定方式：`release_over_bin`（在收纳盒一侧放手，且曾夹住物体）、`lift_and_hold`（抬起后仍夹住物体）或 `grasp_check`（夹爪一闭合就判定是否夹牢） |
 
-目前有两项：`place`（`pick up the power adapter and put it in the blue bin`，`release_over_bin`）和 `pick`（`pick up the power adapter`，`lift_and_hold`）。生产树 `control.xml` 的 policy 分支使用 `task="place"`。纯抓起任务用的是 `control_pick.xml`（见下文[抓取清台树](#抓取清台树-control-pick-xml)）：抓起成功后由树把物体送到放置位置再松开，然后用全局相机判断桌上还有没有物体。
+目前有两项：`place`（`pick up the power adapter and put it in the blue bin`，`release_over_bin`）和 `pick`（`pick up the power adapter`，`grasp_check`；2026-11-01 前为 `lift_and_hold`）。生产树 `control.xml` 的 policy 分支使用 `task="place"`。纯抓起任务用的是 `control_pick.xml`（见下文[抓取清台树](#抓取清台树-control-pick-xml)）：抓起成功后由树把物体送到放置位置再松开，然后用全局相机判断桌上还有没有物体。
 
-两种完成条件的阈值分别位于 `release` 和 `lift` 两个配置块中，由使用同一完成条件的所有任务共用。`lift_and_hold` 从策略第一次闭合夹爪（夹爪指令低于 `release.closed_below`）时开始判定：
+三种完成条件的阈值分别位于 `release`、`lift` 和 `grasp_check` 配置块中，由使用同一完成条件的所有任务共用。
+
+`grasp_check` 在策略闭合夹爪（本次尝试中收到的夹爪指令低于 `release.closed_below`）的那一刻开始判定，不等策略抬起：
+
+- **夹牢**（`grasp_held`，成功）：夹爪有力矩（`torque_reached`）且位置低于 `verdict.empty_position_min`，并且连续 `grasp_check.confirm_sec`（0.8 s）不中断、位置波动不超过 `grasp_check.steady_position_range`（200）。尝试随即结束，策略停止，夹爪保持闭合，由树接手抬起和搬运（见[抓取清台树](#抓取清台树-control-pick-xml)）。
+- **抓空**（`grasp_missed`，可重试）：位置达到 `verdict.empty_position_min`（夹爪合到底），或闭合后 `grasp_check.timeout_sec`（6 s）内没有夹牢。立即停止策略，张开夹爪、回位后重新开始，不再等策略自己补抓。
+- 判定结束前策略又张开夹爪，本次判定作废，等它下一次闭合重新计时。
+- 只认本次尝试中收到的夹爪指令：上一次尝试最后的闭合指令会一直是最新值，直到策略重新发布（2026-11-01 每条轨迹开头都能看到），不能把它当作闭合。
+
+阈值来自 2026-10-20 到 11-01 的 pick 轨迹中闭合后保持 3 s 以上的 86 次闭合：47 次夹住的，夹爪在闭合后 0.6–2.9 s 稳定，按 0.8 s / 200 的条件有 46 次能确认（最晚 4.8 s）；39 次抓空的，位置在 1.3–4.8 s 内达到 7800，合爪过程中常出现不到 1 s 的力矩脉冲（例如 11-01 06:32:37 在 5085 处闪了一下力矩，随后合到 8244），所以力矩必须持续且位置稳定才算夹牢。
+
+`lift_and_hold` 从策略第一次闭合夹爪（夹爪指令低于 `release.closed_below`）时开始判定：
 
 - **成功**（`lifted_held`）：夹爪夹住了物体（位置低于 `verdict.empty_position_min`，且出现过力矩），累计闭合时间不少于 `lift.min_closed_sec`，并且 `lift.joint_index` 指定的关节（J2）相对闭合时刻移动了 `lift.joint_delta_deg`（负值表示角度减小；RM65 抬起时 J2 减小）。上述条件持续 `lift.hold_sec` 即判定成功。
 - **掉落**（`dropped`，可重试）：曾夹住物体，但之后位置回到 `verdict.empty_position_min` 以上，而策略仍在指令夹爪闭合。
@@ -69,10 +80,21 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
     <Fallback name="pick_until_clear">
       <Repeat num_cycles="-1">
         <Sequence name="pick_cycle">
-          <RetryUnlessFault ...>  <!-- GripperReady → 回位 → PolicyRun task="pick" -->
-          <MoveJ name="pick_lift_pose" arm_id="r" joint_degrees="{pick_lift_joint_degrees}" .../>
-          <MoveJointTo name="pick_turn_to_release" arm_id="r" joint="{pick_release_joint}"
-                       target_degrees="{pick_release_joint_deg}" .../>
+          <RetryUnlessFault ...>
+            <Sequence name="pick_attempt">
+              <GripperReady .../> <ThreeArmMoveJ name="policy_rehome" .../>
+              <PolicyRun arm_id="r" task="pick" .../>  <!-- grasp_check：闭合即判定 -->
+              <WhileGraspHeld name="pick_carry" arm_id="r" ...>
+                <Sequence name="pick_carry_to_release">
+                  <CartesianVelocityForDuration name="pick_lift_up" reference="work/pikabase"
+                                                linear_velocity_mps="0,0,0.03" duration_sec="2.0" .../>
+                  <MoveJ name="pick_lift_pose" arm_id="r" joint_degrees="{pick_lift_joint_degrees}" .../>
+                  <MoveJointTo name="pick_turn_to_release" arm_id="r" joint="{pick_release_joint}"
+                               target_degrees="{pick_release_joint_deg}" .../>
+                </Sequence>
+              </WhileGraspHeld>
+            </Sequence>
+          </RetryUnlessFault>
           <GripperReady name="pick_release" arm_id="r" .../>
           <WhiteObjectsRemain name="objects_remain" table_clear="{pick_table_clear}" .../>
         </Sequence>
@@ -88,13 +110,15 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 
 每个周期依次执行：
 
-1. **抓起**：与 `control.xml` 相同的尝试结构（张开夹爪、三臂回位、`PolicyRun`），只是 `task="pick"`，以 `lift_and_hold` 判定成功：夹住物体并抬起后保持，夹爪仍然闭合。重试、故障和超时规则与上文相同。
-2. **抬升到固定位姿**：右臂 `MoveJ` 到 `pick_cycle.lift_joint_degrees`。目前取右臂起始位姿（`pika_config.yaml`），等测出专门的抬升位姿后在配置里修改即可，不用改 XML。
-3. **转到放置侧**：`MoveJointTo` 只把 J1（`pick_cycle.release_joint`）转到 `pick_cycle.release_joint_deg`（-135°），其余关节保持不动。从上往下看是顺时针转动（J1 角度减小约 125°）。2026-10-20 在真机上空载、以 5% 速度从抬升位姿转到 -135° 再转回，现场确认路径上没有障碍。
-4. **松开**：`GripperReady` 张开右夹爪，物体落在放置侧。
-5. **检测**：`WhiteObjectsRemain` 读一帧全局相机（D435）图像，判断垫子上是否还有白色物体。有物体就返回 `SUCCESS`，`Repeat` 开始下一个周期；没有物体就写入 `pick_table_clear=true` 并返回失败，以此结束 `Repeat`。
+1. **抓取**：与 `control.xml` 相同的尝试结构（张开夹爪、三臂回位、`PolicyRun`），只是 `task="pick"`，以 `grasp_check` 判定：策略一闭合夹爪就判断有没有夹牢。抓空立即重试（停策略、张开、回位、再跑策略）；夹牢则策略停下，夹爪保持闭合，进入搬运。重试、故障和超时规则与上文相同。
+2. **竖直抬起**：`CartesianVelocityForDuration` 在恒等工作坐标系 `work/pikabase`（即右臂竖直安装的基座系，+Z 向上）中以 0.03 m/s 向上运动 2 s（含加减速约 5.5 cm）。策略停下时夹爪还贴着桌面，先竖直离开桌面，后面的关节空间 MoveJ 就不会拖着物体扫过垫子。
+3. **搬运全程监测**：第 2–4 步都包在 `WhileGraspHeld` 里，并且和抓取一起位于 `RetryUnlessFault` 之内。每个 tick 先读 `/gripper_right/position`：位置在 `verdict.empty_position_min` 以上持续 `grasp_check.carry_lost_sec`（0.3 s），就是物体掉了，立即 halt 正在执行的运动并返回可重试的失败，`RetryUnlessFault` 张开夹爪、回位后重新运行策略。掉落和抓空一样消耗 `attempts`。搬运中的运动失败或超过 `gripper_ready.position_stale_sec` 读不到夹爪位置，由 `WhileGraspHeld` 置位 `policy_fault`，不重试，与这些运动放在重试外面时的行为一致。
+4. **抬升到固定位姿**：右臂 `MoveJ` 到 `pick_cycle.lift_joint_degrees`。目前取右臂起始位姿（`pika_config.yaml`），等测出专门的抬升位姿后在配置里修改即可，不用改 XML。
+5. **转到放置侧**：`MoveJointTo` 只把 J1（`pick_cycle.release_joint`）转到 `pick_cycle.release_joint_deg`（-163°），以 20% 速度转动（2026-10-30 起，原为 10%），其余关节保持不动。从上往下看是顺时针转动（J1 角度减小约 153°）。2026-10-20 在真机上空载、以 5% 速度从抬升位姿转到 -135° 再转回，现场确认路径上没有障碍；2026-10-30 起放置角改为 -163°，沿同一方向多转 28°，-135° 到 -163° 这一段还没有空载确认过。
+6. **松开**：`GripperReady` 张开右夹爪，物体落在放置侧。
+7. **检测**：`WhiteObjectsRemain` 读一帧全局相机（D435）图像，判断垫子上是否还有白色物体。有物体就返回 `SUCCESS`，`Repeat` 开始下一个周期；没有物体就写入 `pick_table_clear=true` 并返回失败，以此结束 `Repeat`。
 
-`Repeat` 结束后由 `CheckBool` 判断结束原因：如果是桌面已清空，先由 `pick_done_home` 让三臂回到起始位姿，再停在 `PolicyInputStub`（policy 模式空闲，桥接已停止）。回位这一步不能省：进入 policy 模式的第一步回位受输入模式切换超时（`behavior_tree.yaml` 的 `switch_timeout_ms`，5 s）限制，如果右臂停在 -135°，回位约需 8 s，会超时并退回 none（2026-10-20 真机上出现过）。其他原因（尝试次数用完、故障、某个 MoveJ 失败、相机没有图像）都不会写入 `pick_table_clear`，于是经 `FailInputMode` 进入 `FAILED`；这条路径不会自动回位，再次进入前如果右臂不在起始位姿附近，需要先手动回位（见下文操作流程）。注意抬升、转动这两步的 MoveJ 失败不会更新 `policy_failure_reason`，此时 `FAILED` 的说明可能是上一次失败尝试留下的原因（如果没有，就是默认的 `policy task failed`），具体原因需查看诊断事件。
+`Repeat` 结束后由 `CheckBool` 判断结束原因：如果是桌面已清空，先由 `pick_done_home` 让三臂回到起始位姿，再停在 `PolicyInputStub`（policy 模式空闲，桥接已停止）。回位这一步不能省：进入 policy 模式的第一步回位受输入模式切换超时（`behavior_tree.yaml` 的 `switch_timeout_ms`，5 s）限制，如果右臂停在放置侧（-135° 时回位约需 8 s，-163° 更久），会超时并退回 none（2026-10-20 真机上出现过）。其他原因（尝试次数用完、故障、某个 MoveJ 失败、相机没有图像）都不会写入 `pick_table_clear`，于是经 `FailInputMode` 进入 `FAILED`；这条路径不会自动回位，再次进入前如果右臂不在起始位姿附近，需要先手动回位（见下文操作流程）。抬起、抬升、转动这几步的运动失败由 `WhileGraspHeld` 写入 `policy_failure_reason`（`carrying the object failed in pick_carry_to_release: ...`），`FAILED` 的说明就是它。
 
 ### 白色物体检测（WhiteObjectsRemain）
 
@@ -113,7 +137,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 - 实时画面中，三个适配器计数为 1709，只剩一个时约 620；抹掉适配器、保留线缆时为 91，判为已清空。
 - 光斑腐蚀后的范围约为 x 388–460、y 176–350，排除区取 `[392, 170, 75, 185]`，与最近的适配器（右边缘 x 391）不重叠。
 
-检测时手臂必须离开垫子区域：右臂停在 J1=-135° 时应位于画面之外，这一点尚待带物体运行时确认。相机、垫子或灯光挪动后，需要重新标定 ROI 和排除区。
+检测时手臂必须离开垫子区域：右臂停在放置侧（J1=-163°）时应位于画面之外，这一点尚待带物体运行时确认。相机、垫子或灯光挪动后，需要重新标定 ROI 和排除区。
 
 dry-run 时不读相机，直接报告桌面已清空，因此 dry-run 只跑一个周期就结束。
 
@@ -124,7 +148,7 @@ dry-run 时不读相机，直接报告桌面已清空，因此 dry-run 只跑一
 - 确认机器人栈正常：三条臂的 `joint_states` 都在约 10 Hz，`/l|m|r/execute_motion` 都在线，全局相机 `/camera_global/d435/color/image_raw` 有图像（`rgb8`）。
 - 检查右夹爪：读 `/gripper_right/position` 和 `/gripper_right/alarm`。重建容器后，夹爪常会停在半开的位置（如 900）且报警为 32（0x20），不响应指令。依次调用 `/gripper_right/reset` 和 `/gripper_right/enable` 即可恢复（必要时再调用 `open`）。报警值会一直保持 32，但 policy 链路上的任何环节都不检查它，不影响运行。
 - 布置场景：适配器放在绿色垫子上，避开右侧的反光排除区（`object_detection.exclude_xywh`）；收纳盒放在放置侧；清空工作区；有人手持急停。
-- 确认右臂在起始位姿附近。进入 policy 模式的第一步回位受 5 s 的切换超时限制。正常结束时 `pick_done_home` 会自动回位；如果上一次以 `FAILED` 结束、手臂停在远处（例如 J1 = -135°），需要先在 :8765 的运动面板把右臂移回起始位姿。
+- 确认右臂在起始位姿附近。进入 policy 模式的第一步回位受 5 s 的切换超时限制。正常结束时 `pick_done_home` 会自动回位；如果上一次以 `FAILED` 结束、手臂停在远处（例如 J1 = -163°），需要先在 :8765 的运动面板把右臂移回起始位姿。
 
 **2. 先跑一遍 dry-run**
 
@@ -140,7 +164,7 @@ REALMAN_BT_DRY_RUN=true ./rm65 bt control_pick
 REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 ```
 
-在 :8765 上，勾选真实运动后启动也可以。然后选择"Policy / 抓取清台"。`activation: auto` 下，选择即开始运动：三臂回到起始位姿，然后每轮依次执行抓取（约 10–15 s）、抬升、J1 转到 -135°、松爪、检测，有物体就继续下一轮；桌面清空后三臂回到起始位姿，停在 policy 空闲。
+在 :8765 上，勾选真实运动后启动也可以。然后选择"Policy / 抓取清台"。`activation: auto` 下，选择即开始运动：三臂回到起始位姿，然后每轮依次执行抓取（约 10–15 s）、抬升、J1 转到 -163°、松爪、检测，有物体就继续下一轮；桌面清空后三臂回到起始位姿，停在 policy 空闲。
 
 **4. 结束**
 
@@ -170,6 +194,7 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 | --- | --- | --- |
 | `GripperReady` | 读取 `/gripper_<name>/position`；夹爪未张开时调用一次 `/gripper_<name>/open`，并等待位置回到阈值以内 | 服务缺失、没有位置数据、请求被拒绝或超时：判为故障 |
 | `PolicyRun` | 预检、激活、监督一次尝试，并按固定顺序停止 | 见下表 |
+| `WhileGraspHeld` | 装饰节点：子节点（搬运运动）执行期间持续读 `/gripper_<name>/position`，夹爪合到底（`verdict.empty_position_min` 以上）持续 `grasp_check.carry_lost_sec` 即 halt 子节点 | 物体掉落：可重试的失败，写入 `policy_failure_reason`；子节点失败或读不到夹爪位置：判为故障 |
 | `MoveJointTo` | 读取当前关节角，只把一个关节转到绝对角度，再作为普通 MoveJ 执行（`control_pick.xml` 用它把 J1 转到放置侧） | 读角度失败、MoveJ 失败或超时 |
 | `WhiteObjectsRemain` | 用全局相机检测垫子上是否还有白色物体，结果写入 `table_clear` | 有物体返回 `SUCCESS`；桌面已清空时返回失败并写入 `table_clear=true`；没有图像、编码不支持或 ROI 超出图像范围时返回失败，并写入 `policy_failure_reason` |
 | `FailInputMode` | 把任务级失败转为输入模式 `FAILED`，原因取自 `policy_failure_reason`；协调器随后切换到 `none` | — |
@@ -190,9 +215,11 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 | --- | --- | --- |
 | 在收纳盒一侧放手，且曾夹住物体 | `SUCCESS`，`released_held` | — |
 | 在收纳盒一侧放手，但夹爪合到底 | 失败，`released_empty` | 是 |
+| `grasp_check`：闭合后夹牢 | `SUCCESS`，`grasp_held` | — |
+| `grasp_check`：闭合后合到底，或 `grasp_check.timeout_sec` 内没有夹牢 | 失败，`grasp_missed` | 是 |
 | `lift_and_hold`：抬起并保持，仍夹着物体 | `SUCCESS`，`lifted_held` | — |
 | `lift_and_hold`：夹住后物体掉落 | 失败，`dropped` | 是 |
-| 超过 `max_attempt_sec` 仍未完成（放手或抬起保持） | 失败，`timeout` | 是 |
+| 超过 `max_attempt_sec` 仍未完成（放手、抬起保持或夹牢） | 失败，`timeout` | 是 |
 | 夹爪闭合且指令几乎为零，持续 `stall.sec` | 失败，`stall` | 是 |
 | 某个关节电流持续 `current_guard.sustain_sec` 高于 `current_guard.limits_ma`（手臂顶在桌面或其他东西上） | 失败，`overcurrent` | 是：张开夹爪、回到起始位姿后重新抓取 |
 | 桥接因推理连续超时而自行暂停、桥接统计中断超过 `stats_stale_sec`、预检时桥接迟迟未就绪、`/policy/activate` 无回应 | 失败，`policy_timeout` | 是，按 `timeout_retry` 单独计数，先等待 `backoff_sec` |
@@ -200,7 +227,7 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 | `lift_and_hold`：夹着物体转向收纳盒一侧 | 故障，`wrong_task` | 否，经 `FailInputMode` 进入 `FAILED` |
 | `lift_and_hold`：抓空后转向收纳盒一侧 | 失败，`wrong_side_empty` | 是 |
 
-以下关于放手和抓取的判定适用于 `release_over_bin`，`lift_and_hold` 的判定见上一节。**放手**指策略的夹爪指令在累计闭合足够久之后升到阈值以上，同时手臂位于收纳盒一侧（`release.joint_index` 对应的关节低于 `release.joint_below_deg`）。这一位置条件可以排除策略在垫子上为重新抓取而张开夹爪的情况。**抓取判定**依据放手前最后一段闭合期的夹爪位置：停在中间且出现过 `torque_reached`，说明夹住了物体；合到底且没有力矩，则是抓空。
+以下关于放手和抓取的判定适用于 `release_over_bin`，`lift_and_hold` 和 `grasp_check` 的判定见上一节。**放手**指策略的夹爪指令在累计闭合足够久之后升到阈值以上，同时手臂位于收纳盒一侧（`release.joint_index` 对应的关节低于 `release.joint_below_deg`）。这一位置条件可以排除策略在垫子上为重新抓取而张开夹爪的情况。**抓取判定**依据放手前最后一段闭合期的夹爪位置：停在中间且出现过 `torque_reached`，说明夹住了物体；合到底且没有力矩，则是抓空。
 
 每次尝试的结果会写入黑板键 `policy_attempt_result`、`policy_grasp_verdict`、`policy_attempt_sec`、`policy_failure_reason`，并作为事件记入运行快照，可在 Web 监视器中查看。
 

@@ -81,6 +81,11 @@ void PolicyTaskConfig::validate() const {
   require(lift.wrong_side_joint_index >= 0 && lift.wrong_side_joint_index < 6,
           "policy_task.lift.wrong_side_joint_index must be 0..5");
   require(std::isfinite(lift.wrong_side_below_deg), "policy_task.lift.wrong_side_below_deg must be finite");
+  require(positive(grasp_check.confirm_sec) && positive(grasp_check.steady_position_range) &&
+              positive(grasp_check.timeout_sec) && positive(grasp_check.carry_lost_sec),
+          "policy_task.grasp_check values must be positive");
+  require(grasp_check.confirm_sec < grasp_check.timeout_sec,
+          "policy_task.grasp_check.confirm_sec must be below timeout_sec");
   require(prompt_topic.size() > 1 && prompt_topic.front() == '/',
           "policy_task.prompt_topic must start with /");
   require(!tasks.empty(), "policy_task.tasks must name at least one task");
@@ -144,6 +149,8 @@ const char* completionName(PolicyTaskConfig::Completion completion) {
       return "release_over_bin";
     case PolicyTaskConfig::Completion::kLiftAndHold:
       return "lift_and_hold";
+    case PolicyTaskConfig::Completion::kGraspCheck:
+      return "grasp_check";
   }
   return "release_over_bin";
 }
@@ -151,7 +158,9 @@ const char* completionName(PolicyTaskConfig::Completion completion) {
 PolicyTaskConfig::Completion parseCompletion(const std::string& text) {
   if (text == "release_over_bin") return PolicyTaskConfig::Completion::kReleaseOverBin;
   if (text == "lift_and_hold") return PolicyTaskConfig::Completion::kLiftAndHold;
-  throw std::invalid_argument("completion must be release_over_bin or lift_and_hold, got '" + text + "'");
+  if (text == "grasp_check") return PolicyTaskConfig::Completion::kGraspCheck;
+  throw std::invalid_argument("completion must be release_over_bin, lift_and_hold or grasp_check, got '" +
+                              text + "'");
 }
 
 }  // namespace realman_bt

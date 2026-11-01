@@ -11,6 +11,8 @@ export type OutcomeKind = "success" | "retry" | "timeout" | "fault";
 export const outcomes: Record<string, { kind: OutcomeKind; reason: string; grasp: string }> = {
   released_held: { kind: "success", reason: "", grasp: "held" },
   lifted_held: { kind: "success", reason: "", grasp: "held" },
+  grasp_held: { kind: "success", reason: "", grasp: "held" },
+  grasp_missed: { kind: "retry", reason: "the jaws closed on nothing", grasp: "empty" },
   released_empty: { kind: "retry", reason: "released over the bin but the jaws closed on nothing", grasp: "empty" },
   dropped: { kind: "retry", reason: "the object slipped out of the closed jaws", grasp: "empty" },
   timeout: { kind: "retry", reason: "no release within 45 s", grasp: "" },
@@ -43,7 +45,7 @@ export const scenarios: Scenario[] = [
   { id: "server-timeout", label: "策略服务超时后重试成功", task: "place", cycles: 1, attempts: 1, results: ["policy_timeout", "policy_timeout", "released_held"] },
   { id: "server-timeout-exhaust", label: "策略服务持续超时", task: "place", cycles: 1, attempts: 3, results: ["policy_timeout"] },
   { id: "two-cycles", label: "两个周期", task: "place", cycles: 2, attempts: 3, results: ["released_held", "released_empty", "released_held"] },
-  { id: "pick-lift", label: "抓起 · 掉落后重试成功", task: "pick", cycles: 1, attempts: 3, results: ["dropped", "lifted_held"] },
+  { id: "pick-grasp", label: "抓起 · 闭合抓空后重试成功", task: "pick", cycles: 1, attempts: 3, results: ["grasp_missed", "grasp_held"] },
   { id: "pick-wrong", label: "抓起 · 执行了放置任务", task: "pick", cycles: 1, attempts: 3, results: ["wrong_task"] },
   { id: "gripper-stuck", label: "夹爪无法张开", task: "place", cycles: 1, attempts: 3, results: ["released_held"], gripperStuck: true },
 ];

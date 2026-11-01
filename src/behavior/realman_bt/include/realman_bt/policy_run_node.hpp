@@ -35,8 +35,10 @@ namespace realman_bt {
 // `task` names an entry of policy_task.tasks (config/ros/policy_task.yaml).
 //
 //   SUCCESS  release_over_bin: the object was released over the bin; lift_and_hold: it was lifted
-//            and is still held (the gripper stays closed on it).
-//   FAILURE  with policy_fault unset: a retryable failure (empty grasp, dropped, timeout, stall).
+//            and is still held; grasp_check: the gripper closed firmly on it (in both the gripper
+//            stays closed on it).
+//   FAILURE  with policy_fault unset: a retryable failure (empty grasp, missed grasp, dropped,
+//            timeout, stall).
 //   FAILURE  with policy_timeout set: the policy server or its bridge timed out (the bridge paused
 //            itself after its inference requests timed out, went silent, did not get ready within
 //            service_wait_sec, or /policy/activate did not answer); RetryUnlessFault retries it on

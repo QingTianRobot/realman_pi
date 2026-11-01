@@ -32,7 +32,7 @@ def test_every_branch_but_policy_is_identical_to_control_xml():
             assert ET.tostring(pick[name]) == ET.tostring(control[name]), name
 
 
-def test_policy_branch_picks_lifts_turns_releases_and_checks_the_table():
+def test_policy_branch_picks_carries_while_held_releases_and_checks_the_table():
     policy = _branches(PICK)["policy_branch"]
     guard = policy.find("InputModeGuard")
     assert guard.attrib["mode"] == "policy"
@@ -53,22 +53,33 @@ def test_policy_branch_picks_lifts_turns_releases_and_checks_the_table():
     assert clear.tag == "CheckBool" and clear.attrib == {"key": "pick_table_clear", "expected": "true"}
 
     cycle = repeat.find("Sequence[@name='pick_cycle']")
-    assert [child.tag for child in cycle] == [
-        "RetryUnlessFault", "MoveJ", "MoveJointTo", "GripperReady", "WhiteObjectsRemain"]
+    assert [child.tag for child in cycle] == ["RetryUnlessFault", "GripperReady", "WhiteObjectsRemain"]
     attempt = cycle.find("RetryUnlessFault/Sequence[@name='pick_attempt']")
-    assert [child.tag for child in attempt] == ["GripperReady", "ThreeArmMoveJ", "PolicyRun"]
+    # The carry is part of the attempt: a drop on the way is retried like a missed grasp.
+    assert [child.tag for child in attempt] == ["GripperReady", "ThreeArmMoveJ", "PolicyRun", "WhileGraspHeld"]
     run = attempt.find("PolicyRun")
     assert run.attrib["task"] == "pick" and run.attrib["arm_id"] == "r"
 
-    _, lift, turn, release, detect = list(cycle)
-    assert lift.attrib["arm_id"] == "r"
+    carry = attempt.find("WhileGraspHeld")
+    assert carry.attrib["arm_id"] == "r"
+    up, lift, turn = list(carry.find("Sequence[@name='pick_carry_to_release']"))
+    assert up.tag == "CartesianVelocityForDuration" and up.attrib["arm_id"] == "r"
+    # Straight up in the identity work frame of the upright r base, slowly, a few centimetres.
+    assert up.attrib["reference"] == "work/pikabase"
+    assert up.attrib["angular_velocity_radps"] == "0,0,0"
+    vx, vy, vz = (float(value) for value in up.attrib["linear_velocity_mps"].split(","))
+    assert vx == vy == 0.0 and 0.0 < vz <= 0.05
+    assert 0.03 <= vz * float(up.attrib["duration_sec"]) <= 0.08
+    assert lift.tag == "MoveJ" and lift.attrib["arm_id"] == "r"
     assert lift.attrib["joint_degrees"] == "{pick_lift_joint_degrees}"
-    assert turn.attrib["arm_id"] == "r"
+    assert turn.tag == "MoveJointTo" and turn.attrib["arm_id"] == "r"
     assert turn.attrib["joint"] == "{pick_release_joint}"
     assert turn.attrib["target_degrees"] == "{pick_release_joint_deg}"
+
+    _, release, detect = list(cycle)
     assert release.attrib["arm_id"] == "r"
     assert detect.attrib["table_clear"] == "{pick_table_clear}"
-    for leaf in (lift, turn, release, detect, run):
+    for leaf in (carry, up, lift, turn, release, detect, run):
         assert leaf.attrib["dry_run"] == "{dry_run}"
 
 
@@ -81,13 +92,13 @@ def test_every_tag_is_registered_in_the_executor():
 def test_the_pick_cycle_settings_are_the_reviewed_values():
     document = yaml.safe_load((ROOT / "config/ros/policy_task.yaml").read_text(encoding="utf-8"))
     policy_task = document["realman_bt_executor"]["ros__parameters"]["policy_task"]
-    assert policy_task["tasks"]["pick"]["completion"] == "lift_and_hold"
+    assert policy_task["tasks"]["pick"]["completion"] == "grasp_check"
     pick_cycle = policy_task["pick_cycle"]
     # 2026-10-20: the lift pose is the right arm's start pose until a dedicated one is measured.
     pika = yaml.safe_load((ROOT / "config/ros/pika_config.yaml").read_text(encoding="utf-8"))
     assert pick_cycle["lift_joint_degrees"] == pika["pika_default_pose"]["right"]["joint_degrees"]
     assert pick_cycle["release_joint"] == 1
-    assert pick_cycle["release_joint_deg"] == -135.0
+    assert pick_cycle["release_joint_deg"] == -163.0
     detection = policy_task["object_detection"]
     assert detection["image_topic"] == "/camera_global/d435/color/image_raw"
     assert detection["erode_px"] % 2 == 1

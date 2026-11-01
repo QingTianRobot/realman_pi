@@ -35,7 +35,8 @@ realman_bt_executor:
       # The tasks the served policy was trained on; the BT's PolicyRun picks one with its `task` port. A prompt must be
       # the training view's task text VERBATIM (meta/tasks.parquet; for m_multitask_b16_2gpu also contract.json
       # `prompts`): one character off and the model is out of distribution without any error. completion is how a
-      # successful attempt ends: release_over_bin (the `release` block below) or lift_and_hold (the `lift` block).
+      # successful attempt ends: release_over_bin (the `release` block below), lift_and_hold (the `lift` block) or
+      # grasp_check (the `grasp_check` block; control_pick.xml then lifts and carries the object itself).
       # ROS parameters cannot list keys, so every task is named in task_names first.
       task_names: [place, pick]
       tasks:
@@ -44,7 +45,7 @@ realman_bt_executor:
           completion: release_over_bin
         pick:
           prompt: "pick up the power adapter"
-          completion: lift_and_hold
+          completion: grasp_check
       gripper_for_arm:
         l: gripper_left
         m: gripper_mid
@@ -115,6 +116,20 @@ realman_bt_executor:
         hold_sec: 2.0
         wrong_side_joint_index: 0
         wrong_side_below_deg: -25.0
+      # grasp_check tasks: judged as soon as the policy closes the gripper (command below release.closed_below, sent
+      # during this attempt). Held = torque with the position below verdict.empty_position_min, unbroken and within
+      # steady_position_range for confirm_sec: success, the policy stops and the tree carries the object. Missed
+      # (retryable) = the position reaches empty_position_min (jaws met), or no hold within timeout_sec of the close.
+      # The policy opening again first cancels the check. While the tree carries the object (WhileGraspHeld in
+      # control_pick.xml), carry_lost_sec of positions at or above empty_position_min is a drop: the carry stops and
+      # the attempt is retried. Measured on the 86 closes in the 2026-10-20..11-01 pick traces that stayed closed 3 s:
+      # held ones settle 0.6-2.9 s after the close (46 of 47 pass 0.8 s / 200, all within 4.8 s); empty ones reach
+      # 7800 in 1.3-4.8 s and show torque blips under 1 s while the jaws travel.
+      grasp_check:
+        confirm_sec: 0.8
+        steady_position_range: 200.0
+        timeout_sec: 6.0
+        carry_lost_sec: 0.3
       # Grasp verdict: the median gripper position over the last window_sec of the closed phase, with torque_reached
       # seen, means the object was held. Measured 2026-10-14: held ~5700-5800 with torque, empty 8380-8480 without.
       verdict:
@@ -140,10 +155,11 @@ realman_bt_executor:
       # lift_joint_degrees is the right arm's start pose (pika_config.yaml) until a dedicated lift pose is measured
       # (decision 2026-10-20). Velocities are the XML's (10%). The turn from the lift pose to J1 -135 (clockwise seen from
       # above) was run on the robot at 5% without an object on 2026-10-20 and the operator saw no obstacle on the path.
+      # 2026-10-30: release at J1 -163 instead (user decision), turning further the same way; -135..-163 not yet path-checked.
       pick_cycle:
         lift_joint_degrees: [-9.89, 18.046, 79.074, 15.505, 79.606, -6.194]
         release_joint: 1
-        release_joint_deg: -135.0
+        release_joint_deg: -163.0
       # WhiteObjectsRemain: white blobs on the mat in the global D435 image mean objects are left. roi_xywh is the
       # green mat in the 640x480 image (pixels: x, y, width, height). A pixel is white when its smallest RGB channel is
       # at least min_channel and max-min of its channels is at most max_chroma; it counts only if its whole

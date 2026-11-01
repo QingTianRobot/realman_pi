@@ -140,10 +140,11 @@ realman_bt_executor:
       # lift_joint_degrees is the right arm's start pose (pika_config.yaml) until a dedicated lift pose is measured
       # (decision 2026-10-20). Velocities are the XML's (10%). The turn from the lift pose to J1 -135 (clockwise seen from
       # above) was run on the robot at 5% without an object on 2026-10-20 and the operator saw no obstacle on the path.
+      # 2026-10-30: release at J1 -163 instead (user decision), turning further the same way; -135..-163 not yet path-checked.
       pick_cycle:
         lift_joint_degrees: [-9.89, 18.046, 79.074, 15.505, 79.606, -6.194]
         release_joint: 1
-        release_joint_deg: -135.0
+        release_joint_deg: -163.0
       # WhiteObjectsRemain: white blobs on the mat in the global D435 image mean objects are left. roi_xywh is the
       # green mat in the 640x480 image (pixels: x, y, width, height). A pixel is white when its smallest RGB channel is
       # at least min_channel and max-min of its channels is at most max_chroma; it counts only if its whole

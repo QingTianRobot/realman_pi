@@ -153,11 +153,20 @@ void testTheDefaultTasksAreTheTwoPromptsOfTheMultitaskModel() {
   assert(config.task("place").prompt == "pick up the power adapter and put it in the blue bin");
   assert(config.task("place").completion == PolicyTaskConfig::Completion::kReleaseOverBin);
   assert(config.task("pick").prompt == "pick up the power adapter");
-  assert(config.task("pick").completion == PolicyTaskConfig::Completion::kLiftAndHold);
+  assert(config.task("pick").completion == PolicyTaskConfig::Completion::kGraspCheck);
   assert(config.prompt_topic == "/policy/prompt");
   assert(config.lift.joint_index == 1 && config.lift.joint_delta_deg == -10.0);
   assert(config.lift.hold_sec == 2.0 && config.lift.min_closed_sec == 3.0);
   assert(config.lift.wrong_side_joint_index == 0 && config.lift.wrong_side_below_deg == -25.0);
+  assert(config.grasp_check.confirm_sec == 0.8 && config.grasp_check.steady_position_range == 200.0);
+  assert(config.grasp_check.timeout_sec == 6.0 && config.grasp_check.carry_lost_sec == 0.3);
+}
+
+void testGraspCheckValuesMustBePositiveAndConfirmFitInTheTimeout() {
+  assertRejected([](PolicyTaskConfig& c) { c.grasp_check.confirm_sec = 0.0; }, "grasp_check");
+  assertRejected([](PolicyTaskConfig& c) { c.grasp_check.steady_position_range = -1.0; }, "grasp_check");
+  assertRejected([](PolicyTaskConfig& c) { c.grasp_check.carry_lost_sec = 0.0; }, "grasp_check");
+  assertRejected([](PolicyTaskConfig& c) { c.grasp_check.timeout_sec = 0.5; }, "confirm_sec must be below");
 }
 
 void testAnUnknownTaskNamesTheKnownOnes() {
@@ -175,15 +184,17 @@ void testAnUnknownTaskNamesTheKnownOnes() {
 void testCompletionNamesRoundTrip() {
   using realman_bt::completionName;
   using realman_bt::parseCompletion;
-  for (auto completion : {PolicyTaskConfig::Completion::kReleaseOverBin, PolicyTaskConfig::Completion::kLiftAndHold}) {
+  for (auto completion : {PolicyTaskConfig::Completion::kReleaseOverBin, PolicyTaskConfig::Completion::kLiftAndHold,
+                          PolicyTaskConfig::Completion::kGraspCheck}) {
     assert(parseCompletion(completionName(completion)) == completion);
   }
   assert(std::string(completionName(PolicyTaskConfig::Completion::kLiftAndHold)) == "lift_and_hold");
+  assert(std::string(completionName(PolicyTaskConfig::Completion::kGraspCheck)) == "grasp_check");
   try {
     parseCompletion("release");
     assert(false);
   } catch (const std::invalid_argument& error) {
-    assert(std::string(error.what()).find("release_over_bin or lift_and_hold") != std::string::npos);
+    assert(std::string(error.what()).find("release_over_bin, lift_and_hold or grasp_check") != std::string::npos);
   }
 }
 
@@ -232,6 +243,7 @@ int main() {
   testTheTraceNeedsASamplePeriodAndWhenOnADirectory();
   testRouterReleaseMayBeZeroButNotNegative();
   testTheDefaultTasksAreTheTwoPromptsOfTheMultitaskModel();
+  testGraspCheckValuesMustBePositiveAndConfirmFitInTheTimeout();
   testAnUnknownTaskNamesTheKnownOnes();
   testCompletionNamesRoundTrip();
   testTasksNeedDistinctNonEmptyPrompts();

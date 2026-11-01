@@ -43,6 +43,10 @@ const char* outcomeName(AttemptOutcome outcome) {
       return "wrong_task";
     case AttemptOutcome::kWrongSideEmpty:
       return "wrong_side_empty";
+    case AttemptOutcome::kGraspHeld:
+      return "grasp_held";
+    case AttemptOutcome::kGraspMissed:
+      return "grasp_missed";
     case AttemptOutcome::kTimeout:
       return "timeout";
     case AttemptOutcome::kStall:
@@ -58,7 +62,8 @@ const char* outcomeName(AttemptOutcome outcome) {
 }
 
 bool isSuccess(AttemptOutcome outcome) {
-  return outcome == AttemptOutcome::kReleasedHeld || outcome == AttemptOutcome::kLiftedHeld;
+  return outcome == AttemptOutcome::kReleasedHeld || outcome == AttemptOutcome::kLiftedHeld ||
+         outcome == AttemptOutcome::kGraspHeld;
 }
 
 bool isFault(AttemptOutcome outcome) {
@@ -86,6 +91,7 @@ void PolicySupervisor::reset() {
   lift_reference_deg_.reset();
   lifted_since_.reset();
   held_once_ = false;
+  grasp_check_since_.reset();
   stall_since_.reset();
   latched_fault_.reset();
   latched_overcurrent_.reset();
@@ -165,9 +171,10 @@ void PolicySupervisor::onBridgeStats(const BridgeStats& stats, double received_t
   stats_received_ = received_time;
 }
 
-void PolicySupervisor::onPolicyGripperCommand(double value, double) {
+void PolicySupervisor::onPolicyGripperCommand(double value, double time) {
   policy_gripper_ = value;
   policy_gripper_valid_ = true;
+  policy_gripper_time_ = time;
 }
 
 void PolicySupervisor::onDriverCommand(double linear_mps, double angular_radps, double time) {
@@ -350,19 +357,26 @@ const Verdict& PolicySupervisor::evaluate(double now) {
     last_closed_time_ = now;
   }
 
-  if (task_.completion == PolicyTaskConfig::Completion::kReleaseOverBin) {
-    if (evaluateRelease(now)) return verdict_;
-  } else {
-    evaluateLift(now, closed);
-    if (verdict_.finished) return verdict_;
+  switch (task_.completion) {
+    case PolicyTaskConfig::Completion::kReleaseOverBin:
+      if (evaluateRelease(now)) return verdict_;
+      break;
+    case PolicyTaskConfig::Completion::kLiftAndHold:
+      evaluateLift(now, closed);
+      if (verdict_.finished) return verdict_;
+      break;
+    case PolicyTaskConfig::Completion::kGraspCheck:
+      evaluateGraspCheck(now);
+      if (verdict_.finished) return verdict_;
+      break;
   }
 
   if (now - start_time_ > config_.max_attempt_sec) {
-    const bool release = task_.completion == PolicyTaskConfig::Completion::kReleaseOverBin;
+    const char* what = task_.completion == PolicyTaskConfig::Completion::kReleaseOverBin ? "no release"
+                       : task_.completion == PolicyTaskConfig::Completion::kLiftAndHold ? "no lift-and-hold"
+                                                                                         : "no firm grasp";
     finish(now, AttemptOutcome::kTimeout,
-           std::string(release ? "no release" : "no lift-and-hold") + " within " +
-               number(config_.max_attempt_sec, 0) + " s",
-           "");
+           std::string(what) + " within " + number(config_.max_attempt_sec, 0) + " s", "");
     return verdict_;
   }
 
@@ -460,6 +474,54 @@ void PolicySupervisor::evaluateLift(double now, bool closed) {
     if (now - *lifted_since_ >= lift.hold_sec) finish(now, AttemptOutcome::kLiftedHeld, "", "held");
   } else {
     lifted_since_.reset();
+  }
+}
+
+void PolicySupervisor::evaluateGraspCheck(double now) {
+  // Only a close sent during this attempt counts: the bridge's last command of the previous
+  // attempt (closed) is still the latest value until the policy publishes again.
+  const bool closed = policy_gripper_valid_ && policy_gripper_time_ >= start_time_ &&
+                      policy_gripper_ < config_.release.closed_below;
+  if (!closed) {
+    grasp_check_since_.reset();  // the policy opened again before a verdict: it may try once more
+    return;
+  }
+  if (!grasp_check_since_) grasp_check_since_ = now;
+  const auto& check = config_.grasp_check;
+  const double empty_min = config_.verdict.empty_position_min;
+
+  // Readings since the close, newest first: how long have the jaws held firmly and steadily?
+  double held_from = std::nan("");
+  double newest = std::nan("");
+  double low = 0.0;
+  double high = 0.0;
+  for (auto sample = gripper_samples_.rbegin(); sample != gripper_samples_.rend(); ++sample) {
+    if (sample->time < *grasp_check_since_) break;
+    if (std::isnan(newest)) {
+      if (sample->position >= empty_min) {
+        finish(now, AttemptOutcome::kGraspMissed,
+               "the jaws closed on nothing (gripper position " + number(sample->position, 0) + ")",
+               "empty");
+        return;
+      }
+      newest = sample->time;
+      low = high = sample->position;
+    }
+    if (!sample->torque_reached || sample->position >= empty_min) break;
+    low = std::min(low, sample->position);
+    high = std::max(high, sample->position);
+    if (high - low > check.steady_position_range) break;
+    held_from = sample->time;
+  }
+  if (!std::isnan(held_from) && newest - held_from >= check.confirm_sec - 1e-9) {
+    finish(now, AttemptOutcome::kGraspHeld, "", "held");
+    return;
+  }
+  if (now - *grasp_check_since_ >= check.timeout_sec) {
+    finish(now, AttemptOutcome::kGraspMissed,
+           "no firm grasp within " + number(check.timeout_sec, 1) + " s of the close (gripper position " +
+               number(last_gripper_position_, 0) + (last_torque_reached_ ? ", torque" : ", no torque") + ")",
+           "empty");
   }
 }
 

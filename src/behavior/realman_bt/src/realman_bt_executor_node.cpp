@@ -28,6 +28,7 @@
 #include "realman_bt/retry_unless_fault_node.hpp"
 #include "realman_bt/rotate_joint_node.hpp"
 #include "realman_bt/three_arm_move_j_node.hpp"
+#include "realman_bt/while_grasp_held_node.hpp"
 #include "realman_bt/white_objects_remain_node.hpp"
 
 namespace realman_bt {
@@ -157,6 +158,7 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   factory_.registerNodeType<GripperReadyNode>("GripperReady");
   factory_.registerNodeType<PolicyRunNode>("PolicyRun");
   factory_.registerNodeType<WhiteObjectsRemainNode>("WhiteObjectsRemain");
+  factory_.registerNodeType<WhileGraspHeldNode>("WhileGraspHeld");
   factory_.registerNodeType<SelectInputModeNode>("SelectInputMode");
   factory_.registerNodeType<InputModeGuardNode>("InputModeGuard");
   factory_.registerNodeType<ActivateInputModeNode>("ActivateInputMode");

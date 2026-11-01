@@ -399,12 +399,19 @@ std::string pickXml() {
   return readFile(std::filesystem::path(BT_TEST_CONFIG_DIR) / "control_pick.xml");
 }
 
+// The lift after a grasp is a Cartesian velocity in r's work/pikabase frame; control_router.launch.py
+// passes these registries from realman_coordinates.yaml and realman_motion.yaml on the robot.
+std::vector<rclcpp::Parameter> pickParameters() {
+  return {{"coordinate_references", std::vector<std::string>{"r|work/pikabase|1|pikabase|r/work/pikabase"}},
+          {"cartesian_velocity_profiles", std::vector<std::string>{"r|20|100|0.15|0.25|0.1|0.5|10|2"}}};
+}
+
 // control_pick.xml in dry run: every leaf of one pick cycle is registered and validates, the
 // detector reports a clear table without reading the camera, and the branch then idles in policy
 // mode instead of failing.
 void testPickTreeDryRunEndsWithAClearTableAndIdles() {
   Fixture f;
-  f.load(pickXml());
+  f.load(pickXml(), pickParameters());
   f.subscribe();
   require(f.until([&] { return !f.states.empty(); }), "missing initial state");
   require(f.select("policy")->accepted, "policy request rejected");
@@ -424,7 +431,7 @@ void testPickTreeFailedCycleIsNotAClearTable() {
   auto xml = pickXml();
   replaceOnce(xml, "<PolicyRun arm_id=\"r\" task=\"pick\" dry_run=\"{dry_run}\"/>",
               "<CheckBool key=\"never_set\"/>");
-  f.load(xml);
+  f.load(xml, pickParameters());
   f.subscribe();
   require(f.until([&] { return !f.states.empty(); }), "missing initial state");
   require(f.select("policy")->accepted, "policy request rejected");

@@ -80,10 +80,26 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
     <Fallback name="pick_until_clear">
       <Repeat num_cycles="-1">
         <Sequence name="pick_cycle">
-          <RetryUnlessFault ...>
+          <RetryUnlessFault ...>  <!-- 大重试：{policy_attempts} 次，每次从起始位姿开始 -->
             <Sequence name="pick_attempt">
               <GripperReady .../> <ThreeArmMoveJ name="policy_rehome" .../>
-              <PolicyRun arm_id="r" task="pick" .../>  <!-- grasp_check：闭合即判定 -->
+              <SetBool key="pick_regrasp" value="false"/>
+              <!-- 小重试：{pick_regrasp_attempts} 次，从当前位置继续 -->
+              <RetryUnlessFault name="pick_regrasps" num_attempts="{pick_regrasp_attempts}"
+                                timeouts_to_parent="true">
+                <Sequence name="pick_try">
+                  <Fallback name="pick_regrasp_prepare">
+                    <CheckBool key="pick_regrasp" expected="false"/>  <!-- 第一次跳过 -->
+                    <Sequence name="pick_regrasp_back_off">
+                      <GripperReady name="pick_regrasp_open" arm_id="r" .../>
+                      <CartesianVelocityForDuration name="pick_regrasp_lift" reference="work/pikabase"
+                                                    linear_velocity_mps="0,0,0.02" duration_sec="1.0" .../>
+                    </Sequence>
+                  </Fallback>
+                  <SetBool key="pick_regrasp" value="true"/>
+                  <PolicyRun arm_id="r" task="pick" .../>  <!-- grasp_check：闭合即判定 -->
+                </Sequence>
+              </RetryUnlessFault>
               <WhileGraspHeld name="pick_carry" arm_id="r" ...>
                 <Sequence name="pick_carry_to_release">
                   <CartesianVelocityForDuration name="pick_lift_up" reference="work/pikabase"
@@ -110,9 +126,12 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 
 每个周期依次执行：
 
-1. **抓取**：与 `control.xml` 相同的尝试结构（张开夹爪、三臂回位、`PolicyRun`），只是 `task="pick"`，以 `grasp_check` 判定：策略一闭合夹爪就判断有没有夹牢。抓空立即重试（停策略、张开、回位、再跑策略）；夹牢则策略停下，夹爪保持闭合，进入搬运。重试、故障和超时规则与上文相同。
+1. **抓取**：`task="pick"`，以 `grasp_check` 判定：策略一闭合夹爪就判断有没有夹牢。夹牢则策略停下，夹爪保持闭合，进入搬运。没有成功时分两级重试（2026-11-01 起，原来只有一级，每次都回位）：
+   - **小重试**（内层 `RetryUnlessFault pick_regrasps`，`pick_cycle.regrasp_attempts` 次，含第一次，默认 3）：抓空，或策略因其他可重试的原因停下（电流过大、停滞、超过 `max_attempt_sec`），先张开夹爪，再在 `work/pikabase` 中以 0.02 m/s 竖直抬起 1 s（含加减速约 2 cm），然后不回位，从当前位置继续运行策略。黑板键 `pick_regrasp` 记录这是不是本次大重试中的第一次策略运行：第一次直接从起始位姿开始，不张开、不抬起。
+   - **大重试**（外层 `RetryUnlessFault`，`attempts` 次，默认 3）：小重试用完，或搬运途中物体掉落（见第 3 步），张开夹爪、三臂回到起始位姿，再开始新一轮小重试。因此一个周期最多运行 3 × 3 = 9 次策略。
+   - 策略服务超时不在原地重试：内层设置了 `timeouts_to_parent="true"`，带着 `policy_timeout` 立即交给外层，由外层按 `timeout_retry` 等待、回位并单独计数，与原来的行为相同。故障（`policy_fault`）使两层都立即放弃。
 2. **竖直抬起**：`CartesianVelocityForDuration` 在恒等工作坐标系 `work/pikabase`（即右臂竖直安装的基座系，+Z 向上）中以 0.03 m/s 向上运动 2 s（含加减速约 5.5 cm）。策略停下时夹爪还贴着桌面，先竖直离开桌面，后面的关节空间 MoveJ 就不会拖着物体扫过垫子。
-3. **搬运全程监测**：第 2–4 步都包在 `WhileGraspHeld` 里，并且和抓取一起位于 `RetryUnlessFault` 之内。每个 tick 先读 `/gripper_right/position`：位置在 `verdict.empty_position_min` 以上持续 `grasp_check.carry_lost_sec`（0.3 s），就是物体掉了，立即 halt 正在执行的运动并返回可重试的失败，`RetryUnlessFault` 张开夹爪、回位后重新运行策略。掉落和抓空一样消耗 `attempts`。搬运中的运动失败或超过 `gripper_ready.position_stale_sec` 读不到夹爪位置，由 `WhileGraspHeld` 置位 `policy_fault`，不重试，与这些运动放在重试外面时的行为一致。
+3. **搬运全程监测**：第 2–4 步都包在 `WhileGraspHeld` 里，并且和抓取一起位于 `RetryUnlessFault` 之内。每个 tick 先读 `/gripper_right/position`：位置在 `verdict.empty_position_min` 以上持续 `grasp_check.carry_lost_sec`（0.3 s），就是物体掉了，立即 halt 正在执行的运动并返回可重试的失败，外层 `RetryUnlessFault`（大重试）张开夹爪、回位后重新运行策略。掉落消耗一次 `attempts`（此时右臂已离开桌面，不做小重试）。搬运中的运动失败或超过 `gripper_ready.position_stale_sec` 读不到夹爪位置，由 `WhileGraspHeld` 置位 `policy_fault`，不重试，与这些运动放在重试外面时的行为一致。
 4. **抬升到固定位姿**：右臂 `MoveJ` 到 `pick_cycle.lift_joint_degrees`。目前取右臂起始位姿（`pika_config.yaml`），等测出专门的抬升位姿后在配置里修改即可，不用改 XML。
 5. **转到放置侧**：`MoveJointTo` 只把 J1（`pick_cycle.release_joint`）转到 `pick_cycle.release_joint_deg`（-163°），以 20% 速度转动（2026-10-30 起，原为 10%），其余关节保持不动。从上往下看是顺时针转动（J1 角度减小约 153°）。2026-10-20 在真机上空载、以 5% 速度从抬升位姿转到 -135° 再转回，现场确认路径上没有障碍；2026-10-30 起放置角改为 -163°，沿同一方向多转 28°，-135° 到 -163° 这一段还没有空载确认过。
 6. **松开**：`GripperReady` 张开右夹爪，物体落在放置侧。
@@ -198,7 +217,7 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 | `MoveJointTo` | 读取当前关节角，只把一个关节转到绝对角度，再作为普通 MoveJ 执行（`control_pick.xml` 用它把 J1 转到放置侧） | 读角度失败、MoveJ 失败或超时 |
 | `WhiteObjectsRemain` | 用全局相机检测垫子上是否还有白色物体，结果写入 `table_clear` | 有物体返回 `SUCCESS`；桌面已清空时返回失败并写入 `table_clear=true`；没有图像、编码不支持或 ROI 超出图像范围时返回失败，并写入 `policy_failure_reason` |
 | `FailInputMode` | 把任务级失败转为输入模式 `FAILED`，原因取自 `policy_failure_reason`；协调器随后切换到 `none` | — |
-| `RetryUnlessFault` | 与 `Retry` 相同，但如果失败的叶节点已置位 `policy_fault`，会立即返回失败，不再消耗剩余次数；置位 `policy_timeout` 的失败按 `timeout_attempts` 单独计数，等待 `timeout_backoff_sec` 后再重试 | 超时次数耗尽时，在 `policy_failure_reason` 前加上 `policy server timed out N times; last: `；运行开始、每次重试前和成功时清空 `policy_failure_reason`，失败结束时保留最后一次尝试的原因 |
+| `RetryUnlessFault` | 与 `Retry` 相同，但如果失败的叶节点已置位 `policy_fault`，会立即返回失败，不再消耗剩余次数；置位 `policy_timeout` 的失败按 `timeout_attempts` 单独计数，等待 `timeout_backoff_sec` 后再重试；`timeouts_to_parent="true"` 时改为立即返回这类失败、保留标志，交给外层的 `RetryUnlessFault` | 超时次数耗尽时，在 `policy_failure_reason` 前加上 `policy server timed out N times; last: `；运行开始、每次重试前和成功时清空 `policy_failure_reason`，失败结束时保留最后一次尝试的原因 |
 
 叶节点返回 `FAILURE` 并不会把输入模式标记为 `FAILED`，只有 `FailInputMode`（以及切换超时和 tick 异常）会这样做。因此"次数耗尽"必须经过它，否则持久路由会让失败的分支无限重来。
 

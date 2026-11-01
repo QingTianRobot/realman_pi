@@ -105,9 +105,9 @@ export const nodeDocs: Record<string, NodeDoc> = {
   },
   RetryUnlessFault: {
     category: "decorator",
-    summary: "与 Retry 相同，但如果失败的叶节点已把黑板键 policy_fault 置为 true，会立即返回失败，不再消耗剩余次数。置位 policy_timeout 的失败（策略服务超时）按 timeout_attempts 单独计数，不占用 num_attempts，并在等待 timeout_backoff_sec 后才重试。",
+    summary: "与 Retry 相同，但如果失败的叶节点已把黑板键 policy_fault 置为 true，会立即返回失败，不再消耗剩余次数。置位 policy_timeout 的失败（策略服务超时）按 timeout_attempts 单独计数，不占用 num_attempts，并在等待 timeout_backoff_sec 后才重试；timeouts_to_parent=true 时改为立即返回、保留标志，交给外层 RetryUnlessFault（control_pick.xml 的小重试）。",
     success: "子节点成功",
-    failure: "policy_fault 已置位，或失败次数达到 num_attempts，或超时次数达到 timeout_attempts（此时在 policy_failure_reason 前加上 policy server timed out N times; last: ）",
+    failure: "policy_fault 已置位，或失败次数达到 num_attempts，或超时次数达到 timeout_attempts（此时在 policy_failure_reason 前加上 policy server timed out N times; last: ），或 timeouts_to_parent=true 时发生超时",
     running: "子节点返回 RUNNING；或发生可重试的失败，此时 halt() 子节点并返回 RUNNING；超时后的等待期间也返回 RUNNING，且不 tick 子节点",
     halt: "结束本次运行（包括正在进行的等待），并清除 policy_fault 和 policy_timeout",
     blackboard: "读取 policy_fault、policy_timeout；每次运行开始时和被 halt() 时清除这两个键，因此上一次的标志不会影响新一轮的首次尝试；policy_timeout 在每次超时重试前也会清除。超时次数耗尽时改写 policy_failure_reason",
@@ -270,7 +270,7 @@ export const nodeDocs: Record<string, NodeDoc> = {
   },
   WhileGraspHeld: {
     category: "decorator",
-    summary: "抓取清台树中包住搬运运动（竖直抬起、抬升位姿、转到放置侧）：子节点执行期间每个 tick 先读夹爪位置，物体掉落就停止运动，让外层 RetryUnlessFault 重新运行策略。",
+    summary: "抓取清台树中包住搬运运动（竖直抬起、抬升位姿、转到放置侧）：子节点执行期间每个 tick 先读夹爪位置，物体掉落就停止运动，让外层 RetryUnlessFault（大重试）回位后重新运行策略。",
     success: "子节点成功，且夹爪仍夹着物体",
     failure: "夹爪位置在 verdict.empty_position_min 以上持续 grasp_check.carry_lost_sec（物体掉落）：可重试；子节点失败或超过 gripper_ready.position_stale_sec 读不到夹爪位置：判为故障（置位 policy_fault）",
     running: "子节点返回 RUNNING，夹爪仍夹着物体",

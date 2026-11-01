@@ -54,11 +54,36 @@ def test_policy_branch_picks_carries_while_held_releases_and_checks_the_table():
 
     cycle = repeat.find("Sequence[@name='pick_cycle']")
     assert [child.tag for child in cycle] == ["RetryUnlessFault", "GripperReady", "WhiteObjectsRemain"]
-    attempt = cycle.find("RetryUnlessFault/Sequence[@name='pick_attempt']")
-    # The carry is part of the attempt: a drop on the way is retried like a missed grasp.
-    assert [child.tag for child in attempt] == ["GripperReady", "ThreeArmMoveJ", "PolicyRun", "WhileGraspHeld"]
-    run = attempt.find("PolicyRun")
-    assert run.attrib["task"] == "pick" and run.attrib["arm_id"] == "r"
+    attempts = cycle.find("RetryUnlessFault")
+    assert attempts.attrib["num_attempts"] == "{policy_attempts}"
+    assert attempts.attrib["timeout_attempts"] == "{policy_timeout_attempts}"
+    assert "timeouts_to_parent" not in attempts.attrib
+    attempt = attempts.find("Sequence[@name='pick_attempt']")
+    # An attempt starts from the start pose; the carry is part of it, so a drop on the way goes back there too.
+    assert [child.tag for child in attempt] == [
+        "GripperReady", "ThreeArmMoveJ", "SetBool", "RetryUnlessFault", "WhileGraspHeld"]
+    assert attempt.find("SetBool").attrib == {"key": "pick_regrasp", "value": "false"}
+
+    # Regrasps: misses rerun the policy from where the arm is; timeouts go to the outer retry (start pose).
+    regrasps = attempt.find("RetryUnlessFault[@name='pick_regrasps']")
+    assert regrasps.attrib["num_attempts"] == "{pick_regrasp_attempts}"
+    assert regrasps.attrib["timeouts_to_parent"] == "true"
+    prepare, mark, run = list(regrasps.find("Sequence[@name='pick_try']"))
+    assert run.tag == "PolicyRun" and run.attrib["task"] == "pick" and run.attrib["arm_id"] == "r"
+    assert mark.tag == "SetBool" and mark.attrib == {"key": "pick_regrasp", "value": "true"}
+    # The first run skips the back-off (the flag is still false); every later one opens and lifts first.
+    first, back_off = list(prepare)
+    assert prepare.tag == "Fallback"
+    assert first.tag == "CheckBool" and first.attrib == {"key": "pick_regrasp", "expected": "false"}
+    regrasp_open, regrasp_lift = list(back_off)
+    assert regrasp_open.tag == "GripperReady" and regrasp_open.attrib["arm_id"] == "r"
+    assert regrasp_lift.tag == "CartesianVelocityForDuration" and regrasp_lift.attrib["arm_id"] == "r"
+    assert regrasp_lift.attrib["reference"] == "work/pikabase"
+    assert regrasp_lift.attrib["angular_velocity_radps"] == "0,0,0"
+    vx, vy, vz = (float(value) for value in regrasp_lift.attrib["linear_velocity_mps"].split(","))
+    assert vx == vy == 0.0 and 0.0 < vz <= 0.03
+    # "A little": clear of the table, well below the carry's lift.
+    assert 0.01 <= vz * float(regrasp_lift.attrib["duration_sec"]) <= 0.03
 
     carry = attempt.find("WhileGraspHeld")
     assert carry.attrib["arm_id"] == "r"
@@ -79,7 +104,7 @@ def test_policy_branch_picks_carries_while_held_releases_and_checks_the_table():
     _, release, detect = list(cycle)
     assert release.attrib["arm_id"] == "r"
     assert detect.attrib["table_clear"] == "{pick_table_clear}"
-    for leaf in (carry, up, lift, turn, release, detect, run):
+    for leaf in (carry, up, lift, turn, release, detect, run, regrasp_open, regrasp_lift):
         assert leaf.attrib["dry_run"] == "{dry_run}"
 
 
@@ -99,6 +124,9 @@ def test_the_pick_cycle_settings_are_the_reviewed_values():
     assert pick_cycle["lift_joint_degrees"] == pika["pika_default_pose"]["right"]["joint_degrees"]
     assert pick_cycle["release_joint"] == 1
     assert pick_cycle["release_joint_deg"] == -163.0
+    # 2026-11-01: 3 attempts from the start pose, each with up to 3 policy runs (regrasps).
+    assert policy_task["attempts"] == 3
+    assert pick_cycle["regrasp_attempts"] == 3
     detection = policy_task["object_detection"]
     assert detection["image_topic"] == "/camera_global/d435/color/image_raw"
     assert detection["erode_px"] % 2 == 1

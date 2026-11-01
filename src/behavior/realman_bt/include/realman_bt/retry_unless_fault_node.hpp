@@ -30,6 +30,9 @@ inline constexpr const char* kPolicyTimeoutKey = "policy_timeout";
 ///   `timeout_backoff_sec` (RUNNING, the child is not ticked) so a warming-up server or a congested
 ///   link can recover. The default 0 counts a timeout as an ordinary failed attempt, no wait.
 ///   When the timeout budget runs out, `policy_failure_reason` is prefixed with the count.
+///   `timeouts_to_parent="true"` instead returns such a failure at once with the flag still set,
+///   so an enclosing RetryUnlessFault handles it on its budget (control_pick.xml: a timeout during
+///   a regrasp goes back to the start pose like before, it is not retried from where the arm is).
 ///
 /// The flags belong to one run of this node. They are cleared when a run starts and by `halt()`,
 /// so a flag left over from an earlier run never blocks the first attempt of a new one, and the
@@ -52,7 +55,10 @@ class RetryUnlessFaultNode final : public bt_core::DecoratorNode {
                                 "Policy-server timeouts allowed per run on their own budget; "
                                 "-1 = no limit, 0 = count them as ordinary attempts"),
         bt_core::InputPort<double>("timeout_backoff_sec", "0",
-                                   "Wait before retrying after a policy-server timeout"));
+                                   "Wait before retrying after a policy-server timeout"),
+        bt_core::InputPort<bool>("timeouts_to_parent", "false",
+                                 "Return a policy-server timeout at once, flag kept, for an "
+                                 "enclosing RetryUnlessFault to retry"));
   }
 
   bt_core::NodeStatus tick() override {
@@ -85,7 +91,8 @@ class RetryUnlessFaultNode final : public bt_core::DecoratorNode {
         return bt_core::NodeStatus::RUNNING;
 
       case bt_core::NodeStatus::FAILURE:
-        if (faultRaised()) {
+        if (faultRaised() ||
+            (timeoutRaised() && getInput<bool>("timeouts_to_parent").value_or(false))) {
           endRun();
           return bt_core::NodeStatus::FAILURE;
         }

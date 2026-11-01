@@ -36,17 +36,25 @@
                            r_joint_degrees="{pika_r_joint_degrees}"
                            velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
             <ActivateInputMode mode="policy"/>
-            <!-- Pick and clear the table. Each cycle: the pick-only policy (task="pick", grasp_check) runs until it
-                 closes the gripper, and the grasp is judged right then: closed on nothing is retried at once (open,
-                 rehome, run the policy again). Held: the policy stops, the right arm lifts straight up, goes to the
-                 lift pose and turns J1 to the release side, all inside WhileGraspHeld, so an object that drops on
-                 the way stops the carry and is retried the same way; the drop uses up an attempt like a miss. Then
-                 the gripper opens over the release side and WhiteObjectsRemain looks at the global camera. Objects left: SUCCESS, the Repeat runs the next cycle. Table clear: it writes
+            <!-- Pick and clear the table, with two levels of retry. Each cycle: the pick-only policy (task="pick",
+                 grasp_check) runs until it closes the gripper, and the grasp is judged right then.
+                 Regrasp (inner RetryUnlessFault, pick_cycle.regrasp_attempts policy runs): closed on nothing, the
+                 policy stopped for another retryable reason (overcurrent, stall, attempt timeout): the gripper opens,
+                 the arm lifts ~2 cm straight up and the policy continues from there, without going home.
+                 Attempt (outer RetryUnlessFault, policy_task.attempts): the regrasps are used up, or the object
+                 drops while carried: the gripper opens and the arms go back to the start pose, and a fresh round of
+                 regrasps starts. A policy-server timeout is handed from the inner retry to the outer one
+                 (timeouts_to_parent), so it waits, goes home and is counted on its own budget as before. A fault
+                 ends both at once.
+                 Held: the policy stops, the right arm lifts straight up, goes to the lift pose and turns J1 to the
+                 release side, all inside WhileGraspHeld, so an object that drops on the way stops the carry and
+                 fails the attempt. Then the gripper opens over the release side and WhiteObjectsRemain looks at the
+                 global camera. Objects left: SUCCESS, the Repeat runs the next cycle. Table clear: it writes
                  pick_table_clear=true and fails, which ends the Repeat; CheckBool turns that into success and the
                  branch idles in policy mode. Any other failure (attempts used up, a fault, a MoveJ, no camera
                  image) leaves pick_table_clear false, so FailInputMode reports FAILED. Lift pose, release joint and
-                 angle, and the detector's ROI and thresholds come from config/ros/policy_task.yaml (pick_cycle,
-                 object_detection). -->
+                 angle, regrasp count, and the detector's ROI and thresholds come from config/ros/policy_task.yaml
+                 (pick_cycle, object_detection). -->
             <Fallback name="pick_task">
               <Sequence name="pick_task_ok">
                 <SetBool key="pick_table_clear" value="false"/>
@@ -63,7 +71,30 @@
                                          m_joint_degrees="{pika_m_joint_degrees}"
                                          r_joint_degrees="{pika_r_joint_degrees}"
                                          velocity_percent="10" blend_radius_percent="0" timeout_sec="120"/>
-                          <PolicyRun arm_id="r" task="pick" dry_run="{dry_run}"/>
+                          <!-- pick_regrasp=false: the first policy run of this attempt starts from the start pose
+                               as is; every later one first opens the gripper and lifts ~2 cm (0.02 m/s for 1 s,
+                               less with the ramps) so the policy sees the object again instead of the closed jaws
+                               on the table. -->
+                          <SetBool key="pick_regrasp" value="false"/>
+                          <RetryUnlessFault name="pick_regrasps" num_attempts="{pick_regrasp_attempts}"
+                                            timeouts_to_parent="true">
+                            <Sequence name="pick_try">
+                              <Fallback name="pick_regrasp_prepare">
+                                <CheckBool key="pick_regrasp" expected="false"/>
+                                <Sequence name="pick_regrasp_back_off">
+                                  <GripperReady name="pick_regrasp_open" arm_id="r" dry_run="{dry_run}"/>
+                                  <CartesianVelocityForDuration name="pick_regrasp_lift" arm_id="r"
+                                                                dry_run="{dry_run}"
+                                                                reference="work/pikabase"
+                                                                linear_velocity_mps="0,0,0.02"
+                                                                angular_velocity_radps="0,0,0"
+                                                                duration_sec="1.0"/>
+                                </Sequence>
+                              </Fallback>
+                              <SetBool key="pick_regrasp" value="true"/>
+                              <PolicyRun arm_id="r" task="pick" dry_run="{dry_run}"/>
+                            </Sequence>
+                          </RetryUnlessFault>
                           <!-- The policy stopped with the gripper on the table: 0.03 m/s up for 2 s (~5.5 cm with the
                                ramps) in the identity work frame (= the upright r base, +Z up) before the joint-space
                                MoveJ, so the first move cannot sweep the object across the mat. -->

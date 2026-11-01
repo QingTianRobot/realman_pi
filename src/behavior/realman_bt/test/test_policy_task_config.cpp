@@ -32,6 +32,7 @@ void testDefaultsAreTheReviewedDesignValues() {
   assert(config.cycles == 1);
   assert(config.attempts == 3);
   assert(config.timeout_retry.attempts == 3 && config.timeout_retry.backoff_sec == 20.0);
+  assert(config.pick_cycle.regrasp_attempts == 3);
   assert(config.arm == "r");
   assert(config.activation == "auto");
   assert(config.gripper_for_arm.at("r") == "gripper_right");
@@ -61,6 +62,7 @@ void testUnlimitedCyclesAndAttemptsAreAllowed() {
   config.cycles = -1;
   config.attempts = -1;
   config.timeout_retry.attempts = -1;
+  config.pick_cycle.regrasp_attempts = -1;
   config.validate();
 }
 
@@ -68,6 +70,7 @@ void testCountsMustBePositiveOrMinusOne() {
   assertRejected([](PolicyTaskConfig& c) { c.cycles = 0; }, "cycles");
   assertRejected([](PolicyTaskConfig& c) { c.attempts = -2; }, "attempts");
   assertRejected([](PolicyTaskConfig& c) { c.timeout_retry.attempts = 0; }, "timeout_retry.attempts");
+  assertRejected([](PolicyTaskConfig& c) { c.pick_cycle.regrasp_attempts = 0; }, "regrasp_attempts");
 }
 
 void testTheTimeoutBackoffMustNotBeNegative() {

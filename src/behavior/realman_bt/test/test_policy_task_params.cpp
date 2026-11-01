@@ -34,6 +34,7 @@ void testWithoutOverridesTheDefaultsAreUsed() {
   assert(loaded.release.joint_below_deg == -35.0);
   assert(loaded.router_release_sec == 1.5);
   assert(loaded.command_namespace == "/pi05_policy");
+  assert(loaded.pick_cycle.regrasp_attempts == 3);
 }
 
 void testOverridesReplaceTheDefaults() {
@@ -55,6 +56,7 @@ void testOverridesReplaceTheDefaults() {
       {"policy_task.current_guard.enabled", false},
       {"policy_task.current_guard.limits_ma", std::vector<int64_t>{5000, 9000, 9000, 7000, 8000, 4000}},
       {"policy_task.current_guard.sustain_sec", 0.8},
+      {"policy_task.pick_cycle.regrasp_attempts", -1},
   });
   assert(loaded.cycles == 3 && loaded.attempts == 5);
   assert(loaded.timeout_retry.attempts == -1 && loaded.timeout_retry.backoff_sec == 5.0);
@@ -68,6 +70,7 @@ void testOverridesReplaceTheDefaults() {
   assert(loaded.joint_lo[4] == 25.0 && loaded.joint_hi[1] == 100.0);
   assert(!loaded.current_guard.enabled && loaded.current_guard.limits_ma[1] == 9000.0 &&
          loaded.current_guard.sustain_sec == 0.8);
+  assert(loaded.pick_cycle.regrasp_attempts == -1);
 }
 
 void testWholeNumbersWrittenForDecimalsAreAccepted() {

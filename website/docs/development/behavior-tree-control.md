@@ -179,7 +179,7 @@ Action 或夹爪 command，需要真实 Pika 运动必须显式设置 `REALMAN_B
 | `Repeat` | `num_cycles`（默认 1，`-1` 无限） | 子节点每成功一次计一轮，达到轮数返回 `SUCCESS`；子节点失败则整体失败。每一轮之间会 `halt()` 子节点 |
 | `Retry` | `num_attempts`（默认 1，`-1` 无限） | 子节点失败时 `halt()` 后重跑，次数含首次；`RUNNING` 不消耗次数 |
 | `MotionDwellMonitor` | `arm_id`、`dwell_sec`、`tolerance_deg`、`on_dwell` | 子节点运行时，指定的臂在同一姿态停留超过 `dwell_sec` 就 `halt()` 子节点并返回 `on_dwell`（默认 `FAILURE`），见 [动作停留监控](#动作停留监控) |
-| `RetryUnlessFault` | `num_attempts`（默认 1，`-1` 无限）；`timeout_attempts`（默认 0，`-1` 无限）；`timeout_backoff_sec`（默认 0） | 同 `Retry`，但失败的叶节点若已把黑板键 `policy_fault` 置为 `true`，立即返回 `FAILURE`，不再消耗剩余次数；若置位的是 `policy_timeout`，且 `timeout_attempts` 不为 0，则这次失败不占 `num_attempts`，改按 `timeout_attempts` 计数，并在等待 `timeout_backoff_sec` 后重试 |
+| `RetryUnlessFault` | `num_attempts`（默认 1，`-1` 无限）；`timeout_attempts`（默认 0，`-1` 无限）；`timeout_backoff_sec`（默认 0）；`timeouts_to_parent`（默认 `false`） | 同 `Retry`，但失败的叶节点若已把黑板键 `policy_fault` 置为 `true`，立即返回 `FAILURE`，不再消耗剩余次数；若置位的是 `policy_timeout`，且 `timeout_attempts` 不为 0，则这次失败不占 `num_attempts`，改按 `timeout_attempts` 计数，并在等待 `timeout_backoff_sec` 后重试。`timeouts_to_parent="true"` 时，`policy_timeout` 的失败立即返回、标志保留，由外层的 `RetryUnlessFault` 处理（`control_pick.xml` 的小重试用它） |
 
 `policy_fault` 用来区分"值得再试一次"和"再试也没用"：抓空、超时属于前者，叶节点什么都不用写；
 关节越界、必需服务缺失属于后者，叶节点在返回 `FAILURE` 之前把它置为 `true`。这个标志属于

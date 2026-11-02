@@ -206,6 +206,8 @@ PolicyTaskConfig declareAndLoadPolicyTaskConfig(rclcpp::Node& node) {
       read.integer(p + "pick_cycle.release_joint", defaults.pick_cycle.release_joint);
   config.pick_cycle.release_joint_deg =
       read.number(p + "pick_cycle.release_joint_deg", defaults.pick_cycle.release_joint_deg);
+  config.pick_cycle.regrasp_attempts =
+      read.integer(p + "pick_cycle.regrasp_attempts", defaults.pick_cycle.regrasp_attempts);
   const auto& detection = defaults.object_detection;
   config.object_detection.image_topic =
       read.text(p + "object_detection.image_topic", detection.image_topic);

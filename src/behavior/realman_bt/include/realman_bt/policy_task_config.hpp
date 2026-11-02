@@ -20,8 +20,10 @@ inline constexpr char kPolicyAttemptsKey[] = "policy_attempts";
 inline constexpr char kPolicyTimeoutAttemptsKey[] = "policy_timeout_attempts";
 inline constexpr char kPolicyTimeoutBackoffSecKey[] = "policy_timeout_backoff_sec";
 // Pick-and-clear cycle (config/behavior-trees/control_pick.xml): the lift pose as six comma-separated
-// degrees for MoveJ, the joint that turns to the release side and its target angle.
+// degrees for MoveJ, the joint that turns to the release side and its target angle, and the
+// policy runs per attempt before the tree goes back to the start pose.
 inline constexpr char kPickLiftJointDegreesKey[] = "pick_lift_joint_degrees";
+inline constexpr char kPickRegraspAttemptsKey[] = "pick_regrasp_attempts";
 inline constexpr char kPickReleaseJointKey[] = "pick_release_joint";
 inline constexpr char kPickReleaseJointDegKey[] = "pick_release_joint_deg";
 
@@ -97,10 +99,14 @@ struct PolicyTaskConfig {
   // control_pick.xml: after a pick attempt lifts the object, the arm goes to lift_joint_degrees,
   // turns joint release_joint (1-based) to release_joint_deg and opens the gripper there. The lift
   // pose is the right arm's start pose (pika_config.yaml) until a dedicated one is measured.
+  // regrasp_attempts: policy runs within one attempt (the first counts; -1 = no limit). After a
+  // miss the gripper opens, the arm lifts a little and the policy continues from there; when they
+  // are used up the attempt fails and the next one starts again from the start pose.
   struct PickCycle {
     std::array<double, 6> lift_joint_degrees{-9.89, 18.046, 79.074, 15.505, 79.606, -6.194};
     int release_joint{1};
     double release_joint_deg{-135.0};
+    int regrasp_attempts{3};
   };
   // WhiteObjectsRemain: are there still white objects (the power adapters) on the mat? Pixels of
   // the ROI whose smallest RGB channel is at least min_channel and whose channel spread is at most

@@ -110,8 +110,9 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   blackboard_->set<int>(kPolicyAttemptsKey, policy_task_config_.attempts);
   blackboard_->set<int>(kPolicyTimeoutAttemptsKey, policy_task_config_.timeout_retry.attempts);
   blackboard_->set<double>(kPolicyTimeoutBackoffSecKey, policy_task_config_.timeout_retry.backoff_sec);
-  // control_pick.xml reads the lift pose and the release joint as {pick_lift_joint_degrees},
-  // {pick_release_joint} and {pick_release_joint_deg}.
+  // control_pick.xml reads the lift pose, the release joint and the policy runs per attempt as
+  // {pick_lift_joint_degrees}, {pick_release_joint}, {pick_release_joint_deg} and
+  // {pick_regrasp_attempts}.
   {
     std::ostringstream lift;
     lift << std::setprecision(12);
@@ -122,6 +123,7 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   }
   blackboard_->set<int>(kPickReleaseJointKey, policy_task_config_.pick_cycle.release_joint);
   blackboard_->set<double>(kPickReleaseJointDegKey, policy_task_config_.pick_cycle.release_joint_deg);
+  blackboard_->set<int>(kPickRegraspAttemptsKey, policy_task_config_.pick_cycle.regrasp_attempts);
   // MotionDwellMonitor defaults (config/ros/motion_monitor.yaml); a port in the XML wins over them.
   const MotionMonitorConfig motion_monitor = declareAndLoadMotionMonitorConfig(*this);
   blackboard_->set<double>(kMotionDwellSecKey, motion_monitor.dwell_sec);

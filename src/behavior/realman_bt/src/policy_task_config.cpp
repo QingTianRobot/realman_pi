@@ -110,6 +110,8 @@ void PolicyTaskConfig::validate() const {
   require(std::isfinite(pick_cycle.release_joint_deg) && pick_cycle.release_joint_deg >= -360.0 &&
               pick_cycle.release_joint_deg <= 360.0,
           "policy_task.pick_cycle.release_joint_deg must be in [-360, 360]");
+  require(countOk(pick_cycle.regrasp_attempts),
+          "policy_task.pick_cycle.regrasp_attempts must be -1 (no limit) or at least 1");
   const auto& detection = object_detection;
   require(detection.image_topic.size() > 1 && detection.image_topic.front() == '/',
           "policy_task.object_detection.image_topic must start with /");

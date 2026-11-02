@@ -80,8 +80,9 @@ struct Fixture {
 
   Fixture(int attempts, std::vector<NodeStatus> script, std::vector<int> fault_on_tick = {},
           std::vector<int> timeout_on_tick = {}, int timeout_attempts = 0,
-          double timeout_backoff_sec = 0.0) {
+          double timeout_backoff_sec = 0.0, bool timeouts_to_parent = false) {
     config.blackboard = bt_core::Blackboard::create();
+    config.port_values["timeouts_to_parent"] = timeouts_to_parent ? "true" : "false";
     config.port_values["num_attempts"] = std::to_string(attempts);
     config.port_values["timeout_attempts"] = std::to_string(timeout_attempts);
     config.port_values["timeout_backoff_sec"] = std::to_string(timeout_backoff_sec);
@@ -242,10 +243,11 @@ void testAttemptsPortDefaultsToOne() {
 void testDeclaresTheAttemptAndTimeoutPorts() {
   const auto ports = realman_bt::RetryUnlessFaultNode::providedPorts();
 
-  assert(ports.size() == 3);
+  assert(ports.size() == 4);
   assert(ports.count("num_attempts") == 1);
   assert(ports.count("timeout_attempts") == 1);
   assert(ports.count("timeout_backoff_sec") == 1);
+  assert(ports.count("timeouts_to_parent") == 1);
 }
 
 // ---- policy-server timeouts ---------------------------------------------------------------------
@@ -270,6 +272,50 @@ void testTheTimeoutBudgetEndsTheRunWithTheCountInTheReason() {
   assert(f.events == Events({"tick", "halt", "tick", "halt", "tick"}));
   assert(f.timeoutSet());  // left for the parent, like the fault flag
   assert(f.reason() == "policy server timed out 3 times; last: bridge paused on tick 3");
+}
+
+void testTimeoutsToParentReturnATimeoutAtOnceWithTheFlag() {
+  Fixture f(3, {NodeStatus::FAILURE}, {}, {1}, 3, 0.0, true);
+
+  assert(f.retry->executeTick() == NodeStatus::FAILURE);
+  assert(f.events == Events({"tick"}));
+  assert(f.timeoutSet());
+  assert(f.reason() == "bridge paused on tick 1");
+}
+
+void testTimeoutsToParentStillRetriesOrdinaryFailures() {
+  Fixture f(5, {NodeStatus::FAILURE}, {}, {2}, 3, 0.0, true);
+
+  assert(f.retry->executeTick() == NodeStatus::RUNNING);
+  assert(f.retry->executeTick() == NodeStatus::FAILURE);  // the timeout on the second try
+  assert(f.events == Events({"tick", "halt", "tick"}));
+  assert(f.timeoutSet());
+}
+
+void testNestedRetriesSpendInnerAttemptsOnMissesAndOuterBudgetOnTimeouts() {
+  // control_pick.xml: the inner retry (regrasps) hands timeouts to the outer one (start pose).
+  // Ticks 1-2 miss (inner attempts 1-2), tick 3 times out (outer timeout 1, inner run ends),
+  // ticks 4-5 miss in a fresh inner run, tick 6 succeeds. The outer attempts are never spent.
+  bt_core::NodeConfig config;
+  config.blackboard = bt_core::Blackboard::create();
+  Events events;
+  bt_core::NodeConfig outer_config = config;
+  outer_config.port_values = {{"num_attempts", "1"}, {"timeout_attempts", "3"}};
+  bt_core::NodeConfig inner_config = config;
+  inner_config.port_values = {{"num_attempts", "3"}, {"timeouts_to_parent", "true"}};
+  auto outer = std::make_shared<realman_bt::RetryUnlessFaultNode>("outer", outer_config);
+  auto inner = std::make_shared<realman_bt::RetryUnlessFaultNode>("inner", inner_config);
+  auto child = std::make_shared<ScriptedAction>(
+      "child", config, events,
+      std::vector<NodeStatus>{NodeStatus::FAILURE, NodeStatus::FAILURE, NodeStatus::FAILURE,
+                              NodeStatus::FAILURE, NodeStatus::FAILURE, NodeStatus::SUCCESS},
+      std::vector<int>{}, std::vector<int>{3});
+  inner->setChild(child);
+  outer->setChild(inner);
+
+  for (int tick = 1; tick <= 5; ++tick) assert(outer->executeTick() == NodeStatus::RUNNING);
+  assert(outer->executeTick() == NodeStatus::SUCCESS);
+  assert(std::count(events.begin(), events.end(), "tick") == 6);
 }
 
 void testASingleAllowedTimeoutEndsTheRunAtOnce() {
@@ -435,6 +481,9 @@ int main() {
   testDeclaresTheAttemptAndTimeoutPorts();
   testTimeoutsDoNotUseUpTheAttempts();
   testTheTimeoutBudgetEndsTheRunWithTheCountInTheReason();
+  testTimeoutsToParentReturnATimeoutAtOnceWithTheFlag();
+  testTimeoutsToParentStillRetriesOrdinaryFailures();
+  testNestedRetriesSpendInnerAttemptsOnMissesAndOuterBudgetOnTimeouts();
   testASingleAllowedTimeoutEndsTheRunAtOnce();
   testOrdinaryFailuresStillCountAgainstTheAttempts();
   testWithoutATimeoutBudgetATimeoutIsAnOrdinaryAttempt();

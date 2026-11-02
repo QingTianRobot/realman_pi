@@ -46,31 +46,35 @@ void PolicyRunNode::publishPrompt(Clock::time_point now) {
 }
 
 void PolicyRunNode::publishAttemptStart() {
-  realman_recording_msgs::msg::AttemptEvent event;
-  event.kind = realman_recording_msgs::msg::AttemptEvent::START;
-  event.stamp = rclcpp::Clock(RCL_SYSTEM_TIME).now();
+  // A carry that never reported (no WhileGraspHeld after the last PolicyRun) still ends the
+  // recording of that attempt before the next one starts.
+  if (auto leftover = takeCarriedAttempt(blackboard())) {
+    publishAttemptEvent(attempt_pub_, *leftover, blackboard(), name());
+  }
+  AttemptEvent event;
+  event.kind = AttemptEvent::START;
   event.attempt_id = attempt_id_;
   event.task = task_name_;
   event.arm = arm_;
   event.prompt = task_.prompt;
-  // From here: the activation call, the run, three stop calls and the router release.
-  event.max_duration_sec = static_cast<uint32_t>(std::ceil(
-      config_->max_attempt_sec + 4.0 * config_->service_call_timeout_sec + config_->router_release_sec));
-  try {
-    attempt_pub_->publish(event);
-    attempt_announced_ = true;
-  } catch (const std::exception& error) {
-    recordPolicyEvent(blackboard(), "WARN", name(), "attempt_event", error.what());
+  // From here: the activation call, the run, three stop calls and the router release, and for
+  // grasp_check the carry, whose end is the attempt's RESULT.
+  double max_sec = config_->max_attempt_sec + 4.0 * config_->service_call_timeout_sec +
+                   config_->router_release_sec;
+  if (task_.completion == PolicyTaskConfig::Completion::kGraspCheck) {
+    max_sec += config_->grasp_check.carry_record_sec;
   }
+  event.max_duration_sec = static_cast<uint32_t>(std::ceil(max_sec));
+  publishAttemptEvent(attempt_pub_, event, blackboard(), name());
+  attempt_announced_ = true;
 }
 
 void PolicyRunNode::publishAttemptResult(const std::string& outcome, bool succeeded,
-                                         const std::string& reason) {
+                                         const std::string& reason, bool carried) {
   if (!attempt_announced_) return;
   attempt_announced_ = false;
-  realman_recording_msgs::msg::AttemptEvent event;
-  event.kind = realman_recording_msgs::msg::AttemptEvent::RESULT;
-  event.stamp = rclcpp::Clock(RCL_SYSTEM_TIME).now();
+  AttemptEvent event;
+  event.kind = AttemptEvent::RESULT;
   event.attempt_id = attempt_id_;
   event.task = task_name_;
   event.arm = arm_;
@@ -78,10 +82,10 @@ void PolicyRunNode::publishAttemptResult(const std::string& outcome, bool succee
   event.outcome = outcome;
   event.succeeded = succeeded;
   event.reason = reason;
-  try {
-    attempt_pub_->publish(event);
-  } catch (const std::exception& error) {
-    recordPolicyEvent(blackboard(), "WARN", name(), "attempt_event", error.what());
+  if (carried) {
+    handOverCarriedAttempt(blackboard(), std::move(event));
+  } else {
+    publishAttemptEvent(attempt_pub_, event, blackboard(), name());
   }
 }
 
@@ -208,9 +212,7 @@ void PolicyRunNode::initialize() {
   bridge_estop_ = ros_node_->create_client<Trigger>("/policy/emergency_stop");
   router_estop_ = ros_node_->create_client<Trigger>("/policy_router/emergency_stop");
   prompt_pub_ = ros_node_->create_publisher<std_msgs::msg::String>(config_->prompt_topic, 10);
-  // Reliable so the recorder never misses the START/RESULT pair of an attempt.
-  attempt_pub_ = ros_node_->create_publisher<realman_recording_msgs::msg::AttemptEvent>(
-      "/recording/attempt", rclcpp::QoS(10).reliable());
+  attempt_pub_ = createAttemptPublisher(*ros_node_);
 }
 
 void PolicyRunNode::resetAttempt() {
@@ -543,7 +545,9 @@ bt_core::NodeStatus PolicyRunNode::finalize() {
                     "task=" + task_name_ + " result=" + outcomeName(verdict.outcome) +
                         " grasp=" + (verdict.grasp_verdict.empty() ? "n/a" : verdict.grasp_verdict) +
                         " seconds=" + std::to_string(verdict.attempt_sec));
-  publishAttemptResult(outcomeName(verdict.outcome), verdict.succeeded, verdict.reason);
+  // A held grasp_check attempt goes on as the tree's carry, which reports how it ends.
+  publishAttemptResult(outcomeName(verdict.outcome), verdict.succeeded, verdict.reason,
+                       verdict.succeeded && task_.completion == PolicyTaskConfig::Completion::kGraspCheck);
   resetAttempt();
   if (verdict.succeeded) {
     setFailureReason("");

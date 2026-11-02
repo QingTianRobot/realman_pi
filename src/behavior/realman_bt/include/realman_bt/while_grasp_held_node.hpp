@@ -7,6 +7,7 @@
 
 #include "bt_core/decorator_node.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "realman_bt/policy_attempt_events.hpp"
 #include "realman_bt/policy_task_config.hpp"
 #include "std_msgs/msg/float64.hpp"
 
@@ -27,6 +28,9 @@ namespace realman_bt {
 // The position is checked before the child is ticked, so a drop is seen even on the tick the
 // child would have finished. dry_run=true ticks the child without looking at the gripper (a failed
 // child is still a fault).
+//
+// The grasp_check attempt PolicyRun handed over (policy_attempt_events.hpp) ends with the carry:
+// its RESULT goes to /recording/attempt as carried (success), carry_dropped, carry_fault or halted.
 class WhileGraspHeldNode final : public bt_core::DecoratorNode {
  public:
   using bt_core::DecoratorNode::DecoratorNode;
@@ -43,10 +47,13 @@ class WhileGraspHeldNode final : public bt_core::DecoratorNode {
   bt_core::NodeStatus stopChild(bt_core::NodeStatus status);
   // Ticks the child; a child FAILURE that raised no flag of its own becomes a fault.
   bt_core::NodeStatus tickChild();
+  // Sends the handed-over attempt's RESULT; nothing when no attempt is being carried.
+  void finishCarriedAttempt(const std::string& outcome, bool succeeded, const std::string& reason);
 
   const PolicyTaskConfig* config_{nullptr};
   std::string gripper_;
   rclcpp::Subscription<std_msgs::msg::Float64>::SharedPtr subscription_;
+  AttemptPublisher attempt_pub_;
 
   std::mutex mutex_;
   double position_{0.0};

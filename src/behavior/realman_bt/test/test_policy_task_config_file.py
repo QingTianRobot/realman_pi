@@ -109,6 +109,7 @@ def test_the_grasp_check_thresholds_are_the_reviewed_values():
         "steady_position_range": 200.0,
         "timeout_sec": 6.0,
         "carry_lost_sec": 0.3,
+        "carry_record_sec": 125.0,
     }
 
 

@@ -8,9 +8,11 @@
 #include <memory>
 #include <string>
 #include <thread>
+#include <vector>
 
 #include "bt_core/leaf_node.hpp"
 #include "rclcpp/rclcpp.hpp"
+#include "realman_bt/policy_attempt_events.hpp"
 #include "realman_bt/policy_task_blackboard.hpp"
 #include "realman_bt/policy_task_config.hpp"
 #include "realman_bt/retry_unless_fault_node.hpp"
@@ -23,6 +25,7 @@ using namespace std::chrono_literals;
 using bt_core::NodeStatus;
 using realman_bt::PolicyTaskConfig;
 using realman_bt::WhileGraspHeldNode;
+using AttemptEvent = realman_recording_msgs::msg::AttemptEvent;
 
 PolicyTaskConfig fastConfig() {
   PolicyTaskConfig config;
@@ -53,6 +56,10 @@ struct Fixture {
     ros = std::make_shared<rclcpp::Node>("fake_gripper_manager");
     executor.add_node(ros);
     publisher = ros->create_publisher<std_msgs::msg::Float64>("/gripper_right/position", 10);
+    // Like the recorder: collects the carried attempt's RESULT.
+    attempt_sub = ros->create_subscription<AttemptEvent>(
+        "/recording/attempt", rclcpp::QoS(10).reliable(),
+        [this](AttemptEvent::ConstSharedPtr message) { attempts.push_back(*message); });
 
     bt_core::NodeConfig node_config;
     node_config.blackboard = bt_core::Blackboard::create();
@@ -85,6 +92,26 @@ struct Fixture {
     return status;
   }
 
+  // What PolicyRun leaves after a held grasp_check attempt.
+  void handOverAnAttempt() {
+    AttemptEvent result;
+    result.kind = AttemptEvent::RESULT;
+    result.attempt_id = "policy_attempt_20261101T000000Z_r";
+    result.task = "pick";
+    result.arm = "r";
+    result.outcome = "grasp_held";
+    result.succeeded = true;
+    realman_bt::handOverCarriedAttempt(blackboard, result);
+  }
+
+  void settle() {
+    const auto end = std::chrono::steady_clock::now() + 300ms;
+    while (std::chrono::steady_clock::now() < end) {
+      executor.spin_some();
+      std::this_thread::sleep_for(5ms);
+    }
+  }
+
   bool faultRaised() const { return blackboard->get<bool>(realman_bt::kPolicyFaultKey).value_or(false); }
   std::string reason() const {
     return blackboard->get<std::string>(realman_bt::kPolicyFailureReasonKey).value_or("");
@@ -94,6 +121,8 @@ struct Fixture {
   std::shared_ptr<rclcpp::Node> ros;
   rclcpp::executors::SingleThreadedExecutor executor;
   rclcpp::Publisher<std_msgs::msg::Float64>::SharedPtr publisher;
+  rclcpp::Subscription<AttemptEvent>::SharedPtr attempt_sub;
+  std::vector<AttemptEvent> attempts;
   bt_core::Blackboard::Ptr blackboard;
   std::unique_ptr<WhileGraspHeldNode> node;
   std::shared_ptr<FakeCarry> carry;
@@ -192,6 +221,70 @@ void testAHaltForgetsTheDropTimer() {
   assert(f.run(300ms) == NodeStatus::RUNNING);
 }
 
+// ---- the carried attempt's RESULT for the recorder --------------------------------------------
+
+void testACarryThatArrivesEndsTheAttemptAsCarried() {
+  Fixture f;
+  f.handOverAnAttempt();
+  assert(f.run(100ms) == NodeStatus::RUNNING);
+  f.carry->result = NodeStatus::SUCCESS;
+  assert(f.run(200ms) == NodeStatus::SUCCESS);
+  f.settle();
+
+  assert(f.attempts.size() == 1);
+  const auto& result = f.attempts[0];
+  assert(result.kind == AttemptEvent::RESULT);
+  assert(result.attempt_id == "policy_attempt_20261101T000000Z_r" && result.task == "pick");
+  assert(result.outcome == "carried" && result.succeeded && result.reason.empty());
+  assert(!realman_bt::takeCarriedAttempt(f.blackboard).has_value());
+}
+
+void testADropEndsTheAttemptAsAFailure() {
+  Fixture f;
+  f.handOverAnAttempt();
+  assert(f.run(100ms) == NodeStatus::RUNNING);
+  f.position = 8450.0;
+  assert(f.run(1s) == NodeStatus::FAILURE);
+  f.settle();
+
+  assert(f.attempts.size() == 1);
+  assert(f.attempts[0].outcome == "carry_dropped" && !f.attempts[0].succeeded);
+  assert(f.attempts[0].reason.find("dropped while carrying") != std::string::npos);
+}
+
+void testAFailedCarryMotionEndsTheAttemptAsACarryFault() {
+  Fixture f;
+  f.handOverAnAttempt();
+  assert(f.run(100ms) == NodeStatus::RUNNING);
+  f.carry->result = NodeStatus::FAILURE;
+  assert(f.run(200ms) == NodeStatus::FAILURE);
+  f.settle();
+
+  assert(f.attempts.size() == 1);
+  assert(f.attempts[0].outcome == "carry_fault" && !f.attempts[0].succeeded);
+  assert(f.attempts[0].reason.find("pick_carry_to_release") != std::string::npos);
+}
+
+void testAHaltedCarryEndsTheAttemptOnce() {
+  Fixture f;
+  f.handOverAnAttempt();
+  assert(f.run(100ms) == NodeStatus::RUNNING);
+  f.node->halt();
+  f.node->halt();
+  f.settle();
+
+  assert(f.attempts.size() == 1);
+  assert(f.attempts[0].outcome == "halted" && !f.attempts[0].succeeded);
+}
+
+void testACarryWithoutAHandOverAnnouncesNothing() {
+  Fixture f;
+  f.carry->result = NodeStatus::SUCCESS;
+  assert(f.run(200ms) == NodeStatus::SUCCESS);
+  f.settle();
+  assert(f.attempts.empty());
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -205,6 +298,11 @@ int main(int argc, char** argv) {
   testDryRunOnlyTicksTheChild();
   testDryRunStillTurnsAFailedCarryIntoAFault();
   testAHaltForgetsTheDropTimer();
+  testACarryThatArrivesEndsTheAttemptAsCarried();
+  testADropEndsTheAttemptAsAFailure();
+  testAFailedCarryMotionEndsTheAttemptAsACarryFault();
+  testAHaltedCarryEndsTheAttemptOnce();
+  testACarryWithoutAHandOverAnnouncesNothing();
   rclcpp::shutdown();
   return 0;
 }

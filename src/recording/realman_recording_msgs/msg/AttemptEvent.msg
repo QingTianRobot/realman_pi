@@ -15,7 +15,8 @@ string prompt
 # START only: the longest the attempt can last from START (activation + run + stop). The
 # recorder adds a margin and stops the session itself if no RESULT arrives by then.
 uint32 max_duration_sec
-# RESULT only: PolicyRun's outcome name (lifted_held, dropped, timeout, ...) or "halted".
+# RESULT only: PolicyRun's outcome name (lifted_held, dropped, timeout, ...) or "halted"; for a
+# grasp_check attempt the carry's (realman_bt WhileGraspHeld): carried, carry_dropped, carry_fault.
 string outcome
 bool succeeded
 # RESULT only: the human-readable reason PolicyRun reported (empty on success).

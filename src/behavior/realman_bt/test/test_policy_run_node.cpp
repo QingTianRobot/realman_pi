@@ -1298,6 +1298,68 @@ void testADryRunAnnouncesNothing() {
   assert(f.stack.attempts.empty());
 }
 
+void testAHeldGraspCheckAttemptIsHandedToTheCarry() {
+  Fixture f(false, graspConfig(), "pick");
+  f.stack.serve();
+  PickScenario scenario;
+
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::SUCCESS);
+  f.settle();
+
+  // Only START went out: the carry that follows decides how the attempt ends.
+  assert(f.stack.attempts.size() == 1);
+  const auto& start = f.stack.attempts[0];
+  assert(start.kind == AttemptEvent::START && start.task == "pick");
+  assert(start.max_duration_sec >=
+         static_cast<uint32_t>(f.config.max_attempt_sec + f.config.grasp_check.carry_record_sec));
+  const auto carried = f.blackboard->get<AttemptEvent>(realman_bt::kPolicyCarriedAttemptKey);
+  assert(carried.has_value());
+  assert(carried->kind == AttemptEvent::RESULT);
+  assert(carried->attempt_id == start.attempt_id);
+  assert(carried->outcome == "grasp_held" && carried->succeeded);
+}
+
+void testAMissedGraspCheckAttemptEndsAtOnce() {
+  Fixture f(false, graspConfig(), "pick");
+  f.stack.serve();
+  PickScenario scenario(false, 8450.0, false);
+
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::FAILURE);
+  f.settle();
+
+  assert(f.stack.attempts.size() == 2);
+  assert(f.stack.attempts[1].outcome == "grasp_missed" && !f.stack.attempts[1].succeeded);
+  assert(!f.blackboard->get<AttemptEvent>(realman_bt::kPolicyCarriedAttemptKey).has_value());
+}
+
+void testACarryThatNeverReportedEndsBeforeTheNextAttempt() {
+  Fixture f(false, graspConfig(), "pick");
+  f.stack.serve();
+  PickScenario first;
+  assert(f.run(8s, std::ref(first)) == NodeStatus::SUCCESS);
+  f.node->halt();  // what Repeat does; no WhileGraspHeld took the hand-over
+  f.settle();
+  assert(f.stack.attempts.size() == 1);
+
+  f.stack.r_target = {-9.89, 18.05, 79.07, 15.5, 79.6, -6.2};
+  f.stack.policy_gripper = 1.0;
+  f.stack.gripper_position = 50.0;
+  f.stack.torque_reached = false;
+  f.settle(600ms);
+
+  PickScenario second;
+  assert(f.run(8s, std::ref(second)) == NodeStatus::SUCCESS);
+  f.settle();
+
+  // The first attempt's RESULT goes out (as PolicyRun saw it) before the second START.
+  assert(f.stack.attempts.size() == 3);
+  assert(f.stack.attempts[1].kind == AttemptEvent::RESULT);
+  assert(f.stack.attempts[1].attempt_id == f.stack.attempts[0].attempt_id);
+  assert(f.stack.attempts[1].outcome == "grasp_held");
+  assert(f.stack.attempts[2].kind == AttemptEvent::START);
+  assert(f.stack.attempts[2].attempt_id != f.stack.attempts[0].attempt_id);
+}
+
 }  // namespace
 
 int main(int argc, char** argv) {
@@ -1354,6 +1416,9 @@ int main(int argc, char** argv) {
   testAHaltedAttemptIsAnnouncedAsHaltedOnce();
   testOperatorModeAnnouncesTheAttemptOnlyOnceActivated();
   testADryRunAnnouncesNothing();
+  testAHeldGraspCheckAttemptIsHandedToTheCarry();
+  testAMissedGraspCheckAttemptEndsAtOnce();
+  testACarryThatNeverReportedEndsBeforeTheNextAttempt();
   rclcpp::shutdown();
   return 0;
 }

@@ -6,7 +6,7 @@ pi05 自主运行时，操作员在 :8765 上实时标出"开始偏离 / 恢复�
 
 | 环节 | 谁做 | 结果 |
 | --- | --- | --- |
-| 每次尝试自动录制 | 行为树 PolicyRun 在 `/recording/attempt` 上发 `START`/`RESULT`，录制服务据此开录、停录 | 一次尝试一个 session，导出到 `realman/pi05-policy-rollouts`，带 `success`、`failure_reason`、`policy_task`、`attempt_id` 机器标签 |
+| 每次尝试自动录制 | 行为树 PolicyRun 在 `/recording/attempt` 上发 `START`/`RESULT`（抓稳后要搬运的 pick 由 WhileGraspHeld 在搬运结束时发 `RESULT`），录制服务据此开录、停录 | 一次尝试一个 session，导出到 `realman/pi05-policy-rollouts`，带 `success`、`failure_reason`、`policy_task`、`attempt_id` 机器标签 |
 | 现场打点 | :8765 行为树卡片里的打点条（`D`、数字键或按钮） | 偏离区间实时写进 session 的 manifest |
 | 回放修正 | 录制回放页的"偏离"编辑器 | 改起止帧、补原因、删误标 |
 | 导出 | 回放页"导出偏离标注"按钮或命令行 | `episode_quality_events.json` |
@@ -65,7 +65,7 @@ session 的 `manifest.json` 里有一个 `quality` 块，时间是纳秒字符�
 }
 ```
 
-- `attempt.outcome` 是 PolicyRun 的结果名；被 halt 是 `halted`，录制结束前没收到结果是 `no_result`。
+- `attempt.outcome` 是 PolicyRun 的结果名；被 halt 是 `halted`，录制结束前没收到结果是 `no_result`。`control_pick.xml` 的 pick（`grasp_check`）在抓稳后还要搬运，结果由 WhileGraspHeld 给出：`carried`（成功）、`carry_dropped`、`carry_fault` 或 `halted`；录像覆盖整个搬运过程，没抓到（`grasp_missed`）则在合爪判定时就结束。
 - 标签编辑器里，尝试结果显示为"机器写入"的标签，人工修改仍然优先；`deviation_count`（区间条数）是只读的派生标签，训练端可以用 `--where deviation_count=0` 之类的条件筛选。
 
 `episode_quality_events.json` 按数据集的 `episode_index` 给出每个 episode 的帧网格、尝试结果和区间（纳秒和帧号都有）。第 i 帧的时间是 `first_walltime_ns + i × round(1e9 / fps)`，与导出器的网格一致。在帧上展开成逐帧标签时：

@@ -15,7 +15,7 @@
 #include "realman_bt/policy_supervisor.hpp"
 #include "realman_bt/policy_trace.hpp"
 #include "realman_bt/policy_task_config.hpp"
-#include "realman_recording_msgs/msg/attempt_event.hpp"
+#include "realman_bt/policy_attempt_events.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32.hpp"
@@ -52,7 +52,10 @@ namespace realman_bt {
 //
 // Each attempt is announced on /recording/attempt for the recorder: START once the preflight has
 // passed (the id is the attempt's trace file name), then exactly one RESULT when it ends or is
-// halted. A dry run or a failed preflight announces nothing.
+// halted. A dry run or a failed preflight announces nothing. A grasp_check attempt that ends held
+// sends no RESULT: it is handed over to the WhileGraspHeld carry that follows (see
+// policy_attempt_events.hpp), and a hand-over still waiting when the next attempt starts is sent
+// first with the outcome PolicyRun saw.
 class PolicyRunNode final : public bt_core::ActionNode {
  public:
   using bt_core::ActionNode::ActionNode;
@@ -100,7 +103,9 @@ class PolicyRunNode final : public bt_core::ActionNode {
   void sendStopsWithoutWaiting();
   void publishPrompt(Clock::time_point now);
   void publishAttemptStart();
-  void publishAttemptResult(const std::string& outcome, bool succeeded, const std::string& reason);
+  // carried=true hands the RESULT over to the carry instead of sending it.
+  void publishAttemptResult(const std::string& outcome, bool succeeded, const std::string& reason,
+                            bool carried = false);
 
   const PolicyTaskConfig* config_{nullptr};
   std::string arm_;
@@ -116,7 +121,7 @@ class PolicyRunNode final : public bt_core::ActionNode {
   rclcpp::Client<Trigger>::SharedPtr router_estop_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr prompt_pub_;
   Clock::time_point prompt_sent_at_{};
-  rclcpp::Publisher<realman_recording_msgs::msg::AttemptEvent>::SharedPtr attempt_pub_;
+  AttemptPublisher attempt_pub_;
   std::string attempt_id_;
   bool attempt_announced_{false};  // a START went out and its RESULT has not
 

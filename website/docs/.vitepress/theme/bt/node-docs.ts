@@ -274,8 +274,8 @@ export const nodeDocs: Record<string, NodeDoc> = {
     success: "子节点成功，且夹爪仍夹着物体",
     failure: "夹爪位置在 verdict.empty_position_min 以上持续 grasp_check.carry_lost_sec（物体掉落）：可重试；子节点失败或超过 gripper_ready.position_stale_sec 读不到夹爪位置：判为故障（置位 policy_fault）",
     running: "子节点返回 RUNNING，夹爪仍夹着物体",
-    halt: "halt 子节点并清空掉落计时",
-    blackboard: "掉落时写入 policy_failure_reason；故障时还写入 policy_fault",
+    halt: "halt 子节点并清空掉落计时；正在搬运的尝试向 /recording/attempt 发 RESULT（halted）",
+    blackboard: "掉落时写入 policy_failure_reason；故障时还写入 policy_fault；接过 PolicyRun 交来的录制尝试，搬运结束时发它的 RESULT（carried / carry_dropped / carry_fault）",
     page: "./policy-task#抓取清台树-control-pick-xml",
   },
   CartesianVelocityForDuration: {

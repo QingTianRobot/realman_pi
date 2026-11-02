@@ -146,6 +146,22 @@ def _parse_stop_behavior_tree(message: dict[str, Any]) -> dict[str, Any]:
     return {"type": "stop_behavior_tree", "request_id": _request_id(message)}
 
 
+def _parse_quality_mark(message: dict[str, Any]) -> dict[str, Any]:
+    """A live deviation mark for the recorder; the node checks the reason against the config."""
+    request_id = _request_id(message)
+    kind = message.get("kind")
+    if kind not in {"deviate_start", "recover", "reason"}:
+        raise ProtocolError("invalid_field", "kind must be deviate_start, recover or reason", request_id)
+    reason = message.get("reason", "")
+    if not isinstance(reason, str) or (reason and re.fullmatch(r"[a-z][a-z0-9_]{0,31}", reason) is None):
+        raise ProtocolError("invalid_field", "reason must be a reason id", request_id)
+    if kind == "reason" and not reason:
+        raise ProtocolError("invalid_field", "a reason mark needs a reason", request_id)
+    if kind == "recover" and reason:
+        raise ProtocolError("invalid_field", "recover takes no reason", request_id)
+    return {"type": "quality_mark", "request_id": request_id, "kind": kind, "reason": reason}
+
+
 def _parse_keyboard_state(message: dict[str, Any]) -> dict[str, Any]:
     arm = message.get("arm")
     if arm not in {"l", "r"}:
@@ -470,6 +486,7 @@ _ARMLESS_PARSERS = {
     "ping": _parse_ping,
     "select_input_mode": _parse_select_input_mode,
     "stop_behavior_tree": _parse_stop_behavior_tree,
+    "quality_mark": _parse_quality_mark,
     "keyboard_state": _parse_keyboard_state,
     "capture_calibration_sample": _parse_capture_calibration_sample,
     "solve_calibration": _parse_solve_calibration,

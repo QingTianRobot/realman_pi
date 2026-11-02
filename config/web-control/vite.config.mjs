@@ -68,6 +68,8 @@ async function devManifest() {
   const policyTask = YAML.parse(await readFile(resolve(repositoryDirectory, "config/ros/policy_task.yaml"), "utf8"))
     .realman_bt_executor.ros__parameters.policy_task;
   const jointCurrent = { ...policyTask.current_guard, policy_arm: policyTask.arm };
+  // Same shape as model_manifest quality_reasons (validation lives in quality_marks.py).
+  const qualityReasons = YAML.parse(await readFile(resolve(repositoryDirectory, "config/recording/quality_reasons.yaml"), "utf8")).reasons;
   return {
     version: 1,
     root_frame: robots[0].parent_frame || layout.robots.l.parent_frame,
@@ -86,6 +88,7 @@ async function devManifest() {
       : null,
     end_effectors: endEffectors,
     joint_current: jointCurrent,
+    quality_reasons: qualityReasons,
     keyboard_control: {
       heartbeat_period_ms: keyboard.heartbeat_period_ms,
       input_timeout_ms: keyboard.input_timeout_ms,

@@ -15,6 +15,7 @@
 #include "realman_bt/policy_supervisor.hpp"
 #include "realman_bt/policy_trace.hpp"
 #include "realman_bt/policy_task_config.hpp"
+#include "realman_bt/policy_attempt_events.hpp"
 #include "sensor_msgs/msg/joint_state.hpp"
 #include "std_msgs/msg/bool.hpp"
 #include "std_msgs/msg/float32.hpp"
@@ -48,6 +49,13 @@ namespace realman_bt {
 // FAILURE, policy_failure_reason. halt() sends the stop calls without waiting, so nothing keeps
 // driving when the router switches away from the policy branch. dry_run=true only records what
 // would be supervised: no subscriptions, no service calls.
+//
+// Each attempt is announced on /recording/attempt for the recorder: START once the preflight has
+// passed (the id is the attempt's trace file name), then exactly one RESULT when it ends or is
+// halted. A dry run or a failed preflight announces nothing. A grasp_check attempt that ends held
+// sends no RESULT: it is handed over to the WhileGraspHeld carry that follows (see
+// policy_attempt_events.hpp), and a hand-over still waiting when the next attempt starts is sent
+// first with the outcome PolicyRun saw.
 class PolicyRunNode final : public bt_core::ActionNode {
  public:
   using bt_core::ActionNode::ActionNode;
@@ -94,6 +102,10 @@ class PolicyRunNode final : public bt_core::ActionNode {
   std::shared_ptr<CallState> sendTrigger(const rclcpp::Client<Trigger>::SharedPtr& client);
   void sendStopsWithoutWaiting();
   void publishPrompt(Clock::time_point now);
+  void publishAttemptStart();
+  // carried=true hands the RESULT over to the carry instead of sending it.
+  void publishAttemptResult(const std::string& outcome, bool succeeded, const std::string& reason,
+                            bool carried = false);
 
   const PolicyTaskConfig* config_{nullptr};
   std::string arm_;
@@ -109,6 +121,9 @@ class PolicyRunNode final : public bt_core::ActionNode {
   rclcpp::Client<Trigger>::SharedPtr router_estop_;
   rclcpp::Publisher<std_msgs::msg::String>::SharedPtr prompt_pub_;
   Clock::time_point prompt_sent_at_{};
+  AttemptPublisher attempt_pub_;
+  std::string attempt_id_;
+  bool attempt_announced_{false};  // a START went out and its RESULT has not
 
   mutable std::mutex mutex_;  // supervisor_, stats_, bridge_prompt_, torque_ and the arrival times
   std::unique_ptr<PolicySupervisor> supervisor_;

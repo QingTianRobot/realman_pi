@@ -138,6 +138,7 @@ test("documentation routes render", async ({ page }) => {
     "development/realman-driver-scaffold",
     "development/realman-action-development",
     "development/recording-platform",
+    "development/quality-annotation",
     "development/realman-web-control",
     "development/web-parameter-tuning",
     "development/three-arm-visualization",

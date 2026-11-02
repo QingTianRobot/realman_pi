@@ -1893,3 +1893,49 @@ test("disables the restart button while the host helper is not running", async (
   await expect(page.locator("#docker-restart")).toBeDisabled();
   await expect(page.locator("#docker-restart")).toHaveAttribute("title", /restart-helper install/);
 });
+
+test("marks deviations from the keyboard while a policy attempt is recorded", async ({ page }) => {
+  await page.goto("/");
+  await pushBtRuntime(page, {
+    available: true, tree_id: "control_pick", sequence: 1, timestamp_ms: 1, root_status: "RUNNING", failure_reason: "",
+    nodes: [
+      btNode("0", "Control", "Sequence", "control_pick", "RUNNING"),
+      btNode("0/0", "Action", "PolicyRun", "PolicyRun", "RUNNING"),
+    ],
+  });
+  await expect(page.locator("#quality-warning")).toContainText("本次尝试未录制");
+
+  const recording = {
+    state: "RECORDING", session_id: "20261029T031500Z-abc", elapsed_sec: 3, profile: "policy_rollout",
+    attempt_id: "policy_attempt_20261029_031500_r", deviating: false, deviation_start_ns: "", reason: "",
+    rejected_marks: 0, dropped_marks: 0, last_error: "",
+  };
+  await emitWebSocketEvent(page, { type: "recording_state", recording });
+  await expect(page.locator("#quality-live")).toBeVisible();
+  await expect(page.locator("#quality-warning")).toBeHidden();
+  await expect(page.locator("#quality-recording")).toContainText("policy_attempt_20261029_031500_r");
+  await expect(page.locator("#quality-reasons button")).toHaveCount(6);
+
+  const sentMarks = () => page.evaluate(() => ((window as any).__webMessages as string[])
+    .map((raw) => JSON.parse(raw))
+    .filter((message) => message.type === "quality_mark")
+    .map((message) => [message.kind, message.reason]));
+  await page.keyboard.press("d");
+  await expect.poll(sentMarks).toEqual([["deviate_start", ""]]);
+  const requestId = await page.evaluate(() => ((window as any).__webMessages as string[])
+    .map((raw) => JSON.parse(raw)).filter((message) => message.type === "quality_mark")[0].request_id);
+  await emitWebSocketEvent(page, { type: "quality_mark_result", request_id: requestId, kind: "deviate_start", reason: "" });
+  await expect(page.locator("#quality-marks li")).toHaveCount(1);
+
+  await emitWebSocketEvent(page, { type: "recording_state", recording: {
+    ...recording, deviating: true, deviation_start_ns: `${Date.now()}000000`,
+  } });
+  await expect(page.locator("#quality-state")).toContainText("偏离中");
+  await page.keyboard.press("2");
+  await page.keyboard.press("d");
+  await expect.poll(sentMarks).toEqual([["deviate_start", ""], ["reason", "wrong_target"], ["recover", ""]]);
+
+  await emitWebSocketEvent(page, { type: "recording_state", recording: { ...recording, state: "READY" } });
+  await pushBtRuntime(page, { available: false });
+  await expect(page.locator("#quality-strip")).toBeHidden();
+});

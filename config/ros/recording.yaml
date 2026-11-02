@@ -74,6 +74,19 @@
     # sessions PENDING so the operator can review/hide them before batch-exporting
     # the survivors together via the ADOPT_ALL service command.
     auto_export_on_stop: false
+    # One session per policy attempt: realman_bt PolicyRun publishes START/RESULT on
+    # /recording/attempt and the recorder opens/closes the session itself, through the
+    # same serialized lifecycle path as /recording/manage. A session someone else started
+    # (manual or Pika) is never interrupted; that attempt is just not recorded.
+    auto_record_enabled: true
+    auto_record_profile: policy_rollout
+    # Seconds added to the attempt's own max_duration_sec before the recorder stops a
+    # session whose RESULT never arrived (outcome no_result).
+    auto_record_stop_margin_sec: 10
+    # Attempt sessions export right away, unlike the manual sessions above (ADOPT_ALL).
+    auto_record_adopt_on_stop: true
+    # Policy rollouts go to their own LeRobot dataset so they never mix into teleop BC data.
+    lerobot_profile_repo_ids: ["policy_rollout=realman/pi05-policy-rollouts"]
     # Concurrent LeRobot conversion workers.  Read/align phases overlap; the dataset's
     # own process-wide append lock still serializes the final parquet/video write.
     export_workers: 3

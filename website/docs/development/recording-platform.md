@@ -86,7 +86,7 @@ LeRobot v3 的每个向量 feature 都在 `features.<key>.names` 中声明分量
 两个 ROS 节点的订阅实体由 `rclpy.Node` 自身登记和销毁；不要覆盖或重复 append
 `self._subscriptions`。在 Humble 中重复登记同一个 Subscription 会导致节点退出时二次销毁并抛出异常。
 
-`/recording/manage` 是唯一的会话控制入口，类型为 `realman_recording_msgs/srv/ManageRecording`。录制平台不提供 `recording/manage_session` Action；网页也只读取状态，不发起录制控制：
+`/recording/manage` 是人工和 Pika 的会话控制入口，类型为 `realman_recording_msgs/srv/ManageRecording`。策略尝试另走 `/recording/attempt`（见下文“策略尝试自动录制与偏离打点”）。录制平台不提供 `recording/manage_session` Action；网页也只读取状态，不发起录制控制：
 
 | 命令 | 所需字段 | 行为 |
 | --- | --- | --- |
@@ -107,6 +107,16 @@ session manifest、相机 `media-index.json` 和 LeRobot `lerobot-v3.json` recei
 `/recording/status` (`RecordingStatus`) 是网页状态的唯一权威来源。倒计时由 recorder 的单调时钟计算，浏览器仅显示它，不能用前端定时器决定结束录制。
 
 网页控制台采用深色工业控制台布局：顶部显示连接与 session 状态，上方为低清相机网格，下方按机械臂展示连接状态与关节值。坐标状态只允许有限的数值字段进入浏览器，非法 JSON、未知字段和非有限值会被丢弃。预览图片按时间戳增量刷新，不会随每次状态快照重复重载；WebSocket 断开时只影响操作台，不影响录制节点。
+
+## 策略尝试自动录制与偏离打点
+
+行为树 PolicyRun 每次尝试在 `/recording/attempt` 上发两条 `AttemptEvent`：预检通过、准备激活策略时发 `START`，尝试结束（或被 halt）时发 `RESULT`。recorder 收到 `START` 后，用 `auto_record_profile`（默认 `policy_rollout`）走和 `/recording/manage` 相同的串行 START 路径开录，`duration_sec` 设为尝试的 `max_duration_sec` 加 `auto_record_stop_margin_sec`；收到同一个 `attempt_id` 的 `RESULT` 后写结果并停录，`auto_record_adopt_on_stop` 打开时立即 ADOPT 导出。
+
+- 已经有 session 在录（人工或 Pika 开的）时，这次尝试不录，计数 `auto_record.ignored_busy`；预检失败也不录，原因写在 status 的 `auto_record_last_error`。尝试本身照常运行。
+- 没收到 `RESULT` 就停录（超时、手动 STOP、节点退出）时，结果记为 `no_result`。
+- `lerobot_profile_repo_ids` 按 profile 选导出数据集：`policy_rollout` 导出到 `realman/pi05-policy-rollouts`，其余 profile 仍用 `lerobot_repo_id`，策略数据不会混进遥操作数据集。每个数据集是 `lerobot_export_dir` 下以 repo_id 命名的子目录；如果 `lerobot_export_dir` 本身就是一个数据集（直接含有 `meta/info.json`），导出器会把任何 episode 都追加进它，所以这时路由到其他数据集的 session 一律导出失败（export `FAILED`，说明里写明原因），不会写进遥操作数据集，需要把 `lerobot_export_dir` 改成上一级目录。
+
+录制期间，:8765 的现场打点以 `QualityMark` 发到 `/recording/quality_mark`。recorder 把每条打点原样写进 MCAP，同时合成偏离区间，实时写进 `manifest.partial.json` 的 `quality` 块。尝试结果写进 `quality.attempt`，并作为机器写入的 `auto` 标签（`success`、`failure_reason`、`policy_task`、`attempt_id`）出现在标签编辑器里；人工标签仍然优先。派生标签 `deviation_count` 是区间条数，只读。完整的标注规范、回放修改方法和 sidecar 格式见[策略运行偏离标注](./quality-annotation)。
 
 ## 配置和运行
 

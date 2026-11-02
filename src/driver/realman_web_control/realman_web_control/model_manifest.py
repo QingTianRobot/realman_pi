@@ -11,6 +11,7 @@ import xml.etree.ElementTree as ET
 import yaml
 
 from .keyboard_control import load_keyboard_control_config
+from .quality_marks import load_quality_reasons
 
 
 ARMS = ("l", "m", "r")
@@ -211,6 +212,7 @@ def build_manifest(
     description_root: str | Path,
     end_effectors_path: str | Path | None = None,
     policy_task_path: str | Path | None = None,
+    quality_reasons_path: str | Path | None = None,
 ) -> dict[str, Any]:
     """Return browser-safe layout data without copying model files."""
 
@@ -280,6 +282,7 @@ def build_manifest(
             "keyboard": "config/ros/keyboard_control.yaml",
             "end_effectors": "config/ros/end_effectors.yaml",
             "joint_current": "config/ros/policy_task.yaml",
+            "quality_reasons": "config/recording/quality_reasons.yaml",
         },
         "root_frame": robots[0]["parent_frame"],
         "default_joint_position_rad": _finite(
@@ -296,6 +299,8 @@ def build_manifest(
             else {}
         ),
         "joint_current": _joint_current_guard(None if policy_task_path is None else Path(policy_task_path).resolve()),
+        # Deviation reasons for the live marking strip (digit keys follow this order).
+        "quality_reasons": load_quality_reasons(quality_reasons_path),
     }
 
 

@@ -8,6 +8,8 @@ find_package(rosidl_default_generators REQUIRED)
 find_package(std_msgs REQUIRED)
 
 rosidl_generate_interfaces(${PROJECT_NAME}
+  "msg/AttemptEvent.msg"
+  "msg/QualityMark.msg"
   "msg/RecordingStatus.msg"
   "srv/ManageRecording.srv"
   DEPENDENCIES builtin_interfaces std_msgs

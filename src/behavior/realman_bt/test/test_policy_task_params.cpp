@@ -152,6 +152,7 @@ void testTheShippedYamlLoadsThroughRosAsALaunchFileWouldPassIt() {
   assert(loaded.task("pick").completion == PolicyTaskConfig::Completion::kGraspCheck);
   assert(loaded.task("place").completion == PolicyTaskConfig::Completion::kReleaseOverBin);
   assert(loaded.grasp_check.confirm_sec == 0.8 && loaded.grasp_check.timeout_sec == 6.0);
+  assert(loaded.grasp_check.carry_record_sec == 125.0);
   assert(loaded.lift.joint_delta_deg == -10.0 && loaded.lift.hold_sec == 2.0);
   assert(loaded.prompt_topic == "/policy/prompt");
 }

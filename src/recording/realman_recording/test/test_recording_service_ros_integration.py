@@ -40,6 +40,7 @@ def test_real_recorder_service_prepare_start_stop_and_discard(tmp_path):
             Parameter("preflight_required_topics", value=["/qa/joint_states"]),
             Parameter("min_free_space_bytes", value=0),
             Parameter("auto_export_on_stop", value=False),
+            Parameter("auto_record_enabled", value=False),
         ]
         recorder = RecordingRecorderNode(parameter_overrides=parameters)
         assert len(recorder._subscriptions) == len(recorder._topic_types)

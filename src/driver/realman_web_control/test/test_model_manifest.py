@@ -172,3 +172,9 @@ def test_manifest_rejects_an_invalid_current_guard(tmp_path, block, message):
     )
     with pytest.raises(ValueError, match=message):
         build_manifest(*paths(), None, task)
+
+
+def test_manifest_publishes_the_deviation_reasons():
+    manifest = build_manifest(*paths(), quality_reasons_path=ROOT / "config/recording/quality_reasons.yaml")
+    assert manifest["quality_reasons"][0] == {"id": "grasp_miss", "label": "抓偏"}
+    assert build_manifest(*paths())["quality_reasons"] == []

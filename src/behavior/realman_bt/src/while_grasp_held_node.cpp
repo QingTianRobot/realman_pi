@@ -87,6 +87,7 @@ bt_core::NodeStatus WhileGraspHeldNode::tick() {
       raisePolicyFault(blackboard(), reason);
       setFailureReason(reason);
       recordPolicyEvent(blackboard(), "ERROR", name(), "fault", reason);
+      finishCarriedAttempt("carry_fault", false, reason);
       return stopChild(bt_core::NodeStatus::FAILURE);
     }
   } else if (position >= config_->verdict.empty_position_min) {
@@ -99,6 +100,7 @@ bt_core::NodeStatus WhileGraspHeldNode::tick() {
       recordPolicyFailureReason(blackboard(), reason);
       setFailureReason(reason);
       recordPolicyEvent(blackboard(), "WARN", name(), "dropped", reason + "; stopping the carry");
+      finishCarriedAttempt("carry_dropped", false, reason);
       return stopChild(bt_core::NodeStatus::FAILURE);
     }
   } else {
@@ -111,20 +113,36 @@ bt_core::NodeStatus WhileGraspHeldNode::tick() {
 bt_core::NodeStatus WhileGraspHeldNode::tickChild() {
   const auto status = child()->executeTick();
   if (status == bt_core::NodeStatus::RUNNING) return status;
-  if (status == bt_core::NodeStatus::FAILURE &&
-      !blackboard()->get<bool>(kPolicyFaultKey).value_or(false)) {
+  if (status == bt_core::NodeStatus::FAILURE) {
     const std::string detail = child()->failureReason();
     const std::string reason =
         "carrying the object failed in " + child()->name() + (detail.empty() ? "" : ": " + detail);
-    raisePolicyFault(blackboard(), reason);
-    setFailureReason(reason);
-    recordPolicyEvent(blackboard(), "ERROR", name(), "fault", reason);
+    if (!blackboard()->get<bool>(kPolicyFaultKey).value_or(false)) {
+      raisePolicyFault(blackboard(), reason);
+      setFailureReason(reason);
+      recordPolicyEvent(blackboard(), "ERROR", name(), "fault", reason);
+    }
+    finishCarriedAttempt("carry_fault", false, reason);
+  } else {
+    finishCarriedAttempt("carried", true, "");
   }
   reset();
   return status;
 }
 
+void WhileGraspHeldNode::finishCarriedAttempt(const std::string& outcome, bool succeeded,
+                                              const std::string& reason) {
+  auto result = takeCarriedAttempt(blackboard());
+  if (!result) return;
+  if (!attempt_pub_) attempt_pub_ = createAttemptPublisher(requireRosNode(blackboard()));
+  result->outcome = outcome;
+  result->succeeded = succeeded;
+  result->reason = reason;
+  publishAttemptEvent(attempt_pub_, *result, blackboard(), name());
+}
+
 void WhileGraspHeldNode::halt() {
+  finishCarriedAttempt("halted", false, "halted by the behavior tree while carrying the object");
   reset();
   bt_core::DecoratorNode::halt();
 }

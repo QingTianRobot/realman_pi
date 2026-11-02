@@ -15,14 +15,15 @@ import time
 from contextlib import contextmanager
 from datetime import datetime, timedelta, timezone
 from pathlib import Path
-from typing import Any, Iterator
+from typing import Any, Iterable, Iterator
 
 from .json_io import atomic_json_write
+from .quality_events import quality_block
 
 CORE = ("success", "arm", "date", "lighting_level")
 RESERVED = set(CORE) | {"session_id", "dataset_path", "episode_index", "raw_session_path",
                         "recording_state", "decision", "export_state", "tag_sources", "revision",
-                        "default_snapshot", "path_base", "complete"}
+                        "default_snapshot", "path_base", "complete", "deviation_count"}
 KEY_RE = re.compile(r"^[A-Za-z][A-Za-z0-9_.-]{0,63}$")
 SESSION_RE = re.compile(r"^[A-Za-z0-9][A-Za-z0-9_-]{0,127}$")
 INITIAL = {"success": True, "arm": None, "lighting_level": None}
@@ -110,6 +111,20 @@ def derived_date(manifest: dict[str, Any]) -> str | None:
         return None
 
 
+def deviation_count(manifest: dict[str, Any]) -> int:
+    """Number of deviation intervals in the manifest's quality block (derived, read-only)."""
+    return len(quality_block(manifest)["intervals"])
+
+
+def _tag_state(snapshot: dict[str, Any], manual: dict[str, Any], removed: Iterable[str], revision: int,
+               auto: dict[str, Any]) -> dict[str, Any]:
+    """The manifest's ``episode_tags`` object; ``auto`` (recorder-written) is kept only when present."""
+    state: dict[str, Any] = {"defaults": snapshot, "manual": manual, "removed": sorted(removed), "revision": revision}
+    if auto:
+        state["auto"] = auto
+    return state
+
+
 @contextmanager
 def _file_lock(root: Path) -> Iterator[None]:
     root.mkdir(parents=True, exist_ok=True)
@@ -178,6 +193,13 @@ class EpisodeTagStore:
             raise ValueError("finalized manifest is invalid")
         return path, payload
 
+    @staticmethod
+    def _auto(manifest: dict[str, Any]) -> dict[str, Any]:
+        """Tags the recorder wrote for a policy attempt (``episode_tags.auto``)."""
+        state = manifest.get("episode_tags")
+        auto = state.get("auto") if isinstance(state, dict) else None
+        return validate_tags(auto) if isinstance(auto, dict) else {}
+
     def _state(self, manifest: dict[str, Any]) -> tuple[dict[str, Any], dict[str, Any], int]:
         state = manifest.get("episode_tags")
         if not isinstance(state, dict):
@@ -190,8 +212,10 @@ class EpisodeTagStore:
         manual = validate_tags(manual) if isinstance(manual, dict) else {}
         annotations = manifest.get("annotations")
         legacy = annotations.get("success") if isinstance(annotations, dict) else None
+        # The recorder mirrors an attempt's verdict into annotations; that is not a manual edit.
+        baseline = self._auto(manifest).get("success", snapshot["success"])
         if "success" not in manual and type(legacy) is bool and (
-            not isinstance(manifest.get("episode_tags"), dict) or legacy != snapshot["success"]
+            not isinstance(manifest.get("episode_tags"), dict) or legacy != baseline
         ):
             manual["success"] = legacy
         revision = state.get("revision", 0)
@@ -202,6 +226,9 @@ class EpisodeTagStore:
         tags = {**snapshot, "date": derived_date(manifest)}
         sources = {key: "default" for key in snapshot}
         sources["date"] = "derived"
+        auto = self._auto(manifest)
+        tags.update(auto)
+        sources.update({key: "auto" for key in auto})
         state = manifest.get("episode_tags") or {}
         removed = state.get("removed", []) if isinstance(state, dict) else []
         if isinstance(removed, list):
@@ -211,6 +238,8 @@ class EpisodeTagStore:
                     sources.pop(key, None)
         tags.update(manual)
         sources.update({key: "manual" for key in manual})
+        tags["deviation_count"] = deviation_count(manifest)
+        sources["deviation_count"] = "derived"
         return {"tags": tags, "tag_sources": sources, "revision": revision,
                 "complete": tags.get("arm") is not None and tags.get("lighting_level") is not None and tags.get("date") is not None}
 
@@ -252,7 +281,7 @@ class EpisodeTagStore:
                 removed.add(key)
             manual.update(changes)
             removed.difference_update(changes)
-            manifest["episode_tags"] = {"defaults": snapshot, "manual": manual, "removed": sorted(removed), "revision": current + 1}
+            manifest["episode_tags"] = _tag_state(snapshot, manual, removed, current + 1, self._auto(manifest))
             annotations = manifest.get("annotations")
             if not isinstance(annotations, dict):
                 annotations = {}
@@ -293,7 +322,7 @@ class EpisodeTagStore:
                     changes.append({"session_id": directory.name, "fields": fields})
                     if not dry_run:
                         snapshot.update({key: value["to"] for key, value in fields.items()})
-                        manifest["episode_tags"] = {"defaults": snapshot, "manual": manual, "removed": sorted(removed), "revision": revision + 1}
+                        manifest["episode_tags"] = _tag_state(snapshot, manual, removed, revision + 1, self._auto(manifest))
                         manifest.setdefault("annotations", {})["success"] = self._effective(manifest)["tags"]["success"]
                         atomic_json_write(path, manifest)
                 except (OSError, ValueError, TypeError, json.JSONDecodeError) as error:

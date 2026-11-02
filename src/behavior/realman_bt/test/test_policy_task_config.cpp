@@ -163,12 +163,14 @@ void testTheDefaultTasksAreTheTwoPromptsOfTheMultitaskModel() {
   assert(config.lift.wrong_side_joint_index == 0 && config.lift.wrong_side_below_deg == -25.0);
   assert(config.grasp_check.confirm_sec == 0.8 && config.grasp_check.steady_position_range == 200.0);
   assert(config.grasp_check.timeout_sec == 6.0 && config.grasp_check.carry_lost_sec == 0.3);
+  assert(config.grasp_check.carry_record_sec == 125.0);
 }
 
 void testGraspCheckValuesMustBePositiveAndConfirmFitInTheTimeout() {
   assertRejected([](PolicyTaskConfig& c) { c.grasp_check.confirm_sec = 0.0; }, "grasp_check");
   assertRejected([](PolicyTaskConfig& c) { c.grasp_check.steady_position_range = -1.0; }, "grasp_check");
   assertRejected([](PolicyTaskConfig& c) { c.grasp_check.carry_lost_sec = 0.0; }, "grasp_check");
+  assertRejected([](PolicyTaskConfig& c) { c.grasp_check.carry_record_sec = 0.0; }, "grasp_check");
   assertRejected([](PolicyTaskConfig& c) { c.grasp_check.timeout_sec = 0.5; }, "confirm_sec must be below");
 }
 

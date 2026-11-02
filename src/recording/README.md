@@ -12,7 +12,7 @@
 - 采集路径不能依赖浏览器、Rerun、Three.js、视频解码或 LeRobot；这些组件异常时不能阻塞 MCAP 写入。
 - Web 页面只读展示，不提供开始/暂停/停止录制按钮，也不代理机械臂运动控制。
 - 默认 `rm65 up` 的实时展示仍由 `realman_web_control` 提供；只有需要录制测试时才单独启动 `realman_recording`，不得为展示目的要求启动 recording。
-- 上游通过 ROS 2 Service 控制录制生命周期；Service 是唯一的录制控制入口。
+- 上游通过 ROS 2 Service `/recording/manage` 控制录制生命周期；唯一的例外是策略尝试：行为树 PolicyRun 在 `/recording/attempt` 上发 `START`/`RESULT`，recorder 用同一条串行的内部 START/STOP 路径为每次尝试录一个 session（`auto_record_*` 参数，可关闭），并且绝不打断别人开的 session。
 - LeRobot Web 回放和离线 Rerun 都不属于采集链路；回放异常不能阻塞 MCAP 写入，Rerun 离线工具暂缓。
 - LeRobot canonical 转换和 π0.5 adapter 已实现；必须在 Humble/真实 SDK 环境验证前保持失败可见，不能伪造端到端成功。
 
@@ -127,7 +127,7 @@ Service：`/recording/manage`，类型：`realman_recording_msgs/srv/ManageRecor
 
 时间戳约定：所有接收时间、session 创建/结束时间和 ADOPT/导出审计时间均使用 ROS 2 `SYSTEM_TIME`（epoch nanoseconds）；MCAP bag record time 使用回调接收时间；消息自身的 `header.stamp` 若存在必须原样保留。仅录制时长的本地计时使用单调时钟；浏览器倒计时只显示 `/recording/status`，不能决定停止时刻；预约开始在触发时重新执行预检。
 
-`/recording/manage` 是唯一的会话控制入口；录制平台不再提供 `recording/manage_session` Action。Web 保持纯只读，不创建任何控制客户端。
+`/recording/manage` 是人工和 Pika 的会话控制入口；策略尝试由 `/recording/attempt` 自动开录、停录（见上方边界说明）。录制平台不提供 `recording/manage_session` Action。Web 不创建任何录制控制客户端。
 
 ## 6. Session 文件格式
 

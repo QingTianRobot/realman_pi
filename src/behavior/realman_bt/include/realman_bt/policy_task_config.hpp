@@ -80,6 +80,8 @@ struct PolicyTaskConfig {
   // (position at or above empty_position_min), or no hold within timeout_sec of the close. The
   // policy opening again before a verdict cancels the check. While the tree carries the object,
   // WhileGraspHeld treats carry_lost_sec of positions at or above empty_position_min as a drop.
+  // The attempt's recording runs on through the carry (WhileGraspHeld reports its result), so the
+  // recorder's deadline for it gets carry_record_sec more: the carry's own timeouts (2 + 60 + 60 s).
   // Measured on the 86 closes of the 2026-10-20..11-01 pick traces that stayed closed for 3 s:
   // held ones settle 0.6-2.9 s after the close (46 of 47 pass 0.8 s / 200 within 4.8 s), empty
   // ones reach 7800 in 1.3-4.8 s and often show torque blips under 1 s while the jaws travel.
@@ -88,6 +90,7 @@ struct PolicyTaskConfig {
     double steady_position_range{200.0};
     double timeout_sec{6.0};
     double carry_lost_sec{0.3};
+    double carry_record_sec{125.0};
   };
   struct Verdict {
     double window_sec{3.0};

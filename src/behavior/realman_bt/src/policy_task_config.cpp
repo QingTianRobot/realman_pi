@@ -82,7 +82,8 @@ void PolicyTaskConfig::validate() const {
           "policy_task.lift.wrong_side_joint_index must be 0..5");
   require(std::isfinite(lift.wrong_side_below_deg), "policy_task.lift.wrong_side_below_deg must be finite");
   require(positive(grasp_check.confirm_sec) && positive(grasp_check.steady_position_range) &&
-              positive(grasp_check.timeout_sec) && positive(grasp_check.carry_lost_sec),
+              positive(grasp_check.timeout_sec) && positive(grasp_check.carry_lost_sec) &&
+              positive(grasp_check.carry_record_sec),
           "policy_task.grasp_check values must be positive");
   require(grasp_check.confirm_sec < grasp_check.timeout_sec,
           "policy_task.grasp_check.confirm_sec must be below timeout_sec");

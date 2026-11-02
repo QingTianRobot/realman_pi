@@ -330,3 +330,18 @@ dialog input { width: 100%; margin: 8px 0 18px; }
 .gripper-limits-body { display: grid; gap: 9px; }
 .gripper-raw { display: grid; gap: 5px; color: var(--text-3); font-size: 10px; }
 .gripper-raw input { width: 100%; }
+.quality-strip { margin: 0 0 8px; }
+.quality-warning { padding: 6px 8px; border-radius: 8px; color: var(--warn); background: var(--warn-bg); border: 1px solid var(--line); font-size: 11px; line-height: 1.45; overflow-wrap: anywhere; }
+.quality-live { padding: 8px; border-radius: 8px; background: var(--card-sub); border: 1px solid var(--line); }
+.quality-head { display: flex; justify-content: space-between; align-items: center; gap: 8px; font-size: 11px; color: var(--text-2); }
+.quality-recording { overflow-wrap: anywhere; }
+.quality-state { font-weight: 600; color: var(--ok); white-space: nowrap; }
+.quality-state.deviating { color: var(--danger); }
+.quality-actions { display: flex; flex-wrap: wrap; gap: 6px; margin-top: 8px; }
+.quality-reasons { display: flex; flex-wrap: wrap; gap: 4px; }
+.quality-reason { padding: 4px 8px; border-radius: var(--radius-control); border: 1px solid var(--line); background: var(--btn-bg); color: var(--btn-content); font-size: 11px; cursor: pointer; }
+.quality-reason.active { border-color: var(--danger); color: var(--danger); }
+.quality-reason:disabled { opacity: .5; cursor: not-allowed; }
+.quality-message { margin-top: 6px; color: var(--danger); font-size: 11px; }
+.quality-message:empty { display: none; }
+.quality-marks { margin: 6px 0 0; padding-left: 18px; color: var(--text-3); font-size: 10px; }

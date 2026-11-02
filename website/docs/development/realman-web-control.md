@@ -325,6 +325,19 @@ Web 服务读取它并压缩成树视图（`bt_runtime.py`）：去掉事件日�
 launcher 从不终止任何进程，停止仍走“终止行为树”。`realman_bringup_remote` 默认 `start_bt_launcher:=true`
 （`REALMAN_START_BT_LAUNCHER=false` 可关闭）；`realman_web_control.yaml` 的 `behavior_tree_launcher.url` 置空则隐藏启动菜单。
 
+### 偏离打点
+
+行为树里 PolicyRun 在跑、录制服务也在为这次尝试录制（profile 为 `policy_rollout`）时，行为树卡片里会出现打点条：录制中的 `attempt_id` 和时长、当前状态（正常 / 偏离中 N 秒）、开始/恢复按钮、原因按钮和本次尝试最近几条打点。PolicyRun 在跑但录制服务没在录时，打点条变成黄色的"本次尝试未录制"，并显示录制服务给出的原因。
+
+| 按键 | 正常时 | 偏离中 |
+| --- | --- | --- |
+| `D` | 开始偏离 | 恢复正常 |
+| `1`–`9` | 带这个原因开始偏离 | 给当前这段设原因 |
+
+数字键按 `config/recording/quality_reasons.yaml` 的顺序对应原因。焦点在输入框里、键盘遥操作模式开着、页面不可写或打点条没显示时，按键不起作用。USB 脚踏设成发 `D` 就能用脚打点。
+
+打点通过 WebSocket 指令 `{"type": "quality_mark", "request_id": "...", "kind": "deviate_start" | "recover" | "reason", "reason": "<原因 id 或空>"}` 发给后端，后端用服务器的系统时间盖戳后发到 `/recording/quality_mark`，并回 `quality_mark_result`；原因不在列表里时回 `error`（`invalid_reason`）。页面上的"偏离中"状态来自录制服务的 `/recording/status`，后端在它变化时推送 `recording_state`。标注规范和回放修改方法见[策略运行偏离标注](./quality-annotation)。
+
 ### 重启 Docker（驱动容器）
 
 顶栏的“重启 Docker”按钮重启 `realman_bringup_remote`（三臂驱动、夹爪、相机健康、`bt_launcher` 都在这个容器里），

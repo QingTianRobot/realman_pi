@@ -176,3 +176,83 @@ test("replay workspace synchronizes camera tiles and exposes added canonical fea
   await expect(page.locator(".layout")).not.toHaveClass(/replay-layout/);
   await expect(page.locator("#previews")).toBeVisible();
 });
+
+test("replay marks deviation intervals on frames and saves them in nanoseconds", async ({ page }) => {
+  const first = 1_790_000_000_000_000_000n;
+  const step = 100_000_000n;
+  const reasons = [{ id: "grasp_miss", label: "抓偏" }, { id: "stall", label: "卡住犹豫" }];
+  const saved: any[] = [];
+  let revision = 0;
+  const frameOf = (ns: string | null) => (ns === null ? null : Number((BigInt(ns) - first + step - 1n) / step));
+  const documentFor = (intervals: any[]) => ({
+    session_id: "episode-q", revision, attempt: { attempt_id: "policy_attempt_x", outcome: "dropped", succeeded: false },
+    frames: { fps: 10, first_walltime_ns: first.toString(), frame_count: 4 }, reasons,
+    intervals: intervals.map((item) => ({
+      ...item, source: "replay", start_frame: frameOf(item.start_ns),
+      end_frame: item.end_ns === null ? 3 : (frameOf(item.end_ns) as number) - 1,
+    })),
+  });
+  await page.route("**/api/lerobot", (route) => route.fulfill({ json: { sessions: [
+    { session_id: "episode-q", repo_id: "realman/pi05-policy-rollouts", episode_index: 0, frames: 4, fps: 10,
+      task: "pick_only", quality: { invalid_frames: 0 } },
+  ] } }));
+  await page.route("**/api/lerobot/pending", (route) => route.fulfill({ json: { sessions: [] } }));
+  await page.route("**/api/lerobot/trash", (route) => route.fulfill({ json: { sessions: [] } }));
+  await page.route("**/api/lerobot/episode-q/summary", (route) => route.fulfill({ json: {
+    features: { "observation.images.front": { dtype: "video", shape: [] } }, quality: { invalid_frames: 0 }, canonical: {},
+  } }));
+  await page.route("**/api/lerobot/episode-q/frames", (route) => route.fulfill({ json: { frames: [0, 1, 2, 3].map((index) => ({
+    frame_index: index, timestamp_ns: 1_000_000_000 + index * 100_000_000, state: Array(21).fill(0), action: [], features: {},
+    cameras: { front: true },
+  })) } }));
+  await page.route("**/api/lerobot/episode-q/video/*", (route) => route.fulfill({ status: 200, contentType: "video/mp4", body: "" }));
+  await page.route("**/api/lerobot/episode-q/subtasks", (route) => route.fulfill({ json: { subtasks: [] } }));
+  await page.route("**/api/recording/episode-q/quality_events", async (route) => {
+    if (route.request().method() === "PUT") {
+      const body = route.request().postDataJSON();
+      saved.push(body);
+      expect(body.revision).toBe(revision);
+      revision += 1;
+      await route.fulfill({ json: documentFor(body.intervals) });
+    } else {
+      await route.fulfill({ json: documentFor([]) });
+    }
+  });
+
+  await page.goto("/");
+  await page.locator('.tab[data-tab="replay"]').click();
+  await page.locator('.episode-item[data-session="episode-q"] .episode-main').click();
+  await expect(page.locator("#replay-frame-label")).toHaveText("1 / 4");
+  await page.locator("#quality-toggle").click();
+  await expect(page.locator("#quality-attempt")).toContainText("policy_attempt_x");
+
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#replay-frame-label")).toHaveText("2 / 4");
+  await page.keyboard.press("d");
+  await expect.poll(() => saved.length).toBe(1);
+  expect(saved[0].intervals).toEqual([
+    { start_ns: (first + step).toString(), end_ns: null, reason: null, source: "replay" },
+  ]);
+  await expect(page.locator("#quality-track .quality-band.open")).toHaveCount(1);
+
+  await page.keyboard.press("ArrowRight");
+  await page.keyboard.press("ArrowRight");
+  await expect(page.locator("#replay-frame-label")).toHaveText("4 / 4");
+  await page.keyboard.press("d");
+  await expect.poll(() => saved.length).toBe(2);
+  expect(saved[1].intervals).toEqual([
+    { start_ns: (first + step).toString(), end_ns: (first + 4n * step).toString(), reason: null, source: "replay" },
+  ]);
+
+  await page.locator("#quality-list .quality-reason").selectOption("stall");
+  await expect.poll(() => saved.length).toBe(3);
+  expect(saved[2].intervals[0].reason).toBe("stall");
+  expect(saved[2].intervals[0].start_ns).toBe((first + step).toString());
+
+  // The reason <select> may still hold focus, and keys typed into a field never edit intervals.
+  await page.evaluate(() => (document.activeElement as HTMLElement | null)?.blur());
+  await page.keyboard.press("Delete");
+  await expect.poll(() => saved.length).toBe(4);
+  expect(saved[3].intervals).toEqual([]);
+  await expect(page.locator("#quality-track .quality-band")).toHaveCount(0);
+});

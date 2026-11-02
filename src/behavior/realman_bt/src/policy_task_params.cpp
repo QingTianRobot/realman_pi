@@ -173,6 +173,8 @@ PolicyTaskConfig declareAndLoadPolicyTaskConfig(rclcpp::Node& node) {
   config.grasp_check.timeout_sec = read.number(p + "grasp_check.timeout_sec", defaults.grasp_check.timeout_sec);
   config.grasp_check.carry_lost_sec =
       read.number(p + "grasp_check.carry_lost_sec", defaults.grasp_check.carry_lost_sec);
+  config.grasp_check.carry_record_sec =
+      read.number(p + "grasp_check.carry_record_sec", defaults.grasp_check.carry_record_sec);
   config.prompt_topic = read.text(p + "prompt_topic", defaults.prompt_topic);
   // ROS parameters cannot list the keys under tasks., so the names come first; each name then has
   // tasks.<name>.prompt and tasks.<name>.completion. A name without a default entry needs both.

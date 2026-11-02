@@ -281,3 +281,23 @@ def test_connected_trajectory_rejects_short_or_invalid_waypoint_lists():
     ]
     with pytest.raises(ProtocolError, match="velocity_percent"):
         parse_message(json.dumps(message))
+
+
+def test_quality_mark_is_global_and_validates_kind_and_reason():
+    message = {"type": "quality_mark", "request_id": "q-1", "kind": "deviate_start", "reason": "grasp_miss"}
+    assert parse_message(json.dumps(message)) == message
+    assert parse_message(json.dumps({"type": "quality_mark", "request_id": "q-2", "kind": "recover"})) == {
+        "type": "quality_mark", "request_id": "q-2", "kind": "recover", "reason": "",
+    }
+
+
+@pytest.mark.parametrize("message", [
+    {"type": "quality_mark", "request_id": "q", "kind": "jump"},
+    {"type": "quality_mark", "request_id": "q", "kind": "reason"},
+    {"type": "quality_mark", "request_id": "q", "kind": "reason", "reason": "Not An Id"},
+    {"type": "quality_mark", "request_id": "q", "kind": "recover", "reason": "stall"},
+    {"type": "quality_mark", "kind": "deviate_start"},
+])
+def test_quality_mark_rejects_malformed_commands(message):
+    with pytest.raises(ProtocolError):
+        parse_message(json.dumps(message))

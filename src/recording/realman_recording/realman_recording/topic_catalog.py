@@ -16,6 +16,7 @@ from typing import Any, Iterable
 
 from geometry_msgs.msg import TwistStamped
 from realman_msgs.msg import CartesianVelocityState
+from realman_recording_msgs.msg import QualityMark
 from sensor_msgs.msg import JointState
 from std_msgs.msg import Bool, Float64, Int32, String
 from tf2_msgs.msg import TFMessage
@@ -32,6 +33,7 @@ TYPE_REGISTRY: dict[str, Any] = {
     "tf2_msgs/msg/TFMessage": TFMessage,
     "geometry_msgs/msg/TwistStamped": TwistStamped,
     "realman_msgs/msg/CartesianVelocityState": CartesianVelocityState,
+    "realman_recording_msgs/msg/QualityMark": QualityMark,
 }
 
 
@@ -53,6 +55,7 @@ def build_topic_catalog(
     gripper_action_topics: Iterable[str] = (),
     gripper_torque_topics: Iterable[str] = (),
     gripper_alarm_topics: Iterable[str] = (),
+    quality_mark_topic: str = "",
 ) -> dict[str, TopicSpec]:
     """Build the ordered topic→spec map for one set of recording inputs.
 
@@ -101,4 +104,7 @@ def build_topic_catalog(
     for topic in gripper_alarm_topics:
         if str(topic):
             add(str(topic), Int32, "std_msgs/msg/Int32")
+    # Live deviation marks from :8765: annotation input, archived like any observation.
+    if quality_mark_topic:
+        add(quality_mark_topic, QualityMark, "realman_recording_msgs/msg/QualityMark")
     return catalog

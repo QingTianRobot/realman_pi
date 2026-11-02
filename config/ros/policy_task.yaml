@@ -125,12 +125,15 @@ realman_bt_executor:
       # control_pick.xml), carry_lost_sec of positions at or above empty_position_min is a drop: the carry stops and
       # the attempt is retried. Measured on the 86 closes in the 2026-10-20..11-01 pick traces that stayed closed 3 s:
       # held ones settle 0.6-2.9 s after the close (46 of 47 pass 0.8 s / 200, all within 4.8 s); empty ones reach
-      # 7800 in 1.3-4.8 s and show torque blips under 1 s while the jaws travel.
+      # 7800 in 1.3-4.8 s and show torque blips under 1 s while the jaws travel. A recorded attempt (/recording/attempt)
+      # ends when the carry does, not at the close: carry_record_sec is added to the recorder's deadline for it (the
+      # carry's own timeouts: 2 s lift + 60 s MoveJ + 60 s turn).
       grasp_check:
         confirm_sec: 0.8
         steady_position_range: 200.0
         timeout_sec: 6.0
         carry_lost_sec: 0.3
+        carry_record_sec: 125.0
       # Grasp verdict: the median gripper position over the last window_sec of the closed phase, with torque_reached
       # seen, means the object was held. Measured 2026-10-14: held ~5700-5800 with torque, empty 8380-8480 without.
       verdict:

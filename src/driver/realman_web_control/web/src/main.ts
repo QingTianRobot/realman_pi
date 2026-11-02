@@ -7,6 +7,7 @@ import { ARM_ICON_SVG } from "./arm_icon";
 import { AXIS_COLORS, VelocityTrace } from "./velocity_trace";
 import { JOINT_COLORS, JointCurrentTrace } from "./joint_current_trace";
 import { activeRouterBranch, ancestors, buildBtTree, findInputRouter, renderBreadcrumb, renderBtNode, type BtRuntime } from "./bt_tree";
+import { initQualityStrip, type QualityReason, type RecordingView } from "./quality_strip";
 
 type ArmId = "l" | "m" | "r";
 type KeyboardArmId = "l" | "r";
@@ -77,6 +78,7 @@ type JointCurrentGuard = { enabled: boolean; limits_ma: number[]; sustain_sec: n
 type Manifest = {
   end_effectors?: Partial<Record<ArmId, EndEffector>>;
   joint_current?: JointCurrentGuard;
+  quality_reasons?: QualityReason[];
   pedestal?: Pedestal | null;
   root_frame: string;
   default_joint_position_rad: number;
@@ -196,6 +198,15 @@ app.innerHTML = `
           <div id="bt-stop-status" class="bt-stop-status" role="status" aria-live="polite" hidden></div>
           <div class="bt-meta"><span id="bt-tree-id"></span><button id="bt-scope-toggle" class="text-button" type="button" hidden>显示整棵树</button></div>
           <div id="bt-mode-reason" class="bt-mode-reason" role="status" aria-live="polite" hidden></div>
+          <div id="quality-strip" class="quality-strip" hidden>
+            <div id="quality-warning" class="quality-warning" role="status" hidden></div>
+            <div id="quality-live" class="quality-live" hidden>
+              <div class="quality-head"><span id="quality-recording" class="quality-recording"></span><span id="quality-state" class="quality-state">正常</span></div>
+              <div class="quality-actions"><button id="quality-toggle" class="button" type="button" title="快捷键 D">开始偏离 (D)</button><div id="quality-reasons" class="quality-reasons"></div></div>
+              <div id="quality-message" class="quality-message" role="status" aria-live="polite"></div>
+              <ol id="quality-marks" class="quality-marks"></ol>
+            </div>
+          </div>
           <div id="bt-breadcrumb" class="bt-breadcrumb" hidden></div>
           <div id="bt-failure" class="bt-reason bt-root-reason" hidden></div>
           <ul id="bt-tree" class="bt-tree" aria-live="off"></ul>
@@ -2009,10 +2020,15 @@ function handleMessage(message: Message) {
     result.textContent = `${arm.toUpperCase()} ${status} / ${message.message || "unknown error"}`;
     if (arm === selectedArm) actionState.textContent = status.toUpperCase();
     updateButtons();
+  } else if (message.type === "recording_state") {
+    qualityStrip.setRecording(message.recording as RecordingView);
+  } else if (message.type === "quality_mark_result") {
+    qualityStrip.onResult(message);
   } else if (message.type === "bt_runtime") {
     // Pushed by the server on every visible change of the executor's snapshot, and once after hello.
     btRuntime = message.runtime?.available === true ? message.runtime as BtRuntime : { available: false };
     renderBehaviorTree();
+    qualityStrip.setPolicyRunning(policyRunRunning(btRuntime));
   } else if (message.type === "behavior_tree_stop_result") {
     if (message.request_id !== btStopRequest) return;
     setBtStopStatus(message.success
@@ -2020,6 +2036,8 @@ function handleMessage(message: Message) {
       : `终止失败：${message.message}`, !message.success);
     if (!message.success) btStopRequest = "";
     renderBtStopButton();
+  } else if (message.type === "error" && qualityStrip.onError(message)) {
+    // A refused deviation mark: the marking strip shows why.
   } else if (message.type === "error" && message.request_id && message.request_id === btStopRequest) {
     btStopRequest = "";
     setBtStopStatus(`终止失败：${message.message}`, true);
@@ -2081,6 +2099,9 @@ function connect() {
     // Tree states only arrive over this socket; do not keep showing a frozen tree.
     btRuntime = { available: false };
     renderBehaviorTree();
+    // Nor a recording state nobody updates any more.
+    qualityStrip.setRecording(null);
+    qualityStrip.setPolicyRunning(false);
     updateButtons();
     window.setTimeout(connect, 2000);
   });
@@ -2111,6 +2132,7 @@ function updateButtons() {
 
 function loadManifest(next: Manifest) {
   manifest = next;
+  qualityStrip.setReasons(next.quality_reasons ?? []);
   if (next.joint_current) ensureJointCurrentSkeleton(next.joint_current);
   renderKeyboardControl();
   selectedArm = armSelect.value as ArmId;
@@ -2431,6 +2453,11 @@ const btModeReason = $("#bt-mode-reason") as HTMLElement;
 const btTreeHost = $("#bt-tree") as HTMLElement;
 const btToggled = new Map<string, boolean>();
 let btRuntime: BtRuntime = { available: false };
+// PolicyRun is RUNNING from its preflight until its stop calls are done.
+function policyRunRunning(runtime: BtRuntime) {
+  return runtime.available && runtime.nodes.some((node) => node.registration_name === "PolicyRun" && node.status === "RUNNING");
+}
+const qualityStrip = initQualityStrip({ send, canWrite, keyboardActive: keyboardModeActive });
 let btShowWholeTree = false;
 let btLastMarkup = "";
 let btWasRunning = false;

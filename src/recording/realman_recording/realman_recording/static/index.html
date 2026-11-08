@@ -61,8 +61,8 @@
     .raw-modal-controls .raw-speed select{background:#0b0f17;color:var(--text);border:1px solid var(--line);border-radius:8px;padding:7px 9px;font:12px inherit}
     .raw-modal-controls .frame-label{min-width:88px;text-align:right;color:var(--muted);font:11px ui-monospace,Menlo,monospace}
   </style>
-  <script type="module" crossorigin src="/assets/recording-C4JXtpql.js"></script>
-  <link rel="stylesheet" crossorigin href="/assets/recording-BHOoMecv.css">
+  <script type="module" crossorigin src="/assets/recording-KS3Axivz.js"></script>
+  <link rel="stylesheet" crossorigin href="/assets/recording-CnN6DqWk.css">
 </head>
 <body>
   <main class="shell">
@@ -106,7 +106,9 @@
           <div id="sidebar-episodes" class="studio-sidebar-body">
             <input id="replay-search" class="studio-search" type="search" placeholder="搜索 session / task…" aria-label="搜索 Episode">
             <select id="replay-filter" class="studio-select" aria-label="按 task 过滤"><option value="">全部 task</option></select>
-            <div class="tag-filters"><select id="tag-filter-key" class="studio-select" aria-label="标签筛选字段"><option value="">全部标签</option><option value="success">success</option><option value="arm">arm</option><option value="date">date</option><option value="lighting_level">lighting_level</option></select><input id="tag-filter-value" class="studio-search" placeholder="精确值；空=未标注" aria-label="标签筛选值" title="选字段后填入当前默认值；历史 Episode 须显式补齐才会改变"></div>
+            <div id="tag-filter-rows" class="tag-filter-rows"></div>
+            <div class="tag-filter-actions"><button id="tag-filter-add" class="episode-action" type="button">+ 标签条件</button><button id="tag-filter-clear" class="episode-action" type="button">清空</button><small>同时满足所有条件</small></div>
+            <div id="replay-filter-count" class="filter-result-count" role="status" aria-live="polite">筛选结果：0 / 0 Episodes</div>
             <div class="episode-duration-filter">
               <input id="replay-duration-min" type="number" min="0" step="0.5" placeholder="最短秒" aria-label="最短时长(秒)">
               <span>—</span>

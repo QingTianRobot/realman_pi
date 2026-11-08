@@ -60,6 +60,14 @@ function escapeHtml(value: string): string {
   })[character] ?? character);
 }
 
+function normalizeDateFilter(value: string): string | null {
+  const match = /^(\d{4})[-/](\d{1,2})[-/](\d{1,2})$/.exec(value.trim());
+  if (!match) return null;
+  const canonical = `${match[1]}-${match[2].padStart(2, "0")}-${match[3].padStart(2, "0")}`;
+  const date = new Date(`${canonical}T00:00:00Z`);
+  return !Number.isNaN(date.getTime()) && date.toISOString().slice(0, 10) === canonical ? canonical : null;
+}
+
 function toast(message: string, error = false): void {
   const el = $("#toast");
   if (!el) return;
@@ -71,8 +79,14 @@ function toast(message: string, error = false): void {
 export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   const searchEl = $<HTMLInputElement>("#replay-search");
   const filterEl = $<HTMLSelectElement>("#replay-filter");
-  const tagKeyEl = $<HTMLSelectElement>("#tag-filter-key");
-  const tagValueEl = $<HTMLInputElement>("#tag-filter-value");
+  const tagRowsEl = $("#tag-filter-rows");
+  const filterCountEl = $("#replay-filter-count");
+  type TagFilter = { row: HTMLElement; key: HTMLSelectElement; value: HTMLInputElement; options: HTMLDivElement; toggle: HTMLButtonElement; edited: boolean };
+  const tagFilters: TagFilter[] = [];
+  let nextFilterId = 0;
+  const closeOptions = () => { for (const filter of tagFilters) if (filter.options.matches(":popover-open")) filter.options.hidePopover(); };
+  window.addEventListener("resize", closeOptions);
+  document.addEventListener("scroll", (event) => { if (!tagFilters.some((filter) => filter.options.contains(event.target as Node))) closeOptions(); }, true);
   const durationMinEl = $<HTMLInputElement>("#replay-duration-min");
   const durationMaxEl = $<HTMLInputElement>("#replay-duration-max");
   const episodesEl = $("#replay-episodes");
@@ -87,25 +101,120 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   let hidden: EpisodeMeta[] = [];
   let activeId: string | null = null;
   let defaultTags: Record<string, string | boolean | number | null> = {};
-  let defaultsLoaded = false;
-  let filterValueEdited = false;
   let defaultsRequestId = 0;
   const tagEditor = initTags((scope, tags) => {
     if (scope === "defaults") {
       defaultsRequestId++;
       defaultTags = tags;
-      defaultsLoaded = true;
-      filterValueEdited = false;
       renderFilter();
-      setFilterToDefault();
+      for (const filter of tagFilters) if (!filter.edited) applyDefault(filter);
+      render();
     }
     void refresh();
   });
 
-  function setFilterToDefault(): void {
-    const value = tagKeyEl.value ? defaultTags[tagKeyEl.value] : null;
-    tagValueEl.value = value == null ? "" : String(value);
+  function applyDefault(filter: TagFilter): void {
+    const value = defaultTags[filter.key.value];
+    filter.value.value = value == null ? "" : String(value);
+  }
+
+  function updateTagOptions(filter: TagFilter): void {
+    const core = ["success", "arm", "date", "lighting_level", "material", "retry"];
+    const keys = [...new Set([...core, ...episodes.flatMap((episode) => Object.keys(episode.tags ?? {})), ...Object.keys(defaultTags)])];
+    const selected = filter.key.value;
+    if (selected && !keys.includes(selected)) keys.push(selected);
+    filter.key.innerHTML = '<option value="">全部标签</option>' + keys.map((key) => `<option value="${escapeHtml(key)}">${escapeHtml(key)}</option>`).join("");
+    filter.key.value = selected;
+    updateValueOptions(filter);
+  }
+
+  function positionOptions(filter: TagFilter): void {
+    const rect = filter.row.getBoundingClientRect();
+    const width = Math.min(Math.max(rect.width, 240), 360, window.innerWidth - 24);
+    filter.options.style.width = `${width}px`;
+    filter.options.style.left = `${Math.max(12, Math.min(rect.left, window.innerWidth - width - 12))}px`;
+    const bottom = filter.value.getBoundingClientRect().bottom + 6;
+    const height = Math.min(filter.options.scrollHeight, 220);
+    filter.options.style.top = `${bottom + height <= window.innerHeight - 12 ? bottom : Math.max(12, rect.top - height - 6)}px`;
+  }
+
+  function showOptions(filter: TagFilter): void {
+    if (filter.value.disabled || !filter.options.children.length) return;
+    if (!filter.options.matches(":popover-open")) filter.options.showPopover();
+    positionOptions(filter);
+    filter.value.setAttribute("aria-expanded", "true");
+  }
+
+  function markSelectedOption(filter: TagFilter): void {
+    const value = filter.key.value === "date" ? normalizeDateFilter(filter.value.value) : filter.value.value;
+    for (const option of filter.options.querySelectorAll<HTMLButtonElement>("button")) option.setAttribute("aria-selected", String(option.dataset.value === value));
+  }
+
+  function updateValueOptions(filter: TagFilter): void {
+    const key = filter.key.value;
+    const enums: Record<string, string[]> = { success: ["true", "false"], retry: ["false", "true"], arm: ["left", "right", "both"], lighting_level: ["1", "2", "3"], material: ["adapter", "plug", "cable", "mix-adapter", "mix-cable", "mix-plug"] };
+    const observed = episodes.filter((episode) => !filterEl.value || episode.task === filterEl.value)
+      .map((episode) => episode.tags?.[key]).filter((value) => value != null).map(String);
+    const values = [...new Set([...(enums[key] ?? []), ...observed])];
+    if (key === "date") values.sort().reverse();
+    const signature = JSON.stringify(values);
+    if (filter.options.dataset.values !== signature) {
+      filter.options.dataset.values = signature;
+      filter.options.replaceChildren(...values.map((value, index) => {
+        const option = document.createElement("button"); option.type = "button"; option.className = "tag-value-option"; option.tabIndex = -1;
+        option.setAttribute("role", "option"); option.dataset.value = value; option.textContent = value;
+        option.addEventListener("click", () => { filter.value.value = value; filter.value.dispatchEvent(new Event("input", { bubbles: true })); filter.value.focus(); filter.options.hidePopover(); });
+        option.addEventListener("keydown", (event) => {
+          const delta = event.key === "ArrowDown" || event.key === "ArrowRight" ? 1 : event.key === "ArrowUp" || event.key === "ArrowLeft" ? -1 : 0;
+          if (delta) { event.preventDefault(); const buttons = filter.options.querySelectorAll<HTMLButtonElement>("button"); buttons[(index + delta + buttons.length) % buttons.length]?.focus(); }
+          if (event.key === "Escape") { event.preventDefault(); filter.value.focus(); filter.options.hidePopover(); }
+        });
+        return option;
+      }));
+    }
+    markSelectedOption(filter);
+    filter.value.disabled = !key; filter.toggle.disabled = !key || !values.length;
+    if (!key && filter.options.matches(":popover-open")) filter.options.hidePopover();
+    filter.value.placeholder = !key ? "选择标签字段" : key === "date" ? "选择日期或输入 YYYY-MM-DD" : "选择或输入；空=未标注";
+  }
+
+  function addTagFilter(): void {
+    const row = document.createElement("div"); row.className = "tag-filter-row";
+    const key = document.createElement("select"); key.className = "studio-select tag-filter-key"; key.setAttribute("aria-label", "标签筛选字段");
+    const value = document.createElement("input"); value.className = "studio-search tag-filter-value"; value.setAttribute("aria-label", "标签筛选值"); value.autocomplete = "off";
+    const control = document.createElement("div"); control.className = "tag-value-control";
+    const toggle = document.createElement("button"); toggle.type = "button"; toggle.className = "tag-value-toggle"; toggle.textContent = "⌄"; toggle.setAttribute("aria-label", "展开全部标签选项");
+    const options = document.createElement("div"); options.id = `tag-value-options-${++nextFilterId}`; options.className = "tag-value-options"; options.popover = "auto"; options.setAttribute("role", "listbox"); options.setAttribute("aria-label", "全部标签值");
+    value.setAttribute("role", "combobox"); value.setAttribute("aria-controls", options.id); value.setAttribute("aria-expanded", "false"); value.setAttribute("aria-haspopup", "listbox"); value.setAttribute("aria-autocomplete", "none");
+    const remove = document.createElement("button"); remove.type = "button"; remove.className = "episode-action tag-filter-remove"; remove.textContent = "×"; remove.setAttribute("aria-label", "移除标签条件");
+    const filter: TagFilter = { row, key, value, options, toggle, edited: false };
+    control.append(value, toggle); row.append(key, control, remove, options); tagRowsEl.append(row); tagFilters.push(filter);
+    key.addEventListener("change", () => { filter.edited = false; applyDefault(filter); updateValueOptions(filter); render(); });
+    value.addEventListener("input", () => { filter.edited = true; markSelectedOption(filter); render(); });
+    value.addEventListener("focus", () => showOptions(filter));
+    value.addEventListener("click", () => showOptions(filter));
+    value.addEventListener("keydown", (event) => {
+      if (event.key === "ArrowDown") { event.preventDefault(); showOptions(filter); filter.options.querySelector<HTMLButtonElement>("button")?.focus(); }
+      if (event.key === "Escape" && filter.options.matches(":popover-open")) { event.preventDefault(); filter.options.hidePopover(); }
+    });
+    toggle.addEventListener("mousedown", (event) => event.preventDefault());
+    toggle.addEventListener("click", () => { if (options.matches(":popover-open")) options.hidePopover(); else { value.focus(); showOptions(filter); } });
+    options.addEventListener("toggle", () => value.setAttribute("aria-expanded", String(options.matches(":popover-open"))));
+    row.addEventListener("focusout", (event) => { if (!row.contains(event.relatedTarget as Node | null) && options.matches(":popover-open")) options.hidePopover(); });
+    remove.addEventListener("click", () => { tagFilters.splice(tagFilters.indexOf(filter), 1); row.remove(); if (!tagFilters.length) addTagFilter(); render(); });
+    updateTagOptions(filter);
     render();
+  }
+
+  function matchesTagFilters(episode: EpisodeMeta): boolean {
+    return tagFilters.every((filter) => {
+      const key = filter.key.value;
+      if (!key) return true;
+      const actual = episode.tags?.[key] ?? null;
+      const raw = filter.value.value.trim();
+      const wanted = key === "date" && raw ? normalizeDateFilter(raw) ?? raw : raw;
+      return wanted === "" ? actual === null : actual !== null && String(actual) === wanted;
+    });
   }
 
   async function loadDefaults(): Promise<void> {
@@ -116,9 +225,9 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
       const data = await response.json() as { tags?: typeof defaultTags };
       if (requestId !== defaultsRequestId) return;
       defaultTags = data.tags ?? {};
-      defaultsLoaded = true;
       renderFilter();
-      if (!filterValueEdited) setFilterToDefault();
+      for (const filter of tagFilters) if (!filter.edited) applyDefault(filter);
+      render();
     } catch { /* A missing defaults endpoint must not block the episode list. */ }
   }
 
@@ -129,11 +238,7 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
     const maxSec = durationMaxEl.value ? Number(durationMaxEl.value) : null;
     return episodes.filter((episode) => {
       if (task && (episode.task ?? "") !== task) return false;
-      if (tagKeyEl.value) {
-        const actual = episode.tags?.[tagKeyEl.value] ?? null;
-        const wanted = tagValueEl.value.trim();
-        if (wanted === "" ? actual !== null : String(actual) !== wanted) return false;
-      }
+      if (!matchesTagFilters(episode)) return false;
       if (query) {
         const number = episode.episode_index !== undefined ? String(episode.episode_index + 1).padStart(6, "0") : "";
         const haystack = `${episode.session_id} ${episode.task ?? ""} ${number}`.toLowerCase();
@@ -155,11 +260,7 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
       '<option value="">全部 task</option>' +
       tasks.map((task) => `<option value="${escapeHtml(task)}">${escapeHtml(task)}</option>`).join("");
     if (tasks.includes(current)) filterEl.value = current;
-    const currentKey = tagKeyEl.value;
-    const custom = [...new Set([...episodes.flatMap((episode) => Object.keys(episode.tags ?? {})), ...Object.keys(defaultTags)])].filter((key) => !["success", "arm", "date", "lighting_level"].includes(key));
-    tagKeyEl.innerHTML = '<option value="">全部标签</option>' +
-      ["success", "arm", "date", "lighting_level", ...custom].map((key) => `<option value="${escapeHtml(key)}">${escapeHtml(key)}</option>`).join("");
-    tagKeyEl.value = currentKey;
+    for (const filter of tagFilters) updateTagOptions(filter);
   }
 
   function row(episode: EpisodeMeta, kind: "visible" | "hidden"): string {
@@ -167,7 +268,7 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
       ? String(episode.episode_index + 1).padStart(6, "0")
       : episode.session_id;
     const task = episode.task ? `<small>${escapeHtml(episode.task)}</small>` : "";
-    const badges = episode.tags ? `<small class="tag-badges">${episode.complete ? "已标注" : "待补齐"} · success=${episode.tags.success === true ? "true" : "false"} · arm=${escapeHtml(String(episode.tags.arm ?? "—"))} · light=${escapeHtml(String(episode.tags.lighting_level ?? "—"))}</small>` : "";
+    const badges = episode.tags ? `<small class="tag-badges">${episode.complete ? "已标注" : "待补齐"} · success=${episode.tags.success === true ? "true" : "false"} · arm=${escapeHtml(String(episode.tags.arm ?? "—"))} · light=${escapeHtml(String(episode.tags.lighting_level ?? "—"))} · material=${escapeHtml(String(episode.tags.material ?? "—"))} · retry=${escapeHtml(String(episode.tags.retry ?? "—"))}</small>` : "";
     const active = kind === "visible" && activeId === episode.session_id ? " active" : "";
     const buttons = kind === "visible"
       ? `<div class="episode-actions"><button class="episode-action" data-action="tags" data-session="${escapeHtml(episode.session_id)}">标签</button><button class="episode-action" data-action="edit" data-session="${escapeHtml(episode.session_id)}" title="编辑 task 标签">编辑</button><button class="episode-action" data-action="remove" data-session="${escapeHtml(episode.session_id)}" title="永久删除该 episode（不可恢复）">删除</button><button class="episode-action" data-action="hide" data-session="${escapeHtml(episode.session_id)}" title="隐藏该 episode">隐藏</button></div>`
@@ -183,6 +284,7 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
 
   function render(): void {
     const list = visibleEpisodes();
+    filterCountEl.textContent = `筛选结果：${list.length} / ${episodes.length} Episodes`;
     countEl.textContent = episodes.length ? `${episodes.length} 个已转换` : "暂无";
     episodesEl.innerHTML = list.length
       ? list.map((episode) => row(episode, "visible")).join("")
@@ -400,17 +502,13 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   reindexButton.addEventListener("click", () => void handleReindex());
   $("#tag-defaults-button").addEventListener("click", () => void tagEditor.openDefaults().catch((error) => toast(String(error), true)));
   searchEl.addEventListener("input", render);
-  filterEl.addEventListener("change", render);
-  tagKeyEl.addEventListener("change", () => {
-    filterValueEdited = false;
-    if (defaultsLoaded) setFilterToDefault();
-    else void loadDefaults();
-    render();
-  });
-  tagValueEl.addEventListener("input", () => { filterValueEdited = true; render(); });
+  filterEl.addEventListener("change", () => { for (const filter of tagFilters) updateValueOptions(filter); render(); });
+  $("#tag-filter-add").addEventListener("click", addTagFilter);
+  $("#tag-filter-clear").addEventListener("click", () => { tagFilters.splice(0); tagRowsEl.replaceChildren(); addTagFilter(); });
   durationMinEl.addEventListener("input", render);
   durationMaxEl.addEventListener("input", render);
 
+  addTagFilter();
   void loadDefaults();
   void refresh();
 

@@ -4,7 +4,7 @@ type TagMap = Record<string, TagValue>;
 type TagDocument = { tags: TagMap; tag_sources?: Record<string, string>; tag_types?: Record<string, string>; revision?: number; default_snapshot?: TagMap; removed?: string[]; meta_synced?: boolean; meta_error?: string };
 type TagEditor = { openEpisode(sessionId: string): Promise<void>; openDefaults(): Promise<void> };
 
-const core = ["success", "arm", "date", "lighting_level"];
+const core = ["success", "arm", "date", "lighting_level", "material", "retry"];
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector(selector) as T;
 
 function option(value: string, label: string): HTMLOptionElement {
@@ -57,8 +57,10 @@ export function initTags(onSaved: (scope: "defaults" | "episode", tags: TagMap) 
     row.append(label);
     let input: HTMLInputElement | HTMLSelectElement;
     if (key === "success") input = select([["true", "成功 true"], ["false", "失败 false"]], String(value));
+    else if (key === "retry") input = select([["false", "false"], ["true", "true"]], String(value ?? false));
     else if (key === "arm") input = select([["", "未知"], ["left", "左臂"], ["right", "右臂"], ["both", "双臂"]], value === null ? "" : String(value));
     else if (key === "lighting_level") input = select([["", "未知"], ["1", "较暗 1"], ["2", "正常 2"], ["3", "较亮 3"]], value === null ? "" : String(value));
+    else if (key === "material") input = select([["", "未知"], ["adapter", "adapter"], ["plug", "plug"], ["cable", "cable"], ["mix-adapter", "mix-adapter"], ["mix-cable", "mix-cable"], ["mix-plug", "mix-plug"]], value == null ? "" : String(value));
     else if (key === "date") { input = document.createElement("input"); input.type = "date"; input.value = value === null ? "" : String(value); }
     else {
       const kind = select([["string", "文本"], ["bool", "布尔"], ["int", "整数"], ["float", "小数"], ["null", "空值"]], valueType(value, declaredType));
@@ -99,7 +101,7 @@ export function initTags(onSaved: (scope: "defaults" | "episode", tags: TagMap) 
       if (!sessionId && key === "date") {
         const note = document.createElement("p"); note.textContent = "date 根据录制时间自动计算（Asia/Shanghai）"; fields.append(note); continue;
       }
-      makeRow(key, values[key] ?? (key === "success" ? true : null), loaded.tag_sources?.[key] ?? "default", false);
+      makeRow(key, values[key] ?? (key === "success" ? true : key === "retry" ? false : null), loaded.tag_sources?.[key] ?? "default", false);
     }
     for (const [key, value] of Object.entries(values)) if (!core.includes(key)) makeRow(key, value, loaded.tag_sources?.[key] ?? "default", true, false, loaded.tag_types?.[key]);
     for (const key of loaded.removed ?? []) {
@@ -117,7 +119,7 @@ export function initTags(onSaved: (scope: "defaults" | "episode", tags: TagMap) 
     for (const row of fields.querySelectorAll<HTMLElement>(".tag-row")) {
       if (row.dataset.derived === "true") continue;
       const keyInput = row.querySelector<HTMLInputElement>(".tag-key");
-      const key = keyInput ? keyInput.value.trim() : row.querySelector("label")?.firstChild?.textContent || "";
+      const key = keyInput ? keyInput.value.trim() : row.dataset.originalKey || "";
       if (!key || seen.has(key)) throw new Error(`重复或空 Key: ${key}`);
       seen.add(key);
       const original = row.dataset.originalKey ?? key;
@@ -127,8 +129,8 @@ export function initTags(onSaved: (scope: "defaults" | "episode", tags: TagMap) 
       const input = row.querySelector<HTMLInputElement | HTMLSelectElement>(".tag-value");
       if (!input) continue;
       let value: TagValue;
-      if (key === "success") value = input.value === "true";
-      else if (key === "arm" || key === "date") value = input.value || null;
+      if (key === "success" || key === "retry") value = input.value === "true";
+      else if (key === "arm" || key === "date" || key === "material") value = input.value || null;
       else if (key === "lighting_level") value = input.value ? Number(input.value) : null;
       else value = parseValue(row.querySelector<HTMLSelectElement>(".tag-type")?.value || "string", input.value);
       const kind = row.querySelector<HTMLSelectElement>(".tag-type")?.value;

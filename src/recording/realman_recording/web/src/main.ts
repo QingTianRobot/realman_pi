@@ -1,4 +1,5 @@
 import * as THREE from "three";
+import { createViewerRenderer, type ViewerRenderer } from "./viewer-renderer";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import URDFLoader from "urdf-loader";
 import { GridStack } from "gridstack";
@@ -49,9 +50,9 @@ const previewsEl = $("#previews");
 const toast = $("#toast");
 const viewerState = $("#viewer-state");
 const jointStamp = $("#joint-stamp");
-const canvas = $<HTMLCanvasElement>("#canvas");
+let canvas = $<HTMLCanvasElement>("#canvas");
 const viewer = $("#viewer");
-const motionCanvas = $<HTMLCanvasElement>("#motion-canvas");
+let motionCanvas = $<HTMLCanvasElement>("#motion-canvas");
 const motionViewer = $("#motion-viewer");
 const motionCards = $("#motion-cards");
 const motion3dStatus = $("#motion-3d-status");
@@ -59,11 +60,11 @@ const motion3dStatus = $("#motion-3d-status");
 let manifest: Manifest | null = null;
 let socket: WebSocket | null = null;
 let toastTimer: number | undefined;
-let renderer: THREE.WebGLRenderer;
+let renderer: ViewerRenderer;
 let scene: THREE.Scene;
 let camera: THREE.PerspectiveCamera;
 let controls: OrbitControls;
-let motionRenderer: THREE.WebGLRenderer;
+let motionRenderer: ViewerRenderer;
 let motionScene: THREE.Scene;
 let motionCamera: THREE.PerspectiveCamera;
 let motionControls: OrbitControls;
@@ -268,12 +269,9 @@ function renderMotionCards() {
 }
 
 function initScene() {
-  renderer = new THREE.WebGLRenderer({ canvas, antialias: true, alpha: true, preserveDrawingBuffer: true });
-  renderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  renderer.outputColorSpace = THREE.SRGBColorSpace;
-  renderer.setClearColor(0x091114, 1);
-  renderer.shadowMap.enabled = true;
   scene = new THREE.Scene();
+  const view = createViewerRenderer(canvas);
+  canvas = view.canvas; renderer = view.renderer;
   camera = new THREE.PerspectiveCamera(35, 1, 0.01, 100);
   camera.up.set(0, 0, 1);
   camera.position.set(1.2, -1.8, 1.25);
@@ -292,20 +290,21 @@ function initScene() {
   new ResizeObserver(resize).observe(viewer);
   resize();
 
-  const frame = () => {
+  let lastFrame = 0;
+  const frame = (now: number) => {
     requestAnimationFrame(frame);
+    if (document.hidden || !canvas.getClientRects().length || now - lastFrame < 33) return;
+    lastFrame = now;
     controls.update();
     renderer.render(scene, camera);
   };
-  frame();
+  requestAnimationFrame(frame);
 }
 
 function initMotionScene() {
-  motionRenderer = new THREE.WebGLRenderer({ canvas: motionCanvas, antialias: true, alpha: true });
-  motionRenderer.setPixelRatio(Math.min(window.devicePixelRatio, 2));
-  motionRenderer.outputColorSpace = THREE.SRGBColorSpace;
-  motionRenderer.setClearColor(0x091114, 1);
   motionScene = new THREE.Scene();
+  const view = createViewerRenderer(motionCanvas);
+  motionCanvas = view.canvas; motionRenderer = view.renderer;
   motionCamera = new THREE.PerspectiveCamera(38, 1, 0.01, 100);
   motionCamera.up.set(0, 0, 1);
   motionCamera.position.set(1.2, -1.8, 1.25);
@@ -326,19 +325,23 @@ function initMotionScene() {
   };
   new ResizeObserver(resize).observe(motionViewer);
   resize();
-  const frame = () => {
+  let lastFrame = 0;
+  const frame = (now: number) => {
     requestAnimationFrame(frame);
+    if (document.hidden || !motionCanvas.getClientRects().length || now - lastFrame < 33) return;
+    lastFrame = now;
     motionControls.update();
     motionRenderer.render(motionScene, motionCamera);
   };
-  frame();
+  requestAnimationFrame(frame);
 }
 
 async function loadFleet() {
-  if (!manifest) return;
+  if (!manifest || !renderer) return;
   viewerState.textContent = "加载 URDF…";
   viewerState.removeAttribute("hidden");
   const loader = new URDFLoader();
+  loader.parseVisual = renderer?.mode === "webgl";
   loader.packages = { rm65_description: `${location.origin}/models` };
   try {
     scene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
@@ -358,6 +361,7 @@ async function loadFleet() {
       const urdf = await loader.loadAsync(`${location.origin}${config.urdf_url}`);
       urdf.position.set(config.transform.x - middle.x, config.transform.y - middle.y, config.transform.z - middle.z);
       urdf.rotation.set(config.transform.roll, config.transform.pitch, config.transform.yaw, "ZYX");
+      urdf.userData.compatColor = { l: "#55a6ff", m: "#67d391", r: "#f4bb63" }[config.id];
       scene.add(urdf);
       robotScenes[config.id] = urdf;
       setRobotJoints(config.id, Array(6).fill(manifest!.default_joint_position_rad));
@@ -653,8 +657,10 @@ function connect() {
   };
 }
 
-initScene();
-initMotionScene();
+for (const [initialize, status] of [[initScene, viewerState], [initMotionScene, motion3dStatus]] as const) {
+  try { initialize(); }
+  catch (error) { status.textContent = "3D 视图不可用；状态、相机与转换功能仍可使用"; console.warn("3D initialization failed", error); }
+}
 fetch("/api/layout")
   .then((response) => response.json())
   .then((next) => {

@@ -142,6 +142,14 @@ def _parse_select_input_mode(message: dict[str, Any]) -> dict[str, Any]:
     return {"type": "select_input_mode", "request_id": request_id, "mode_id": mode_id}
 
 
+def _parse_pika_switch(message: dict[str, Any]) -> dict[str, Any]:
+    request_id = _request_id(message)
+    enabled = message.get("enabled")
+    if not isinstance(enabled, bool):
+        raise ProtocolError("invalid_field", "enabled must be true or false", request_id)
+    return {"type": "pika_switch", "request_id": request_id, "enabled": enabled}
+
+
 def _parse_stop_behavior_tree(message: dict[str, Any]) -> dict[str, Any]:
     return {"type": "stop_behavior_tree", "request_id": _request_id(message)}
 
@@ -485,6 +493,7 @@ def _parse_recover_motion(message: dict[str, Any], arm: str) -> dict[str, Any]:
 _ARMLESS_PARSERS = {
     "ping": _parse_ping,
     "select_input_mode": _parse_select_input_mode,
+    "pika_switch": _parse_pika_switch,
     "stop_behavior_tree": _parse_stop_behavior_tree,
     "quality_mark": _parse_quality_mark,
     "keyboard_state": _parse_keyboard_state,

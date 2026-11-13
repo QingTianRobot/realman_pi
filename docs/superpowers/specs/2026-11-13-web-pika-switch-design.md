@@ -76,7 +76,7 @@ States (`phase`):
 | `off` | stack stopped, not our mode | `on` command → `starting` |
 | `starting` | helper `/start` in flight | ok → `waiting_input`; error → `failed` |
 | `waiting_input` | stack up, waiting for `/pika/l` and `/pika/r` cartesian_velocity both younger than `input_fresh_ms` | both fresh → `selecting`; `input_wait_timeout_sec` → `failed` (stack is left running, see below) |
-| `selecting` | `pikavelocity` requested through the input-mode bridge | `ACTIVE` + `active_mode == pikavelocity` → `on`; bridge error/timeout → `failed` |
+| `selecting` | `pikavelocity` requested through the input-mode bridge | `ACTIVE` + `active_mode == pikavelocity` for our executor request → `on`; refused, FAILED, superseded or `mode_switch_timeout_sec` → `failed` |
 | `on` | Pika velocity active | `off` command → `stopping`; mode leaves `pikavelocity` (another mode selected anywhere) → stays `on` with `mode_lost: true` |
 | `stopping` | `none` requested, then helper `/stop` | helper ok → `off`; error → `failed` |
 | `failed` | `detail` holds the reason | `on` or `off` command retries from the start |
@@ -91,9 +91,14 @@ Rules:
 - **On failure while waiting for input** the stack is left running so the operator
   can look at it; `off` stops it. The detail names the missing arm(s) (e.g.
   `no /pika/r input for 30 s`).
-- **Mode selection reuses** `InputModeBridge.select_mode` with the requesting
-  browser's `client_id` and a server-made request id (`pika-<n>`), so the existing
-  cancel-web-actions, supersede and timeout behaviour applies unchanged. If the
+- **Mode selection reuses** `InputModeBridge.select_mode` with the switch's own
+  client id `pika_switch` and a server-made request id (`pika-<n>`), so the existing
+  cancel-web-actions and supersede behaviour applies unchanged. Results are
+  correlated by the executor request id from the bridge's `input_mode_result`
+  (refused → fail/stop at once; only snapshots of that request, or a newer one =
+  superseded, decide the outcome), so a FAILED/ACTIVE snapshot from an older
+  request never decides a new attempt. The bridge's 5 s pending timeout is
+  ignored in favour of `mode_switch_timeout_sec` (150 s, covers the entry MoveJ). If the
   catalog has no `pikavelocity` option (control tree not running), `on` fails
   before starting the stack: `pikavelocity mode is not available; start the control tree first`.
 - **One owner**: only one sequence runs; a second `on`/`off` during a transition

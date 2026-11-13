@@ -815,6 +815,8 @@ git commit -m "feat(web-control): pika_switch message and config"
 - Produces:
 
 ```python
+PIKA_CLIENT_ID = "pika_switch"   # bridge client id of every select_mode the switch makes
+
 @dataclass(frozen=True)
 class PikaSwitchConfig:
     input_fresh_ms: float; input_wait_timeout_sec: float; status_poll_sec: float
@@ -828,6 +830,7 @@ class ModeView:            # what the switch needs from InputModeBridge
     requested_mode: str
     active_mode: str
     detail: str = ""
+    request_id: int = 0    # the snapshot's executor request id
 
 @dataclass(frozen=True)
 class PikaEffect:
@@ -838,22 +841,29 @@ class PikaEffect:
 class PikaSwitch:
     def __init__(self, config: PikaSwitchConfig, *, enabled: bool, clock=time.monotonic) -> None
     def command(self, client_id: str, request_id: str, enabled: bool, mode: ModeView) -> list[PikaEffect]
-    def helper_result(self, action: str, ok: bool, payload: dict[str, Any]) -> list[PikaEffect]
+    def mode_request_result(self, request_id: str, accepted: bool, executor_request_id: int,
+                            message: str) -> list[PikaEffect]
+    def helper_result(self, action: str, ok: bool, payload: dict[str, Any], *,
+                      epoch: int | None = None) -> list[PikaEffect]
     def input_received(self, arm: str) -> None
     def tick(self, mode: ModeView) -> list[PikaEffect]
     def state_event(self) -> dict[str, Any]
 ```
 
-Effects: `helper` payload `{"action": "start"|"stop"|"status"}`; `select_mode` payload `{"mode_id": str, "request_id": "pika-<n>"}` with `client_id` set to the requester; `send_event` payload = `state_event()` (broadcast, `client_id=None`); `reply_error` payload `{"type": "error", "code": ..., "message": ..., "request_id": ...}` to `client_id`.
+Effects: `helper` payload `{"action": "start"|"stop"}` or `{"action": "status", "epoch": int}`; `select_mode` payload `{"mode_id": str, "request_id": "pika-<n>"}` with `client_id=PIKA_CLIENT_ID`; `send_event` payload = `state_event()` (broadcast, `client_id=None`); `reply_error` payload `{"type": "error", "code": ..., "message": ..., "request_id": ...}` to `client_id`.
 
 `helper_result(action="status", ok, payload)` uses `payload["running"]`; `ok=False` for status means the helper is unreachable → `available: False`.
+
+`_epoch` increments with every start/stop helper effect; a status result whose `epoch` differs from the current one is stale and ignored (`helper_result` returns `[]`, nothing changes). Calls without `epoch` always apply.
+
+Mode requests are correlated by the executor request id: `mode_request_result(request_id, accepted, executor_request_id, message)` is the bridge's `input_mode_result` for the outstanding `pika-<n>` (others are ignored). Accepted remembers the executor id; refused fails `selecting` (`"{mode} refused: {message}"`) or, in the off sequence, records `"{off_mode} refused: {message}"` and stops the stack at once. `tick` decides mode outcomes only from snapshots with `request_id == executor id` (ACTIVE in the target mode / FAILED) or a newer one (`superseded by another input mode request`); before the id is known only "router unavailable" and the switch's own `mode_switch_timeout_sec` apply. The bridge's 5 s pending timeout is never a failure for the switch (the entry MoveJ can take up to 120 s).
 
 - [ ] **Step 1: Write the failing tests**
 
 `test/test_pika_switch.py`:
 
 ```python
-from realman_web_control.pika_switch import ModeView, PikaSwitch, PikaSwitchConfig
+from realman_web_control.pika_switch import PIKA_CLIENT_ID, ModeView, PikaSwitch, PikaSwitchConfig
 
 CONFIG = PikaSwitchConfig(input_fresh_ms=500, input_wait_timeout_sec=30, status_poll_sec=2,
                           mode_switch_timeout_sec=150, mode="pikavelocity", off_mode="none")
@@ -867,13 +877,23 @@ class Clock:
         return self.now
 
 
-def mode(active="none", phase="ACTIVE", requested=None, selectable=True, available=True, detail=""):
-    return ModeView(available, selectable, phase, requested or active, active, detail)
+def mode(active="none", phase="ACTIVE", requested=None, selectable=True, available=True, detail="", request_id=0):
+    return ModeView(available, selectable, phase, requested or active, active, detail, request_id)
 
 
 def kinds(effects):
     return [(e.kind, e.payload.get("action") or e.payload.get("mode_id") or e.payload.get("code") or e.payload.get("phase"))
             for e in effects]
+
+
+def selects(effects):
+    return [e for e in effects if e.kind == "select_mode"]
+
+
+def accept(switch, effects, executor_request_id, accepted=True, message=""):
+    """Feed the bridge's input_mode_result for the select_mode effect in `effects`."""
+    [select] = selects(effects)
+    return switch.mode_request_result(select.payload["request_id"], accepted, executor_request_id, message)
 
 
 def make(running=False):
@@ -886,6 +906,15 @@ def make(running=False):
 def feed(switch, clock, arms=("l", "r")):
     for arm in arms:
         switch.input_received(arm)
+
+
+def _to_selecting(switch, clock, request_id="p1"):
+    switch.command("c1", request_id, True, mode())
+    switch.helper_result("start", True, {})
+    feed(switch, clock)
+    effects = switch.tick(mode())
+    assert switch.state_event()["phase"] == "selecting"
+    return effects
 
 
 def test_disabled_switch_is_unavailable_and_refuses():
@@ -920,13 +949,34 @@ def test_full_on_sequence():
     assert switch.state_event()["input_age_ms"]["r"] is None
     feed(switch, clock)
     effects = switch.tick(mode())
-    select = [e for e in effects if e.kind == "select_mode"]
-    assert select[0].payload["mode_id"] == "pikavelocity" and select[0].client_id == "c1"
+    select = selects(effects)
+    assert select[0].payload == {"mode_id": "pikavelocity", "request_id": "pika-1"}
     assert switch.state_event()["phase"] == "selecting"
-    switch.tick(mode(active="none", phase="SWITCHING", requested="pikavelocity"))
+    assert accept(switch, effects, 7) == []
+    switch.tick(mode(active="none", phase="SWITCHING", requested="pikavelocity", request_id=7))
     assert switch.state_event()["phase"] == "selecting"
-    switch.tick(mode(active="pikavelocity"))
+    switch.tick(mode(active="pikavelocity", request_id=7))
     assert switch.state_event()["phase"] == "on"
+
+
+def test_select_mode_uses_own_client_id():
+    switch, clock = make()
+    select = selects(_to_selecting(switch, clock))
+    assert select[0].client_id == PIKA_CLIENT_ID == "pika_switch"
+
+
+def test_waiting_input_broadcasts_rising_input_ages():
+    switch, clock = make()
+    switch.command("c1", "p1", True, mode())
+    switch.helper_result("start", True, {})
+    switch.input_received("l")
+    ages = []
+    for _ in range(3):
+        clock.now += 0.1
+        events = [e for e in switch.tick(mode()) if e.kind == "send_event"]
+        assert len(events) == 1 and events[0].client_id is None
+        ages.append(events[0].payload["input_age_ms"]["l"])
+    assert ages == [100, 200, 300]
 
 
 def test_waiting_input_times_out_naming_missing_arm_and_leaves_stack():
@@ -949,7 +999,7 @@ def test_stale_input_does_not_count():
     switch.helper_result("start", True, {})
     feed(switch, clock)
     clock.now += 1.0  # older than 500 ms
-    assert not [e for e in switch.tick(mode()) if e.kind == "select_mode"]
+    assert not selects(switch.tick(mode()))
 
 
 def test_start_failure_reports_output():
@@ -961,16 +1011,76 @@ def test_start_failure_reports_output():
 
 
 def test_mode_failure_and_timeout():
-    for final, advance in ((mode(active="none", phase="FAILED", requested="pikavelocity", detail="MoveJ failed"), 0),
-                           (mode(active="none", phase="SWITCHING", requested="pikavelocity"), 151)):
+    for final, advance in ((mode(active="none", phase="FAILED", requested="pikavelocity", detail="MoveJ failed",
+                                 request_id=7), 0),
+                           (mode(active="none", phase="SWITCHING", requested="pikavelocity", request_id=7), 151)):
         switch, clock = make()
-        switch.command("c1", "p1", True, mode())
-        switch.helper_result("start", True, {})
-        feed(switch, clock)
-        switch.tick(mode())
+        accept(switch, _to_selecting(switch, clock), 7)
         clock.now += advance
         switch.tick(final)
         assert switch.state_event()["phase"] == "failed"
+
+
+def test_mode_failure_detail_comes_from_snapshot():
+    switch, clock = make()
+    accept(switch, _to_selecting(switch, clock), 7)
+    switch.tick(mode(active="none", phase="FAILED", requested="pikavelocity", detail="MoveJ failed", request_id=7))
+    assert switch.state_event()["detail"] == "MoveJ failed"
+
+
+def test_refused_pikavelocity_fails_immediately():
+    switch, clock = make()
+    effects = accept(switch, _to_selecting(switch, clock), 7, accepted=False, message="executor busy")
+    state = switch.state_event()
+    assert state["phase"] == "failed" and state["detail"] == "pikavelocity refused: executor busy"
+    assert any(e.kind == "send_event" for e in effects)
+
+
+def test_result_for_other_request_is_ignored():
+    switch, clock = make()
+    _to_selecting(switch, clock)
+    assert switch.mode_request_result("pika-99", False, 7, "x") == []
+    assert switch.state_event()["phase"] == "selecting"
+
+
+def test_stale_failed_snapshot_from_older_request_does_not_fail_retry():
+    switch, clock = make()
+    stale = mode(active="none", phase="FAILED", requested="pikavelocity", detail="old failure", request_id=3)
+    effects = _to_selecting(switch, clock)
+    switch.tick(stale)  # executor id not known yet
+    assert switch.state_event()["phase"] == "selecting"
+    accept(switch, effects, 4)
+    switch.tick(stale)  # older request id
+    assert switch.state_event()["phase"] == "selecting"
+    switch.tick(mode(active="pikavelocity", request_id=4))
+    assert switch.state_event()["phase"] == "on"
+
+
+def test_superseded_while_selecting_fails():
+    switch, clock = make()
+    accept(switch, _to_selecting(switch, clock), 7)
+    switch.tick(mode(active="keyboard", request_id=8))
+    state = switch.state_event()
+    assert state["phase"] == "failed" and "superseded" in state["detail"]
+
+
+def test_already_active_reply_turns_on():
+    switch, clock = make()
+    switch.command("c1", "p1", True, mode(active="pikavelocity", request_id=5))
+    switch.helper_result("start", True, {})
+    feed(switch, clock)
+    effects = switch.tick(mode(active="pikavelocity", request_id=5))
+    assert switch.state_event()["phase"] == "selecting"
+    accept(switch, effects, 5)
+    switch.tick(mode(active="pikavelocity", request_id=5))
+    assert switch.state_event()["phase"] == "on"
+
+
+def test_selecting_with_router_gone_fails():
+    switch, clock = make()
+    _to_selecting(switch, clock)
+    switch.tick(mode(available=False, phase=None, active=""))
+    assert switch.state_event()["phase"] == "failed"
 
 
 def test_busy_during_transition():
@@ -979,22 +1089,33 @@ def test_busy_during_transition():
     assert kinds(switch.command("c2", "p2", False, mode())) == [("reply_error", "pika_switch_busy")]
 
 
-def _turn_on(switch, clock):
-    switch.command("c1", "p1", True, mode())
-    switch.helper_result("start", True, {})
-    feed(switch, clock)
-    switch.tick(mode())
-    switch.tick(mode(active="pikavelocity"))
+def _turn_on(switch, clock, executor_request_id=7):
+    accept(switch, _to_selecting(switch, clock), executor_request_id)
+    switch.tick(mode(active="pikavelocity", request_id=executor_request_id))
+    assert switch.state_event()["phase"] == "on"
+
+
+def _turn_off(switch, clock):
+    _turn_on(switch, clock)
+    effects = switch.command("c1", "p9", False, mode(active="pikavelocity", request_id=7))
+    assert [e.payload["mode_id"] for e in selects(effects)] == ["none"]
+    assert ("helper", "stop") not in kinds(effects)
+    return effects
+
+
+def test_on_while_on_is_noop():
+    switch, clock = make()
+    _turn_on(switch, clock)
+    assert switch.command("c2", "p2", True, mode(active="pikavelocity", request_id=7)) == []
     assert switch.state_event()["phase"] == "on"
 
 
 def test_off_selects_none_then_stops_stack():
     switch, clock = make()
-    _turn_on(switch, clock)
-    effects = switch.command("c1", "p9", False, mode(active="pikavelocity"))
-    assert [e.payload["mode_id"] for e in effects if e.kind == "select_mode"] == ["none"]
-    assert ("helper", "stop") not in kinds(effects)
-    effects = switch.tick(mode(active="none"))
+    effects = _turn_off(switch, clock)
+    assert selects(effects)[0].client_id == PIKA_CLIENT_ID
+    accept(switch, effects, 8)
+    effects = switch.tick(mode(active="none", request_id=8))
     assert ("helper", "stop") in kinds(effects)
     assert switch.state_event()["phase"] == "stopping"
     switch.helper_result("stop", True, {})
@@ -1002,21 +1123,80 @@ def test_off_selects_none_then_stops_stack():
     assert switch.state_event()["stack_running"] is False
 
 
+def test_off_does_not_stop_on_stale_none_snapshot():
+    switch, clock = make()
+    effects = _turn_off(switch, clock)
+    # An ACTIVE none snapshot from an older request must not count as reached.
+    assert ("helper", "stop") not in kinds(switch.tick(mode(active="none", request_id=6)))
+    accept(switch, effects, 8)
+    assert ("helper", "stop") not in kinds(switch.tick(mode(active="none", request_id=6)))
+
+
 def test_off_stops_stack_even_if_none_is_refused_or_router_gone():
-    for final in (mode(active="pikavelocity", phase="FAILED", requested="none", detail="busy"),
+    for final in (mode(active="pikavelocity", phase="FAILED", requested="none", detail="busy", request_id=8),
                   mode(available=False, phase=None, active="")):
         switch, clock = make()
-        _turn_on(switch, clock)
-        switch.command("c1", "p9", False, mode(active="pikavelocity"))
+        accept(switch, _turn_off(switch, clock), 8)
         effects = switch.tick(final)
         assert ("helper", "stop") in kinds(effects)
+
+
+def test_refused_none_stops_at_once_and_reports_after_off():
+    switch, clock = make()
+    effects = accept(switch, _turn_off(switch, clock), 8, accepted=False, message="session busy")
+    assert ("helper", "stop") in kinds(effects)
+    switch.helper_result("stop", True, {})
+    state = switch.state_event()
+    assert state["phase"] == "off" and state["detail"] == "none refused: session busy"
+
+
+def test_off_superseded_stops_stack():
+    switch, clock = make()
+    accept(switch, _turn_off(switch, clock), 8)
+    effects = switch.tick(mode(active="keyboard", request_id=9))
+    assert ("helper", "stop") in kinds(effects)
+    assert "superseded" in switch.state_event()["detail"]
+
+
+def test_stopping_timeout_issues_stop():
+    switch, clock = make()
+    accept(switch, _turn_off(switch, clock), 8)
+    assert ("helper", "stop") not in kinds(switch.tick(mode(active="pikavelocity", phase="SWITCHING",
+                                                             requested="none", request_id=8)))
+    clock.now += 151
+    effects = switch.tick(mode(active="pikavelocity", phase="SWITCHING", requested="none", request_id=8))
+    assert ("helper", "stop") in kinds(effects)
+    assert switch.state_event()["detail"] == "none not active after 150 s"
+
+
+def test_helper_stop_failure_fails():
+    switch, _ = make(running=True)
+    switch.command("c1", "p1", False, mode(active="keyboard"))
+    switch.helper_result("stop", False, {"error": "stop failed"})
+    state = switch.state_event()
+    assert state["phase"] == "failed" and "stop failed" in state["detail"]
 
 
 def test_off_skips_mode_when_not_in_pika_mode():
     switch, _ = make(running=True)
     effects = switch.command("c1", "p1", False, mode(active="keyboard"))
     assert ("helper", "stop") in kinds(effects)
-    assert not [e for e in effects if e.kind == "select_mode"]
+    assert not selects(effects)
+
+
+def test_off_selects_none_while_pika_mode_is_requested():
+    switch, _ = make(running=True)
+    effects = switch.command("c1", "p1", False, mode(active="none", phase="SWITCHING", requested="pikavelocity"))
+    assert [e.payload["mode_id"] for e in selects(effects)] == ["none"]
+
+
+def test_running_with_other_mode_is_off_and_off_only_stops():
+    switch, _ = make(running=True)
+    switch.tick(mode(active="keyboard"))
+    state = switch.state_event()
+    assert state["phase"] == "off" and state["stack_running"] is True
+    effects = switch.command("c1", "p1", False, mode(active="keyboard"))
+    assert ("helper", "stop") in kinds(effects) and not selects(effects)
 
 
 def test_status_poll_and_external_changes():
@@ -1032,12 +1212,45 @@ def test_status_poll_and_external_changes():
     assert switch.state_event()["phase"] == "off"
 
 
+def test_stale_status_result_after_start_is_ignored():
+    switch, clock = make()
+    clock.now += 2.1
+    [status] = [e for e in switch.tick(mode()) if e.kind == "helper"]
+    assert status.payload["action"] == "status" and "epoch" in status.payload
+    switch.command("c1", "p1", True, mode())
+    switch.helper_result("start", True, {})
+    assert switch.helper_result("status", True, {"running": False}, epoch=status.payload["epoch"]) == []
+    assert switch.state_event()["stack_running"] is True
+    feed(switch, clock)
+    accept(switch, switch.tick(mode()), 7)
+    switch.tick(mode(active="pikavelocity", request_id=7))
+    switch.tick(mode(active="pikavelocity", request_id=7))
+    assert switch.state_event()["phase"] == "on"
+
+
+def test_current_status_result_applies():
+    switch, clock = make()
+    clock.now += 2.1
+    [status] = [e for e in switch.tick(mode()) if e.kind == "helper"]
+    switch.helper_result("status", False, {"error": "down"}, epoch=status.payload["epoch"])
+    assert switch.state_event()["available"] is False
+
+
 def test_mode_lost_is_shown_while_on():
     switch, clock = make()
     _turn_on(switch, clock)
     switch.tick(mode(active="keyboard"))
     state = switch.state_event()
     assert state["phase"] == "on" and state["mode_lost"] is True
+
+
+def test_mode_lost_updates_while_status_in_flight():
+    switch, clock = make()
+    _turn_on(switch, clock)
+    clock.now += 2.1
+    assert ("helper", "status") in kinds(switch.tick(mode(active="pikavelocity", request_id=7)))
+    switch.tick(mode(active="keyboard", request_id=9))
+    assert switch.state_event()["mode_lost"] is True
 
 
 def test_failed_retry_on_and_off():
@@ -1070,7 +1283,11 @@ Expected: FAIL (`ModuleNotFoundError: realman_web_control.pika_switch`).
 """ROS-independent sequencing for the :8765 Pika velocity switch.
 
 On:  helper start -> both /pika/{l,r}/cartesian_velocity fresh -> select `mode`.
-Off: select `off_mode` (only when `mode` is active) -> helper stop.
+Off: select `off_mode` (only when `mode` is active or requested) -> helper stop.
+Mode requests go through the input-mode bridge under the switch's own client id
+and are correlated by the executor request id from the bridge's
+`input_mode_result`; the bridge's short pending timeout is not a failure here,
+only `mode_switch_timeout_sec` is (it covers the entry MoveJ).
 The owner serializes all calls and applies the returned effects in order.
 """
 
@@ -1080,8 +1297,10 @@ from dataclasses import dataclass
 import time
 from typing import Any, Callable
 
+PIKA_CLIENT_ID = "pika_switch"
 PIKA_ARMS = ("l", "r")
 TRANSITIONS = frozenset({"starting", "waiting_input", "selecting", "stopping"})
+SUPERSEDED = "superseded by another input mode request"
 
 
 @dataclass(frozen=True)
@@ -1102,6 +1321,7 @@ class ModeView:
     requested_mode: str
     active_mode: str
     detail: str = ""
+    request_id: int = 0  # executor request id of the snapshot
 
 
 @dataclass(frozen=True)
@@ -1122,10 +1342,12 @@ class PikaSwitch:
         self._phase = "off"
         self._detail = ""
         self._mode_lost = False
-        self._client_id: str | None = None
         self._deadline = 0.0
         self._stop_after_mode = False
         self._next_request = 0
+        self._mode_request: str | None = None
+        self._executor_request_id: int | None = None
+        self._epoch = 0
         self._last_input: dict[str, float] = {}
         self._helper_in_flight: str | None = None
         # The owner sends one status probe at start-up (Task 4); polling resumes after one period.
@@ -1142,20 +1364,38 @@ class PikaSwitch:
             return [self._error(client_id, request_id, "pika_switch_unavailable", "Pika helper is not available")]
         if self._phase in TRANSITIONS or self._helper_in_flight in ("start", "stop"):
             return [self._error(client_id, request_id, "pika_switch_busy", f"Pika switch is {self._phase}")]
-        self._client_id = client_id
         if enabled:
+            if self._phase == "on" and self._in_mode(mode):
+                return []
             if not (mode.available and mode.selectable):
                 return [self._error(client_id, request_id, "pika_mode_unavailable",
                                     f"{self._config.mode} mode is not available; start the control tree first")]
             self._last_input.clear()
             return self._enter("starting", "") + [self._helper("start")]
-        if mode.available and mode.active_mode == self._config.mode and mode.phase is not None:
+        if mode.available and self._config.mode in (mode.active_mode, mode.requested_mode):
             self._stop_after_mode = True
             self._deadline = self._clock() + self._config.mode_switch_timeout_sec
             return self._enter("stopping", "") + [self._select(self._config.off_mode)]
         return self._enter("stopping", "") + [self._helper("stop")]
 
-    def helper_result(self, action: str, ok: bool, payload: dict[str, Any]) -> list[PikaEffect]:
+    def mode_request_result(self, request_id: str, accepted: bool, executor_request_id: int,
+                            message: str) -> list[PikaEffect]:
+        if self._mode_request is None or request_id != self._mode_request:
+            return []
+        if accepted:
+            self._executor_request_id = executor_request_id
+            return []
+        self._mode_request = None
+        if self._phase == "selecting":
+            return self._enter("failed", f"{self._config.mode} refused: {message}")
+        if self._phase == "stopping" and self._stop_after_mode:
+            return self._finish_off_mode(f"{self._config.off_mode} refused: {message}")
+        return []
+
+    def helper_result(self, action: str, ok: bool, payload: dict[str, Any], *,
+                      epoch: int | None = None) -> list[PikaEffect]:
+        if action == "status" and epoch is not None and epoch != self._epoch:
+            return []  # issued before a later start/stop; its answer is stale
         if self._helper_in_flight == action:
             self._helper_in_flight = None
         if action == "status":
@@ -1180,6 +1420,9 @@ class PikaSwitch:
     def tick(self, mode: ModeView) -> list[PikaEffect]:
         now = self._clock()
         effects: list[PikaEffect] = []
+        executor = self._executor_request_id
+        ours = executor is not None and mode.request_id == executor
+        superseded = executor is not None and mode.request_id > executor
         if self._phase == "waiting_input":
             if all(self._fresh(arm, now) for arm in PIKA_ARMS):
                 self._deadline = now + self._config.mode_switch_timeout_sec
@@ -1188,28 +1431,35 @@ class PikaSwitch:
                 missing = ", ".join(f"/pika/{arm}" for arm in PIKA_ARMS if not self._fresh(arm, now))
                 effects += self._enter("failed", f"no {missing} input for {self._config.input_wait_timeout_sec:g} s")
         elif self._phase == "selecting":
-            if mode.phase == "ACTIVE" and mode.active_mode == self._config.mode:
+            if ours and mode.phase == "ACTIVE" and mode.active_mode == self._config.mode:
                 effects += self._enter("on", "")
-            elif mode.phase == "FAILED" and mode.requested_mode == self._config.mode:
+            elif ours and mode.phase == "FAILED":
                 effects += self._enter("failed", mode.detail or f"switch to {self._config.mode} failed")
+            elif superseded:
+                effects += self._enter("failed", SUPERSEDED)
             elif not mode.available:
                 effects += self._enter("failed", "input mode router is unavailable")
             elif now >= self._deadline:
                 effects += self._enter("failed", f"{self._config.mode} not active after {self._config.mode_switch_timeout_sec:g} s")
         elif self._phase == "stopping" and self._stop_after_mode:
-            reached = mode.phase == "ACTIVE" and mode.active_mode == self._config.off_mode
-            refused = mode.phase == "FAILED" and mode.requested_mode == self._config.off_mode
-            if reached or refused or not mode.available or now >= self._deadline:
-                self._stop_after_mode = False
-                if refused:
-                    self._detail = f"{self._config.off_mode} refused: {mode.detail}"
-                effects += self._publish() + [self._helper("stop")]
-        elif self._phase in ("off", "on") and self._helper_in_flight is None:
-            in_mode = mode.phase == "ACTIVE" and mode.active_mode == self._config.mode
-            if self._phase == "off" and self._stack_running and in_mode:
-                effects += self._enter("on", "")
-            elif self._phase == "on" and not self._stack_running:
-                effects += self._enter("off", "Pika stack stopped outside :8765")
+            off_mode = self._config.off_mode
+            if ours and mode.phase == "ACTIVE" and mode.active_mode == off_mode:
+                effects += self._finish_off_mode("")
+            elif ours and mode.phase == "FAILED":
+                effects += self._finish_off_mode(f"{off_mode} refused: {mode.detail}")
+            elif superseded:
+                effects += self._finish_off_mode(SUPERSEDED)
+            elif not mode.available:
+                effects += self._finish_off_mode("")
+            elif now >= self._deadline:
+                effects += self._finish_off_mode(f"{off_mode} not active after {self._config.mode_switch_timeout_sec:g} s")
+        elif self._phase in ("off", "on"):
+            in_mode = self._in_mode(mode)
+            if self._helper_in_flight is None:
+                if self._phase == "off" and self._stack_running and in_mode:
+                    effects += self._enter("on", "")
+                elif self._phase == "on" and not self._stack_running:
+                    effects += self._enter("off", "Pika stack stopped outside :8765")
             self._mode_lost = self._phase == "on" and not in_mode
         if (self._enabled and self._helper_in_flight is None and self._phase not in TRANSITIONS
                 and now >= self._next_poll):
@@ -1233,15 +1483,29 @@ class PikaSwitch:
         }
 
     # ---- helpers ------------------------------------------------------
+    def _in_mode(self, mode: ModeView) -> bool:
+        return mode.phase == "ACTIVE" and mode.active_mode == self._config.mode
+
     def _fresh(self, arm: str, now: float) -> bool:
         received = self._last_input.get(arm)
         return received is not None and (now - received) * 1000 < self._config.input_fresh_ms
+
+    def _finish_off_mode(self, detail: str) -> list[PikaEffect]:
+        """End the off sequence's mode step and stop the stack."""
+        self._stop_after_mode = False
+        self._mode_request = None
+        self._executor_request_id = None
+        self._detail = detail
+        return self._publish() + [self._helper("stop")]
 
     def _enter(self, phase: str, detail: str) -> list[PikaEffect]:
         self._phase = phase
         self._detail = detail
         if phase != "on":
             self._mode_lost = False
+        if phase not in ("selecting", "stopping"):
+            self._mode_request = None
+            self._executor_request_id = None
         return self._publish()
 
     def _publish(self) -> list[PikaEffect]:
@@ -1255,12 +1519,16 @@ class PikaSwitch:
 
     def _helper(self, action: str) -> PikaEffect:
         self._helper_in_flight = action
-        return PikaEffect("helper", {"action": action})
+        if action in ("start", "stop"):
+            self._epoch += 1
+            return PikaEffect("helper", {"action": action})
+        return PikaEffect("helper", {"action": action, "epoch": self._epoch})
 
     def _select(self, mode_id: str) -> PikaEffect:
         self._next_request += 1
-        return PikaEffect("select_mode", {"mode_id": mode_id, "request_id": f"pika-{self._next_request}"},
-                          self._client_id)
+        self._mode_request = f"pika-{self._next_request}"
+        self._executor_request_id = None
+        return PikaEffect("select_mode", {"mode_id": mode_id, "request_id": self._mode_request}, PIKA_CLIENT_ID)
 
     @staticmethod
     def _error(client_id: str, request_id: str, code: str, message: str) -> PikaEffect:
@@ -1444,7 +1712,7 @@ Imports (top, with the other package imports; `TwistStamped` with the other `geo
 ```python
 from geometry_msgs.msg import TwistStamped
 from .pika_helper_client import call_helper
-from .pika_switch import ModeView, PikaEffect, PikaSwitch, PikaSwitchConfig
+from .pika_switch import PIKA_CLIENT_ID, ModeView, PikaEffect, PikaSwitch, PikaSwitchConfig
 ```
 
 In `__init__`, right after `self._input_modes = InputModeBridge(...)`:
@@ -1506,6 +1774,7 @@ New methods (place after `_apply_input_mode_effects`):
             requested_mode=snapshot.requested_mode if snapshot is not None else "",
             active_mode=snapshot.active_mode if snapshot is not None else "",
             detail=snapshot.detail if snapshot is not None else "",
+            request_id=snapshot.request_id if snapshot is not None else 0,
         )
 
     @_serialized_control
@@ -1513,10 +1782,11 @@ New methods (place after `_apply_input_mode_effects`):
         self._apply_pika_effects(self._pika.tick(self._pika_mode_view()))
 
     @_serialized_control
-    def _pika_helper_done(self, action: str, ok: bool, payload: dict[str, Any]) -> None:
+    def _pika_helper_done(self, action: str, ok: bool, payload: dict[str, Any], *,
+                          epoch: int | None = None) -> None:
         if not ok and action != "status":
             self.get_logger().warning(f"Pika helper {action} failed: {payload.get('error', '')}")
-        self._apply_pika_effects(self._pika.helper_result(action, ok, payload))
+        self._apply_pika_effects(self._pika.helper_result(action, ok, payload, epoch=epoch))
 
     def _apply_pika_effects(self, effects: list[PikaEffect]) -> None:
         for effect in effects:
@@ -1528,18 +1798,39 @@ New methods (place after `_apply_input_mode_effects`):
                 action = effect.payload["action"]
                 if action != "status":
                     self.get_logger().info(f"Pika switch: helper {action}")
+                epoch = effect.payload.get("epoch")
                 threading.Thread(
-                    target=lambda action=action: self._pika_helper_done(
-                        action, *call_helper(self._pika_helper_url, action, self._pika_helper_timeout)),
+                    target=lambda action=action, epoch=epoch: self._pika_helper_done(
+                        action, *call_helper(self._pika_helper_url, action, self._pika_helper_timeout),
+                        epoch=epoch),
                     name=f"pika-helper-{action}", daemon=True,
                 ).start()
             elif effect.kind == "select_mode":
                 self.get_logger().info(f"Pika switch: select input mode {effect.payload['mode_id']}")
                 self._apply_input_mode_effects(self._input_modes.select_mode(
-                    effect.client_id or "pika_switch",
+                    PIKA_CLIENT_ID,
                     {"mode_id": effect.payload["mode_id"], "request_id": effect.payload["request_id"]},
                 ))
 ```
+
+In `_apply_input_mode_effects`, the `send_event` branch keeps bridge replies addressed to the switch away from the server (`PIKA_CLIENT_ID` is not a browser):
+
+```python
+            if effect.kind == "send_event":
+                if effect.client_id == PIKA_CLIENT_ID:
+                    payload = effect.payload
+                    if payload.get("type") == "input_mode_result":
+                        self._apply_pika_effects(self._pika.mode_request_result(
+                            payload["request_id"], bool(payload["accepted"]),
+                            int(payload["executor_request_id"]), str(payload.get("message", "")),
+                        ))
+                    else:
+                        self.get_logger().debug(f"Pika switch: dropped input-mode event {payload.get('type')}")
+                    continue
+                self._server.send_event(effect.payload, effect.client_id)
+```
+
+Bridge errors to `PIKA_CLIENT_ID` (including its 5 s pending timeout) are dropped on purpose: the switch keeps its own `mode_switch_timeout_sec`, which covers the entry MoveJ.
 
 Also store `self._pika_mode_id = web_config.pika_mode` next to `self._pika_helper_url`. Confirm `threading` is imported (it is: `threading.RLock` is used).
 

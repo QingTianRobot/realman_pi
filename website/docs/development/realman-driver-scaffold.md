@@ -107,9 +107,14 @@ flowchart TD
   C0["首次连接失败（臂后上电）<br/>或通信错误 -1/-2 / SDK 异常<br/>connected=false"] --> T["每 reconnect_interval（5 s）重试"]
   T --> S["同一个 RoboticArm 对象上<br/>删除旧句柄 → 重建句柄<br/>不调用 rm_destroy"]
   S -- "无效句柄 id=-1 / socket 错误" --> T
-  S -- 成功 --> V["重新回读并校验坐标"]
+  S -- 成功 --> R{"断线前已连接过？"}
+  R -- 否（首次连接） --> V["重新回读并校验坐标"]
+  R -- 是 --> STOP["新句柄上 stop()"]
+  STOP -- "0" --> CLR["释放旧会话 lockout 与 ownership"] --> V
+  STOP -- "非 0" --> DROP["保留 lockout<br/>释放句柄"] --> T
   V -- 匹配/修复成功 --> OK["开放 motion gate"]
   V -- 读写失败或回读不符 --> BLK["motion gate 关闭<br/>仅 MOVEJ 可用"]
+  V -- "坐标启动被拒（如 arm busy）" --> DROP2["释放句柄"] --> T
 ```
 
 #### 进程内重连：不调用 `rm_destroy()`
@@ -128,6 +133,22 @@ flowchart TD
 重连只涉及本臂自己的句柄，不影响其他臂和夹爪。测试见
 `src/driver/realman_robot_driver/test/test_sdk_reconnect.py`：伪 SDK 先返回 N 次无效句柄再返回有效句柄，
 验证驱动在同一进程内恢复。
+
+#### 断线时正在运行的会话：重连后释放 lockout
+
+速度/位姿会话运行中断线（例如一次 `-2` 关节读取超时）时，零速和 `slow_stop` 只能发到已失效的句柄上，
+返回非零状态，会话因此进入 lockout 并保留该臂 ownership。旧实现中只有显式 `/disconnect` 才会清除它；
+自动重连成功后坐标启动需要 ownership，于是报
+`RealMan coordinate startup failed ... arm l is busy; coordinate operation refused`，之后所有运动目标都被
+`Rejecting motion goal: arm l is busy` 拒绝，`select_work` 报 `coordinate mutation refused`，只能重启容器
+（2026-11-13 SJDrealman，Pika 速度遥操作中 l/r 两臂同时出现）。
+
+现在自动重连（非首次连接、非事件通道恢复）在注册回调后、对账之前先在新句柄上调用 `stop()`：
+返回 `0` 才按 `/disconnect` 的同样规则释放速度会话、位姿会话和 motion coordinator 的 lockout 与 ownership，
+然后对账并重新校验坐标；`stop()` 失败则保留 lockout、释放句柄，按 `reconnect_interval` 重试。坐标启动失败
+（包括仍然 busy）同样释放句柄，避免 `connected=true` 让重连定时器永远不再尝试。日志中出现
+`RealMan link was lost; stopped on the new connection and released session lockouts` 即表示走了这条路径。
+测试见 `test_realman_driver_node.py` 中的 `test_reconnect_after_lost_link_*` 等用例。
 
 ### 控制器诊断：`controller_info`
 

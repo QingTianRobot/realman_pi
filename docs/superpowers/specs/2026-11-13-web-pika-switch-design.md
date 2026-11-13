@@ -141,7 +141,7 @@ It is disabled during transitions. While `on`, the button reads `关闭 Pika`.
 # host (./rm65 pika-helper install) with commands from config/docker/pika_helper.json.
 pika_switch:
   helper_url: http://127.0.0.1:8783  # Empty string hides the switch.
-  helper_timeout_sec: 25.0           # Above the helper's timeout_sec + stop_grace_sec.
+  helper_timeout_sec: 40.0           # Above the helper's timeout_sec 20 + stop_grace_sec 8, with room for the status checks during stop.
   input_fresh_ms: 500                # Both l and r must be newer than this.
   input_wait_timeout_sec: 30.0       # Stack started but no Pika data → failed.
   status_poll_sec: 2.0

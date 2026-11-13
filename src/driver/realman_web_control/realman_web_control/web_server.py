@@ -50,7 +50,7 @@ class WebServerConfig:
     docker_restart_service: str = ""
     # Host-side pika_process_helper starts/stops the Pika stack; empty URL hides the switch.
     pika_helper_url: str = ""
-    pika_helper_timeout_sec: float = 25.0
+    pika_helper_timeout_sec: float = 40.0
     pika_input_fresh_ms: float = 500.0
     pika_input_wait_timeout_sec: float = 30.0
     pika_status_poll_sec: float = 2.0
@@ -134,7 +134,7 @@ def load_server_config(path: str | Path) -> WebServerConfig:
     if not isinstance(pika_url, str) or (pika_url and urlsplit(pika_url).scheme not in ("http", "https")):
         raise ValueError("pika_switch.helper_url must be an http(s) URL or empty")
     pika_numbers: dict[str, float] = {}
-    for field, default in (("helper_timeout_sec", 25.0), ("input_fresh_ms", 500.0),
+    for field, default in (("helper_timeout_sec", 40.0), ("input_fresh_ms", 500.0),
                            ("input_wait_timeout_sec", 30.0), ("status_poll_sec", 2.0),
                            ("mode_switch_timeout_sec", 150.0)):
         value = pika.get(field, default)

@@ -182,7 +182,6 @@ def test_calibration_session_cleanup_and_explicit_delete_are_scoped_to_sessions(
 
 
 def _write_config(tmp_path, extra):
-    import yaml
     document = {
         "server": {"bind_host": "127.0.0.1", "port": 8765, "allowed_origins": ["same-origin"]},
         "input_mode": {"discovery_period_sec": 1.0, "web_override_timeout_sec": 5.0},
@@ -222,3 +221,4 @@ def test_repo_config_enables_the_pika_switch():
     root = Path(__file__).resolve().parents[4]
     config = load_server_config(root / "config/ros/realman_web_control.yaml")
     assert config.pika_helper_url == "http://127.0.0.1:8783"
+    assert config.pika_helper_timeout_sec > 28  # helper timeout_sec 20 + stop_grace_sec 8

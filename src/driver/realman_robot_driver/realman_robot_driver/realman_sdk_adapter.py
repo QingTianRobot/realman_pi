@@ -65,7 +65,6 @@ class RealManSdkAdapter:
         robot_model: str,
         mock_mode: bool,
         arm_id: str = "",
-        soft_reconnect_attempts: int = 3,
     ) -> None:
         self.ip = ip
         self.port = port
@@ -73,12 +72,6 @@ class RealManSdkAdapter:
         self.robot_model = robot_model
         self.mock_mode = mock_mode
         self.arm_id = arm_id
-        # After a lost connection the SDK handle is first recreated in place:
-        # rm_destroy() tears down the SDK's global state, which is the last
-        # resort rather than the first. Only after this many consecutive
-        # in-place failures does connect() fall back to a full SDK reset.
-        self.soft_reconnect_attempts = max(0, int(soft_reconnect_attempts))
-        self._soft_reconnect_failures = 0
         self._lock = threading.RLock()
         self._state_condition = threading.Condition(self._lock)
         self._lifecycle_lock = threading.RLock()
@@ -121,7 +114,15 @@ class RealManSdkAdapter:
             return self._last_error_message
 
     def connect(self) -> int:
-        """Connect without issuing motion; return the vendor-style status code."""
+        """Connect without issuing motion; return the vendor-style status code.
+
+        The RoboticArm object (and with it the SDK's process-global rm_init()
+        state) is created once and kept for the life of the adapter. Every
+        connect after that, including retries after a failed or lost
+        connection, only replaces this arm's handle on that object. The SDK's
+        rm_destroy() is process-global and after it rm_create_robot_arm() keeps
+        returning id -1 until the process restarts, so only shutdown() calls it.
+        """
         # Hold the lifecycle gate over the complete create operation. This makes
         # concurrent connects share one handle and prevents disconnect from
         # detaching a robot while create is still in progress.
@@ -129,19 +130,10 @@ class RealManSdkAdapter:
             with self._lock:
                 if self._connected and not self._disconnecting:
                     return 0
-                has_stale_robot = self._robot is not None
-            if (
-                has_stale_robot
-                and not self.mock_mode
-                and self._soft_reconnect_failures < self.soft_reconnect_attempts
-            ):
-                return self._recreate_handle_locked()
-            if has_stale_robot:
-                self._soft_reconnect_failures = 0
-                teardown_status = self._disconnect_locked()
-                if teardown_status != 0:
-                    return teardown_status
+                has_robot = self._robot is not None
             if self.mock_mode:
+                if has_robot:
+                    self._disconnect_locked(destroy=False)
                 with self._lock:
                     self._generation += 1
                     self._disconnecting = False
@@ -151,6 +143,8 @@ class RealManSdkAdapter:
                     self._mock_trajectory_reads_remaining = 0
                     self._set_success_locked()
                     return 0
+            if has_robot:
+                return self._recreate_handle_locked()
 
             try:
                 from Robotic_Arm.rm_robot_interface import RoboticArm, rm_thread_mode_e
@@ -160,75 +154,29 @@ class RealManSdkAdapter:
                     self._set_failure_locked(-100, "Robotic_Arm Python SDK is not installed")
                 return -100
 
-            with self._lock:
-                self._generation += 1
-                generation = self._generation
-                self._disconnecting = False
-                self._destroying = False
-                self._connected = False
-                self._event_callback = None
-                self._vendor_event_callback = None
-                self._pending_event_callback = None
-                self._pending_event_callback_marker = None
-            robot: Any | None = None
             try:
                 mode = getattr(rm_thread_mode_e, self.thread_mode)
                 robot = RoboticArm(mode)
-                handle = robot.rm_create_robot_arm(self.ip, self.port)
-                connected = _is_valid_handle(handle)
-                if not connected:
-                    # A create call may return an object even when the API2
-                    # handle is invalid. Release that native object before
-                    # exposing the failed connection to any later call.
-                    try:
-                        if handle is not None:
-                            robot.rm_delete_robot_arm()
-                    except Exception:
-                        pass
-                    try:
-                        robot.rm_destroy()
-                    except Exception:
-                        pass
-                    with self._lock:
-                        if self._generation == generation:
-                            self._robot = None
-                            self._handle = None
-                            self._connected = False
-                            self._set_failure_locked(
-                                -1, "SDK returned an invalid robot handle"
-                            )
-                    return -1
-                with self._lock:
-                    # The lifecycle lock guarantees no disconnect can supersede
-                    # this create operation.
-                    self._robot = robot
-                    self._handle = handle
-                    self._connected = connected
-                    if connected:
-                        self._set_success_locked()
-                    else:
-                        self._set_failure_locked(-1, "SDK returned an invalid robot handle")
-                    return self._last_error
             except Exception as error:
-                if robot is not None:
-                    try:
-                        robot.rm_destroy()
-                    except Exception:
-                        pass
                 with self._lock:
-                    if self._generation == generation:
-                        self._robot = None
-                        self._handle = None
-                        self._connected = False
-                        self._set_failure_locked(-1, str(error))
+                    self._generation += 1
+                    self._robot = None
+                    self._handle = None
+                    self._connected = False
+                    self._set_failure_locked(-1, str(error))
                 return -1
+            with self._lock:
+                self._robot = robot
+                self._handle = None
+            return self._recreate_handle_locked()
 
     def _recreate_handle_locked(self) -> int:
-        """Replace a lost handle on the existing SDK object; caller holds the lifecycle lock.
+        """Replace this arm's handle on the kept SDK object; caller holds the lifecycle lock.
 
-        Unlike _disconnect_locked() this never calls rm_destroy(), so the SDK's
-        global state survives and a controller that is reachable again can be
-        reconnected. A failed attempt keeps the robot object for the next try.
+        The previous handle, if any, is deleted first. A failed create keeps the
+        RoboticArm object so the next retry starts from the same SDK state; an
+        invalid (id -1) handle is never registered in the SDK, so it is dropped
+        rather than handed back to rm_delete_robot_arm().
         """
         with self._lock:
             robot = self._robot
@@ -241,7 +189,7 @@ class RealManSdkAdapter:
                 self._state_condition.wait()
             self._destroying = True
         try:
-            if handle is not None:
+            if _is_valid_handle(handle):
                 robot.rm_delete_robot_arm()
         except Exception:
             pass
@@ -263,63 +211,43 @@ class RealManSdkAdapter:
             if valid:
                 self._handle = new_handle
                 self._connected = True
-                self._soft_reconnect_failures = 0
                 self._set_success_locked()
                 return 0
             self._handle = None
             self._connected = False
-            self._soft_reconnect_failures += 1
             self._set_failure_locked(-1, failure_message)
             return -1
 
     def disconnect(self) -> int:
-        """Release the SDK handle and all SDK connections."""
+        """Release this arm's SDK handle; the SDK itself stays up for a reconnect."""
         with self._lifecycle_lock:
-            self._soft_reconnect_failures = 0
-            return self._disconnect_locked()
+            return self._disconnect_locked(destroy=False)
+
+    def shutdown(self) -> int:
+        """Release the handle and tear the SDK down with rm_destroy().
+
+        rm_destroy() closes every connection the process holds and leaves the
+        SDK unable to create handles again, so call this only when the driver
+        process is exiting.
+        """
+        with self._lifecycle_lock:
+            return self._disconnect_locked(destroy=True)
 
     def reconnect(self) -> int:
-        """Recreate the SDK handle without destroying the RoboticArm object.
+        """Recreate this arm's SDK handle in place (event-channel recovery).
 
-        rm_destroy() tears down the SDK global state so the next
-        rm_create_robot_arm() returns an invalid handle (id=-1). A recovery
-        reconnect must therefore delete only the handle and recreate it on
-        the same object.
+        A failed attempt leaves the arm disconnected with the RoboticArm object
+        kept, so the periodic connect() retry continues from the same SDK state.
         """
         with self._lifecycle_lock:
             with self._lock:
-                robot = self._robot
-                handle = self._handle
-                if robot is None:
-                    return self.connect()
-                self._connected = False
-                self._disconnecting = True
-            try:
-                if handle is not None:
-                    robot.rm_delete_robot_arm()
-            except Exception:
-                pass
-            new_handle = robot.rm_create_robot_arm(self.ip, self.port)
-            if not _is_valid_handle(new_handle):
-                with self._lock:
-                    self._robot = None
-                    self._handle = None
-                    self._connected = False
-                    self._disconnecting = False
-                    self._set_failure_locked(
-                        -1, "SDK returned an invalid robot handle on reconnect"
-                    )
-                return -1
-            with self._lock:
-                self._handle = new_handle
-                self._connected = True
-                self._disconnecting = False
-                self._generation += 1
-                self._set_success_locked()
-            return 0
+                has_robot = self._robot is not None
+            if self.mock_mode or not has_robot:
+                return self.connect()
+            return self._recreate_handle_locked()
 
-    def _disconnect_locked(self) -> int:
-        """Drain calls for the current robot before deleting and destroying it."""
+    def _disconnect_locked(self, *, destroy: bool) -> int:
+        """Drain calls for the current robot, delete its handle and optionally destroy the SDK."""
         with self._lock:
             robot = self._robot
             handle = self._handle
@@ -344,7 +272,7 @@ class RealManSdkAdapter:
 
             # Preemptive stop calls may still enter while this wait is in
             # progress. Once the count reaches zero, close the state gate
-            # before releasing the lock so no new call can race destroy.
+            # before releasing the lock so no new call can race the teardown.
             while self._active_calls:
                 self._state_condition.wait()
             self._destroying = True
@@ -353,17 +281,19 @@ class RealManSdkAdapter:
         destroy_result = 0
         first_error: Exception | None = None
         try:
-            if handle is not None:
+            if _is_valid_handle(handle):
                 delete_result = robot.rm_delete_robot_arm()
         except Exception as error:
             first_error = error
-        try:
-            destroy_result = robot.rm_destroy()
-        except Exception as error:
-            first_error = first_error or error
+        if destroy:
+            try:
+                destroy_result = robot.rm_destroy()
+            except Exception as error:
+                first_error = first_error or error
 
         with self._lock:
-            self._robot = None
+            if destroy:
+                self._robot = None
             self._handle = None
             self._event_callback = None
             self._vendor_event_callback = None

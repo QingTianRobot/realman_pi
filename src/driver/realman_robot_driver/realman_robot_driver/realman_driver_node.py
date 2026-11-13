@@ -1378,6 +1378,13 @@ class RealManDriverNode(Node):
                 self.get_logger().error(
                     "RealMan pose lockout cleanup failed after disconnect"
                 )
+        # disconnect() only releases this arm's handle so a running node can
+        # reconnect. The SDK-wide rm_destroy() runs once, as the process exits.
+        shutdown_sdk_status = self.adapter.shutdown()
+        if shutdown_sdk_status != 0:
+            self.get_logger().error(
+                f"RealMan SDK shutdown failed with status {shutdown_sdk_status}"
+            )
         return super().destroy_node()
 
 

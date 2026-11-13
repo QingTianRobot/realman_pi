@@ -575,14 +575,29 @@ def test_disconnect_clears_event_callback_and_reconnect_does_not_retain_it():
     assert adapter._pending_event_callback is None
 
 
-def test_disconnect_attempts_destroy_after_delete_exception_and_clears_callback(
+def test_disconnect_delete_exception_releases_handle_but_keeps_sdk(adapter, fake_robot):
+    callback = lambda event: event
+    adapter._event_callback = callback
+    fake_robot.results["rm_delete_robot_arm"] = RuntimeError("delete failed")
+
+    assert adapter.disconnect() == -1
+    assert ("rm_delete_robot_arm",) in fake_robot.calls
+    # rm_destroy() is process-global and blocks later reconnects.
+    assert ("rm_destroy",) not in fake_robot.calls
+    assert adapter._event_callback is None
+    assert adapter._robot is fake_robot
+    assert adapter._handle is None
+    assert adapter.connected is False
+
+
+def test_shutdown_attempts_destroy_after_delete_exception_and_clears_callback(
     adapter, fake_robot
 ):
     callback = lambda event: event
     adapter._event_callback = callback
     fake_robot.results["rm_delete_robot_arm"] = RuntimeError("delete failed")
 
-    assert adapter.disconnect() == -1
+    assert adapter.shutdown() == -1
     assert ("rm_delete_robot_arm",) in fake_robot.calls
     assert ("rm_destroy",) in fake_robot.calls
     assert adapter._event_callback is None
@@ -601,7 +616,7 @@ def test_disconnect_retains_event_callback_until_destroy_returns(adapter, fake_r
 
     fake_robot.rm_destroy = destroy
 
-    assert adapter.disconnect() == 0
+    assert adapter.shutdown() == 0
     assert adapter._event_callback is None
     assert adapter._pending_event_callback is None
 
@@ -1164,84 +1179,7 @@ def test_connect_after_connection_loss_recreates_handle_without_global_destroy(
     assert adapter.last_error == 0
 
 
-def test_failed_in_place_reconnect_is_retried_in_place_before_a_hard_reset(monkeypatch):
-    UnexpectedReplacementRobot.instances = []
-    _install_connecting_sdk(monkeypatch, UnexpectedReplacementRobot)
-    invalid = SimpleNamespace(id=-1)
-    stale_robot = RecreatableRobot([invalid, invalid, SimpleNamespace(id=19)])
-    adapter = _stale_adapter(stale_robot, soft_reconnect_attempts=3)
-
-    assert adapter.connect() == -1
-    assert adapter.connected is False
-    assert adapter._robot is stale_robot
-    assert adapter._handle is None
-    assert adapter.last_error_message == "SDK returned an invalid robot handle"
-
-    assert adapter.connect() == -1
-    assert adapter.connect() == 0
-
-    assert [call[0] for call in stale_robot.calls] == [
-        "rm_delete_robot_arm",
-        "rm_create_robot_arm",
-        "rm_create_robot_arm",
-        "rm_create_robot_arm",
-    ]
-    assert "rm_destroy" not in [call[0] for call in stale_robot.calls]
-    assert adapter._handle.id == 19
-    assert adapter.connected is True
-
-
-def test_persistent_in_place_failure_escalates_to_a_hard_reset(monkeypatch):
-    InvalidHandleRobot.instances = []
-    _install_connecting_sdk(monkeypatch, InvalidHandleRobot)
-    invalid = SimpleNamespace(id=-1)
-    stale_robot = RecreatableRobot([invalid, invalid])
-    adapter = _stale_adapter(stale_robot, soft_reconnect_attempts=2)
-
-    assert adapter.connect() == -1
-    assert adapter.connect() == -1
-    # The in-place budget is spent: the next attempt destroys the SDK and
-    # starts over with a fresh RoboticArm.
-    assert adapter.connect() == -1
-
-    assert [call[0] for call in stale_robot.calls] == [
-        "rm_delete_robot_arm",
-        "rm_create_robot_arm",
-        "rm_create_robot_arm",
-        "rm_destroy",
-    ]
-    assert len(InvalidHandleRobot.instances) == 1
-    assert adapter._robot is None
-
-
-def test_connect_aborts_when_stale_robot_teardown_fails(monkeypatch):
-    UnexpectedReplacementRobot.instances = []
-    _install_connecting_sdk(monkeypatch, UnexpectedReplacementRobot)
-    adapter = RealManSdkAdapter(
-        ip="192.0.2.123",
-        port=8080,
-        thread_mode="RM_TRIPLE_MODE_E",
-        robot_model="RM65-B",
-        mock_mode=False,
-        soft_reconnect_attempts=0,
-    )
-    stale_robot = FakeRobot()
-    stale_robot.results["rm_destroy"] = 71
-    adapter._robot = stale_robot
-    adapter._handle = SimpleNamespace(id=17)
-
-    assert adapter.connect() == 71
-
-    assert stale_robot.calls == [("rm_delete_robot_arm",), ("rm_destroy",)]
-    assert UnexpectedReplacementRobot.instances == []
-    assert adapter._robot is None
-    assert adapter._handle is None
-    assert adapter.connected is False
-    assert adapter.last_error == 71
-    assert adapter.last_error_message == "SDK disconnect failed"
-
-
-def test_connect_invalid_handle_cleans_up_robot_immediately(monkeypatch):
+def test_connect_invalid_handle_keeps_sdk_object_for_the_next_retry(monkeypatch):
     InvalidHandleRobot.instances = []
     _install_connecting_sdk(monkeypatch, InvalidHandleRobot)
     adapter = RealManSdkAdapter(
@@ -1255,8 +1193,10 @@ def test_connect_invalid_handle_cleans_up_robot_immediately(monkeypatch):
     assert adapter.connect() == -1
 
     robot = InvalidHandleRobot.instances[-1]
-    assert robot.calls == [("create", "192.0.2.123", 8080), ("delete",), ("destroy",)]
-    assert adapter._robot is None
+    # An id -1 handle is never registered in the SDK, and rm_destroy() would
+    # leave every later create invalid, so neither is called.
+    assert robot.calls == [("create", "192.0.2.123", 8080)]
+    assert adapter._robot is robot
     assert adapter._handle is None
     assert adapter.connected is False
     assert adapter.last_error == -1
@@ -1297,11 +1237,12 @@ def test_connect_is_single_handle_and_disconnect_waits_for_blocking_create(monke
     assert connect_results == [0, 0]
     assert disconnect_result == [0]
     assert BlockingCreateRobot.created == 1
-    assert len(BlockingCreateRobot.destroyed) == 1
+    assert BlockingCreateRobot.destroyed == []
+    assert adapter._robot.calls == ["delete"]
     assert adapter.connected is False
 
 
-def test_disconnect_waits_for_blocking_motion_before_destroy(adapter, fake_robot):
+def test_shutdown_waits_for_blocking_motion_before_destroy(adapter, fake_robot):
     entered = threading.Event()
     release = threading.Event()
     destroy_started = threading.Event()
@@ -1322,7 +1263,7 @@ def test_disconnect_waits_for_blocking_motion_before_destroy(adapter, fake_robot
     assert entered.wait(timeout=1.0)
 
     disconnect_result = []
-    disconnector = threading.Thread(target=lambda: disconnect_result.append(adapter.disconnect()))
+    disconnector = threading.Thread(target=lambda: disconnect_result.append(adapter.shutdown()))
     disconnector.start()
     assert disconnector.is_alive()
     assert not destroy_started.wait(timeout=0.2)
@@ -1359,7 +1300,7 @@ def test_stale_motion_result_does_not_pollute_disconnect_or_reconnect(adapter, f
     motion = threading.Thread(target=adapter.movej, args=([0.0] * 6, 20, 0, False))
     motion.start()
     assert entered.wait(timeout=1.0)
-    disconnector = threading.Thread(target=adapter.disconnect)
+    disconnector = threading.Thread(target=adapter.shutdown)
     disconnector.start()
     release.set()
     assert destroy_entered.wait(timeout=1.0)
@@ -1444,7 +1385,7 @@ def test_disconnect_retains_callback_during_post_registration_teardown(
     assert adapter._active_calls == 0
 
     disconnect_result = []
-    disconnector = threading.Thread(target=lambda: disconnect_result.append(adapter.disconnect()))
+    disconnector = threading.Thread(target=lambda: disconnect_result.append(adapter.shutdown()))
     disconnector.start()
     disconnector.join(timeout=2.0)
     assert not disconnector.is_alive()

@@ -248,3 +248,33 @@
 .replay-timeline .quality-source{color:var(--muted)}
 .replay-timeline .quality-remove{margin-left:auto;background:none;border:none;color:var(--muted);cursor:pointer;font-size:14px}
 @media (max-width:720px){.replay-timeline .quality-bar{flex-wrap:wrap}.replay-timeline .quality-status{flex-basis:100%}}
+
+/* Live camera preview: every camera fits inside the panel at once, no scrolling.
+   main.ts picks the column count that gives the largest 16:9 tiles for the panel size. */
+.camera-panel .grid-stack-item-content{overflow:hidden}
+#previews.camera-grid{flex:1;min-height:0;overflow:hidden;grid-template-columns:repeat(var(--camera-columns,1),minmax(0,1fr));grid-template-rows:repeat(var(--camera-rows,1),minmax(0,1fr));align-content:stretch}
+#previews .camera-card{aspect-ratio:auto;min-height:0;height:100%}
+#previews .camera-card img{object-fit:contain;background:#080b12}
+
+/* Pika tracker window beside the three-arm 3D view. */
+.pika-panel .grid-stack-item-content{overflow:hidden}
+.pika-head{display:flex;align-items:center;gap:10px}
+.pika-recenter{background:#101a2a;color:var(--muted);border:1px solid var(--line);border-radius:7px;padding:3px 9px;font:11px inherit;cursor:pointer}
+.pika-recenter:hover{color:var(--text);border-color:var(--blue)}
+.pika-empty{position:absolute;inset:0;display:grid;place-content:center;gap:4px;padding:18px;text-align:center;color:var(--muted);font-size:12px;line-height:1.6;background:#091114d9;pointer-events:none}
+.pika-empty[hidden]{display:none}
+.pika-empty b{color:var(--amber);font-size:13px}
+.pika-empty code{color:var(--text)}
+.pika-cards{display:grid;grid-template-columns:repeat(auto-fit,minmax(150px,1fr));gap:8px;padding:10px 12px 0}
+.pika-card{border:1px solid var(--line);border-left:3px solid var(--pika-color);border-radius:9px;background:var(--surface2);padding:8px 10px;display:flex;flex-direction:column;gap:2px;font:11px/1.45 ui-monospace,Menlo,monospace;color:var(--muted);min-width:0}
+.pika-card h4{display:flex;justify-content:space-between;margin:0 0 3px;font:600 12px Inter,system-ui,sans-serif;color:var(--text)}
+.pika-card h4 span{font:700 10px ui-monospace,Menlo,monospace;color:var(--muted)}
+.pika-card.live h4 span{color:var(--green)}
+.pika-card.stale h4 span{color:var(--amber)}
+.pika-card.no_data h4 span{color:var(--red)}
+.pika-card b{color:var(--text);font-weight:500}
+.pika-card .pika-hint{color:var(--amber);font-family:Inter,system-ui,sans-serif}
+.pika-teleop{font-family:Inter,system-ui,sans-serif}
+.pika-teleop.on{color:var(--green)}
+.pika-panel .viewer{min-height:150px}
+.pika-panel .viewer-footer{gap:10px}

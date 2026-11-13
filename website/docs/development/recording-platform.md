@@ -47,6 +47,25 @@ LeRobot v3 的每个向量 feature 都在 `features.<key>.names` 中声明分量
 此行为参考 [LeRobot Studio 的图表数据模型](https://github.com/ioai-tech/lerobot-studio/blob/main/src/react/components/panels/ChartPanel/chartPanelModel.ts)：保留其 feature metadata 驱动维度命名、任意 observation/action 数值字段进入检视器的做法，但沿用本项目现有 Web 工作台和 `/api/lerobot` 只读 API，不引入 Studio 的 React 应用或额外服务。
 回放页现在用 `<video>` 同步播放导出的 LeRobot 视频（`/api/lerobot/<session>/video/<camera>`，支持 HTTP Range），不再逐帧拉 JPEG；按帧 JPEG endpoint 仍保留，按请求缩放至 640×360、quality 65，只影响 Web 预览传输，不修改 LeRobot 原视频。
 
+## 实时页：Pika 运动 3D 与相机预览
+
+`三臂 3D 姿态` 右侧是 `Pika 运动 3D` 窗口（窄屏时自动换到下一行），只读显示左右两只 Pika 追踪器：
+
+| 数据 | 话题（`config/ros/recording.yaml`） | 说明 |
+| --- | --- | --- |
+| 追踪器位姿 | `pika_pose_topics: [/pika_pose_l, /pika_pose_r]`，`geometry_msgs/PoseStamped` | 主机原生 Pika 栈（tmux `pika`）在追踪器定位后约 125 Hz 发布，与是否遥操作无关 |
+| 遥操作命令 | `pika_command_velocity_topics: [/pika/l/cartesian_velocity, /pika/r/cartesian_velocity]`，`TwistStamped` | 只有该侧 START（双击 Pika 夹爪）后才发布，没有数据是正常状态 |
+
+`pika_sides` 与两个列表逐项对应；全部留空（`[""]`）即关闭该窗口的数据。桥接节点以 best-effort QoS 订阅（可匹配 reliable 或 best-effort 发布端），在 ROS 无关的 `pika_motion.py` 中缓存最新位姿，并随 `web_state_hz` 快照下发 `pika.sides.<l|r>`：
+
+- `state`：`live`（1 s 内有新位姿）、`stale`（曾经收到但超过 1 s 未更新，通常是追踪器丢失定位）、`no_data`（从未收到）；
+- `position_m`、`orientation_xyzw`、`frame_id`、`pose_age_ms`；`speed_mps` 是追踪器位置在 ≥100 ms 窗口内的差分速度，仅在 `live` 时给出；
+- `command_active` 及 `command_linear_mps`/`command_angular_radps`：最近 0.5 s 内收到命令才视为遥操作中。
+
+3D 场景画在追踪器自己的坐标系（页脚显示 `frame_id`），不是机器人 world，因此与三臂场景分开。`live` 一侧显示彩色点、姿态坐标轴与轨迹（蓝=左，橙=右），视角自动跟随；拖动后停止跟随，点 `居中` 恢复。`stale` 一侧保留最后位姿并变暗，卡片写明多久未更新。两侧都没有实时数据时，窗口覆盖空状态提示：从未收到时提示等待的话题并让操作员检查主机 tmux `pika` 与追踪器定位；数据中断时提示"Pika 位姿已停止更新"。
+
+`相机预览` 不再在面板内滚动：所有已配置相机同时铺满面板，前端按面板尺寸选出 16:9 画面最大的行列数（`#previews` 的 `data-camera-layout`，如 `3x1`），画面 `object-fit: contain`。拖大或拖小面板即可整体缩放全部画面。新增窗口后布局缓存键升级为 `recording-layout-v4`，旧的自定义拖拽布局会被重置一次；只保存桌面 12 列布局。
+
 ## 回放与整理（Phase 2）
 
 回放页是只读展示加**整理**操作：整理只改元数据，不删除任何原始文件。所有端点都挂在 `:8770`（默认只绑定回环地址，无认证），`session_id` 先解析到录制根目录下并拒绝目录穿越。
@@ -133,6 +152,7 @@ session manifest、相机 `media-index.json` 和 LeRobot `lerobot-v3.json` recei
 - `cartesian_command_frames` 必须与上游 `TwistStamped.header.frame_id` 一致；当前三臂控制器使用
   `l/m/r/work/cell`，若控制器切换 base/tool frame，必须同步修改配置，导出器会拒绝混用；
 - `preview_*` 是 Web 独立预览限制，`preview_enabled=true` 才启动低清 JPEG 重压缩 worker；
+- `pika_sides`、`pika_pose_topics`、`pika_command_velocity_topics` 是 `Pika 运动 3D` 窗口的只读输入，长度须一致（命令列表可为空），不进入录制数据；
 - LeRobot Web 回放已接入；Rerun 离线回放暂缓，不影响实时展示、原始数据录制或 LeRobot 导出。
 
 默认随 `./rm65 up` 一起启动（`realman_recording` 容器）；回放页在 `http://127.0.0.1:8770/`。Compose 将仓库

@@ -137,3 +137,10 @@
     gripper_position_topics: [/gripper_left/position, /gripper_mid/position, /gripper_right/position]
     gripper_torque_topics: [/gripper_left/torque_reached, /gripper_mid/torque_reached, /gripper_right/torque_reached]
     gripper_alarm_topics: [/gripper_left/alarm, /gripper_mid/alarm, /gripper_right/alarm]
+    # Pika tracker poses for the "Pika 运动 3D" window, paired with pika_sides. These
+    # PoseStamped topics come from the host-native Pika stack and exist whenever the
+    # tracker is localized (~125 Hz); the velocity commands are published only while
+    # a side is STARTed (double-click on the Pika gripper), so their absence is normal.
+    pika_sides: [l, r]
+    pika_pose_topics: [/pika_pose_l, /pika_pose_r]
+    pika_command_velocity_topics: [/pika/l/cartesian_velocity, /pika/r/cartesian_velocity]

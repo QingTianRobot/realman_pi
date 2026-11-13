@@ -12,6 +12,7 @@ import { initVideo, type VideoContext } from "./replay/video";
 import { initCharts, renderHealth } from "./replay/charts";
 import { initAnnotation } from "./replay/annotation";
 import { initQuality } from "./replay/quality";
+import { initPikaView, type PikaSnapshot } from "./pika-view";
 
 type ArmId = "l" | "m" | "r";
 type Robot = {
@@ -40,6 +41,7 @@ type Snapshot = {
   }>>;
   preview_cameras: Record<string, number>;
   grippers?: Record<string, Record<string, number | boolean>>;
+  pika?: PikaSnapshot;
 };
 
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector(selector) as T;
@@ -395,6 +397,29 @@ function renderArms(arms: Snapshot["arms"]) {
     .join("");
 }
 
+// Fit every visible camera inside the preview panel: choose the column count whose
+// 16:9 tiles come out largest for the panel's current size, so nothing scrolls.
+const CAMERA_ASPECT = 16 / 9;
+function layoutCameraGrid() {
+  const count = [...previewsEl.querySelectorAll<HTMLElement>(".camera-card")].filter((card) => card.style.display !== "none").length;
+  const box = previewsEl.getBoundingClientRect();
+  if (!count || !box.width || !box.height) return;
+  const gap = 10, padding = 24;
+  let best = { columns: 1, rows: count, area: 0 };
+  for (let columns = 1; columns <= count; columns += 1) {
+    const rows = Math.ceil(count / columns);
+    const cellWidth = (box.width - padding - gap * (columns - 1)) / columns;
+    const cellHeight = (box.height - padding - gap * (rows - 1)) / rows;
+    const width = Math.min(cellWidth, cellHeight * CAMERA_ASPECT);
+    const area = width * (width / CAMERA_ASPECT);
+    if (area > best.area) best = { columns, rows, area };
+  }
+  previewsEl.style.setProperty("--camera-columns", String(best.columns));
+  previewsEl.style.setProperty("--camera-rows", String(best.rows));
+  previewsEl.dataset.cameraLayout = `${best.columns}x${best.rows}`;
+}
+new ResizeObserver(layoutCameraGrid).observe(previewsEl);
+
 const previewTimes: Record<string, number> = {};
 function renderCameras(cameras: Record<string, number>) {
   const names = Object.keys(cameras);
@@ -434,6 +459,7 @@ function renderCameras(cameras: Record<string, number>) {
     const name = (card as HTMLElement).dataset.camera;
     if (name && !names.includes(name)) (card as HTMLElement).style.display = "none";
   });
+  layoutCameraGrid();
 }
 
 function render(payload: Snapshot) {
@@ -443,6 +469,8 @@ function render(payload: Snapshot) {
   $("#remaining").textContent = recording.remaining_sec > 0 ? `${recording.remaining_sec.toFixed(1)}s` : "—";
   $("#dropped").textContent = recording.dropped_samples || 0;
   $("#status-pulse").style.background = recording.state === 2 ? "var(--green)" : recording.state === 7 ? "var(--red)" : "var(--amber)";
+
+  pikaView.render(payload.pika);
 
   // In replay mode the 3D viewer, arm grid and gripper grid show the selected frame,
   // not the live subscription.
@@ -657,6 +685,10 @@ function connect() {
   };
 }
 
+const pikaView = initPikaView(
+  $("#pika-viewer"), $("#pika-cards"), $("#pika-status"), $("#pika-empty"), $<HTMLButtonElement>("#pika-recenter"),
+);
+
 for (const [initialize, status] of [[initScene, viewerState], [initMotionScene, motion3dStatus]] as const) {
   try { initialize(); }
   catch (error) { status.textContent = "3D 视图不可用；状态、相机与转换功能仍可使用"; console.warn("3D initialization failed", error); }
@@ -742,11 +774,14 @@ const grid = GridStack.init(
     float: false,
     animate: true,
     draggable: { handle: ".panel-head" },
+    // Side-by-side panels (3D + Pika) stack into one column on narrow screens.
+    columnOpts: { breakpoints: [{ w: 900, c: 1 }] },
   },
   ".layout.grid-stack"
 );
 
-const LAYOUT_KEY = "recording-layout-v3";
+// v4 adds the Pika window beside the three-arm view and a taller camera panel.
+const LAYOUT_KEY = "recording-layout-v4";
 const savedLayout = localStorage.getItem(LAYOUT_KEY);
 if (savedLayout) {
   try {
@@ -756,6 +791,8 @@ if (savedLayout) {
   }
 }
 grid.on("change", () => {
+  // Only the 12-column desktop arrangement is persisted; the 1-column view is derived.
+  if (grid.getColumn() !== 12) return;
   localStorage.setItem(LAYOUT_KEY, JSON.stringify(grid.save(false)));
 });
 

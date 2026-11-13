@@ -348,3 +348,36 @@ test("live camera preview fits every camera in the panel without scrolling", asy
   expect(overflow.panel).toBeLessThanOrEqual(1);
   expect(overflow.cardsInside).toBe(true);
 });
+
+test("status panels grow to show every arm, motion and gripper card without inner scrolling", async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.routeWebSocket("/ws", (socket) => {
+    const velocity = (frame: string) => ({
+      measured_frame_id: frame, measured_valid: true, measured_age_ms: 10,
+      commanded_linear_velocity_mps: [0.1, 0, 0], commanded_angular_velocity_radps: [0, 0, 0.2],
+      measured_linear_velocity_mps: [0.09, 0, 0], measured_angular_velocity_radps: [0, 0, 0.18],
+    });
+    const snapshot = JSON.stringify({
+      ...baseSnapshot,
+      arms: Object.fromEntries(["l", "m", "r"].map((arm) => [arm, {
+        connected: true, positions_rad: [0.1, 0.2, 0.3, 0.4, 0.5, 0.6], cartesian_velocity: velocity(`${arm}/base_link`),
+      }])),
+      grippers: {
+        "/gripper_left/position": { position: 400 }, "/gripper_mid/position": { position: 0 }, "/gripper_right/position": { position: 3955 },
+      },
+    });
+    socket.send(snapshot);
+    setTimeout(() => socket.send(snapshot), 300);
+  });
+  await page.goto("/");
+  await expect(page.locator("#arms .arm-card")).toHaveCount(3, { timeout: 15_000 });
+  await expect(page.locator("#motion-cards svg")).toHaveCount(6, { timeout: 15_000 });
+  await expect(page.locator("#grippers .gripper-card")).toHaveCount(3, { timeout: 15_000 });
+
+  await expect.poll(async () => page.evaluate(() => [...document.querySelectorAll(".layout .grid-stack-item.fit-content")].map((item) => {
+    const content = item.querySelector(".grid-stack-item-content") as HTMLElement;
+    const used = [...content.children].reduce((sum, child) => sum + (child as HTMLElement).offsetHeight, 0);
+    // No hidden overflow, and at most one 20 px row of slack below the content.
+    return content.scrollHeight <= content.clientHeight + 1 && content.clientHeight - used < 24;
+  })), { timeout: 10_000 }).toEqual([true, true, true]);
+});

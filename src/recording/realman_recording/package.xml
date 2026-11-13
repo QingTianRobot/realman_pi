@@ -16,6 +16,7 @@
   <depend>tf2_msgs</depend>
   <depend>realman_msgs</depend>
   <depend>realman_recording_msgs</depend>
+  <depend>gripper_ros2_msgs</depend>
   <exec_depend>rosbag2_py</exec_depend>
   <exec_depend>python3-aiohttp</exec_depend>
   <exec_depend>python3-yaml</exec_depend>

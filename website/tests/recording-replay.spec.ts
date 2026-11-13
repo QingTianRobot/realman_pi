@@ -381,3 +381,36 @@ test("status panels grow to show every arm, motion and gripper card without inne
     return content.scrollHeight <= content.clientHeight + 1 && content.clientHeight - used < 24;
   })), { timeout: 10_000 }).toEqual([true, true, true]);
 });
+
+test("gripper opening uses the live limits from gripper_manager, not hardcoded ranges", async ({ page }) => {
+  test.setTimeout(30_000);
+  let sendLimits: () => void = () => undefined;
+  await page.routeWebSocket("/ws", (socket) => {
+    const grippers = {
+      "/gripper_left/position": { position: 50 }, "/gripper_mid/position": { position: 4500 }, "/gripper_right/position": { position: 3955 },
+    };
+    socket.send(JSON.stringify({ ...baseSnapshot, grippers }));
+    sendLimits = () => socket.send(JSON.stringify({
+      ...baseSnapshot,
+      grippers,
+      gripper_limits: {
+        gripper_left: { open_position: 50, close_position: 8500, min_position: 0, max_position: 8500 },
+        gripper_mid: { open_position: 0, close_position: 9000, min_position: 0, max_position: 9000 },
+        gripper_right: { open_position: 50, close_position: 8500, min_position: 0, max_position: 8500 },
+      },
+    }));
+  });
+  await page.goto("/");
+
+  // Before any limits arrive: raw position only, no guessed percentage.
+  const right = page.locator('#grippers [data-gripper="gripper_right"]');
+  await expect(right).toContainText("开合度 —", { timeout: 15_000 });
+  await expect(right).toContainText("位置 3955 · 等待 /gripper_right/limits");
+
+  sendLimits();
+  // (8500 - 3955) / (8500 - 50) = 53.8 % open.
+  await expect(right).toContainText("开合度 54%");
+  await expect(right).toContainText("开 50 / 闭 8500");
+  await expect(page.locator('#grippers [data-gripper="gripper_left"]')).toContainText("开合度 100%");
+  await expect(page.locator('#grippers [data-gripper="gripper_mid"]')).toContainText("开合度 50%");
+});

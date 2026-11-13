@@ -17,25 +17,31 @@ SPEC.loader.exec_module(helper)
 CONFIG = {
     "bind_host": "127.0.0.1", "port": 8783, "timeout_sec": 20,
     "start": ["tmux", "new-session", "-d", "-s", "pika", "~/start.sh"],
-    "status": ["tmux", "has-session", "-t", "pika"],
-    "stop": ["tmux", "send-keys", "-t", "pika", "C-c"],
+    "status": ["tmux", "has-session", "-t", "=pika"],
+    "stop": ["tmux", "send-keys", "-t", "=pika", "C-c"],
     "stop_grace_sec": 1,
-    "kill": ["tmux", "kill-session", "-t", "pika"],
+    "kill": ["tmux", "kill-session", "-t", "=pika"],
 }
 
 
 class FakeTmux:
     """Status exit code follows the fake session; send-keys stops it after `stops_after` polls."""
 
-    def __init__(self, running=False, stops_after=0, start_exit=0):
+    def __init__(self, running=False, stops_after=0, start_exit=0, start_races=False,
+                 send_keys_exit=0, kill_survives=False):
         self.running = running
         self.stops_after = stops_after
         self.start_exit = start_exit
+        self.start_races = start_races  # new-session fails but someone else created the session
+        self.send_keys_exit = send_keys_exit
+        self.kill_survives = kill_survives
         self.calls = []
         self.block = None
+        self.first_call = threading.Event()
 
     def __call__(self, command, timeout_sec):
         self.calls.append(list(command))
+        self.first_call.set()
         if self.block is not None:
             self.block.wait(5)
         verb = command[1]
@@ -46,12 +52,18 @@ class FakeTmux:
                 self.stops_after -= 1
             return (0 if self.running else 1), ""
         if verb == "new-session":
+            if self.start_races:
+                self.running = True
+                return 1, "duplicate session: pika"
             if self.start_exit == 0:
                 self.running = True
             return self.start_exit, "" if self.start_exit == 0 else "no server"
         if verb == "kill-session":
-            self.running = False
+            if not self.kill_survives:
+                self.running = False
             return 0, ""
+        if verb == "send-keys":
+            return self.send_keys_exit, "" if self.send_keys_exit == 0 else "can't find pane"
         return 0, ""
 
     def _stop_sent(self):
@@ -74,7 +86,9 @@ class PikaProcessTest(unittest.TestCase):
     def test_repo_config_loads(self):
         config = helper.load_config(ROOT / "config/docker/pika_helper.json")
         self.assertEqual(config["port"], 8783)
-        self.assertEqual(config["status"], ["tmux", "has-session", "-t", "pika"])
+        self.assertEqual(config["status"], ["tmux", "has-session", "-t", "=pika"])
+        self.assertEqual(config["stop"], ["tmux", "send-keys", "-t", "=pika", "C-c"])
+        self.assertEqual(config["kill"], ["tmux", "kill-session", "-t", "=pika"])
 
     def test_load_config_rejects_missing_and_bad_commands(self):
         for broken in ({k: v for k, v in CONFIG.items() if k != "kill"}, {**CONFIG, "start": []},
@@ -99,6 +113,13 @@ class PikaProcessTest(unittest.TestCase):
             make(FakeTmux(start_exit=1)).start()
         self.assertIn("no server", failed.exception.output_tail)
 
+    def test_start_that_loses_a_race_but_ends_running_is_success(self):
+        tmux = FakeTmux(running=False, start_races=True)
+        result = make(tmux).start()
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["exit_code"], 0)
+        self.assertIn("duplicate session: pika", result["output_tail"])
+
     def test_stop_sends_ctrl_c_then_returns_once_session_is_gone(self):
         tmux = FakeTmux(running=True, stops_after=0)
         self.assertTrue(make(tmux).stop()["ok"])
@@ -108,8 +129,18 @@ class PikaProcessTest(unittest.TestCase):
         tmux = FakeTmux(running=True, stops_after=10_000)
         sleep = FakeSleep()
         self.assertTrue(make(tmux, sleep).stop()["ok"])
-        self.assertIn(["tmux", "kill-session", "-t", "pika"], tmux.calls)
+        self.assertIn(["tmux", "kill-session", "-t", "=pika"], tmux.calls)
         self.assertGreaterEqual(sleep.total, CONFIG["stop_grace_sec"])
+
+    def test_stop_with_failed_send_keys_but_session_gone_is_success(self):
+        tmux = FakeTmux(running=True, stops_after=0, send_keys_exit=1)
+        self.assertTrue(make(tmux).stop()["ok"])
+
+    def test_stop_fails_when_session_survives_kill(self):
+        tmux = FakeTmux(running=True, stops_after=10_000, kill_survives=True)
+        with self.assertRaises(helper.ActionFailed) as failed:
+            make(tmux).stop()
+        self.assertIn("pika session still running after kill", failed.exception.output_tail)
 
     def test_stop_when_not_running_is_success(self):
         tmux = FakeTmux(running=False)
@@ -120,14 +151,17 @@ class PikaProcessTest(unittest.TestCase):
         tmux = FakeTmux(running=False)
         tmux.block = threading.Event()
         process = make(tmux)
-        worker = threading.Thread(target=process.start)
+        results = []
+        worker = threading.Thread(target=lambda: results.append(process.start()))
         worker.start()
-        while not tmux.calls:
-            pass
+        self.assertTrue(tmux.first_call.wait(5))
         with self.assertRaises(helper.Busy):
             process.stop()
         tmux.block.set()
         worker.join(5)
+        self.assertFalse(worker.is_alive())
+        self.assertEqual(len(results), 1)
+        self.assertTrue(results[0]["ok"])
 
 
 class HttpTest(unittest.TestCase):

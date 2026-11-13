@@ -12,6 +12,8 @@ Environment=DISPLAY=:0
 ExecStart=/usr/bin/python3 @ROOT@/scripts/pika_process_helper.py --config @ROOT@/config/docker/pika_helper.json
 Restart=on-failure
 RestartSec=3
+# Only kill the helper: the tmux server it forked lives in this cgroup and must keep Pika alive.
+KillMode=process
 
 [Install]
 WantedBy=default.target

@@ -131,6 +131,9 @@ class PikaProcess:
             if self._running():
                 return self._finish(0, "already running")
             exit_code, output = self._run("start")
+            # Judge by the end state: a lost race ("duplicate session") still leaves Pika running.
+            if exit_code != 0 and self._running():
+                exit_code = 0
         except BaseException:
             self._finish_quietly()
             raise
@@ -149,6 +152,12 @@ class PikaProcess:
             if self._running():
                 exit_code, output = self._run("kill")
                 output = f"{output}\nkilled after {self.stop_grace_sec:g} s"
+            # Judge by the end state, not by the last command's exit code.
+            if self._running():
+                exit_code = exit_code or 1
+                output = f"{output}\npika session still running after kill"
+            else:
+                exit_code = 0
         except BaseException:
             self._finish_quietly()
             raise

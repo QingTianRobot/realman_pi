@@ -1,0 +1,10 @@
+{
+  "bind_host": "127.0.0.1",
+  "port": 8783,
+  "timeout_sec": 20,
+  "start": ["tmux", "new-session", "-d", "-s", "pika", "~/pika_teleop_ws/start_pika_bag.sh"],
+  "status": ["tmux", "has-session", "-t", "pika"],
+  "stop": ["tmux", "send-keys", "-t", "pika", "C-c"],
+  "stop_grace_sec": 8,
+  "kill": ["tmux", "kill-session", "-t", "pika"]
+}

@@ -1,0 +1,17 @@
+# Host-side helper behind the :8765 "Pika 速度控制" switch.
+# Installed by `./rm65 pika-helper install` as a systemd --user unit (fills in @ROOT@):
+# the Pika stack needs the desktop user's tmux server and DISPLAY, and no sudo is required.
+# Run `loginctl enable-linger $USER` once so it keeps running without a login session.
+[Unit]
+Description=RealMan Pika process helper for the :8765 Web page
+
+[Service]
+Type=simple
+WorkingDirectory=@ROOT@
+Environment=DISPLAY=:0
+ExecStart=/usr/bin/python3 @ROOT@/scripts/pika_process_helper.py --config @ROOT@/config/docker/pika_helper.json
+Restart=on-failure
+RestartSec=3
+
+[Install]
+WantedBy=default.target

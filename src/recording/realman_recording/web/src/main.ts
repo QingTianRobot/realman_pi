@@ -2,7 +2,7 @@ import * as THREE from "three";
 import { createViewerRenderer, type ViewerRenderer } from "./viewer-renderer";
 import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import URDFLoader from "urdf-loader";
-import { GridStack } from "gridstack";
+import { GridStack, type GridItemHTMLElement } from "gridstack";
 import "gridstack/dist/gridstack.min.css";
 import "./styles.css";
 import { initSidebar } from "./replay/sidebar";
@@ -769,7 +769,9 @@ for (const button of document.querySelectorAll<HTMLButtonElement>(".sidebar-tab"
 const grid = GridStack.init(
   {
     column: 12,
-    cellHeight: 60,
+    // 20 px rows (panel heights in index.html are multiples of 3) so content-fitted
+    // status panels end close to their content.
+    cellHeight: 20,
     margin: 12,
     float: false,
     animate: true,
@@ -780,8 +782,8 @@ const grid = GridStack.init(
   ".layout.grid-stack"
 );
 
-// v4 adds the Pika window beside the three-arm view and a taller camera panel.
-const LAYOUT_KEY = "recording-layout-v4";
+// v5: 20 px rows (v4 used 60 px rows, so its saved heights no longer apply).
+const LAYOUT_KEY = "recording-layout-v5";
 const savedLayout = localStorage.getItem(LAYOUT_KEY);
 if (savedLayout) {
   try {
@@ -790,6 +792,33 @@ if (savedLayout) {
     /* a stale layout is ignored */
   }
 }
+// Status panels (arms, 2D motion, grippers) grow to their content instead of
+// scrolling inside a fixed-height widget: whenever their content or width changes,
+// set the widget height to the rows the content needs.
+function fitPanelHeights() {
+  const cellHeight = grid.getCellHeight(true);
+  const margin = Number(grid.opts.margin ?? 0);
+  for (const item of document.querySelectorAll<GridItemHTMLElement>(".layout .grid-stack-item.fit-content")) {
+    const content = item.querySelector<HTMLElement>(".grid-stack-item-content");
+    if (!content || !content.getClientRects().length) continue;
+    const border = content.offsetHeight - content.clientHeight;
+    const natural = [...content.children].reduce((sum, child) => sum + (child as HTMLElement).offsetHeight, 0) + border;
+    const rows = Math.max(1, Math.ceil((natural + 2 * margin) / cellHeight));
+    if (rows !== item.gridstackNode?.h) grid.update(item, { h: rows, minH: rows, maxH: rows });
+  }
+}
+let fitScheduled = false;
+const scheduleFit = () => {
+  if (fitScheduled) return;
+  fitScheduled = true;
+  requestAnimationFrame(() => { fitScheduled = false; fitPanelHeights(); });
+};
+const fitObserver = new ResizeObserver(scheduleFit);
+for (const content of document.querySelectorAll(".layout .grid-stack-item.fit-content .grid-stack-item-content > *")) {
+  fitObserver.observe(content);
+}
+scheduleFit();
+
 grid.on("change", () => {
   // Only the 12-column desktop arrangement is persisted; the 1-column view is derived.
   if (grid.getColumn() !== 12) return;

@@ -68,6 +68,8 @@ LeRobot v3 的每个向量 feature 都在 `features.<key>.names` 中声明分量
 
 `机械臂状态`、`末端运动 · 2D`、`夹爪状态` 三个状态面板（`index.html` 中带 `fit-content` 类）同样不在面板内滚动：前端用 `ResizeObserver` 监听其内容，内容或宽度变化时把面板高度设为恰好容纳全部卡片的行数，并锁定该高度（这三个面板的高度不能手动拖动，宽度和位置仍可调整）。窄屏单列时卡片纵向排列，面板随之变高，整页向下滚动即可看到。为让面板底部贴近内容，网格行高为 20 px（`index.html` 里的 `gs-h` 是 3 的倍数），布局缓存键为 `recording-layout-v5`，旧的自定义拖拽布局会被重置一次；只保存桌面 12 列布局。
 
+`夹爪状态` 的开合度不再写死行程：桥接节点以 reliable + transient-local QoS 订阅 `gripper_limits_topics`（默认 `/gripper_{left,mid,right}/limits`，`gripper_ros2_msgs/GripperLimits`），这是 `gripper_manager` 当前生效的开/闭位（`gripper.yaml` 加 :8765 写入的覆盖值），快照中以 `gripper_limits.<夹爪名>` 下发。开合度 = `(close_position − 位置) / (close_position − open_position)`，限制在 0–100%；卡片同时显示原始位置与开/闭位。尚未收到某夹爪的限位时只显示原始位置和"等待 /<夹爪>/limits"，不再猜测百分比。回放帧使用同一组当前限位计算。
+
 ## 回放与整理（Phase 2）
 
 回放页是只读展示加**整理**操作：整理只改元数据，不删除任何原始文件。所有端点都挂在 `:8770`（默认只绑定回环地址，无认证），`session_id` 先解析到录制根目录下并拒绝目录穿越。
@@ -153,6 +155,7 @@ session manifest、相机 `media-index.json` 和 LeRobot `lerobot-v3.json` recei
 - `preflight_max_age_sec`、`preflight_valid_sec` 和 `min_free_space_bytes` 是开始录制前的硬性预检阈值；
 - `cartesian_command_frames` 必须与上游 `TwistStamped.header.frame_id` 一致；当前三臂控制器使用
   `l/m/r/work/cell`，若控制器切换 base/tool frame，必须同步修改配置，导出器会拒绝混用；
+- `gripper_limits_topics` 提供 `夹爪状态` 开合度所用的实时开/闭位，留空（`[""]`）时网页只显示原始位置；
 - `preview_*` 是 Web 独立预览限制，`preview_enabled=true` 才启动低清 JPEG 重压缩 worker；
 - `pika_sides`、`pika_pose_topics`、`pika_command_velocity_topics` 是 `Pika 运动 3D` 窗口的只读输入，长度须一致（命令列表可为空），不进入录制数据；
 - LeRobot Web 回放已接入；Rerun 离线回放暂缓，不影响实时展示、原始数据录制或 LeRobot 导出。

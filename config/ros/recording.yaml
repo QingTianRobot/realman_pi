@@ -137,6 +137,8 @@
     gripper_position_topics: [/gripper_left/position, /gripper_mid/position, /gripper_right/position]
     gripper_torque_topics: [/gripper_left/torque_reached, /gripper_mid/torque_reached, /gripper_right/torque_reached]
     gripper_alarm_topics: [/gripper_left/alarm, /gripper_mid/alarm, /gripper_right/alarm]
+    # Effective open/close limits (gripper.yaml + :8765 overrides) for 开合度 on :8770.
+    gripper_limits_topics: [/gripper_left/limits, /gripper_mid/limits, /gripper_right/limits]
     # Pika tracker poses for the "Pika 运动 3D" window, paired with pika_sides. These
     # PoseStamped topics come from the host-native Pika stack and exist whenever the
     # tracker is localized (~125 Hz); the velocity commands are published only while

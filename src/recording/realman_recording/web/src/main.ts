@@ -41,6 +41,7 @@ type Snapshot = {
   }>>;
   preview_cameras: Record<string, number>;
   grippers?: Record<string, Record<string, number | boolean>>;
+  gripper_limits?: Record<string, GripperLimits>;
   pika?: PikaSnapshot;
 };
 
@@ -495,33 +496,41 @@ function renderLiveRobot(payload: Snapshot) {
   renderArms(arms);
   (Object.keys(arms) as ArmId[]).forEach((arm) => updateMotion(arm, arms[arm]?.cartesian_velocity));
   renderMotionCards();
-  renderGrippers(payload.grippers ?? {});
+  renderGrippers(payload.grippers ?? {}, payload.gripper_limits);
   renderCameras(payload.preview_cameras ?? {});
 }
 
-// Changingtek gripper open/close positions (device units) from config/ros/gripper.yaml.
-const GRIPPER_RANGE: Record<string, { open: number; close: number }> = {
-  right: { open: 4000, close: 12000 },
-  left: { open: 400, close: 949 },
-  mid: { open: 0, close: 9000 },
-};
+// 开合度 uses each gripper's effective limits from gripper_manager (/<gripper>/limits,
+// gripper.yaml plus :8765 overrides), sent in the snapshot as gripper_limits.
+// Without them the card shows the raw position only, never a guessed percentage.
+type GripperLimits = { open_position: number; close_position: number; min_position: number; max_position: number };
+let gripperLimits: Record<string, GripperLimits> = {};
 
-function gripperOpeningPercent(name: string, value: number): number {
-  const range = GRIPPER_RANGE[name.replace("gripper_", "")];
-  if (!range) return 0;
-  const span = range.close - range.open;
-  if (span <= 0) return 0;
-  const opening = Math.min(1, Math.max(0, (range.close - value) / span));
+// Live topics give "gripper_left"; replay frames give "left".
+const gripperKey = (name: string) => (name.startsWith("gripper_") ? name : `gripper_${name}`);
+
+function gripperOpeningPercent(name: string, value: number): number | null {
+  const limits = gripperLimits[gripperKey(name)];
+  if (!limits) return null;
+  const span = limits.close_position - limits.open_position;
+  if (!span) return null;
+  const opening = Math.min(1, Math.max(0, (limits.close_position - value) / span));
   return Math.round(opening * 100);
 }
 
 function gripperBar(name: string, value: number): string {
   const label = name.replace("gripper_", "");
   const pct = gripperOpeningPercent(name, value);
-  return `<article class="gripper-card"><h4>${label}</h4><div style="margin-bottom:8px;font:11px ui-monospace,Menlo,monospace;color:#8793a8">开合度 ${pct}%</div><div style="height:8px;background:#0b0f17;border:1px solid #202c40;border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct}%;background:linear-gradient(90deg,#55a6ff,#67d391);transition:width .2s"></div></div></article>`;
+  const key = gripperKey(name);
+  const limits = gripperLimits[key];
+  const meta = limits
+    ? `位置 ${value} · 开 ${limits.open_position} / 闭 ${limits.close_position}`
+    : `位置 ${value} · 等待 /${key}/limits`;
+  return `<article class="gripper-card" data-gripper="${key}"><h4>${label}</h4><div class="gripper-pct" style="margin-bottom:4px;font:11px ui-monospace,Menlo,monospace;color:#8793a8">开合度 ${pct === null ? "—" : `${pct}%`}</div><div class="gripper-meta" style="margin-bottom:8px;font:10px ui-monospace,Menlo,monospace;color:#64738a">${meta}</div><div style="height:8px;background:#0b0f17;border:1px solid #202c40;border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct ?? 0}%;background:linear-gradient(90deg,#55a6ff,#67d391);transition:width .2s"></div></div></article>`;
 }
 
-function renderGrippers(grippers: NonNullable<Snapshot["grippers"]>) {
+function renderGrippers(grippers: NonNullable<Snapshot["grippers"]>, limits: Snapshot["gripper_limits"]) {
+  gripperLimits = limits ?? {};
   const entries = Object.entries(grippers);
   if (!entries.length) return;
   const positionTopics = entries.filter(([topic]) => topic.endsWith("/position"));

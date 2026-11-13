@@ -20,9 +20,11 @@ from rclpy.clock import Clock, ClockType
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
 from geometry_msgs.msg import PoseStamped, TwistStamped
-from rclpy.qos import qos_profile_sensor_data
+from rclpy.qos import QoSDurabilityPolicy, QoSProfile, QoSReliabilityPolicy, qos_profile_sensor_data
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Bool, Float64, Int32, String
+
+from gripper_ros2_msgs.msg import GripperLimits
 
 from realman_msgs.msg import CartesianVelocityState
 from realman_recording_msgs.msg import RecordingStatus
@@ -67,6 +69,10 @@ class RecordingWebBridgeNode(Node):
         self.declare_parameter("gripper_position_topics", [""])
         self.declare_parameter("gripper_torque_topics", [""])
         self.declare_parameter("gripper_alarm_topics", [""])
+        # gripper_manager publishes each gripper's effective open/close limits
+        # (gripper.yaml plus :8765 overrides) latched on /<gripper>/limits; the
+        # dashboard's 开合度 is computed from these, never from hardcoded values.
+        self.declare_parameter("gripper_limits_topics", [""])
         # Pika tracker poses (PoseStamped) and the teleop velocity command
         # (TwistStamped, published only while a side is STARTed), shown read-only.
         self.declare_parameter("pika_sides", [""])
@@ -94,6 +100,7 @@ class RecordingWebBridgeNode(Node):
         self._coordinates: dict[str, dict[str, Any]] = {}
         self._cartesian_velocity: dict[str, dict[str, Any]] = {}
         self._gripper: dict[str, dict[str, float | bool | int]] = {}
+        self._gripper_limits: dict[str, dict[str, int]] = {}
         self._recording_status: dict[str, Any] = {
             "state": "IDLE",
             "diagnostics_json": "{}",
@@ -292,6 +299,29 @@ class RecordingWebBridgeNode(Node):
                 10, callback_group=self._callback_group,
             )
 
+        latched = QoSProfile(
+            depth=1,
+            reliability=QoSReliabilityPolicy.RELIABLE,
+            durability=QoSDurabilityPolicy.TRANSIENT_LOCAL,
+        )
+        for topic in self.get_parameter("gripper_limits_topics").value:
+            if not str(topic):
+                continue
+            self.create_subscription(
+                GripperLimits, str(topic), lambda message, selected=str(topic): self._gripper_limits_message(selected, message),
+                latched, callback_group=self._callback_group,
+            )
+
+    def _gripper_limits_message(self, topic: str, message: GripperLimits) -> None:
+        """Cache limits under the gripper name, e.g. /gripper_left/limits -> gripper_left."""
+        name = topic.strip("/").split("/", 1)[0]
+        self._gripper_limits[name] = {
+            "open_position": int(message.open_position),
+            "close_position": int(message.close_position),
+            "min_position": int(message.min_position),
+            "max_position": int(message.max_position),
+        }
+
     def _register_pika_subscriptions(self) -> None:
         """Subscribe best-effort so either a reliable or best-effort Pika publisher matches."""
         for side, (pose_topic, command_topic) in self._pika.sides.items():
@@ -398,6 +428,7 @@ class RecordingWebBridgeNode(Node):
                     for arm in self._arms
                 },
                 "grippers": self._gripper,
+                "gripper_limits": self._gripper_limits,
                 "preview_cameras": preview_cameras,
                 "pika": self._pika.snapshot(time.monotonic_ns()),
             }

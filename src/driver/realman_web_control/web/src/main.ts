@@ -403,6 +403,8 @@ const gripperStates: Record<string, any> = {};
 // Static gripper config (open/close endpoints in device units) from the gripper_list event.
 const gripperConfigs: Record<string, any> = {};
 const gripperModels: Partial<Record<ArmId, any>> = {};
+// Translucent copy of each gripper on the target shadow; mirrors the live gripper opening.
+const shadowGripperModels: Partial<Record<ArmId, any>> = {};
 let selectedGripper = "";
 // Unapplied edits in the travel-limit inputs must survive gripper_list broadcasts.
 let gripperLimitsDirty = false;
@@ -1380,13 +1382,15 @@ async function loadFleet() {
   const loader = new URDFLoader();
   loader.packages = { rm65_description: `${location.origin}/models` };
   for (const arm of Object.keys(gripperModels) as ArmId[]) delete gripperModels[arm];
+  for (const arm of Object.keys(shadowGripperModels) as ArmId[]) delete shadowGripperModels[arm];
   try {
     const snapshots = await Promise.all(manifest!.robots.map(async (config) => {
       const live = await loader.loadAsync(`${location.origin}${config.urdf_url}`);
       const shadow = await loader.loadAsync(`${location.origin}${config.urdf_url}`);
       const mount = manifest!.end_effectors?.[config.id];
       const gripper = mount ? await loader.loadAsync(`${location.origin}${mount.urdf_url}`) : null;
-      return { config, live, shadow, mount, gripper };
+      const shadowGripper = mount ? await loader.loadAsync(`${location.origin}${mount.urdf_url}`) : null;
+      return { config, live, shadow, mount, gripper, shadowGripper };
     }));
     if (generation !== loadGeneration) return;
     if (!scene) throw new Error("WebGL scene was not initialized");
@@ -1424,7 +1428,7 @@ async function loadFleet() {
     } else {
       delete viewer.dataset.pedestal;
     }
-    snapshots.forEach(({ config, live, shadow, mount, gripper }) => {
+    snapshots.forEach(({ config, live, shadow, mount, gripper, shadowGripper }) => {
       // Center the visualization on m without mutating calibrated TF/world coordinates.
       live.position.set(
         config.transform.x - middleTransform.x,
@@ -1438,23 +1442,26 @@ async function loadFleet() {
         config.transform.z - middleTransform.z,
       );
       shadow.rotation.set(config.transform.roll, config.transform.pitch, config.transform.yaw, "ZYX");
-      // The gripper is a child of the flange link, so it follows the live arm; the target shadow stays bare.
-      const parent = mount && gripper ? live.links?.[mount.parent_link] : null;
-      if (mount && gripper && parent) {
-        gripper.position.set(...mount.xyz);
-        gripper.rotation.set(mount.rpy[0], mount.rpy[1], mount.rpy[2], "ZYX");
-        parent.add(gripper);
-        gripperModels[config.id] = gripper;
+      // Each gripper is a child of its flange link, so one follows the live arm and one the target shadow.
+      const mountGripper = (model: any, arm: any, models: Partial<Record<ArmId, any>>) => {
+        const parent = mount && model ? arm.links?.[mount.parent_link] : null;
+        if (!mount || !model || !parent) return;
+        model.position.set(...mount.xyz);
+        model.rotation.set(mount.rpy[0], mount.rpy[1], mount.rpy[2], "ZYX");
+        parent.add(model);
+        models[config.id] = model;
         // Start fully open until the first position feedback arrives.
-        gripper.setJointValue(mount.driving_joint, mount.open_rad);
-      }
+        model.setJointValue(mount.driving_joint, mount.open_rad);
+      };
+      mountGripper(gripper, live, gripperModels);
+      mountGripper(shadowGripper, shadow, shadowGripperModels);
       scene.add(live);
       scene.add(shadow);
       robotScenes[config.id] = { live, shadow };
       allMeshes.push(live, shadow);
     });
     await waitForMeshes(allMeshes);
-    await waitForMeshes(Object.values(gripperModels), 9);
+    await waitForMeshes([...Object.values(gripperModels), ...Object.values(shadowGripperModels)], 9);
     snapshots.forEach(({ config, live, shadow }) => {
       applyMaterials(live, false, config.id);
       applyGripperMaterial(gripperModels[config.id]);
@@ -1470,6 +1477,7 @@ async function loadFleet() {
     viewer.dataset.liveMeshes = String(snapshots.reduce((count, { live }) => count + meshCount(live), 0));
     viewer.dataset.shadowMeshes = String(snapshots.reduce((count, { shadow }) => count + meshCount(shadow), 0));
     viewer.dataset.gripperMeshes = String(Object.values(gripperModels).reduce((count, model) => count + meshCount(model), 0));
+    viewer.dataset.shadowGripperMeshes = String(Object.values(shadowGripperModels).reduce((count, model) => count + meshCount(model), 0));
     updateGripperModels();
     viewer.dataset.visualizationReferenceArm = "m";
     viewerState.setAttribute("hidden", "");
@@ -1627,7 +1635,13 @@ function updateGripperModels() {
     if (!model || !mount) continue;
     const opening = gripperOpening(mount.gripper_name);
     if (opening === null) continue;
-    model.setJointValue(mount.driving_joint, mount.closed_rad + (mount.open_rad - mount.closed_rad) * opening);
+    const angle = mount.closed_rad + (mount.open_rad - mount.closed_rad) * opening;
+    model.setJointValue(mount.driving_joint, angle);
+    const shadowModel = shadowGripperModels[arm];
+    if (shadowModel) {
+      shadowModel.setJointValue(mount.driving_joint, angle);
+      viewer.dataset[`shadowGripper${arm.toUpperCase()}`] = opening.toFixed(2);
+    }
     viewer.dataset[`gripper${arm.toUpperCase()}`] = opening.toFixed(2);
   }
 }

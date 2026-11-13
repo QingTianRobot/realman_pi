@@ -1596,6 +1596,8 @@ test("mounts a gripper on every arm and follows live gripper position feedback",
   const viewer = page.locator("#viewer");
   // 3 grippers x 9 meshes are loaded, attached to the flange links, before the scene is ready.
   await expect(viewer).toHaveAttribute("data-gripper-meshes", "27", { timeout: 30_000 });
+  // The target shadow carries its own translucent copy of each gripper.
+  await expect(viewer).toHaveAttribute("data-shadow-gripper-meshes", "27");
 
   await emitWebSocketEvent(page, {
     type: "gripper_list",
@@ -1612,11 +1614,15 @@ test("mounts a gripper on every arm and follows live gripper position feedback",
   await expect(viewer).toHaveAttribute("data-gripper-l", "0.50");
   await expect(viewer).toHaveAttribute("data-gripper-m", "0.00");
   await expect(viewer).toHaveAttribute("data-gripper-r", "1.00");
+  // The shadow gripper mirrors the live opening.
+  await expect(viewer).toHaveAttribute("data-shadow-gripper-l", "0.50");
+  await expect(viewer).toHaveAttribute("data-shadow-gripper-r", "1.00");
   await expect(page.locator("#gripper-feedback")).toContainText("开合 50%");
 
   // Live updates keep moving the model.
   await emitWebSocketEvent(page, { type: "gripper_state", name: "gripper_left", connected: true, position: 949, speed: 0, current: 0, torque_reached: false, alarm: 0 });
   await expect(viewer).toHaveAttribute("data-gripper-l", "0.00");
+  await expect(viewer).toHaveAttribute("data-shadow-gripper-l", "0.00");
 });
 
 test("gripper travel limits are edited, confirmed and applied from the web panel", async ({ page }) => {

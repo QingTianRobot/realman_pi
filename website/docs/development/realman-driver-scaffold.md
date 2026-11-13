@@ -104,19 +104,30 @@ SDK 适配器保留厂商返回码。SDK 未安装且关闭 mock 时，连接返
 
 ```mermaid
 flowchart TD
-  L["通信错误 -1/-2 或 SDK 异常<br/>connected=false"] --> T["每 reconnect_interval（5 s）重试"]
-  T --> S["原对象上只重建句柄<br/>不调用 rm_destroy"]
+  C0["首次连接失败（臂后上电）<br/>或通信错误 -1/-2 / SDK 异常<br/>connected=false"] --> T["每 reconnect_interval（5 s）重试"]
+  T --> S["同一个 RoboticArm 对象上<br/>删除旧句柄 → 重建句柄<br/>不调用 rm_destroy"]
+  S -- "无效句柄 id=-1 / socket 错误" --> T
   S -- 成功 --> V["重新回读并校验坐标"]
-  S -- 连续失败 3 次 --> F["rm_destroy + 全新对象完整重置"]
-  F --> V
   V -- 匹配/修复成功 --> OK["开放 motion gate"]
   V -- 读写失败或回读不符 --> BLK["motion gate 关闭<br/>仅 MOVEJ 可用"]
 ```
 
-断线后的重连先在原 `RoboticArm` 对象上只删除并重建句柄，不调用 `rm_destroy()`（它会销毁 SDK
-全局状态，之后建连可能一直返回无效句柄，只能重启容器才能恢复）。连续原地重建失败 3 次后才升级为
-`rm_destroy()` 加全新对象的完整重置；任一次成功即清零计数。适配器参数 `soft_reconnect_attempts`
-控制该次数，`0` 表示每次都做完整重置。
+#### 进程内重连：不调用 `rm_destroy()`
+
+每个臂的驱动是独立进程，`RealManSdkAdapter` 在第一次连接时创建一个 `RoboticArm(mode)`（SDK 在此执行进程级
+`rm_init()`），之后整个进程生命周期都保留这个对象。首次连接失败、断线、`/disconnect` 服务、回调注册失败、
+状态读取异常以及事件通道恢复，都只做两件事：用 `rm_delete_robot_arm()` 释放本臂的旧句柄（仅当旧句柄 id 有效；
+`id=-1` 的无效句柄从未在 SDK 中登记，直接丢弃），再在同一对象上调用 `rm_create_robot_arm()`。失败时对象保留，
+下一次重试继续在同一个 SDK 状态上重建，臂恢复应答后的第一次重试就会连上，不需要重启容器。
+
+`rm_destroy()` 是类方法，会关闭本进程的全部连接并销毁 SDK 线程；之后即使重新 `RoboticArm(mode)`，
+`rm_create_robot_arm()` 也会一直返回 `id=-1`（日志表现为每 5 s 一次
+`RealMan connection failed with API2 status -1: SDK returned an invalid robot handle`），只能重启进程。
+2026-11-13 m/r 臂在晚上电和示教器清除 4116 错误后都卡在这一状态，就是旧实现在首次失败和连续三次原地失败后
+调用了它。现在只有 `adapter.shutdown()` 调用 `rm_destroy()`，且只在 `destroy_node()` 退出进程时执行。
+重连只涉及本臂自己的句柄，不影响其他臂和夹爪。测试见
+`src/driver/realman_robot_driver/test/test_sdk_reconnect.py`：伪 SDK 先返回 N 次无效句柄再返回有效句柄，
+验证驱动在同一进程内恢复。
 
 ### 控制器诊断：`controller_info`
 
@@ -318,7 +329,7 @@ SDK 依赖由根目录 `config/python/realman-sdk-requirements.txt` 锁定为 `R
 `rm_event_callback_ptr`（ctypes 回调指针），不能直接传入普通 Python callable。
 `RealManSdkAdapter` 在硬件模式下负责创建并保留这个桥接指针，把
 `rm_event_push_data_t` 转成 Action 协调器使用的字典；mock 模式仍使用普通 Python
-回调。回调注册失败会保留 API2 状态并关闭连接，驱动随后按 `reconnect_interval` 重试，
+回调。回调注册失败会保留 API2 状态并释放本臂句柄，驱动随后按 `reconnect_interval` 重试，
 不会把未确认的轨迹报告为成功。取消后事件通道进入隔离时，状态定时器也会在后台重复执行
 disconnect、冷却、connect、回调注册和 inactive reconciliation；失败只让当前 arm 保持
 `connected=false` 和运动安全门禁，不会退出驱动节点，也不会影响其他 arm。

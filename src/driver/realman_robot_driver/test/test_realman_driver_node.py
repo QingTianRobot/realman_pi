@@ -95,6 +95,10 @@ class FakeCoordinateAdapter:
         self.calls.append(("disconnect",))
         return 0
 
+    def shutdown(self):
+        self.calls.append(("shutdown",))
+        return 0
+
 
 def _controller_tool(name: str):
     if name == "tcpgrip":
@@ -1000,6 +1004,27 @@ def test_node_source_stops_coordinator_before_adapter_disconnect():
 
     assert calls.index("self.motion_coordinator.shutdown") < calls.index(
         "self.adapter.disconnect"
+    )
+
+
+def test_node_destroys_the_sdk_only_in_destroy_node_after_disconnect():
+    tree = ast.parse(NODE_PATH.read_text(encoding="utf-8"))
+    shutdown_owners = []
+    for function in ast.walk(tree):
+        if not isinstance(function, ast.FunctionDef):
+            continue
+        lines = {}
+        for node in ast.walk(function):
+            if isinstance(node, ast.Call):
+                lines.setdefault(ast.unparse(node.func), node.lineno)
+        if "self.adapter.shutdown" in lines:
+            shutdown_owners.append(function.name)
+            assert lines["self.adapter.disconnect"] < lines["self.adapter.shutdown"]
+    # Every other path only releases the handle, so the arm can reconnect.
+    assert shutdown_owners == ["destroy_node"]
+    assert not any(
+        isinstance(node, ast.Attribute) and node.attr == "rm_destroy"
+        for node in ast.walk(tree)
     )
 
 

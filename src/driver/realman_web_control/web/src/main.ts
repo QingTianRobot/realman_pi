@@ -177,7 +177,7 @@ app.innerHTML = `
     <aside class="controls">
       <section id="input-mode-card" class="panel panel-section input-mode-card" hidden>
         <div class="panel-heading compact"><div><span class="eyebrow">GLOBAL INPUT</span><h2>输入模式</h2></div><span id="input-mode-active" class="mini-state">WAIT</span></div>
-        <div class="input-mode-body"><div class="input-mode-row"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><button id="input-mode-restart" class="button ghost" type="button" title="先切到无输入分支，再切回当前分支，重新开始该分支" disabled>重启此分支</button></div><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div><div id="pika-switch-row" class="pika-switch-row" hidden><span class="pika-switch-label">Pika 速度控制</span><span id="pika-switch-state" class="mini-state">未启动</span><button id="pika-switch" class="button ghost" type="button" title="启动：开启 Pika 并切到 Pika / 速度控制；关闭：先切到无输入，再关闭 Pika">启动 Pika</button></div></div>
+        <div class="input-mode-body"><div class="input-mode-row"><label>当前选择<select id="input-mode-select" aria-label="输入模式"></select></label><button id="input-mode-restart" class="button ghost" type="button" title="先切到无输入分支，再切回当前分支，重新开始该分支" disabled>重启此分支</button></div><div id="input-mode-detail" class="input-mode-detail" aria-live="polite">等待输入模式状态</div><div id="pika-switch-row" class="pika-switch-row" hidden><span class="pika-switch-label">Pika 速度控制</span><span id="pika-switch-state" class="mini-state">未启动</span><button id="pika-switch" class="button ghost" type="button" title="启动：开启 Pika 并切到 Pika / 速度控制；关闭：先切到无输入，再关闭 Pika">启动 Pika</button><span id="pika-switch-notice" class="pika-switch-notice" role="status" hidden></span></div></div>
       </section>
       <section id="bt-panel" class="panel panel-section bt-panel" aria-label="行为树" hidden>
         <div class="panel-heading compact"><div><span class="eyebrow">BEHAVIOR TREE</span><h2>行为树<span id="bt-dot" class="tab-dot"></span></h2></div><div class="panel-actions"><span id="bt-root-status" class="bt-status bt-idle">未运行</span><button id="bt-stop" class="button danger" type="button" hidden>终止行为树</button><button id="bt-collapse" class="bt-collapse" type="button" aria-expanded="true" aria-controls="bt-body" title="收起">▾</button></div></div>
@@ -319,6 +319,7 @@ const inputModeRestart = $("#input-mode-restart") as HTMLButtonElement;
 const pikaSwitchRow = $("#pika-switch-row") as HTMLElement;
 const pikaSwitchButton = $("#pika-switch") as HTMLButtonElement;
 const pikaSwitchState = $("#pika-switch-state");
+const pikaSwitchNotice = $("#pika-switch-notice") as HTMLElement;
 const keyboardControlCard = $("#keyboard-control-card") as HTMLElement;
 const keyboardControlState = $("#keyboard-control-state");
 const keyboardFrameLegend = $("#keyboard-frame-legend") as HTMLElement;
@@ -416,12 +417,16 @@ let inputModeCatalog: InputModeOption[] | undefined;
 let inputModeState: InputModeState | undefined;
 let inputModeResultDetail = "";
 type PikaSwitchState = {
-  available: boolean; phase: string; stack_running: boolean;
+  available: boolean; helper_reachable: boolean; input_fresh_ms: number; phase: string; stack_running: boolean;
   input_age_ms: { l: number | null; r: number | null }; mode_lost: boolean; detail: string;
 };
 let pikaSwitch: PikaSwitchState | undefined;
 let pikaSwitchRequest = 0;
+let pikaSwitchNoticeTimer = 0;
 const PIKA_TRANSITIONS = new Set(["starting", "waiting_input", "selecting", "stopping"]);
+// 关闭 is allowed during waiting_input and selecting (the entry MoveJ); only the helper calls are busy.
+const PIKA_BUSY = new Set(["starting", "stopping"]);
+const PIKA_NOTICE_MS = 6000;
 let activeInputModeRequest = "";
 let activeInputModeExecutorRequest: number | undefined;
 let pendingInputModeId = "";
@@ -714,7 +719,11 @@ function renderInputModeCard() {
   renderPikaSwitch();
 }
 function pikaSwitchText(state: PikaSwitchState) {
-  const mark = (age: number | null) => (age !== null && age < 500 ? "✓" : "…");
+  const text = pikaSwitchPhaseText(state);
+  return state.helper_reachable ? text : `${text}（helper 不可达）`;
+}
+function pikaSwitchPhaseText(state: PikaSwitchState) {
+  const mark = (age: number | null) => (age !== null && age < state.input_fresh_ms ? "✓" : "…");
   switch (state.phase) {
     case "starting": return "启动中";
     case "waiting_input": return `等待 Pika 数据 l${mark(state.input_age_ms.l)} r${mark(state.input_age_ms.r)}`;
@@ -742,7 +751,20 @@ function renderPikaSwitch() {
   pikaSwitchState.textContent = pikaSwitchText(state);
   pikaSwitchState.className = `mini-state ${pikaSwitchStateClass(state)}`.trim();
   pikaSwitchButton.textContent = pikaSwitchTurnsOn(state) ? "启动 Pika" : "关闭 Pika";
-  pikaSwitchButton.disabled = !canWrite() || PIKA_TRANSITIONS.has(state.phase);
+  pikaSwitchButton.disabled = !canWrite() || PIKA_BUSY.has(state.phase);
+}
+// Refusals of the switch request (e.g. no control tree) stay in the row for a while.
+function showPikaSwitchNotice(text: string) {
+  window.clearTimeout(pikaSwitchNoticeTimer);
+  pikaSwitchNotice.textContent = text;
+  pikaSwitchNotice.hidden = false;
+  pikaSwitchNoticeTimer = window.setTimeout(clearPikaSwitchNotice, PIKA_NOTICE_MS);
+}
+function clearPikaSwitchNotice() {
+  window.clearTimeout(pikaSwitchNoticeTimer);
+  pikaSwitchNoticeTimer = 0;
+  pikaSwitchNotice.textContent = "";
+  pikaSwitchNotice.hidden = true;
 }
 pikaSwitchButton.addEventListener("click", () => {
   if (!pikaSwitch || pikaSwitchButton.disabled) return;
@@ -1803,6 +1825,8 @@ function handleMessage(message: Message) {
   } else if (message.type === "pika_switch_state") {
     pikaSwitch = {
       available: Boolean(message.available),
+      helper_reachable: message.helper_reachable !== false,
+      input_fresh_ms: typeof message.input_fresh_ms === "number" && message.input_fresh_ms > 0 ? message.input_fresh_ms : 500,
       phase: typeof message.phase === "string" ? message.phase : "off",
       stack_running: Boolean(message.stack_running),
       input_age_ms: {
@@ -2117,6 +2141,9 @@ function handleMessage(message: Message) {
     setBtStopStatus(`终止失败：${message.message}`, true);
     renderBtStopButton();
   } else if (message.type === "error") {
+    if (typeof message.request_id === "string" && message.request_id.startsWith("pika-switch-")) {
+      showPikaSwitchNotice(String(message.message ?? message.code ?? ""));
+    }
     if (message.code === "keyboard_lease" || message.code === "keyboard_inactive") {
       keyboardLeaseOwned = false;
       releaseKeyboardInput();
@@ -2170,6 +2197,9 @@ function connect() {
     releaseKeyboardInput();
     setConnection(false);
     clearInputModeRequest();
+    // Nor a Pika switch state; the server sends a fresh one after reconnecting.
+    pikaSwitch = undefined;
+    clearPikaSwitchNotice();
     // Tree states only arrive over this socket; do not keep showing a frozen tree.
     btRuntime = { available: false };
     renderBehaviorTree();

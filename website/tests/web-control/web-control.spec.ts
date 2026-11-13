@@ -1974,9 +1974,21 @@ test("Pika switch starts and stops Pika velocity control", async ({ page }) => {
   await button.click();
   expect((await sent()).at(-1)).toMatchObject({ type: "pika_switch", enabled: true });
 
-  await pika({ phase: "waiting_input", stack_running: true, input_age_ms: { l: 20, r: null } });
+  await pika({ phase: "starting" });
   await expect(button).toBeDisabled();
+
+  // 关闭 is allowed while waiting for data and during the entry MoveJ.
+  await pika({ phase: "waiting_input", stack_running: true, input_age_ms: { l: 20, r: null } });
+  await expect(button).toBeEnabled();
+  await expect(button).toHaveText("关闭 Pika");
   await expect(state).toHaveText("等待 Pika 数据 l✓ r…");
+  await pika({ phase: "selecting", stack_running: true });
+  await expect(button).toBeEnabled();
+  await expect(button).toHaveText("关闭 Pika");
+  await button.click();
+  expect((await sent()).at(-1)).toMatchObject({ type: "pika_switch", enabled: false });
+  await pika({ phase: "stopping", stack_running: true });
+  await expect(button).toBeDisabled();
 
   await pika({ phase: "on", stack_running: true });
   await expect(button).toBeEnabled();
@@ -1988,4 +2000,51 @@ test("Pika switch starts and stops Pika velocity control", async ({ page }) => {
   await pika({ phase: "failed", stack_running: true, detail: "no /pika/r input for 30 s" });
   await expect(state).toHaveText("失败: no /pika/r input for 30 s");
   await expect(button).toHaveText("关闭 Pika");
+});
+
+test("Pika switch row shows refusals, helper reachability and the server freshness threshold", async ({ page }) => {
+  await page.goto("/");
+  const pika = (overrides: Record<string, unknown>) => emitWebSocketEvent(page, {
+    type: "pika_switch_state", available: true, helper_reachable: true, input_fresh_ms: 500, phase: "off",
+    stack_running: false, input_age_ms: { l: null, r: null }, mode_lost: false, detail: "", ...overrides,
+  });
+  const row = page.locator("#pika-switch-row");
+  const state = page.locator("#pika-switch-state");
+  const notice = page.locator("#pika-switch-notice");
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list", available: true,
+    modes: [{ id: "pikavelocity", label: "Pika / 速度控制", selectable: true }, { id: "none", label: "无输入", selectable: true }],
+  });
+
+  await pika({});
+  await page.locator("#pika-switch").click();
+  await emitWebSocketEvent(page, {
+    type: "error", code: "pika_mode_unavailable", request_id: "pika-switch-1",
+    message: "pikavelocity mode is not available; start the control tree first",
+  });
+  await expect(notice).toHaveText("pikavelocity mode is not available; start the control tree first");
+  await expect(state).toHaveText("未启动");
+  // Other requests' errors stay out of the row.
+  await emitWebSocketEvent(page, { type: "error", code: "x", request_id: "motion-1", message: "other" });
+  await expect(notice).toHaveText("pikavelocity mode is not available; start the control tree first");
+  await expect(notice).toBeHidden({ timeout: 8000 });
+
+  await pika({ phase: "on", stack_running: true, helper_reachable: false });
+  await expect(state).toHaveText("运行中（helper 不可达）");
+  await expect(page.locator("#pika-switch")).toBeEnabled();
+
+  await pika({ phase: "waiting_input", stack_running: true, input_fresh_ms: 100, input_age_ms: { l: 50, r: 200 } });
+  await expect(state).toHaveText("等待 Pika 数据 l✓ r…");
+  await emitWebSocketEvent(page, {
+    type: "pika_switch_state", available: true, phase: "waiting_input", stack_running: true,
+    input_age_ms: { l: 50, r: 400 }, mode_lost: false, detail: "",
+  });
+  await expect(state).toHaveText("等待 Pika 数据 l✓ r✓");  // fallback 500 ms
+
+  await page.evaluate(() => {
+    const socket = (window as any).__webSocket;
+    socket.readyState = 3;
+    socket.emit("close", {});
+  });
+  await expect(row).toBeHidden();
 });

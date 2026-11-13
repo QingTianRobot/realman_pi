@@ -256,3 +256,95 @@ test("replay marks deviation intervals on frames and saves them in nanoseconds",
   expect(saved[3].intervals).toEqual([]);
   await expect(page.locator("#quality-track .quality-band")).toHaveCount(0);
 });
+
+const baseSnapshot = {
+  type: "recording_snapshot",
+  recording: { state: 0, detail: "实时观测", elapsed_sec: 0, remaining_sec: 0, dropped_samples: 0 },
+  arms: {},
+  grippers: {},
+  preview_cameras: {},
+};
+const pikaSide = (side: string, extra: Record<string, unknown>) => ({
+  state: "no_data", pose_topic: `/pika_pose_${side}`, frame_id: "", position_m: null, orientation_xyzw: null,
+  pose_age_ms: null, speed_mps: null, command_topic: `/pika/${side}/cartesian_velocity`, command_active: false,
+  command_frame_id: "", command_linear_mps: null, command_angular_radps: null, command_age_ms: null, ...extra,
+});
+
+test("Pika window explains an empty feed and then shows live and stale trackers", async ({ page }) => {
+  test.setTimeout(30_000);
+  let sendLive: () => void = () => undefined;
+  await page.routeWebSocket("/ws", (socket) => {
+    socket.send(JSON.stringify({
+      ...baseSnapshot,
+      pika: { sides: { l: pikaSide("l", {}), r: pikaSide("r", {}) } },
+    }));
+    sendLive = () => socket.send(JSON.stringify({
+      ...baseSnapshot,
+      pika: { sides: {
+        l: pikaSide("l", {
+          state: "live", frame_id: "pika_world", position_m: [0.1, 0.2, 1.0], orientation_xyzw: [0, 0, 0, 1],
+          pose_age_ms: 8, speed_mps: 0.12, command_active: true, command_frame_id: "l/work/pikabase",
+          command_linear_mps: [0.05, 0, 0], command_angular_radps: [0, 0, 0.3], command_age_ms: 20,
+        }),
+        r: pikaSide("r", {
+          state: "stale", frame_id: "pika_world", position_m: [0.4, 0.2, 1.0], orientation_xyzw: [0, 0, 0, 1],
+          pose_age_ms: 3_720_000,
+        }),
+      } },
+    }));
+  });
+  await page.goto("/");
+
+  const viewer = page.locator("#pika-viewer");
+  await expect(viewer).toHaveAttribute("data-pika-state", "no_data", { timeout: 15_000 });
+  await expect(page.locator("#pika-empty")).toBeVisible();
+  await expect(page.locator("#pika-empty")).toContainText("暂无 Pika 位姿数据");
+  await expect(page.locator("#pika-empty")).toContainText("/pika_pose_l");
+  await expect(page.locator("#pika-r")).toContainText("NO DATA");
+
+  sendLive();
+  await expect(viewer).toHaveAttribute("data-pika-state", "partial");
+  await expect(page.locator("#pika-empty")).toBeHidden();
+  await expect(page.locator("#pika-status")).toHaveText("1 / 2 在线");
+  await expect(page.locator("#pika-l")).toContainText("LIVE");
+  await expect(page.locator("#pika-l")).toContainText("遥操作中");
+  await expect(page.locator("#pika-r")).toContainText("STALE");
+  await expect(page.locator("#pika-r")).toContainText("1.0 小时 未更新");
+
+  // Beside the three-arm view on desktop; its own full-width row on a phone.
+  const [pika, arms, layout] = await Promise.all([".pika-panel", ".layout .grid-stack-item:first-child", ".layout.grid-stack"]
+    .map((selector) => page.locator(selector).first().boundingBox()));
+  if (layout!.width > 900) {
+    expect(Math.abs(pika!.y - arms!.y)).toBeLessThan(2);
+    expect(pika!.x).toBeGreaterThan(arms!.x + arms!.width - 2);
+  } else {
+    expect(pika!.width).toBeGreaterThan(layout!.width * 0.9);
+  }
+});
+
+test("live camera preview fits every camera in the panel without scrolling", async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.route(/\/preview\/.*\.jpg/, (route) => route.fulfill({ status: 404, body: "" }));
+  await page.routeWebSocket("/ws", (socket) => {
+    const now = Date.now() * 1e6;
+    socket.send(JSON.stringify({ ...baseSnapshot, preview_cameras: { "orbbec-left": now, "orbbec-right": now, d435: now } }));
+  });
+  await page.goto("/");
+
+  await expect(page.locator("#previews .camera-card")).toHaveCount(3, { timeout: 15_000 });
+  await expect(page.locator("#previews")).toHaveAttribute("data-camera-layout", /^\dx\d$/);
+  const overflow = await page.locator("#previews").evaluate((grid) => {
+    const panel = grid.closest(".grid-stack-item-content") as HTMLElement;
+    return {
+      grid: grid.scrollHeight - grid.clientHeight,
+      panel: panel.scrollHeight - panel.clientHeight,
+      cardsInside: [...grid.querySelectorAll(".camera-card")].every((card) => {
+        const box = card.getBoundingClientRect(), outer = grid.getBoundingClientRect();
+        return box.top >= outer.top - 1 && box.bottom <= outer.bottom + 1 && box.height > 40;
+      }),
+    };
+  });
+  expect(overflow.grid).toBeLessThanOrEqual(1);
+  expect(overflow.panel).toBeLessThanOrEqual(1);
+  expect(overflow.cardsInside).toBe(true);
+});

@@ -19,6 +19,8 @@ from rclpy.callback_groups import ReentrantCallbackGroup
 from rclpy.clock import Clock, ClockType
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
+from geometry_msgs.msg import PoseStamped, TwistStamped
+from rclpy.qos import qos_profile_sensor_data
 from sensor_msgs.msg import Image, JointState
 from std_msgs.msg import Bool, Float64, Int32, String
 
@@ -27,6 +29,7 @@ from realman_recording_msgs.msg import RecordingStatus
 from realman_recording_msgs.srv import ManageRecording
 from .camera_workers import LatestFramePreview, PreviewFrame, downscale_jpeg, image_to_jpeg, load_camera_sources
 from .layout_manifest import build_recording_manifest
+from .pika_motion import PikaMotionCache
 from .quality_events import load_quality_reasons
 from .rerun_adapter import RerunVisualizationAdapter
 from .web_server import RecordingWebServer
@@ -64,6 +67,11 @@ class RecordingWebBridgeNode(Node):
         self.declare_parameter("gripper_position_topics", [""])
         self.declare_parameter("gripper_torque_topics", [""])
         self.declare_parameter("gripper_alarm_topics", [""])
+        # Pika tracker poses (PoseStamped) and the teleop velocity command
+        # (TwistStamped, published only while a side is STARTed), shown read-only.
+        self.declare_parameter("pika_sides", [""])
+        self.declare_parameter("pika_pose_topics", [""])
+        self.declare_parameter("pika_command_velocity_topics", [""])
         self.declare_parameter("static_root", str(package_share / "static"))
         self.declare_parameter("recording_root", "/data/realman-recordings")
         self.declare_parameter("lerobot_export_dir", "/data/realman-recordings/lerobot")
@@ -140,6 +148,12 @@ class RecordingWebBridgeNode(Node):
                     10, callback_group=self._callback_group,
                 )
         self._register_gripper_subscriptions()
+        self._pika = PikaMotionCache(
+            self.get_parameter("pika_sides").value,
+            self.get_parameter("pika_pose_topics").value,
+            self.get_parameter("pika_command_velocity_topics").value,
+        )
+        self._register_pika_subscriptions()
         self.create_subscription(
             RecordingStatus, "recording/status", self._recording_status_message,
             10, callback_group=self._callback_group,
@@ -278,6 +292,39 @@ class RecordingWebBridgeNode(Node):
                 10, callback_group=self._callback_group,
             )
 
+    def _register_pika_subscriptions(self) -> None:
+        """Subscribe best-effort so either a reliable or best-effort Pika publisher matches."""
+        for side, (pose_topic, command_topic) in self._pika.sides.items():
+            self.create_subscription(
+                PoseStamped, pose_topic, lambda message, selected=side: self._pika_pose(selected, message),
+                qos_profile_sensor_data, callback_group=self._callback_group,
+            )
+            if command_topic:
+                self.create_subscription(
+                    TwistStamped, command_topic, lambda message, selected=side: self._pika_command(selected, message),
+                    qos_profile_sensor_data, callback_group=self._callback_group,
+                )
+
+    def _pika_pose(self, side: str, message: PoseStamped) -> None:
+        position, orientation = message.pose.position, message.pose.orientation
+        self._pika.update_pose(
+            side,
+            frame_id=message.header.frame_id,
+            position=(position.x, position.y, position.z),
+            orientation_xyzw=(orientation.x, orientation.y, orientation.z, orientation.w),
+            received_ns=time.monotonic_ns(),
+        )
+
+    def _pika_command(self, side: str, message: TwistStamped) -> None:
+        linear, angular = message.twist.linear, message.twist.angular
+        self._pika.update_command(
+            side,
+            frame_id=message.header.frame_id,
+            linear=(linear.x, linear.y, linear.z),
+            angular=(angular.x, angular.y, angular.z),
+            received_ns=time.monotonic_ns(),
+        )
+
     def _joint_state(self, arm: str, message: JointState) -> None:
         """Cache joint_1..joint_6 positions only when the full set is present."""
         positions = dict(zip(message.name, message.position))
@@ -352,6 +399,7 @@ class RecordingWebBridgeNode(Node):
                 },
                 "grippers": self._gripper,
                 "preview_cameras": preview_cameras,
+                "pika": self._pika.snapshot(time.monotonic_ns()),
             }
         )
 

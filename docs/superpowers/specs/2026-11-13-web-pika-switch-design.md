@@ -78,13 +78,14 @@ States (`phase`):
 | `waiting_input` | stack up, waiting for `/pika/l` and `/pika/r` cartesian_velocity both younger than `input_fresh_ms` | both fresh → `selecting`; `input_wait_timeout_sec` → `failed` (stack is left running, see below) |
 | `selecting` | `pikavelocity` requested through the input-mode bridge | `ACTIVE` + `active_mode == pikavelocity` for our executor request → `on`; refused, FAILED, executor fallback (our request id with `requested_mode` no longer `pikavelocity`; FAILED lasts one executor tick), superseded or `mode_switch_timeout_sec` → `failed` |
 | `on` | Pika velocity active | `off` command → `stopping`; mode leaves `pikavelocity` (another mode selected anywhere) → stays `on` with `mode_lost: true` |
-| `stopping` | `none` requested, then helper `/stop` | helper ok → `off`; error → `failed` |
+| `stopping` | `none` requested (only when `pikavelocity` is active or requested), then helper `/stop` | helper ok → `off`; error → `failed` |
 | `failed` | `detail` holds the reason | `on` or `off` command retries from the start |
 
 Rules:
 
-- **Off order**: select `none` first and wait for it (or for the bridge timeout),
-  then stop the stack. If the input-mode router is unavailable, skip the mode step
+- **Off order**: when `pikavelocity` is active or requested, select `none` first and
+  wait for it (or for `mode_switch_timeout_sec`), then stop the stack; otherwise
+  only stop the stack. If the input-mode router is unavailable, skip the mode step
   and still stop the stack; if the router is available but `none` is refused,
   still stop the stack (with no input the router releases the session after
   `input_timeout_ms` = 3 s, so the arms stop anyway), and report the refusal in `detail`.
@@ -136,7 +137,9 @@ answer; the page then hides the button.
 
 Page: one toggle in the input-mode area, labelled `Pika 速度控制` with the phase as
 text (未启动 / 启动中 / 等待 Pika 数据 l✓ r… / 切换模式 / 运行中 / 关闭中 / 失败: detail).
-It is disabled during transitions. While `on`, the button reads `关闭 Pika`.
+It is disabled during transitions. The button reads `关闭 Pika` while `on` and
+whenever the stack is running (`off` with `stack_running: true`, shown as
+`Pika 已运行（未切换模式）`, or `failed` with the stack up); otherwise `启动 Pika`.
 
 ### 4. Configuration
 
@@ -151,6 +154,7 @@ pika_switch:
   input_fresh_ms: 500                # Both l and r must be newer than this.
   input_wait_timeout_sec: 30.0       # Stack started but no Pika data → failed.
   status_poll_sec: 2.0
+  mode_switch_timeout_sec: 150.0     # Covers the entry MoveJ (pika_default_pose.timeout_sec 120).
   mode: pikavelocity
   off_mode: none
 ```

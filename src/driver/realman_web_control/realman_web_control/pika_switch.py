@@ -86,7 +86,7 @@ class PikaSwitch:
             return [self._error(client_id, request_id, "pika_switch_busy", f"Pika switch is {self._phase}")]
         if enabled:
             if self._phase == "on" and self._in_mode(mode):
-                return []
+                return [PikaEffect("send_event", self.state_event(), client_id)]  # answer the requester only
             if not (mode.available and mode.selectable):
                 return [self._error(client_id, request_id, "pika_mode_unavailable",
                                     f"{self._config.mode} mode is not available; start the control tree first")]
@@ -145,6 +145,8 @@ class PikaSwitch:
     def tick(self, mode: ModeView) -> list[PikaEffect]:
         now = self._clock()
         effects: list[PikaEffect] = []
+        # Executor request ids are per executor process: after an executor restart they start
+        # again and no longer match, so recovery then relies on router-unavailable or the own timeout.
         executor = self._executor_request_id
         ours = executor is not None and mode.request_id == executor
         superseded = executor is not None and mode.request_id > executor
@@ -160,6 +162,10 @@ class PikaSwitch:
                 effects += self._enter("on", "")
             elif ours and mode.phase == "FAILED":
                 effects += self._enter("failed", mode.detail or f"switch to {self._config.mode} failed")
+            elif ours and mode.requested_mode != self._config.mode:
+                # After a failed switch the executor schedules its fallback under the same request id
+                # on the next tick, so FAILED is usually missed; the changed requested mode is not.
+                effects += self._enter("failed", mode.detail or f"{self._config.mode} failed")
             elif superseded:
                 effects += self._enter("failed", SUPERSEDED)
             elif not mode.available:
@@ -172,10 +178,12 @@ class PikaSwitch:
                 effects += self._finish_off_mode("")
             elif ours and mode.phase == "FAILED":
                 effects += self._finish_off_mode(f"{off_mode} refused: {mode.detail}")
+            elif ours and mode.requested_mode != off_mode:
+                effects += self._finish_off_mode(mode.detail or f"{off_mode} failed")
             elif superseded:
                 effects += self._finish_off_mode(SUPERSEDED)
             elif not mode.available:
-                effects += self._finish_off_mode("")
+                effects += self._finish_off_mode("input mode router is unavailable")
             elif now >= self._deadline:
                 effects += self._finish_off_mode(f"{off_mode} not active after {self._config.mode_switch_timeout_sec:g} s")
         elif self._phase in ("off", "on"):

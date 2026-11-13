@@ -857,7 +857,7 @@ Effects: `helper` payload `{"action": "start"|"stop"}` or `{"action": "status", 
 
 `_epoch` increments with every start/stop helper effect; a status result whose `epoch` differs from the current one is stale and ignored (`helper_result` returns `[]`, nothing changes). Calls without `epoch` always apply.
 
-Mode requests are correlated by the executor request id: `mode_request_result(request_id, accepted, executor_request_id, message)` is the bridge's `input_mode_result` for the outstanding `pika-<n>` (others are ignored). Accepted remembers the executor id; refused fails `selecting` (`"{mode} refused: {message}"`) or, in the off sequence, records `"{off_mode} refused: {message}"` and stops the stack at once. `mode_request_error(request_id, code, message)` takes the bridge's `error` events for the outstanding `pika-<n>` and handles them exactly like a refusal, except code `input_mode_timeout` (the bridge's 5 s pending timeout), which is ignored. A refusal clears the outstanding request, so a later error or FAILED snapshot for it is a no-op (one helper stop only). `tick` decides mode outcomes only from snapshots with `request_id == executor id` (ACTIVE in the target mode / FAILED) or a newer one (`superseded by another input mode request`); before the id is known only "router unavailable" and the switch's own `mode_switch_timeout_sec` apply. The bridge's 5 s pending timeout is never a failure for the switch (the entry MoveJ can take up to 120 s).
+Mode requests are correlated by the executor request id: `mode_request_result(request_id, accepted, executor_request_id, message)` is the bridge's `input_mode_result` for the outstanding `pika-<n>` (others are ignored). Accepted remembers the executor id; refused fails `selecting` (`"{mode} refused: {message}"`) or, in the off sequence, records `"{off_mode} refused: {message}"` and stops the stack at once. `mode_request_error(request_id, code, message)` takes the bridge's `error` events for the outstanding `pika-<n>` and handles them exactly like a refusal, except code `input_mode_timeout` (the bridge's 5 s pending timeout), which is ignored. A refusal clears the outstanding request, so a later error or FAILED snapshot for it is a no-op (one helper stop only). `tick` decides mode outcomes only from snapshots with `request_id == executor id` (ACTIVE in the target mode / FAILED) or a newer one (`superseded by another input mode request`); before the id is known only "router unavailable" and the switch's own `mode_switch_timeout_sec` apply. A snapshot of our request whose `requested_mode` is no longer the target is the executor's fallback after a failed switch (same request id, FAILED visible for one executor tick only): `selecting` fails with the snapshot detail, the off step stops the stack. Executor restarts reset request ids, so recovery then relies on router-unavailable or the own timeout. `on` while already on answers the requester with the current state only. The bridge's 5 s pending timeout is never a failure for the switch (the entry MoveJ can take up to 120 s).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1104,10 +1104,12 @@ def _turn_off(switch, clock):
     return effects
 
 
-def test_on_while_on_is_noop():
+def test_on_while_on_is_noop_but_answers_requester():
     switch, clock = make()
     _turn_on(switch, clock)
-    assert switch.command("c2", "p2", True, mode(active="pikavelocity", request_id=7)) == []
+    effects = switch.command("c2", "p2", True, mode(active="pikavelocity", request_id=7))
+    assert [(e.kind, e.client_id) for e in effects] == [("send_event", "c2")]
+    assert effects[0].payload == switch.state_event()
     assert switch.state_event()["phase"] == "on"
 
 
@@ -1324,6 +1326,38 @@ def test_error_after_snapshot_failure_does_not_stop_twice():
                                    request_id=8)))
     stops += kinds(switch.mode_request_error(_request_id(effects), "input_mode_failed", "busy"))
     assert stops.count(("helper", "stop")) == 1
+
+
+def test_executor_fallback_after_failed_switch_fails_selecting():
+    # After a failed switch the executor falls back to `none` under the same request id;
+    # FAILED is visible for one executor tick only and is usually missed.
+    fallback = mode(active="none", phase="SWITCHING", requested="none",
+                    detail="pikavelocity failed: MoveJ timeout", request_id=7)
+    for snapshots in ((fallback,), (fallback, mode(active="none", request_id=7)), (mode(active="none", request_id=7),)):
+        switch, clock = make()
+        accept(switch, _to_selecting(switch, clock), 7)
+        for snapshot in snapshots:
+            switch.tick(snapshot)
+        state = switch.state_event()
+        assert state["phase"] == "failed"
+        assert state["detail"] == (snapshots[0].detail or "pikavelocity failed")
+
+
+def test_off_step_executor_back_on_pika_mode_stops_stack():
+    switch, clock = make()
+    accept(switch, _turn_off(switch, clock), 8)
+    effects = switch.tick(mode(active="pikavelocity", phase="SWITCHING", requested="pikavelocity",
+                               detail="none failed: busy", request_id=8))
+    assert ("helper", "stop") in kinds(effects)
+    assert switch.state_event()["detail"] == "none failed: busy"
+
+
+def test_off_step_router_gone_records_detail():
+    switch, clock = make()
+    accept(switch, _turn_off(switch, clock), 8)
+    effects = switch.tick(mode(available=False, phase=None, active=""))
+    assert ("helper", "stop") in kinds(effects)
+    assert switch.state_event()["detail"] == "input mode router is unavailable"
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1424,7 +1458,7 @@ class PikaSwitch:
             return [self._error(client_id, request_id, "pika_switch_busy", f"Pika switch is {self._phase}")]
         if enabled:
             if self._phase == "on" and self._in_mode(mode):
-                return []
+                return [PikaEffect("send_event", self.state_event(), client_id)]  # answer the requester only
             if not (mode.available and mode.selectable):
                 return [self._error(client_id, request_id, "pika_mode_unavailable",
                                     f"{self._config.mode} mode is not available; start the control tree first")]
@@ -1483,6 +1517,8 @@ class PikaSwitch:
     def tick(self, mode: ModeView) -> list[PikaEffect]:
         now = self._clock()
         effects: list[PikaEffect] = []
+        # Executor request ids are per executor process: after an executor restart they start
+        # again and no longer match, so recovery then relies on router-unavailable or the own timeout.
         executor = self._executor_request_id
         ours = executor is not None and mode.request_id == executor
         superseded = executor is not None and mode.request_id > executor
@@ -1498,6 +1534,10 @@ class PikaSwitch:
                 effects += self._enter("on", "")
             elif ours and mode.phase == "FAILED":
                 effects += self._enter("failed", mode.detail or f"switch to {self._config.mode} failed")
+            elif ours and mode.requested_mode != self._config.mode:
+                # After a failed switch the executor schedules its fallback under the same request id
+                # on the next tick, so FAILED is usually missed; the changed requested mode is not.
+                effects += self._enter("failed", mode.detail or f"{self._config.mode} failed")
             elif superseded:
                 effects += self._enter("failed", SUPERSEDED)
             elif not mode.available:
@@ -1510,10 +1550,12 @@ class PikaSwitch:
                 effects += self._finish_off_mode("")
             elif ours and mode.phase == "FAILED":
                 effects += self._finish_off_mode(f"{off_mode} refused: {mode.detail}")
+            elif ours and mode.requested_mode != off_mode:
+                effects += self._finish_off_mode(mode.detail or f"{off_mode} failed")
             elif superseded:
                 effects += self._finish_off_mode(SUPERSEDED)
             elif not mode.available:
-                effects += self._finish_off_mode("")
+                effects += self._finish_off_mode("input mode router is unavailable")
             elif now >= self._deadline:
                 effects += self._finish_off_mode(f"{off_mode} not active after {self._config.mode_switch_timeout_sec:g} s")
         elif self._phase in ("off", "on"):

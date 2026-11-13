@@ -238,10 +238,12 @@ def _turn_off(switch, clock):
     return effects
 
 
-def test_on_while_on_is_noop():
+def test_on_while_on_is_noop_but_answers_requester():
     switch, clock = make()
     _turn_on(switch, clock)
-    assert switch.command("c2", "p2", True, mode(active="pikavelocity", request_id=7)) == []
+    effects = switch.command("c2", "p2", True, mode(active="pikavelocity", request_id=7))
+    assert [(e.kind, e.client_id) for e in effects] == [("send_event", "c2")]
+    assert effects[0].payload == switch.state_event()
     assert switch.state_event()["phase"] == "on"
 
 
@@ -458,3 +460,35 @@ def test_error_after_snapshot_failure_does_not_stop_twice():
                                    request_id=8)))
     stops += kinds(switch.mode_request_error(_request_id(effects), "input_mode_failed", "busy"))
     assert stops.count(("helper", "stop")) == 1
+
+
+def test_executor_fallback_after_failed_switch_fails_selecting():
+    # After a failed switch the executor falls back to `none` under the same request id;
+    # FAILED is visible for one executor tick only and is usually missed.
+    fallback = mode(active="none", phase="SWITCHING", requested="none",
+                    detail="pikavelocity failed: MoveJ timeout", request_id=7)
+    for snapshots in ((fallback,), (fallback, mode(active="none", request_id=7)), (mode(active="none", request_id=7),)):
+        switch, clock = make()
+        accept(switch, _to_selecting(switch, clock), 7)
+        for snapshot in snapshots:
+            switch.tick(snapshot)
+        state = switch.state_event()
+        assert state["phase"] == "failed"
+        assert state["detail"] == (snapshots[0].detail or "pikavelocity failed")
+
+
+def test_off_step_executor_back_on_pika_mode_stops_stack():
+    switch, clock = make()
+    accept(switch, _turn_off(switch, clock), 8)
+    effects = switch.tick(mode(active="pikavelocity", phase="SWITCHING", requested="pikavelocity",
+                               detail="none failed: busy", request_id=8))
+    assert ("helper", "stop") in kinds(effects)
+    assert switch.state_event()["detail"] == "none failed: busy"
+
+
+def test_off_step_router_gone_records_detail():
+    switch, clock = make()
+    accept(switch, _turn_off(switch, clock), 8)
+    effects = switch.tick(mode(available=False, phase=None, active=""))
+    assert ("helper", "stop") in kinds(effects)
+    assert switch.state_event()["detail"] == "input mode router is unavailable"

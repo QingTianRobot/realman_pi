@@ -76,7 +76,7 @@ States (`phase`):
 | `off` | stack stopped, not our mode | `on` command → `starting` |
 | `starting` | helper `/start` in flight | ok → `waiting_input`; error → `failed` |
 | `waiting_input` | stack up, waiting for `/pika/l` and `/pika/r` cartesian_velocity both younger than `input_fresh_ms` | both fresh → `selecting`; `input_wait_timeout_sec` → `failed` (stack is left running, see below) |
-| `selecting` | `pikavelocity` requested through the input-mode bridge | `ACTIVE` + `active_mode == pikavelocity` for our executor request → `on`; refused, FAILED, superseded or `mode_switch_timeout_sec` → `failed` |
+| `selecting` | `pikavelocity` requested through the input-mode bridge | `ACTIVE` + `active_mode == pikavelocity` for our executor request → `on`; refused, FAILED, executor fallback (our request id with `requested_mode` no longer `pikavelocity`; FAILED lasts one executor tick), superseded or `mode_switch_timeout_sec` → `failed` |
 | `on` | Pika velocity active | `off` command → `stopping`; mode leaves `pikavelocity` (another mode selected anywhere) → stays `on` with `mode_lost: true` |
 | `stopping` | `none` requested, then helper `/stop` | helper ok → `off`; error → `failed` |
 | `failed` | `detail` holds the reason | `on` or `off` command retries from the start |

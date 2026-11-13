@@ -28,24 +28,29 @@ class FakeTmux:
     """Status exit code follows the fake session; send-keys stops it after `stops_after` polls."""
 
     def __init__(self, running=False, stops_after=0, start_exit=0, start_races=False,
-                 send_keys_exit=0, kill_survives=False):
+                 send_keys_exit=0, kill_survives=False, status_exit=None):
         self.running = running
+        self.status_exit = status_exit  # e.g. 124 (timeout) or 127 (no tmux): not an answer about the session
         self.stops_after = stops_after
         self.start_exit = start_exit
         self.start_races = start_races  # new-session fails but someone else created the session
         self.send_keys_exit = send_keys_exit
         self.kill_survives = kill_survives
         self.calls = []
+        self.timeouts = []
         self.block = None
         self.first_call = threading.Event()
 
     def __call__(self, command, timeout_sec):
         self.calls.append(list(command))
+        self.timeouts.append((command[1], timeout_sec))
         self.first_call.set()
         if self.block is not None:
             self.block.wait(5)
         verb = command[1]
         if verb == "has-session":
+            if self.status_exit is not None:
+                return self.status_exit, "error connecting to /tmp/tmux-1000/default"
             if self.running and self.stops_after == 0 and self._stop_sent():
                 self.running = False
             elif self._stop_sent() and self.stops_after > 0:
@@ -92,9 +97,45 @@ class PikaProcessTest(unittest.TestCase):
 
     def test_load_config_rejects_missing_and_bad_commands(self):
         for broken in ({k: v for k, v in CONFIG.items() if k != "kill"}, {**CONFIG, "start": []},
-                       {**CONFIG, "stop": "tmux kill"}, {**CONFIG, "port": 0}):
+                       {**CONFIG, "stop": "tmux kill"}, {**CONFIG, "port": 0},
+                       {**CONFIG, "status_timeout_sec": 0}):
             with self.assertRaises(ValueError):
                 helper.validate_config(broken)
+
+    def test_repo_config_limits_the_status_probe(self):
+        config = helper.load_config(ROOT / "config/docker/pika_helper.json")
+        self.assertEqual(config["status_timeout_sec"], 5)
+        # Worst start (status + start + status) stays below web control's helper_timeout_sec 40.
+        self.assertLess(2 * config["status_timeout_sec"] + config["timeout_sec"], 40)
+
+    def test_status_probe_uses_its_own_timeout(self):
+        tmux = FakeTmux(running=False)
+        process = helper.PikaProcess({**CONFIG, "status_timeout_sec": 5}, runner=tmux, sleep=FakeSleep(), home="/h")
+        process.start()
+        self.assertEqual({verb: timeout for verb, timeout in tmux.timeouts},
+                         {"has-session": 5.0, "new-session": 20.0})
+
+    def test_status_timeout_defaults_to_five_seconds(self):
+        tmux = FakeTmux(running=False)
+        make(tmux).status()
+        self.assertEqual(tmux.timeouts, [("has-session", 5.0)])
+
+    def test_status_probe_error_is_not_running_with_error(self):
+        for code in (124, 127, 2):
+            status = make(FakeTmux(running=True, status_exit=code)).status()
+            self.assertFalse(status["running"])
+            self.assertIn(f"exit {code}", status["error"])
+
+    def test_start_and_stop_fail_when_the_status_probe_errors(self):
+        for action in ("start", "stop"):
+            tmux = FakeTmux(running=True, status_exit=127)
+            process = make(tmux)
+            with self.assertRaises(helper.ActionFailed) as failed:
+                getattr(process, action)()
+            self.assertIn("exit 127", str(failed.exception))
+            self.assertIn("error connecting to /tmp/tmux-1000/default", failed.exception.output_tail)
+            self.assertFalse(any(call[1] in ("new-session", "send-keys", "kill-session") for call in tmux.calls))
+            self.assertFalse(process.status()["busy"])
 
     def test_start_runs_start_with_home_expanded(self):
         tmux = FakeTmux(running=False)

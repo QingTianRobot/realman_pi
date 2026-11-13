@@ -28,6 +28,10 @@ DEFAULT_CONFIG = ROOT / "config" / "docker" / "pika_helper.json"
 OUTPUT_TAIL_LINES = 12
 COMMAND_KEYS = ("start", "status", "stop", "kill")
 STOP_POLL_SEC = 0.5
+DEFAULT_STATUS_TIMEOUT_SEC = 5.0
+# `tmux has-session` exits 1 when the session is missing; any other non-zero exit
+# (124 timeout, 127 no tmux, ...) is no answer about the session.
+NOT_RUNNING_EXIT = 1
 
 Runner = Callable[[Sequence[str], float], tuple[int, str]]
 
@@ -42,6 +46,13 @@ class ActionFailed(Exception):
         self.output_tail = output_tail
 
 
+class StatusError(Exception):
+    def __init__(self, exit_code: int, output: str) -> None:
+        super().__init__(f"status failed with exit {exit_code}")
+        self.exit_code = exit_code
+        self.output = output
+
+
 def validate_config(document: Any) -> dict[str, Any]:
     if not isinstance(document, dict):
         raise ValueError("pika helper config must be a JSON object")
@@ -51,7 +62,9 @@ def validate_config(document: Any) -> dict[str, Any]:
     port = document["port"]
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise ValueError("port must be from 1 through 65535")
-    for key in ("timeout_sec", "stop_grace_sec"):
+    for key in ("timeout_sec", "stop_grace_sec", "status_timeout_sec"):
+        if key not in document:
+            continue  # status_timeout_sec is optional
         value = document[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
             raise ValueError(f"{key} must be positive")
@@ -95,6 +108,7 @@ class PikaProcess:
         }
         self.timeout_sec = float(config["timeout_sec"])
         self.stop_grace_sec = float(config["stop_grace_sec"])
+        self.status_timeout_sec = float(config.get("status_timeout_sec", DEFAULT_STATUS_TIMEOUT_SEC))
         self._runner = runner
         self._sleep = sleep
         self._lock = threading.Lock()
@@ -102,10 +116,14 @@ class PikaProcess:
         self._last: dict[str, Any] = {}
 
     def _run(self, key: str) -> tuple[int, str]:
-        return self._runner(self.commands[key], self.timeout_sec)
+        timeout = self.status_timeout_sec if key == "status" else self.timeout_sec
+        return self._runner(self.commands[key], timeout)
 
     def _running(self) -> bool:
-        return self._run("status")[0] == 0
+        exit_code, output = self._run("status")
+        if exit_code not in (0, NOT_RUNNING_EXIT):
+            raise StatusError(exit_code, output)
+        return exit_code == 0
 
     def _begin(self, action: str) -> None:
         with self._lock:
@@ -134,6 +152,8 @@ class PikaProcess:
             # Judge by the end state: a lost race ("duplicate session") still leaves Pika running.
             if exit_code != 0 and self._running():
                 exit_code = 0
+        except StatusError as error:
+            return self._finish(error.exit_code, f"{error.output}\n{error}")
         except BaseException:
             self._finish_quietly()
             raise
@@ -158,6 +178,8 @@ class PikaProcess:
                 output = f"{output}\npika session still running after kill"
             else:
                 exit_code = 0
+        except StatusError as error:
+            return self._finish(error.exit_code, f"{error.output}\n{error}")
         except BaseException:
             self._finish_quietly()
             raise
@@ -172,7 +194,12 @@ class PikaProcess:
             busy = self._busy is not None
             last = dict(self._last)
         # A status probe during an action is fine: tmux has-session is read-only.
-        return {"running": self._running(), "busy": busy, "last": last}
+        try:
+            return {"running": self._running(), "busy": busy, "last": last}
+        except StatusError as error:
+            tail = _tail(error.output)
+            return {"running": False, "busy": busy, "last": last,
+                    "error": "; ".join([str(error), *tail[-3:]])}
 
 
 def make_handler(process: PikaProcess) -> type[BaseHTTPRequestHandler]:

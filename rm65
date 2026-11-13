@@ -207,6 +207,32 @@ restart_helper() {
   esac
 }
 
+pika_helper() {
+  # Host-side helper behind the :8765 Pika switch (scripts/pika_process_helper.py), as a user unit.
+  local unit="$HOME/.config/systemd/user/realman-pika-helper.service"
+  case "${1:-}" in
+    run) exec python3 "$ROOT/scripts/pika_process_helper.py" --config "$ROOT/config/docker/pika_helper.json" ;;
+    install)
+      if [[ "$DRY_RUN" == "1" ]]; then
+        printf '+ install %s\n' "$unit"
+        return 0
+      fi
+      mkdir -p "$(dirname "$unit")"
+      sed -e "s#@ROOT@#$ROOT#g" "$ROOT/config/docker/realman-pika-helper.service" >"$unit"
+      systemctl --user daemon-reload
+      systemctl --user enable --now realman-pika-helper.service
+      systemctl --user --no-pager status realman-pika-helper.service | head -n 5
+      ;;
+    uninstall)
+      run systemctl --user disable --now realman-pika-helper.service || true
+      run rm -f "$unit"
+      run systemctl --user daemon-reload
+      ;;
+    status) run systemctl --user --no-pager status realman-pika-helper.service ;;
+    *) printf 'usage: rm65 pika-helper install|uninstall|status|run\n' >&2; return 2 ;;
+  esac
+}
+
 usage() {
   cat <<'EOF'
 Usage: ./rm65 <command> [profile]
@@ -223,6 +249,7 @@ Commands:
   bt control          Run the persistent input router and :8080 monitor until Ctrl-C.
   sync                Synchronize the clean main branch to production.
   restart-helper install|uninstall|status|run  Host service behind the :8765 "重启 Docker" button.
+  pika-helper install|uninstall|status|run  Host helper behind the :8765 Pika switch (systemd --user).
 EOF
 }
 
@@ -239,6 +266,7 @@ case "$command_name" in
   camera) exec zsh -lc 'source "$1/functions.zsh" && rm65_camera_start' _ "$ROOT" ;;
   sync) sync_repo "$@" ;;
   restart-helper) restart_helper "$@" ;;
+  pika-helper) pika_helper "$@" ;;
   help|-h|--help) usage ;;
   *) printf 'rm65: unknown command: %s\n' "$command_name" >&2; usage >&2; exit 2 ;;
 esac

@@ -48,6 +48,16 @@ class WebServerConfig:
     docker_restart_url: str = ""
     docker_restart_timeout_sec: float = 2.0
     docker_restart_service: str = ""
+    # Host-side pika_process_helper starts/stops the Pika stack; empty URL hides the switch.
+    pika_helper_url: str = ""
+    pika_helper_timeout_sec: float = 40.0
+    pika_input_fresh_ms: float = 500.0
+    pika_input_wait_timeout_sec: float = 30.0
+    pika_status_poll_sec: float = 2.0
+    pika_mode_switch_timeout_sec: float = 150.0
+    pika_off_mode_timeout_sec: float = 10.0
+    pika_mode: str = "pikavelocity"
+    pika_off_mode: str = "none"
     # Catalog of the /params.html parameter page; None disables the page and its /api/params* routes.
     param_catalog_file: Path | None = None
     param_readback_timeout_sec: float = 0.5
@@ -118,6 +128,26 @@ def load_server_config(path: str | Path) -> WebServerConfig:
     restart_service = restart.get("service", "")
     if restart_url and (not isinstance(restart_service, str) or not restart_service):
         raise ValueError("docker_restart.service must name a Compose service")
+    pika = document.get("pika_switch", {})
+    if not isinstance(pika, dict):
+        raise ValueError("pika_switch must be a mapping")
+    pika_url = pika.get("helper_url", "")
+    if not isinstance(pika_url, str) or (pika_url and urlsplit(pika_url).scheme not in ("http", "https")):
+        raise ValueError("pika_switch.helper_url must be an http(s) URL or empty")
+    pika_numbers: dict[str, float] = {}
+    for field, default in (("helper_timeout_sec", 40.0), ("input_fresh_ms", 500.0),
+                           ("input_wait_timeout_sec", 30.0), ("status_poll_sec", 2.0),
+                           ("mode_switch_timeout_sec", 150.0), ("off_mode_timeout_sec", 10.0)):
+        value = pika.get(field, default)
+        if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
+            raise ValueError(f"pika_switch.{field} must be finite and positive")
+        pika_numbers[field] = float(value)
+    pika_modes: dict[str, str] = {}
+    for field, default in (("mode", "pikavelocity"), ("off_mode", "none")):
+        value = pika.get(field, default)
+        if not isinstance(value, str) or re.fullmatch(r"[a-z][a-z0-9]*", value) is None:
+            raise ValueError(f"pika_switch.{field} must be a lower-case input mode id")
+        pika_modes[field] = value
     tuning = document.get("param_tuning", {})
     if not isinstance(tuning, dict):
         raise ValueError("param_tuning must be a mapping")
@@ -150,6 +180,15 @@ def load_server_config(path: str | Path) -> WebServerConfig:
         docker_restart_url=restart_url.rstrip("/"),
         docker_restart_timeout_sec=float(restart_timeout),
         docker_restart_service=restart_service if isinstance(restart_service, str) else "",
+        pika_helper_url=pika_url.rstrip("/"),
+        pika_helper_timeout_sec=pika_numbers["helper_timeout_sec"],
+        pika_input_fresh_ms=pika_numbers["input_fresh_ms"],
+        pika_input_wait_timeout_sec=pika_numbers["input_wait_timeout_sec"],
+        pika_status_poll_sec=pika_numbers["status_poll_sec"],
+        pika_mode_switch_timeout_sec=pika_numbers["mode_switch_timeout_sec"],
+        pika_off_mode_timeout_sec=pika_numbers["off_mode_timeout_sec"],
+        pika_mode=pika_modes["mode"],
+        pika_off_mode=pika_modes["off_mode"],
         param_catalog_file=(config_root / catalog_file) if catalog_file else None,
         param_readback_timeout_sec=float(readback_timeout),
         **timing,

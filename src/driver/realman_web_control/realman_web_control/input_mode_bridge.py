@@ -89,6 +89,13 @@ class InputModeBridge:
     def generation(self) -> int:
         return self._generation
 
+    @property
+    def snapshot(self) -> InputModeSnapshot | None:
+        return self._snapshot
+
+    def is_selectable(self, mode_id: str) -> bool:
+        return any(option.id == mode_id and option.selectable for option in self._catalog or ())
+
     def keyboard_snapshot(self, client_id: str) -> InputModeSnapshot:
         """Authorize input against both the lease and current executor state."""
         if client_id != self._keyboard_owner:

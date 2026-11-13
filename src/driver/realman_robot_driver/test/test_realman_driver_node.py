@@ -1291,6 +1291,148 @@ def test_event_channel_recovery_refuses_busy_arm_before_disconnect():
     assert ("release", "m") not in events
 
 
+def _lost_link_reconnect_node(events, *, stop_status=0, ever_connected=True):
+    """A node whose adapter lost its link while a velocity session ran."""
+
+    class Adapter:
+        connected = False
+        last_error_message = ""
+
+        def connect(self):
+            events.append("connect")
+            self.connected = True
+            return 0
+
+        def register_event_callback(self, _callback):
+            events.append("register")
+            return 0
+
+        def stop(self):
+            events.append("stop")
+            return stop_status
+
+        def disconnect(self):
+            events.append("disconnect")
+            self.connected = False
+            return 0
+
+    def clearer(name, result=True):
+        def clear():
+            events.append(f"clear_{name}")
+            return result
+
+        return clear
+
+    def reconcile_after_connect(**kwargs):
+        events.append(("reconcile", kwargs))
+        return True
+
+    node = SimpleNamespace(
+        arm_id="l",
+        adapter=Adapter(),
+        arm_ownership=object(),
+        coordinate_manager=object(),
+        velocity_session=SimpleNamespace(
+            clear_lockout_after_disconnect=clearer("velocity")
+        ),
+        pose_session=SimpleNamespace(clear_lockout_after_disconnect=clearer("pose")),
+        motion_coordinator=SimpleNamespace(
+            handle_event=lambda _event: None,
+            reconcile_after_connect=reconcile_after_connect,
+            clear_lockout_after_disconnect=clearer("motion", None),
+        ),
+        _ever_connected=ever_connected,
+        _last_connect_attempt=0.0,
+        _update_active_references=lambda _verification: None,
+        _publish_coordinate_state=lambda _verification: events.append("published"),
+        get_logger=lambda: SimpleNamespace(
+            info=lambda message: events.append(("info", message)),
+            warn=lambda message: events.append(("warn", message)),
+            error=lambda message: events.append(("error", message)),
+        ),
+    )
+    node._release_lockouts_after_lost_link = lambda: (
+        RealManDriverNode._release_lockouts_after_lost_link(node)
+    )
+    return node
+
+
+@requires_ros_action_runtime
+def test_reconnect_after_lost_link_stops_then_releases_stale_session_lockouts(
+    monkeypatch,
+):
+    # SJDrealman 2026-11-13: one joint-read timeout (-2) dropped the link while a
+    # Pika velocity session ran. Its zero/slow-stop failed on the dead handle, so
+    # it kept ownership in lockout; the reconnect then refused coordinate startup
+    # ("arm l is busy") and every later goal until the container restarted.
+    events = []
+    node = _lost_link_reconnect_node(events)
+    monkeypatch.setattr(
+        "realman_robot_driver.realman_driver_node.run_startup_coordinate_policy",
+        lambda *args, **kwargs: (
+            events.append("coordinate_startup")
+            or SimpleNamespace(api2_status=0, matched=True, message="")
+        ),
+    )
+
+    assert RealManDriverNode._connect_to_robot(node) == 0
+    names = [event if isinstance(event, str) else event[0] for event in events]
+    assert names.index("connect") < names.index("stop")
+    assert names.index("stop") < names.index("clear_velocity")
+    assert {"clear_velocity", "clear_pose", "clear_motion"} <= set(names)
+    assert names.index("clear_motion") < names.index("reconcile")
+    assert names.index("reconcile") < names.index("coordinate_startup")
+    assert "disconnect" not in names
+
+
+@requires_ros_action_runtime
+def test_reconnect_keeps_lockouts_and_retries_when_fresh_stop_fails(monkeypatch):
+    events = []
+    node = _lost_link_reconnect_node(events, stop_status=-2)
+    monkeypatch.setattr(
+        "realman_robot_driver.realman_driver_node.run_startup_coordinate_policy",
+        lambda *args, **kwargs: pytest.fail("coordinates must wait for a clean stop"),
+    )
+
+    assert RealManDriverNode._connect_to_robot(node) == -2
+    names = [event if isinstance(event, str) else event[0] for event in events]
+    assert not {"clear_velocity", "clear_pose", "clear_motion"} & set(names)
+    # Leaving the adapter connected would stop the reconnect timer for good.
+    assert "disconnect" in names
+    assert node.adapter.connected is False
+
+
+@requires_ros_action_runtime
+def test_first_connect_does_not_issue_a_stop(monkeypatch):
+    events = []
+    node = _lost_link_reconnect_node(events, ever_connected=False)
+    monkeypatch.setattr(
+        "realman_robot_driver.realman_driver_node.run_startup_coordinate_policy",
+        lambda *args, **kwargs: SimpleNamespace(api2_status=0, matched=True, message=""),
+    )
+
+    assert RealManDriverNode._connect_to_robot(node) == 0
+    assert "stop" not in events
+    assert node._ever_connected is True
+
+
+@requires_ros_action_runtime
+def test_coordinate_startup_failure_disconnects_so_the_timer_retries(monkeypatch):
+    events = []
+    node = _lost_link_reconnect_node(events, ever_connected=False)
+    monkeypatch.setattr(
+        "realman_robot_driver.realman_driver_node.run_startup_coordinate_policy",
+        lambda *args, **kwargs: SimpleNamespace(
+            api2_status=-1,
+            matched=False,
+            message="arm l is busy; coordinate operation refused",
+        ),
+    )
+
+    assert RealManDriverNode._connect_to_robot(node) == -1
+    assert node.adapter.connected is False
+
+
 def test_connect_returns_coordinate_api_failure_instead_of_ready_status():
     tree = ast.parse(NODE_PATH.read_text(encoding="utf-8"))
     connect = next(

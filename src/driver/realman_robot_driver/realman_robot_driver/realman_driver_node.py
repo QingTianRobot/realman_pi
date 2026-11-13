@@ -422,6 +422,7 @@ class RealManDriverNode(Node):
         self._last_state_error = 0
         self._last_joint_count_error = 0
         self._last_connect_attempt = 0.0
+        self._ever_connected = False
 
         self.get_logger().info(
             f"RealMan joint-state driver ready: model={self.robot_model} ip={self.robot_ip} "
@@ -1083,6 +1084,18 @@ class RealManDriverNode(Node):
                     )
                     self.adapter.disconnect()
                     return callback_status
+                if (
+                    not event_recovery
+                    and not was_connected
+                    and getattr(self, "_ever_connected", False)
+                ):
+                    # The link dropped under us. A session that was running then
+                    # could not stop on the dead handle, so it kept ownership in
+                    # lockout; without this the arm stays busy until restart.
+                    release_status = self._release_lockouts_after_lost_link()
+                    if release_status != 0:
+                        self.adapter.disconnect()
+                        return release_status
                 # Recovery recreates the SDK handle while the adapter still
                 # reports connected, but the callback channel is just as fresh
                 # as after a cold connect. Without the reset flag the
@@ -1109,12 +1122,16 @@ class RealManDriverNode(Node):
                             "RealMan coordinate startup failed with API2 status "
                             f"{verification.api2_status}: {verification.message}"
                         )
+                        # Stay retryable: a connected adapter is never retried
+                        # by the reconnect timer.
+                        self.adapter.disconnect()
                         return verification.api2_status
                     if not verification.matched:
                         self.get_logger().warn(
                             f"RealMan coordinate verification blocked motion: {verification.message}"
                         )
                     self._publish_coordinate_state(verification)
+                self._ever_connected = True
                 self.get_logger().info("RealMan connection ready")
             else:
                 detail = self.adapter.last_error_message or "no SDK detail"
@@ -1131,6 +1148,38 @@ class RealManDriverNode(Node):
                     f"RealMan connection cleanup failed: {disconnect_error}"
                 )
             return -1
+
+    def _release_lockouts_after_lost_link(self) -> int:
+        """Stop on the fresh handle, then drop lockouts the dead handle left behind.
+
+        Same release as an explicit /disconnect + /connect, gated on a stop the
+        controller acknowledges on the new connection.
+        """
+        try:
+            stop_status = int(self.adapter.stop())
+        except Exception as error:
+            self.get_logger().error(f"RealMan stop after lost link failed: {error}")
+            return -1
+        if stop_status != 0:
+            self.get_logger().error(
+                "RealMan stop after lost link returned API2 status "
+                f"{stop_status}; session lockouts are kept and the connect is retried"
+            )
+            return stop_status
+        velocity_clear_ok = self.velocity_session.clear_lockout_after_disconnect()
+        pose_clear_ok = self.pose_session.clear_lockout_after_disconnect()
+        self.motion_coordinator.clear_lockout_after_disconnect()
+        if not velocity_clear_ok or not pose_clear_ok:
+            self.get_logger().warn(
+                "RealMan session lockout after lost link not released yet "
+                f"(velocity={velocity_clear_ok} pose={pose_clear_ok})"
+            )
+        else:
+            self.get_logger().warn(
+                "RealMan link was lost; stopped on the new connection and released "
+                "session lockouts"
+            )
+        return 0
 
     def _recover_event_channel(self) -> bool:
         """Reset a stale callback channel after a confirmed inactive stop."""

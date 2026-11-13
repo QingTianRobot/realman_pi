@@ -208,7 +208,10 @@ class WebControlNode(Node):
             mode_switch_timeout_sec=web_config.pika_mode_switch_timeout_sec,
             mode=web_config.pika_mode,
             off_mode=web_config.pika_off_mode,
+            helper_timeout_sec=web_config.pika_helper_timeout_sec,
+            off_mode_timeout_sec=web_config.pika_off_mode_timeout_sec,
         ), enabled=bool(web_config.pika_helper_url))
+        self._pika_reachable_logged: bool | None = None
         self._mode_discovery_period = web_config.discovery_period_sec
         self._mode_list_future = None
         self._mode_state_subscription = None
@@ -844,6 +847,26 @@ class WebControlNode(Node):
         if not ok and action != "status":
             self.get_logger().warning(f"Pika helper {action} failed: {payload.get('error', '')}")
         self._apply_pika_effects(self._pika.helper_result(action, ok, payload, epoch=epoch))
+        reachable = self._pika.reachable
+        if reachable != self._pika_reachable_logged:
+            # Logged once per change; status polls every few seconds would flood the log otherwise.
+            self._pika_reachable_logged = reachable
+            if reachable:
+                self.get_logger().info(f"Pika helper reachable at {self._pika_helper_url}")
+            else:
+                self.get_logger().warning(f"Pika helper not reachable: {payload.get('error', '')}")
+
+    def _run_pika_helper(self, action: str, epoch: int | None) -> None:
+        """Helper thread body: the switch must always get an answer, or it stays in a transition."""
+        try:
+            ok, payload = call_helper(self._pika_helper_url, action, self._pika_helper_timeout)
+        except Exception as error:  # noqa: BLE001 - call_helper should not raise; never lose the answer
+            self.get_logger().error(f"Pika helper {action} call raised: {error!r}")
+            ok, payload = False, {"ok": False, "error": f"Pika helper call failed: {type(error).__name__}: {error}"}
+        try:
+            self._pika_helper_done(action, ok, payload, epoch=epoch)
+        except Exception as error:  # noqa: BLE001 - a daemon thread has nobody else to report to
+            self.get_logger().error(f"Pika switch: applying helper {action} result failed: {error!r}")
 
     def _apply_pika_effects(self, effects: list[PikaEffect]) -> None:
         """Apply switch effects in order; callers hold the control lock (helper calls run in threads)."""
@@ -857,9 +880,7 @@ class WebControlNode(Node):
                     self.get_logger().info(f"Pika switch: helper {action}")
                 epoch = effect.payload.get("epoch")
                 threading.Thread(
-                    target=lambda action=action, epoch=epoch: self._pika_helper_done(
-                        action, *call_helper(self._pika_helper_url, action, self._pika_helper_timeout),
-                        epoch=epoch),
+                    target=self._run_pika_helper, args=(action, epoch),
                     name=f"pika-helper-{action}", daemon=True,
                 ).start()
             elif effect.kind == "select_mode":

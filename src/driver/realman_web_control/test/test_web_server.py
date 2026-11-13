@@ -205,11 +205,21 @@ def test_pika_switch_block_is_loaded(tmp_path):
     assert config.pika_helper_url == "http://127.0.0.1:8783"
     assert config.pika_input_fresh_ms == 400.0
     assert (config.pika_mode, config.pika_off_mode) == ("pikavelocity", "none")
+    assert config.pika_off_mode_timeout_sec == 10.0  # default
+
+
+def test_pika_off_mode_timeout_is_loaded(tmp_path):
+    config = load_server_config(_write_config(tmp_path, {"pika_switch": {
+        "helper_url": "http://127.0.0.1:8783", "off_mode_timeout_sec": 7,
+    }}))
+    assert config.pika_off_mode_timeout_sec == 7.0
 
 
 @pytest.mark.parametrize("bad", [
     {"helper_url": "ftp://x"}, {"helper_url": "http://127.0.0.1:8783", "input_fresh_ms": 0},
     {"helper_url": "http://127.0.0.1:8783", "mode": "Pika Velocity"},
+    {"helper_url": "http://127.0.0.1:8783", "off_mode_timeout_sec": 0},
+    {"helper_url": "http://127.0.0.1:8783", "off_mode_timeout_sec": True},
 ])
 def test_pika_switch_block_is_validated(tmp_path, bad):
     with pytest.raises(ValueError, match="pika_switch"):
@@ -221,4 +231,6 @@ def test_repo_config_enables_the_pika_switch():
     root = Path(__file__).resolve().parents[4]
     config = load_server_config(root / "config/ros/realman_web_control.yaml")
     assert config.pika_helper_url == "http://127.0.0.1:8783"
-    assert config.pika_helper_timeout_sec > 28  # helper timeout_sec 20 + stop_grace_sec 8
+    # Worst helper start: status_timeout_sec 5 + timeout_sec 20 + status 5 (config/docker/pika_helper.json).
+    assert config.pika_helper_timeout_sec > 30
+    assert config.pika_off_mode_timeout_sec == 10.0

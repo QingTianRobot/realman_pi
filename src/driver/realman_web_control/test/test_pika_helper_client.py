@@ -54,3 +54,35 @@ def test_unreachable_helper():
 def test_unknown_action_is_rejected():
     with pytest.raises(ValueError):
         call_helper("http://127.0.0.1:9", "restart", 0.5)
+
+
+def test_malformed_http_answer_is_a_failed_call():
+    import socket
+    listener = socket.socket()
+    listener.bind(("127.0.0.1", 0))
+    listener.listen(1)
+
+    def answer_garbage():
+        connection, _ = listener.accept()
+        connection.recv(4096)
+        connection.sendall(b"garbage\r\n\r\n")
+        connection.close()
+
+    threading.Thread(target=answer_garbage, daemon=True).start()
+    try:
+        ok, payload = call_helper(f"http://127.0.0.1:{listener.getsockname()[1]}", "start", 2.0)
+    finally:
+        listener.close()
+    assert ok is False and payload["ok"] is False
+    assert payload["error"].startswith("Pika helper call failed: BadStatusLine")
+
+
+def test_any_exception_is_a_failed_call(monkeypatch):
+    import realman_web_control.pika_helper_client as client
+
+    def boom(*_args, **_kwargs):
+        raise RuntimeError("boom")
+
+    monkeypatch.setattr(client, "urlopen", boom)
+    assert client.call_helper("http://127.0.0.1:9", "stop", 0.5) == (
+        False, {"ok": False, "error": "Pika helper call failed: RuntimeError: boom"})

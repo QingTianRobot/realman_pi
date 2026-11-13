@@ -1,7 +1,8 @@
 from realman_web_control.pika_switch import PIKA_CLIENT_ID, ModeView, PikaSwitch, PikaSwitchConfig
 
 CONFIG = PikaSwitchConfig(input_fresh_ms=500, input_wait_timeout_sec=30, status_poll_sec=2,
-                          mode_switch_timeout_sec=150, mode="pikavelocity", off_mode="none")
+                          mode_switch_timeout_sec=150, mode="pikavelocity", off_mode="none",
+                          helper_timeout_sec=40, off_mode_timeout_sec=10)
 
 
 class Clock:
@@ -300,10 +301,13 @@ def test_stopping_timeout_issues_stop():
     accept(switch, _turn_off(switch, clock), 8)
     assert ("helper", "stop") not in kinds(switch.tick(mode(active="pikavelocity", phase="SWITCHING",
                                                              requested="none", request_id=8)))
-    clock.now += 151
+    clock.now += 9.9
+    assert ("helper", "stop") not in kinds(switch.tick(mode(active="pikavelocity", phase="SWITCHING",
+                                                             requested="none", request_id=8)))
+    clock.now += 0.1
     effects = switch.tick(mode(active="pikavelocity", phase="SWITCHING", requested="none", request_id=8))
     assert ("helper", "stop") in kinds(effects)
-    assert switch.state_event()["detail"] == "none not active after 150 s"
+    assert switch.state_event()["detail"] == "none not active after 10 s"
 
 
 def test_helper_stop_failure_fails():
@@ -492,3 +496,233 @@ def test_off_step_router_gone_records_detail():
     effects = switch.tick(mode(available=False, phase=None, active=""))
     assert ("helper", "stop") in kinds(effects)
     assert switch.state_event()["detail"] == "input mode router is unavailable"
+
+
+# ---- I1: a helper start/stop that never answers -------------------------
+
+def test_start_and_stop_effects_carry_the_epoch():
+    switch, _ = make()
+    [start] = [e for e in switch.command("c1", "p1", True, mode()) if e.kind == "helper"]
+    assert start.payload["action"] == "start" and isinstance(start.payload["epoch"], int)
+
+
+def test_start_without_answer_fails_after_helper_deadline():
+    switch, clock = make()
+    switch.command("c1", "p1", True, mode())
+    clock.now += 44.9  # helper_timeout_sec 40 + 5
+    switch.tick(mode())
+    assert switch.state_event()["phase"] == "starting"
+    clock.now += 0.1
+    switch.tick(mode())
+    state = switch.state_event()
+    assert state["phase"] == "failed" and state["detail"] == "Pika helper start got no answer"
+    # The late answer is handled as normal; it must not start another transition.
+    effects = switch.helper_result("start", True, {"ok": True})
+    assert switch.state_event()["phase"] == "failed"
+    assert not [e for e in effects if e.kind in ("helper", "select_mode")]
+
+
+def test_stop_without_answer_fails_after_helper_deadline():
+    switch, clock = make(running=True)
+    switch.command("c1", "p1", False, mode(active="keyboard"))
+    clock.now += 45
+    effects = switch.tick(mode(active="keyboard"))
+    state = switch.state_event()
+    assert state["phase"] == "failed" and state["detail"] == "Pika helper stop got no answer"
+    # Polling resumes after the deadline, and a new stop may be issued.
+    [status] = [e for e in effects if e.kind == "helper"]
+    assert status.payload["action"] == "status"
+    switch.helper_result("status", True, {"running": True}, epoch=status.payload["epoch"])
+    assert ("helper", "stop") in kinds(switch.command("c1", "p2", False, mode(active="keyboard")))
+
+
+def test_stop_deadline_counts_from_the_helper_stop_not_from_the_off_step():
+    switch, clock = make()
+    accept(switch, _turn_off(switch, clock), 8)
+    clock.now += 9
+    effects = switch.tick(mode(active="none", request_id=8))
+    assert ("helper", "stop") in kinds(effects)
+    clock.now += 44
+    switch.tick(mode(active="none", request_id=8))
+    assert switch.state_event()["phase"] == "stopping"
+    clock.now += 1
+    switch.tick(mode(active="none", request_id=8))
+    assert switch.state_event()["detail"] == "Pika helper stop got no answer"
+
+
+def test_late_answer_of_an_older_start_is_ignored_after_a_retry():
+    switch, clock = make()
+    [first] = [e for e in switch.command("c1", "p1", True, mode()) if e.kind == "helper"]
+    clock.now += 45
+    switch.tick(mode())
+    assert switch.state_event()["phase"] == "failed"
+    switch.command("c1", "p2", True, mode())
+    assert switch.helper_result("start", False, {"error": "late"}, epoch=first.payload["epoch"]) == []
+    assert switch.state_event()["phase"] == "starting"
+
+
+# ---- I2: off while the helper is unreachable -----------------------------
+
+def test_state_event_reports_helper_reachability():
+    switch, _ = make()
+    assert switch.state_event()["helper_reachable"] is True
+    switch.helper_result("status", False, {"error": "down"})
+    assert switch.state_event()["helper_reachable"] is False
+
+
+def test_off_works_while_helper_unreachable():
+    switch, clock = make()
+    _turn_on(switch, clock)
+    switch.helper_result("status", False, {"error": "Pika helper is not reachable"})
+    state = switch.state_event()
+    assert state["available"] is True and state["helper_reachable"] is False and state["phase"] == "on"
+    effects = switch.command("c1", "p9", False, mode(active="pikavelocity", request_id=7))
+    assert [e.payload["mode_id"] for e in selects(effects)] == ["none"]
+    accept(switch, effects, 8)
+    assert ("helper", "stop") in kinds(switch.tick(mode(active="none", request_id=8)))
+    switch.helper_result("stop", False, {"error": "Pika helper is not reachable"})
+    state = switch.state_event()
+    assert state["phase"] == "failed" and "not reachable" in state["detail"]
+    assert state["available"] is True  # Pika may still drive the arms
+
+
+def test_on_still_needs_a_reachable_helper():
+    switch, _ = make()
+    switch.helper_result("status", False, {"error": "down"})
+    assert kinds(switch.command("c1", "p1", True, mode())) == [("reply_error", "pika_switch_unavailable")]
+
+
+def test_row_stays_while_stack_is_known_running_and_helper_unreachable():
+    switch, _ = make(running=True)
+    switch.helper_result("status", False, {"error": "down"})
+    assert switch.state_event()["available"] is True
+    assert ("helper", "stop") in kinds(switch.command("c1", "p1", False, mode(active="keyboard")))
+
+
+def test_disabled_switch_refuses_off_too():
+    switch = PikaSwitch(CONFIG, enabled=False, clock=Clock())
+    assert kinds(switch.command("c1", "p1", False, mode())) == [("reply_error", "pika_switch_unavailable")]
+
+
+# ---- M4: an errored status counts as an unreachable helper ---------------
+
+def test_errored_status_counts_as_unreachable():
+    switch, _ = make(running=True)
+    switch.helper_result("status", True, {"running": False, "error": "status failed with exit 124"})
+    state = switch.state_event()
+    assert state["helper_reachable"] is False
+    assert state["stack_running"] is True  # last known value is kept
+    assert kinds(switch.command("c1", "p1", True, mode())) == [("reply_error", "pika_switch_unavailable")]
+
+
+# ---- U1: off during waiting_input and selecting -------------------------
+
+def test_off_while_waiting_input_stops_the_stack():
+    switch, _ = make()
+    switch.command("c1", "p1", True, mode())
+    switch.helper_result("start", True, {})
+    effects = switch.command("c1", "p2", False, mode())
+    assert ("helper", "stop") in kinds(effects) and not selects(effects)
+    assert switch.state_event()["phase"] == "stopping"
+    switch.helper_result("stop", True, {})
+    assert switch.state_event()["phase"] == "off"
+
+
+def test_off_while_selecting_selects_none_then_stops():
+    switch, clock = make()
+    first = _to_selecting(switch, clock)
+    old_request = _request_id(first)
+    accept(switch, first, 7)
+    effects = switch.command("c1", "p2", False, mode(active="none", phase="SWITCHING", requested="pikavelocity",
+                                                    request_id=7))
+    [select] = selects(effects)
+    assert select.payload["mode_id"] == "none" and select.payload["request_id"] != old_request
+    assert ("helper", "stop") not in kinds(effects)
+    assert switch.state_event()["phase"] == "stopping"
+    # The bridge supersedes the outstanding pikavelocity request; that and late results for it are ignored.
+    assert switch.mode_request_error(old_request, "input_mode_superseded", "superseded") == []
+    assert switch.mode_request_result(old_request, False, 7, "late") == []
+    assert switch.state_event()["phase"] == "stopping"
+    switch.mode_request_result(select.payload["request_id"], True, 8, "")
+    assert ("helper", "stop") not in kinds(switch.tick(mode(active="pikavelocity", request_id=7)))
+    assert ("helper", "stop") in kinds(switch.tick(mode(active="none", request_id=8)))
+    switch.helper_result("stop", True, {})
+    assert switch.state_event()["phase"] == "off"
+
+
+def test_off_while_selecting_before_executor_answer():
+    switch, clock = make()
+    _to_selecting(switch, clock)
+    effects = switch.command("c1", "p2", False, mode())
+    assert [e.payload["mode_id"] for e in selects(effects)] == ["none"]
+
+
+def test_on_is_busy_while_waiting_input_or_selecting():
+    switch, clock = make()
+    switch.command("c1", "p1", True, mode())
+    switch.helper_result("start", True, {})
+    assert kinds(switch.command("c1", "p2", True, mode())) == [("reply_error", "pika_switch_busy")]
+    feed(switch, clock)
+    switch.tick(mode())
+    assert kinds(switch.command("c1", "p3", True, mode())) == [("reply_error", "pika_switch_busy")]
+
+
+def test_off_is_busy_while_stopping():
+    switch, _ = make(running=True)
+    switch.command("c1", "p1", False, mode(active="keyboard"))
+    assert kinds(switch.command("c1", "p2", False, mode(active="keyboard"))) == [("reply_error", "pika_switch_busy")]
+
+
+# ---- M1: failed but Pika is in charge ------------------------------------
+
+def test_failed_with_stack_running_and_pika_mode_active_is_on():
+    switch, clock = make()
+    accept(switch, _to_selecting(switch, clock), 7)
+    clock.now += 151
+    switch.tick(mode(active="none", phase="SWITCHING", requested="pikavelocity", request_id=7))
+    assert switch.state_event()["phase"] == "failed"
+    switch.helper_result("status", True, {"running": True})  # the poll that follows the failure
+    switch.tick(mode(active="pikavelocity", request_id=12))  # any request id
+    assert switch.state_event()["phase"] == "on"
+
+
+def test_failed_without_stack_stays_failed_in_pika_mode():
+    switch, _ = make()
+    switch.command("c1", "p1", True, mode())
+    switch.helper_result("start", False, {"error": "x"})
+    switch.tick(mode(active="pikavelocity", request_id=3))
+    assert switch.state_event()["phase"] == "failed"
+
+
+# ---- M2: the off step's own timeout and bridge timeout --------------------
+
+def test_bridge_timeout_before_acceptance_in_off_step_stops():
+    switch, clock = make()
+    effects = _turn_off(switch, clock)
+    stop = switch.mode_request_error(_request_id(effects), "input_mode_timeout", "timed out")
+    assert ("helper", "stop") in kinds(stop)
+    switch.helper_result("stop", True, {})
+    assert switch.state_event()["detail"] == "none not confirmed"
+
+
+def test_bridge_timeout_after_acceptance_in_off_step_waits_for_own_timeout():
+    switch, clock = make()
+    effects = _turn_off(switch, clock)
+    accept(switch, effects, 8)
+    assert switch.mode_request_error(_request_id(effects), "input_mode_timeout", "timed out") == []
+    assert switch.state_event()["phase"] == "stopping"
+
+
+def test_selecting_still_uses_mode_switch_timeout():
+    switch, clock = make()
+    accept(switch, _to_selecting(switch, clock), 7)
+    clock.now += 149
+    switch.tick(mode(active="none", phase="SWITCHING", requested="pikavelocity", request_id=7))
+    assert switch.state_event()["phase"] == "selecting"
+
+
+def test_off_is_refused_while_the_row_is_hidden():
+    switch, _ = make()
+    switch.helper_result("status", False, {"error": "down"})
+    assert switch.state_event()["available"] is False
+    assert kinds(switch.command("c1", "p1", False, mode())) == [("reply_error", "pika_switch_unavailable")]

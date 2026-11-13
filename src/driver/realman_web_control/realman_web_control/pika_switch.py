@@ -2,11 +2,19 @@
 
 On:  helper start -> both /pika/{l,r}/cartesian_velocity fresh -> select `mode`.
 Off: select `off_mode` (only when `mode` is active or requested) -> helper stop.
+Off is also accepted while waiting for input (helper stop only) and while
+selecting (the outstanding request is forgotten, then the off step runs), and
+while the helper is unreachable (the stop then fails with its detail).
 Mode requests go through the input-mode bridge under the switch's own client id
 and are correlated by the executor request id from the bridge's
 `input_mode_result`; bridge errors for the request count as refusals except
-the bridge's short pending timeout, which is not a failure here,
-only `mode_switch_timeout_sec` is (it covers the entry MoveJ).
+the bridge's short pending timeout, which is not a failure while selecting,
+only `mode_switch_timeout_sec` is (it covers the entry MoveJ). The off step
+waits at most `off_mode_timeout_sec`, and stops at once on a bridge timeout
+that came before the executor accepted the request.
+A helper start/stop that gets no answer within `helper_timeout_sec + 5 s`
+fails the switch; its late answer is handled as normal, and answers of an
+older start/stop (older epoch) are dropped.
 The owner serializes all calls and applies the returned effects in order.
 """
 
@@ -21,6 +29,7 @@ PIKA_ARMS = ("l", "r")
 TRANSITIONS = frozenset({"starting", "waiting_input", "selecting", "stopping"})
 SUPERSEDED = "superseded by another input mode request"
 BRIDGE_TIMEOUT = "input_mode_timeout"
+HELPER_GRACE_SEC = 5.0  # On top of helper_timeout_sec, which bounds the HTTP call itself.
 
 
 @dataclass(frozen=True)
@@ -31,6 +40,8 @@ class PikaSwitchConfig:
     mode_switch_timeout_sec: float
     mode: str
     off_mode: str
+    helper_timeout_sec: float
+    off_mode_timeout_sec: float
 
 
 @dataclass(frozen=True)
@@ -70,6 +81,7 @@ class PikaSwitch:
         self._epoch = 0
         self._last_input: dict[str, float] = {}
         self._helper_in_flight: str | None = None
+        self._helper_deadline = 0.0
         # The owner sends one status probe at start-up (Task 4); polling resumes after one period.
         self._next_poll = clock() + config.status_poll_sec
         self._published: dict[str, Any] | None = None
@@ -79,11 +91,23 @@ class PikaSwitch:
         if arm in PIKA_ARMS:
             self._last_input[arm] = self._clock()
 
+    @property
+    def reachable(self) -> bool:
+        return self._reachable
+
     def command(self, client_id: str, request_id: str, enabled: bool, mode: ModeView) -> list[PikaEffect]:
-        if not self._enabled or not self._reachable:
+        # Off does not need a reachable helper while the row is shown: Pika may still drive the arms.
+        if not self._enabled or (not self._reachable and (enabled or not self.state_event()["available"])):
             return [self._error(client_id, request_id, "pika_switch_unavailable", "Pika helper is not available")]
-        if self._phase in TRANSITIONS or self._helper_in_flight in ("start", "stop"):
+        busy = ("starting", "stopping") if not enabled else TRANSITIONS
+        if self._phase in busy or self._helper_in_flight in ("start", "stop"):
             return [self._error(client_id, request_id, "pika_switch_busy", f"Pika switch is {self._phase}")]
+        if not enabled and self._phase == "selecting":
+            # The entry MoveJ may be under way: forget the pikavelocity request (its late
+            # result or error no longer matches) and select off_mode as the off step does.
+            return self._begin_off_mode()
+        if not enabled and self._phase == "waiting_input":
+            return self._enter("stopping", "") + [self._helper("stop")]
         if enabled:
             if self._phase == "on" and self._in_mode(mode):
                 return [PikaEffect("send_event", self.state_event(), client_id)]  # answer the requester only
@@ -93,9 +117,7 @@ class PikaSwitch:
             self._last_input.clear()
             return self._enter("starting", "") + [self._helper("start")]
         if mode.available and self._config.mode in (mode.active_mode, mode.requested_mode):
-            self._stop_after_mode = True
-            self._deadline = self._clock() + self._config.mode_switch_timeout_sec
-            return self._enter("stopping", "") + [self._select(self._config.off_mode)]
+            return self._begin_off_mode()
         return self._enter("stopping", "") + [self._helper("stop")]
 
     def mode_request_result(self, request_id: str, accepted: bool, executor_request_id: int,
@@ -112,20 +134,27 @@ class PikaSwitch:
 
         `input_mode_timeout` is the bridge's own short pending timeout; the entry
         MoveJ can take longer, so only `mode_switch_timeout_sec` ends the wait.
+        In the off step a bridge timeout before the executor accepted the request
+        means `off_mode` cannot be confirmed: stop the stack anyway.
         """
-        if self._mode_request is None or request_id != self._mode_request or code == BRIDGE_TIMEOUT:
+        if self._mode_request is None or request_id != self._mode_request:
+            return []
+        if code == BRIDGE_TIMEOUT:
+            if self._phase == "stopping" and self._stop_after_mode and self._executor_request_id is None:
+                return self._finish_off_mode(f"{self._config.off_mode} not confirmed")
             return []
         return self._refused(message)
 
     def helper_result(self, action: str, ok: bool, payload: dict[str, Any], *,
                       epoch: int | None = None) -> list[PikaEffect]:
-        if action == "status" and epoch is not None and epoch != self._epoch:
+        if epoch is not None and epoch != self._epoch:
             return []  # issued before a later start/stop; its answer is stale
         if self._helper_in_flight == action:
             self._helper_in_flight = None
         if action == "status":
-            self._reachable = ok
-            if ok:
+            # A status whose probe errored (tmux timed out or missing) is no answer about the stack.
+            self._reachable = ok and not payload.get("error")
+            if self._reachable:
                 self._stack_running = bool(payload.get("running"))
             return self._publish()
         self._reachable = self._reachable or ok
@@ -150,6 +179,10 @@ class PikaSwitch:
         executor = self._executor_request_id
         ours = executor is not None and mode.request_id == executor
         superseded = executor is not None and mode.request_id > executor
+        if self._helper_in_flight in ("start", "stop") and now >= self._helper_deadline:
+            # The HTTP call is bounded by helper_timeout_sec; no answer by now means the owner lost it.
+            action, self._helper_in_flight = self._helper_in_flight, None
+            effects += self._enter("failed", f"Pika helper {action} got no answer")
         if self._phase == "waiting_input":
             if all(self._fresh(arm, now) for arm in PIKA_ARMS):
                 self._deadline = now + self._config.mode_switch_timeout_sec
@@ -185,11 +218,12 @@ class PikaSwitch:
             elif not mode.available:
                 effects += self._finish_off_mode("input mode router is unavailable")
             elif now >= self._deadline:
-                effects += self._finish_off_mode(f"{off_mode} not active after {self._config.mode_switch_timeout_sec:g} s")
-        elif self._phase in ("off", "on"):
+                effects += self._finish_off_mode(f"{off_mode} not active after {self._config.off_mode_timeout_sec:g} s")
+        elif self._phase in ("off", "on", "failed"):
             in_mode = self._in_mode(mode)
             if self._helper_in_flight is None:
-                if self._phase == "off" and self._stack_running and in_mode:
+                # Pika running and the tree in the Pika mode (under any request) is `on`, however it got there.
+                if self._phase in ("off", "failed") and self._stack_running and in_mode:
                     effects += self._enter("on", "")
                 elif self._phase == "on" and not self._stack_running:
                     effects += self._enter("off", "Pika stack stopped outside :8765")
@@ -207,7 +241,10 @@ class PikaSwitch:
                 for arm in PIKA_ARMS}
         return {
             "type": "pika_switch_state",
-            "available": self._enabled and self._reachable,
+            # The row stays while Pika may still drive the arms, even with the helper unreachable.
+            "available": self._enabled and (self._reachable or self._phase != "off" or self._stack_running),
+            "helper_reachable": self._reachable,
+            "input_fresh_ms": self._config.input_fresh_ms,
             "phase": self._phase,
             "stack_running": self._stack_running,
             "input_age_ms": ages,
@@ -231,6 +268,13 @@ class PikaSwitch:
         if self._phase == "stopping" and self._stop_after_mode:
             return self._finish_off_mode(f"{self._config.off_mode} refused: {message}")
         return []
+
+    def _begin_off_mode(self) -> list[PikaEffect]:
+        """Off step: select off_mode, then stop the stack (see tick)."""
+        self._stop_after_mode = True
+        self._deadline = self._clock() + self._config.off_mode_timeout_sec
+        # _select replaces any outstanding request, so signals for the old one are ignored.
+        return self._enter("stopping", "") + [self._select(self._config.off_mode)]
 
     def _finish_off_mode(self, detail: str) -> list[PikaEffect]:
         """End the off sequence's mode step and stop the stack."""
@@ -263,7 +307,7 @@ class PikaSwitch:
         self._helper_in_flight = action
         if action in ("start", "stop"):
             self._epoch += 1
-            return PikaEffect("helper", {"action": action})
+            self._helper_deadline = self._clock() + self._config.helper_timeout_sec + HELPER_GRACE_SEC
         return PikaEffect("helper", {"action": action, "epoch": self._epoch})
 
     def _select(self, mode_id: str) -> PikaEffect:

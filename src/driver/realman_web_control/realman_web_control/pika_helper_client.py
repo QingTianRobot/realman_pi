@@ -23,6 +23,8 @@ def call_helper(base_url: str, action: str, timeout_sec: float) -> tuple[bool, d
         return False, _payload(error.read())
     except (URLError, OSError, TimeoutError, ValueError):
         return False, {"ok": False, "error": "Pika helper is not reachable (./rm65 pika-helper install)"}
+    except Exception as error:  # noqa: BLE001 - e.g. http.client.HTTPException; the caller must get an answer
+        return False, {"ok": False, "error": f"Pika helper call failed: {type(error).__name__}: {error}"}
 
 
 def _payload(body: bytes) -> dict[str, Any]:

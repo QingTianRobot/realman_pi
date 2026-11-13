@@ -55,6 +55,7 @@ class WebServerConfig:
     pika_input_wait_timeout_sec: float = 30.0
     pika_status_poll_sec: float = 2.0
     pika_mode_switch_timeout_sec: float = 150.0
+    pika_off_mode_timeout_sec: float = 10.0
     pika_mode: str = "pikavelocity"
     pika_off_mode: str = "none"
     # Catalog of the /params.html parameter page; None disables the page and its /api/params* routes.
@@ -136,7 +137,7 @@ def load_server_config(path: str | Path) -> WebServerConfig:
     pika_numbers: dict[str, float] = {}
     for field, default in (("helper_timeout_sec", 40.0), ("input_fresh_ms", 500.0),
                            ("input_wait_timeout_sec", 30.0), ("status_poll_sec", 2.0),
-                           ("mode_switch_timeout_sec", 150.0)):
+                           ("mode_switch_timeout_sec", 150.0), ("off_mode_timeout_sec", 10.0)):
         value = pika.get(field, default)
         if isinstance(value, bool) or not isinstance(value, (int, float)) or not math.isfinite(value) or value <= 0:
             raise ValueError(f"pika_switch.{field} must be finite and positive")
@@ -185,6 +186,7 @@ def load_server_config(path: str | Path) -> WebServerConfig:
         pika_input_wait_timeout_sec=pika_numbers["input_wait_timeout_sec"],
         pika_status_poll_sec=pika_numbers["status_poll_sec"],
         pika_mode_switch_timeout_sec=pika_numbers["mode_switch_timeout_sec"],
+        pika_off_mode_timeout_sec=pika_numbers["off_mode_timeout_sec"],
         pika_mode=pika_modes["mode"],
         pika_off_mode=pika_modes["off_mode"],
         param_catalog_file=(config_root / catalog_file) if catalog_file else None,

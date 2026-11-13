@@ -374,41 +374,59 @@ helper 未运行时按钮灰显，悬停提示需要安装；`docker_restart.url
 - **启动 Pika**：宿主机上启动 Pika 遥操作栈（tmux 会话 `pika` 中的 `~/pika_teleop_ws/start_pika_bag.sh`），
   等 `/pika/l/cartesian_velocity` 和 `/pika/r/cartesian_velocity` 都有新数据，再选择输入模式 `pikavelocity`；
   控制树先把双臂 MoveJ 到 Pika 默认位姿，然后开始跟随。
-- **关闭 Pika**：若 `pikavelocity` 正在运行或已被请求，先选择 `none`（无输入）让双臂停止跟随，等它生效后再关闭
-  Pika 栈；否则直接关闭 Pika 栈。
+- **关闭 Pika**：若 `pikavelocity` 正在运行或已被请求，先选择 `none`（无输入）让双臂停止跟随，等它生效（最多
+  `off_mode_timeout_sec` 10 s）后再关闭 Pika 栈；否则直接关闭 Pika 栈。
 
-整个流程在服务端运行，关闭页面不会中断；状态是全局的并广播给所有页面，每个页面看到同一阶段。过渡阶段按钮禁用，
-期间再发命令回错误 `pika_switch_busy`。页面只读或 WebSocket 未连接时按钮也禁用。
+整个流程在服务端运行，关闭页面不会中断；状态是全局的并广播给所有页面，每个页面看到同一阶段。
+
+**按钮规则**：
+
+- “关闭 Pika”在 `waiting_input`（等待 Pika 数据）和 `selecting`（切换模式，含最长 120 s 的入场 MoveJ）阶段也可按：
+  `waiting_input` 时还没选模式，直接关闭栈；`selecting` 时放弃尚未完成的 `pikavelocity` 请求（它之后的结果和错误都被忽略），
+  选择 `none`，再关闭栈。
+- 只有 `starting` 和 `stopping`（helper 调用进行中）按钮禁用，此时再发命令回错误 `pika_switch_busy`；`waiting_input`
+  和 `selecting` 阶段再发“启动”也回 `pika_switch_busy`。页面只读或 WebSocket 未连接时按钮也禁用；WebSocket 断开时整行隐藏，
+  重连后服务端重新发送状态。
+- helper 不可达时“启动 Pika”被拒绝（`pika_switch_unavailable`），“关闭 Pika”照常执行：先切 `none`，之后 helper `/stop`
+  失败而进入 `failed`，原因写在 `detail`。只要阶段不是 `off` 或栈（最后一次查询时）在运行，整行就保持显示，页面在阶段文字后
+  加“（helper 不可达）”。
+- 命令被拒绝时（例如控制树未运行时按“启动 Pika”），阶段不变（仍是“未启动”），拒绝原因在 Pika 这一行显示约 6 s，
+  同时也出现在结果面板。
 
 | 阶段（`phase`） | 页面文字 | 含义 |
 | --- | --- | --- |
 | `off` | 未启动 / Pika 已运行（未切换模式） | Pika 栈未运行；或栈在运行但当前不是 Pika 模式（例如手动启动） |
-| `starting` | 启动中 | helper `/start` 进行中 |
-| `waiting_input` | 等待 Pika 数据 l✓ r… | 栈已启动，等两路速度都比 `input_fresh_ms` 新；✓ 表示该臂数据新鲜 |
-| `selecting` | 切换模式 | 已通过输入模式 bridge 请求 `pikavelocity`，等它 ACTIVE（含入场 MoveJ） |
+| `starting` | 启动中 | helper `/start` 进行中；`helper_timeout_sec` + 5 s 内没有答复则 `failed`（`Pika helper start got no answer`） |
+| `waiting_input` | 等待 Pika 数据 l✓ r… | 栈已启动，等两路速度都比 `input_fresh_ms` 新；✓ 表示该臂数据新鲜。可按“关闭 Pika” |
+| `selecting` | 切换模式 | 已通过输入模式 bridge 请求 `pikavelocity`，等它 ACTIVE（含入场 MoveJ）。可按“关闭 Pika” |
 | `on` | 运行中 / 运行中（当前不是 Pika 模式） | Pika 速度控制在运行；别处切走了模式时显示后者（`mode_lost`），栈不停 |
-| `stopping` | 关闭中 | 先切 `none`（如需要），再 helper `/stop` |
-| `failed` | 失败: &lt;原因&gt; | 原因在 `detail`；再按按钮从头重试 |
+| `stopping` | 关闭中 | 先切 `none`（如需要，最多 `off_mode_timeout_sec`），再 helper `/stop`；`/stop` 在 `helper_timeout_sec` + 5 s 内没有答复则 `failed` |
+| `failed` | 失败: &lt;原因&gt; | 原因在 `detail`；再按按钮从头重试。栈在运行且行为树已 ACTIVE 在 `pikavelocity`（任何请求）时自动变为 `on` |
 
-按钮方向：栈未运行时（`off` 或 `failed`）显示“启动 Pika”；`on`、栈在运行但不是 Pika 模式、以及失败但栈仍在运行时
-显示“关闭 Pika”。栈在运行但不是 Pika 模式时按“关闭 Pika”只关闭栈，不切换模式。
+按钮方向：栈未运行时（`off` 或 `failed`）显示“启动 Pika”；`waiting_input`、`selecting`、`on`、栈在运行但不是 Pika 模式、
+以及失败但栈仍在运行时显示“关闭 Pika”。栈在运行但不是 Pika 模式时按“关闭 Pika”只关闭栈，不切换模式。
 
 模式请求复用输入模式 bridge，使用开关自己的 client id `pika_switch` 和服务端生成的 request id（`pika-<n>`），所以
 取消 Web 动作、被其它请求顶替等行为与手动切换一致。结果按 bridge `input_mode_result` 里的 executor request id
 对应：拒绝或该请求的任何 bridge 错误立即判失败；只有该请求（或更新的请求 = 被顶替）的状态快照决定结果，旧请求的
 FAILED/ACTIVE 不会影响新的一次。切换失败后 executor 会在下一 tick 以同一 request id 调度回退模式，开关看到
-`requested_mode` 不再是 `pikavelocity` 即判失败。bridge 自己 5 s 的 `input_mode_timeout` 在这里不算失败，
-等待上限是 `mode_switch_timeout_sec`（150 s，覆盖入场 MoveJ 的 `pika_default_pose.timeout_sec` 120 s）。
+`requested_mode` 不再是 `pikavelocity` 即判失败。切换到 `pikavelocity` 时 bridge 自己 5 s 的 `input_mode_timeout`
+不算失败，等待上限是 `mode_switch_timeout_sec`（150 s，覆盖入场 MoveJ 的 `pika_default_pose.timeout_sec` 120 s）。
+关闭时切 `none` 只等 `off_mode_timeout_sec`（10 s）；executor 还没接受 `none` 请求时 bridge 就报 `input_mode_timeout`，
+也直接关闭栈（`detail` 为 `none not confirmed`）。
 
 空闲时每 `status_poll_sec` 查询一次 helper `/status`，所以在终端里手动启动或关闭 Pika 也会反映到页面（只改显示，
-不切换模式）；状态查询带一个序号，在它之后发出的 start/stop 会让这次较早的查询结果作废。Web 服务启动（或重启）时
-用同样的方式推导阶段：栈在运行且当前模式是 `pikavelocity` 则为 `on`，否则为 `off`。
+不切换模式）；status、start、stop 都带一个序号，在它之后发出的 start/stop 会让较早的结果作废。helper 返回的
+`/status` 带 `error`（例如 `tmux has-session` 超时）时按 helper 不可达处理，栈的运行状态保持上一次的值。可达性变化时
+web_control 日志记一次。Web 服务启动（或重启）时用同样的方式推导阶段：栈在运行且当前模式是 `pikavelocity` 则为 `on`，
+否则为 `off`。
 
 **前提**
 
-- 宿主机装好 helper（见下）。helper 未安装或不响应时 `available: false`，整行隐藏。
+- 宿主机装好 helper（见下）。helper 未安装或不响应、且阶段为 `off`、栈未运行时 `available: false`，整行隐藏。
 - 控制树在运行（`./rm65 bt control` 或“行为树”卡片启动）：输入模式目录里没有可选的 `pikavelocity` 时，
-  “启动 Pika”立即失败、不启动栈，提示 `pikavelocity mode is not available; start the control tree first`。
+  “启动 Pika”被拒绝（`pika_mode_unavailable`）、不启动栈，阶段仍是“未启动”，Pika 这一行显示
+  `pikavelocity mode is not available; start the control tree first`。
 
 **宿主机 helper**
 
@@ -422,6 +440,7 @@ Pika 栈是宿主机原生安装（USB 串口、libsurvive 配置、定位器需
   "bind_host": "127.0.0.1",
   "port": 8783,
   "timeout_sec": 20,
+  "status_timeout_sec": 5,
   "start": ["tmux", "new-session", "-d", "-s", "pika", "~/pika_teleop_ws/start_pika_bag.sh"],
   "status": ["tmux", "has-session", "-t", "=pika"],
   "stop": ["tmux", "send-keys", "-t", "=pika", "C-c"],
@@ -430,9 +449,11 @@ Pika 栈是宿主机原生安装（USB 串口、libsurvive 配置、定位器需
 }
 ```
 
-- `status` 退出码 0 即 `running`；`=pika` 精确匹配会话名，不会误中 `pika_xxx`。
+- `status` 退出码 0 即 `running`，**只有**退出码 1（会话不存在）算未运行；`=pika` 精确匹配会话名，不会误中 `pika_xxx`。
+  其它非零退出码（124 超时、127 找不到 tmux 等）不是关于会话的答复：`/start`、`/stop` 带该输出失败（500），
+  `/status` 返回 `"running": false` 加 `error`。
 - `start` 在已运行时直接算成功；`stop` 先发 Ctrl-C，轮询 `status` 至多 `stop_grace_sec` 秒，仍在运行再执行 `kill`。
-  已停止也算成功。每条命令最长 `timeout_sec` 秒。
+  已停止也算成功。`status` 每次最长 `status_timeout_sec`（可选，默认 5 s），其它命令最长 `timeout_sec` 秒。
 - `last` 记录动作、退出码、起止时间和输出末尾 12 行；失败时 `detail` 带错误和输出末尾几行。
 
 helper 以 **systemd 用户单元**运行（不是重启 helper 那样的系统单元）：它要以桌面用户身份运行才能用该用户的 tmux 和
@@ -451,47 +472,62 @@ loginctl enable-linger "$USER" # 只需一次：没有登录会话时用户单�
 
 ```yaml
 pika_switch:
-  helper_url: http://127.0.0.1:8783  # Empty string hides the switch.
-  helper_timeout_sec: 40.0  # Above the helper's timeout_sec 20 + stop_grace_sec 8, with room for the status checks during stop.
+  helper_url: http://127.0.0.1:8783  # Empty string hides the switch (or no helper answers).
+  # Per helper call. Above the helper's worst start (status_timeout_sec 5 + timeout_sec 20 + status 5 s)
+  # and a stop that ends within stop_grace_sec 8; a stop that also needs kill can exceed it and then
+  # shows failed. A start/stop with no answer after this + 5 s fails the switch.
+  helper_timeout_sec: 40.0
   input_fresh_ms: 500  # Both l and r Pika velocity must be newer than this.
   input_wait_timeout_sec: 30.0  # Stack started but no Pika data from an arm -> failed (stack stays up).
   status_poll_sec: 2.0  # Helper status poll; shows a stack started or stopped by hand.
   mode_switch_timeout_sec: 150.0  # Covers the entry MoveJ (pika_default_pose.timeout_sec 120).
+  off_mode_timeout_sec: 10.0  # Off step: wait this long for `off_mode`, then stop the stack anyway.
   mode: pikavelocity
   off_mode: none
 ```
 
-`helper_timeout_sec` 是 Web 服务调用 helper 的 HTTP 超时，必须大于一次 stop 的最坏耗时（`timeout_sec` +
-`stop_grace_sec` + 轮询）。helper 调用不在控制线程上执行，结果再串行送回状态机。
+`helper_timeout_sec` 是 Web 服务调用 helper 的 HTTP 超时，大于一次 start 的最坏耗时（`status_timeout_sec` +
+`timeout_sec` + `status_timeout_sec` = 30 s）和正常的 stop（Ctrl-C 后 `stop_grace_sec` 内退出）；还要 `kill` 的 stop
+可能更久，此时开关显示 `failed`。helper 调用不在控制线程上执行，任何异常也会作为失败结果串行送回状态机；start/stop 在
+`helper_timeout_sec` + 5 s 内没有答复时状态机自行判 `failed`（`Pika helper <action> got no answer`），之后迟到的同一次答复
+照常处理，不会再触发新的过渡。`off_mode_timeout_sec`（默认 10 s）是关闭时等待 `none` 的上限。
 
 **失败处理**
 
 | 情况 | 结果 |
 | --- | --- |
-| helper 未安装或不可达 | `available: false`，整行隐藏 |
-| 控制树未运行 | “启动 Pika”立即失败，不启动栈 |
+| helper 未安装或不可达（阶段 `off`、栈未运行） | `available: false`，整行隐藏 |
+| 运行中 helper 变得不可达 | 整行保留并显示“（helper 不可达）”；“关闭 Pika”仍先切 `none`，之后 `/stop` 失败进入 `failed` |
+| helper start/stop 没有答复 | `helper_timeout_sec` + 5 s 后 `failed`，`detail` 为 `Pika helper start got no answer` / `... stop ...` |
+| 控制树未运行 | “启动 Pika”被拒绝，阶段仍为“未启动”，原因显示在 Pika 这一行，不启动栈 |
 | 启动命令失败 | `failed`，`detail` 带 helper 输出末尾 |
 | 某臂一直没有 Pika 数据（例如右 tracker 没插） | 30 s 后 `失败: no /pika/r input for 30 s`，**栈保留运行**便于排查，按“关闭 Pika”关闭 |
 | `pikavelocity` 被拒绝、切换失败、被其它请求顶替、路由不可用或 150 s 未 ACTIVE | `failed`，栈保留运行 |
-| 关闭时 `none` 被拒绝或路由不可用 | 仍关闭栈，原因写在 `detail`；没有输入后路由在 `input_timeout_ms` = 3 s 后释放会话，机械臂照样停止 |
+| 关闭时 `none` 被拒绝、超时（10 s 或 bridge 在接受前超时）、被顶替或路由不可用 | 仍关闭栈，原因只在这些情况下写在关闭后的 `detail`；没有输入后路由在 `input_timeout_ms` = 3 s 后释放会话，机械臂照样停止 |
+| 切换模式（入场 MoveJ）中按“关闭 Pika” | 放弃 `pikavelocity` 请求，切 `none`，再关闭栈 |
 | 运行中 Pika 数据中断 | 路由行为不变：200 ms 后零速度，3 s 后释放会话 |
 | 页面在流程中关闭 | 流程在服务端继续 |
 | web_control 在运行中重启 | 查询到“栈在运行 + 模式 `pikavelocity`”，显示为 `on` |
 | 栈在 :8765 之外被关闭 | 回到 `off`，`detail` 为 `Pika stack stopped outside :8765` |
 
 **各主机**：`pika_helper.json` 中的命令按主机而定，仓库里的值适用于 Pika 栈在本机 tmux 中运行的机器人宿主机。
-realman_ts 上 Pika 栈运行在另一台 Pika 遥操作机（PikaRemote）上，本迭代不提供它的命令：那里不安装 helper，开关因
-helper 不可达而隐藏；也可以在该主机把 `helper_url` 置空，彻底关闭开关和状态轮询。含私有地址的主机专属值不要提交到
+realman_ts 上 Pika 栈运行在另一台 Pika 遥操作机（PikaRemote）上，本迭代不提供它的命令：那里保留仓库里的 `helper_url`，
+但不安装 helper，没有 helper 答复，所以整行隐藏；也可以在该主机把 `helper_url` 置为 `""`，彻底关闭开关和状态轮询。含私有地址的主机专属值不要提交到
 git（沿用 `.env` / skip-worktree 的做法）。
 
 **实机验收清单**（在 Pika 栈运行于本机的宿主机上，现场操作）：
 
-1. `./rm65 pika-helper install`；tmux `pika` 未运行时 `curl -s 127.0.0.1:8783/status` 返回 `{"running": false, ...}`。
-2. 部署 web_control（代码 + 重建的静态页面），只重启 `realman_web_control` 容器。
-3. 在 :8765 以真实运动启动控制树，按“启动 Pika”：依次显示 启动中 → 等待 Pika 数据 → 切换模式 → 运行中；
+1. `./rm65 pika-helper install`；tmux `pika` 未运行时 `curl -s 127.0.0.1:8783/status` 返回 `{"running": false, ...}`
+   （不带 `error`）。
+2. 检查用户单元的环境：`systemctl --user show-environment` 里有 `DISPLAY` 和 `XAUTHORITY`（定位器 rviz 需要），
+   并确认 `start_pika_bag.sh` 在非交互 tmux shell 里能跑：`tmux new-session -d -s pikatest ~/pika_teleop_ws/start_pika_bag.sh`
+   后 `tmux attach -t pikatest` 查看输出，再 `tmux kill-session -t pikatest`。
+3. 部署 web_control（代码 + 重建的静态页面），只重启 `realman_web_control` 容器。
+4. 在 :8765 以真实运动启动控制树，按“启动 Pika”：依次显示 启动中 → 等待 Pika 数据 → 切换模式 → 运行中；
    双臂到 Pika 默认位姿并跟随。
-4. 按“关闭 Pika”：关闭中 → 未启动；双臂停止；`tmux has-session -t pika` 失败。
-5. 拔掉右 tracker 后按“启动 Pika”：显示 `失败: no /pika/r input for 30 s`，tmux `pika` 仍在运行；按“关闭 Pika”将其关闭。
+5. 按“关闭 Pika”：关闭中 → 未启动；双臂停止；`tmux has-session -t pika` 失败。
+6. 再按“启动 Pika”，在入场 MoveJ（切换模式）期间按“关闭 Pika”：切到无输入，栈关闭。
+7. 拔掉右 tracker 后按“启动 Pika”：显示 `失败: no /pika/r input for 30 s`，tmux `pika` 仍在运行；按“关闭 Pika”将其关闭。
 
 WebSocket 消息见下文 [Pika 速度控制开关消息](#pika-速度控制开关消息)。
 
@@ -523,16 +559,18 @@ WebSocket 消息见下文 [Pika 速度控制开关消息](#pika-速度控制开�
 | `joint_record_deleted` | `record` | MOVEJ 页面确认删除当前选择记录后的结果 |
 | `joint_record_applied` | `command`, `joint_degrees`, `pose_position_m`, `pose_quaternion_wxyz` | 选择记录填入当前 MOVEJ/MOVEL/MOVEP 表单 |
 | `tf_frames` | `arm`, `frames[]` | TF 缓存中与该 arm `base_link` 连通的可选参考坐标 |
-| `pika_switch_state` | `available`, `phase`, `stack_running`, `input_age_ms`, `mode_lost`, `detail` | Pika 速度控制开关状态，连接时和每次变化时发送 |
+| `pika_switch_state` | `available`, `helper_reachable`, `input_fresh_ms`, `phase`, `stack_running`, `input_age_ms`, `mode_lost`, `detail` | Pika 速度控制开关状态，连接时和每次变化时发送 |
 
 ### Pika 速度控制开关消息
 
 浏览器发送 `{"type": "pika_switch", "request_id": "...", "enabled": true|false}`（`enabled` 为布尔值）。服务端广播
-`pika_switch_state`：`available`（helper 已配置且可达）、`phase`（`off`/`starting`/`waiting_input`/`selecting`/
-`on`/`stopping`/`failed`）、`stack_running`、`input_age_ms`（`{"l": n|null, "r": n|null}`，毫秒）、`mode_lost`、
-`detail`。连接时发送一次，之后只在状态变化时发送（输入延迟只在 `waiting_input` 阶段随变化推送）。命令被拒绝时回
-`error`：`pika_switch_unavailable`（helper 未配置或不可达）、`pika_switch_busy`（正在过渡）或
-`pika_mode_unavailable`（控制树未提供 `pikavelocity`）。行为见 [Pika 速度控制开关](#pika-速度控制开关)。
+`pika_switch_state`：`available`（helper 已配置，且 helper 可达、阶段不是 `off` 或栈在运行三者之一成立）、
+`helper_reachable`（最近一次 helper 调用有答复且 `/status` 不带 `error`）、`input_fresh_ms`（页面 ✓ 的阈值）、`phase`
+（`off`/`starting`/`waiting_input`/`selecting`/`on`/`stopping`/`failed`）、`stack_running`、`input_age_ms`
+（`{"l": n|null, "r": n|null}`，毫秒）、`mode_lost`、`detail`。连接时发送一次，之后只在状态变化时发送（输入延迟只在
+`waiting_input` 阶段随变化推送）。命令被拒绝时回 `error`（`request_id` 为页面的 `pika-switch-<n>`，页面在 Pika 这一行
+显示约 6 s）：`pika_switch_unavailable`（helper 未配置；或 helper 不可达时的“启动”）、`pika_switch_busy`（helper 调用进行中，
+或 `waiting_input`/`selecting` 阶段的“启动”）或 `pika_mode_unavailable`（控制树未提供 `pikavelocity`）。行为见 [Pika 速度控制开关](#pika-速度控制开关)。
 
 ### MOVEJ、MOVEL 与 MOVEP
 

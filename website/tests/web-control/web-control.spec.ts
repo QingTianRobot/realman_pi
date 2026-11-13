@@ -1945,3 +1945,47 @@ test("marks deviations from the keyboard while a policy attempt is recorded", as
   await pushBtRuntime(page, { available: false });
   await expect(page.locator("#quality-strip")).toBeHidden();
 });
+
+test("Pika switch starts and stops Pika velocity control", async ({ page }) => {
+  await page.goto("/");
+  const sent = () => page.evaluate(() =>
+    ((window as any).__webMessages as string[]).map((value) => JSON.parse(value))
+      .filter((message) => message.type === "pika_switch"),
+  );
+  const pika = (overrides: Record<string, unknown>) => emitWebSocketEvent(page, {
+    type: "pika_switch_state", available: true, phase: "off", stack_running: false,
+    input_age_ms: { l: null, r: null }, mode_lost: false, detail: "", ...overrides,
+  });
+  await emitWebSocketEvent(page, {
+    type: "input_mode_list", available: true,
+    modes: [{ id: "pikavelocity", label: "Pika / 速度控制", selectable: true }, { id: "none", label: "无输入", selectable: true }],
+  });
+  const row = page.locator("#pika-switch-row");
+  const button = page.locator("#pika-switch");
+  const state = page.locator("#pika-switch-state");
+
+  await pika({ available: false });
+  await expect(row).toBeHidden();
+
+  await pika({});
+  await expect(row).toBeVisible();
+  await expect(button).toHaveText("启动 Pika");
+  await expect(state).toHaveText("未启动");
+  await button.click();
+  expect((await sent()).at(-1)).toMatchObject({ type: "pika_switch", enabled: true });
+
+  await pika({ phase: "waiting_input", stack_running: true, input_age_ms: { l: 20, r: null } });
+  await expect(button).toBeDisabled();
+  await expect(state).toHaveText("等待 Pika 数据 l✓ r…");
+
+  await pika({ phase: "on", stack_running: true });
+  await expect(button).toBeEnabled();
+  await expect(button).toHaveText("关闭 Pika");
+  await expect(state).toHaveText("运行中");
+  await button.click();
+  expect((await sent()).at(-1)).toMatchObject({ type: "pika_switch", enabled: false });
+
+  await pika({ phase: "failed", stack_running: true, detail: "no /pika/r input for 30 s" });
+  await expect(state).toHaveText("失败: no /pika/r input for 30 s");
+  await expect(button).toHaveText("关闭 Pika");
+});

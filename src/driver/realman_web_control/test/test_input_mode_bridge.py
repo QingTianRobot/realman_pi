@@ -415,3 +415,14 @@ def test_failed_request_stays_failed_while_higher_epoch_recovery_and_new_none_re
     assert controller.pending_token is None
     clock.now = 16.0
     assert controller.expire() == []
+
+
+def test_snapshot_and_is_selectable_accessors():
+    bridge = InputModeBridge(web_override_timeout_sec=5.0)
+    assert bridge.snapshot is None and bridge.is_selectable("pikavelocity") is False
+    bridge.update_catalog((InputModeOption("web", "Web", False),
+                           InputModeOption("pikavelocity", "Pika / 速度控制", True)))
+    assert bridge.is_selectable("pikavelocity") is True
+    assert bridge.is_selectable("web") is False
+    bridge.update_state(InputModeSnapshot("none", "none", "none", "ACTIVE", 1, 1))
+    assert bridge.snapshot.active_mode == "none"

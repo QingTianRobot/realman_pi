@@ -55,6 +55,8 @@ from .keyboard_control_bridge import KeyboardControlBridge
 from .model_manifest import build_manifest
 from .param_readback import ParameterReadback
 from .param_tuning import CatalogError, ParamStore
+from .pika_helper_client import call_helper
+from .pika_switch import PIKA_CLIENT_ID, ModeView, PikaEffect, PikaSwitch, PikaSwitchConfig
 from .protocol import ProtocolError, reject_if_read_only
 from .quality_marks import MARK_KINDS, recording_view, view_changed
 from .tf_pose import transform_stamped_pose
@@ -196,6 +198,17 @@ class WebControlNode(Node):
         # Node owns its own _subscriptions collection; never append to it twice.
         self._web_subscriptions = []
         self._input_modes = InputModeBridge(web_override_timeout_sec=web_config.web_override_timeout_sec)
+        self._pika_helper_url = web_config.pika_helper_url
+        self._pika_helper_timeout = web_config.pika_helper_timeout_sec
+        self._pika_mode_id = web_config.pika_mode
+        self._pika = PikaSwitch(PikaSwitchConfig(
+            input_fresh_ms=web_config.pika_input_fresh_ms,
+            input_wait_timeout_sec=web_config.pika_input_wait_timeout_sec,
+            status_poll_sec=web_config.pika_status_poll_sec,
+            mode_switch_timeout_sec=web_config.pika_mode_switch_timeout_sec,
+            mode=web_config.pika_mode,
+            off_mode=web_config.pika_off_mode,
+        ), enabled=bool(web_config.pika_helper_url))
         self._mode_discovery_period = web_config.discovery_period_sec
         self._mode_list_future = None
         self._mode_state_subscription = None
@@ -463,6 +476,17 @@ class WebControlNode(Node):
             self._drain_commands,
             callback_group=self._callback_group,
         )
+        if self._pika_helper_url:
+            for arm in ("l", "r"):
+                # input_received only stores a float; it skips the control lock so the 20 Hz stream never waits.
+                self._web_subscriptions.append(self.create_subscription(
+                    TwistStamped, f"/pika/{arm}/cartesian_velocity",
+                    lambda _message, arm=arm: self._pika.input_received(arm), 1,
+                    callback_group=self._callback_group,
+                ))
+            self._pika_timer = self.create_timer(0.2, self._pika_tick, callback_group=self._callback_group)
+            # First status probe now, so the switch is shown (and `on` is derived) without waiting a poll period.
+            self._apply_pika_effects([PikaEffect("helper", {"action": "status"})])
         self.get_logger().info(
             f"RealMan Web control listening on {web_config.bind_host}:{web_config.port} "
             "(direct control enabled)"
@@ -529,6 +553,10 @@ class WebControlNode(Node):
             self._gripper_command(client_id, message)
         elif message_type == "select_input_mode":
             self._apply_input_mode_effects(self._input_modes.select_mode(client_id, message))
+        elif message_type == "pika_switch":
+            self._apply_pika_effects(self._pika.command(
+                client_id, message["request_id"], message["enabled"], self._pika_mode_view(),
+            ))
         elif message_type == "keyboard_state":
             self._keyboard_state(client_id, message)
         elif message_type in MOTION_TYPES:
@@ -727,6 +755,21 @@ class WebControlNode(Node):
     def _apply_input_mode_effects(self, effects: list[InputModeEffect]) -> None:
         for effect in effects:
             if effect.kind == "send_event":
+                if effect.client_id == PIKA_CLIENT_ID:
+                    # Replies to the Pika switch's own requests; PIKA_CLIENT_ID is not a browser.
+                    payload = effect.payload
+                    if payload.get("type") == "input_mode_result":
+                        self._apply_pika_effects(self._pika.mode_request_result(
+                            payload["request_id"], bool(payload["accepted"]),
+                            int(payload["executor_request_id"]), str(payload.get("message", "")),
+                        ))
+                    elif payload.get("type") == "error" and payload.get("request_id"):
+                        self._apply_pika_effects(self._pika.mode_request_error(
+                            payload["request_id"], str(payload.get("code", "")), str(payload.get("message", "")),
+                        ))
+                    else:
+                        self.get_logger().debug(f"Pika switch: dropped input-mode event {payload.get('type')}")
+                    continue
                 self._server.send_event(effect.payload, effect.client_id)
             elif effect.kind == "cancel_web_actions":
                 self._cancel_web_actions()
@@ -778,6 +821,55 @@ class WebControlNode(Node):
             elif effect.kind == "request_safe_mode":
                 self._request_keyboard_safe_mode()
         self._forget_mode_selection_futures()
+
+    def _pika_mode_view(self) -> ModeView:
+        snapshot = self._input_modes.snapshot
+        return ModeView(
+            available=self._input_modes.available,
+            selectable=self._input_modes.is_selectable(self._pika_mode_id),
+            phase=snapshot.phase if snapshot is not None else None,
+            requested_mode=snapshot.requested_mode if snapshot is not None else "",
+            active_mode=snapshot.active_mode if snapshot is not None else "",
+            detail=snapshot.detail if snapshot is not None else "",
+            request_id=snapshot.request_id if snapshot is not None else 0,
+        )
+
+    @_serialized_control
+    def _pika_tick(self) -> None:
+        self._apply_pika_effects(self._pika.tick(self._pika_mode_view()))
+
+    @_serialized_control
+    def _pika_helper_done(self, action: str, ok: bool, payload: dict[str, Any], *,
+                          epoch: int | None = None) -> None:
+        if not ok and action != "status":
+            self.get_logger().warning(f"Pika helper {action} failed: {payload.get('error', '')}")
+        self._apply_pika_effects(self._pika.helper_result(action, ok, payload, epoch=epoch))
+
+    def _apply_pika_effects(self, effects: list[PikaEffect]) -> None:
+        """Apply switch effects in order; callers hold the control lock (helper calls run in threads)."""
+        for effect in effects:
+            if effect.kind in ("send_event", "reply_error"):
+                # client_id None broadcasts; a requester-only state answer and errors carry the client.
+                self._server.send_event(effect.payload, effect.client_id)
+            elif effect.kind == "helper":
+                action = effect.payload["action"]
+                if action != "status":
+                    self.get_logger().info(f"Pika switch: helper {action}")
+                epoch = effect.payload.get("epoch")
+                threading.Thread(
+                    target=lambda action=action, epoch=epoch: self._pika_helper_done(
+                        action, *call_helper(self._pika_helper_url, action, self._pika_helper_timeout),
+                        epoch=epoch),
+                    name=f"pika-helper-{action}", daemon=True,
+                ).start()
+            elif effect.kind == "select_mode":
+                self.get_logger().info(f"Pika switch: select input mode {effect.payload['mode_id']}")
+                self._apply_input_mode_effects(self._input_modes.select_mode(
+                    PIKA_CLIENT_ID,
+                    {"mode_id": effect.payload["mode_id"], "request_id": effect.payload["request_id"]},
+                ))
+            else:
+                self.get_logger().error(f"Pika switch: unknown effect {effect.kind}")
 
     def _keyboard_work_available(self, arm: str) -> bool:
         state = self._coordinate_state.get(arm, {})
@@ -1504,6 +1596,7 @@ class WebControlNode(Node):
 
     def _send_cached_state(self, client_id: str) -> None:
         self._apply_input_mode_effects(self._input_modes.cached_events(client_id))
+        self._server.send_event(self._pika.state_event(), client_id)
         self._server.send_event(self._camera_health, client_id)
         self._server.send_event({"type": "gripper_list", "grippers": list(self._grippers.values())}, client_id)
         for state in self._gripper_states.values():

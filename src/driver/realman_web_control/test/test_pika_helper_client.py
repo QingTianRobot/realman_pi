@@ -1,0 +1,56 @@
+import json
+import threading
+from http.server import BaseHTTPRequestHandler, ThreadingHTTPServer
+
+import pytest
+
+from realman_web_control.pika_helper_client import call_helper
+
+
+def serve(status, payload):
+    class Handler(BaseHTTPRequestHandler):
+        def _reply(self):
+            body = json.dumps(payload).encode()
+            self.send_response(status)
+            self.send_header("Content-Length", str(len(body)))
+            self.end_headers()
+            self.wfile.write(body)
+            Handler.seen.append((self.command, self.path))
+
+        do_GET = do_POST = _reply
+
+        def log_message(self, *args):
+            pass
+
+    Handler.seen = []
+    server = ThreadingHTTPServer(("127.0.0.1", 0), Handler)
+    threading.Thread(target=server.serve_forever, daemon=True).start()
+    return server, Handler.seen, f"http://127.0.0.1:{server.server_address[1]}"
+
+
+def test_status_is_get_and_start_is_post():
+    server, seen, url = serve(200, {"running": True})
+    try:
+        assert call_helper(url, "status", 2.0) == (True, {"running": True})
+        assert call_helper(url, "start", 2.0)[0] is True
+        assert seen == [("GET", "/status"), ("POST", "/start")]
+    finally:
+        server.shutdown()
+
+
+def test_error_status_returns_payload():
+    server, _, url = serve(500, {"ok": False, "error": "start failed with exit 1"})
+    try:
+        assert call_helper(url, "start", 2.0) == (False, {"ok": False, "error": "start failed with exit 1"})
+    finally:
+        server.shutdown()
+
+
+def test_unreachable_helper():
+    ok, payload = call_helper("http://127.0.0.1:9", "status", 0.5)
+    assert ok is False and "not reachable" in payload["error"]
+
+
+def test_unknown_action_is_rejected():
+    with pytest.raises(ValueError):
+        call_helper("http://127.0.0.1:9", "restart", 0.5)

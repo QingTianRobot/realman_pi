@@ -389,7 +389,8 @@ helper 未运行时按钮灰显，悬停提示需要安装；`docker_restart.url
   重连后服务端重新发送状态。
 - helper 不可达时“启动 Pika”被拒绝（`pika_switch_unavailable`），“关闭 Pika”照常执行：先切 `none`，之后 helper `/stop`
   失败而进入 `failed`，原因写在 `detail`。只要阶段不是 `off` 或栈（最后一次查询时）在运行，整行就保持显示，页面在阶段文字后
-  加“（helper 不可达）”。
+  加“（helper 不可达）”。例外：web_control 重启时 helper 恰好不可达，栈是否在运行未知，整行隐藏；这时用输入模式下拉选
+  “无输入”或终止行为树来停止双臂跟随。
 - 命令被拒绝时（例如控制树未运行时按“启动 Pika”），阶段不变（仍是“未启动”），拒绝原因在 Pika 这一行显示约 6 s，
   同时也出现在结果面板。
 

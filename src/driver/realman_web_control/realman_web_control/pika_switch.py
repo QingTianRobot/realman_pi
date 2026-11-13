@@ -4,7 +4,8 @@ On:  helper start -> both /pika/{l,r}/cartesian_velocity fresh -> select `mode`.
 Off: select `off_mode` (only when `mode` is active or requested) -> helper stop.
 Mode requests go through the input-mode bridge under the switch's own client id
 and are correlated by the executor request id from the bridge's
-`input_mode_result`; the bridge's short pending timeout is not a failure here,
+`input_mode_result`; bridge errors for the request count as refusals except
+the bridge's short pending timeout, which is not a failure here,
 only `mode_switch_timeout_sec` is (it covers the entry MoveJ).
 The owner serializes all calls and applies the returned effects in order.
 """
@@ -19,6 +20,7 @@ PIKA_CLIENT_ID = "pika_switch"
 PIKA_ARMS = ("l", "r")
 TRANSITIONS = frozenset({"starting", "waiting_input", "selecting", "stopping"})
 SUPERSEDED = "superseded by another input mode request"
+BRIDGE_TIMEOUT = "input_mode_timeout"
 
 
 @dataclass(frozen=True)
@@ -103,12 +105,17 @@ class PikaSwitch:
         if accepted:
             self._executor_request_id = executor_request_id
             return []
-        self._mode_request = None
-        if self._phase == "selecting":
-            return self._enter("failed", f"{self._config.mode} refused: {message}")
-        if self._phase == "stopping" and self._stop_after_mode:
-            return self._finish_off_mode(f"{self._config.off_mode} refused: {message}")
-        return []
+        return self._refused(message)
+
+    def mode_request_error(self, request_id: str, code: str, message: str) -> list[PikaEffect]:
+        """A bridge `error` event for the outstanding request counts as a refusal.
+
+        `input_mode_timeout` is the bridge's own short pending timeout; the entry
+        MoveJ can take longer, so only `mode_switch_timeout_sec` ends the wait.
+        """
+        if self._mode_request is None or request_id != self._mode_request or code == BRIDGE_TIMEOUT:
+            return []
+        return self._refused(message)
 
     def helper_result(self, action: str, ok: bool, payload: dict[str, Any], *,
                       epoch: int | None = None) -> list[PikaEffect]:
@@ -207,6 +214,15 @@ class PikaSwitch:
     def _fresh(self, arm: str, now: float) -> bool:
         received = self._last_input.get(arm)
         return received is not None and (now - received) * 1000 < self._config.input_fresh_ms
+
+    def _refused(self, message: str) -> list[PikaEffect]:
+        # Clearing the request makes any later signal for it (error, snapshot) a no-op.
+        self._mode_request = None
+        if self._phase == "selecting":
+            return self._enter("failed", f"{self._config.mode} refused: {message}")
+        if self._phase == "stopping" and self._stop_after_mode:
+            return self._finish_off_mode(f"{self._config.off_mode} refused: {message}")
+        return []
 
     def _finish_off_mode(self, detail: str) -> list[PikaEffect]:
         """End the off sequence's mode step and stop the stack."""

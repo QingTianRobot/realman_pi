@@ -95,10 +95,11 @@ Rules:
   client id `pika_switch` and a server-made request id (`pika-<n>`), so the existing
   cancel-web-actions and supersede behaviour applies unchanged. Results are
   correlated by the executor request id from the bridge's `input_mode_result`
-  (refused → fail/stop at once; only snapshots of that request, or a newer one =
-  superseded, decide the outcome), so a FAILED/ACTIVE snapshot from an older
-  request never decides a new attempt. The bridge's 5 s pending timeout is
-  ignored in favour of `mode_switch_timeout_sec` (150 s, covers the entry MoveJ). If the
+  (refused, or any bridge `error` for that request → fail/stop at once; only
+  snapshots of that request, or a newer one = superseded, decide the outcome), so
+  a FAILED/ACTIVE snapshot from an older request never decides a new attempt. The
+  bridge's 5 s pending timeout (`input_mode_timeout`) is ignored in favour of
+  `mode_switch_timeout_sec` (150 s, covers the entry MoveJ). If the
   catalog has no `pikavelocity` option (control tree not running), `on` fails
   before starting the stack: `pikavelocity mode is not available; start the control tree first`.
 - **One owner**: only one sequence runs; a second `on`/`off` during a transition

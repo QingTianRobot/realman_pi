@@ -403,3 +403,58 @@ def test_every_phase_change_broadcasts_state():
     effects = switch.command("c1", "p1", True, mode())
     assert any(e.kind == "send_event" and e.client_id is None and e.payload["type"] == "pika_switch_state"
                for e in effects)
+
+
+def _request_id(effects):
+    [select] = selects(effects)
+    return select.payload["request_id"]
+
+
+def test_bridge_error_before_acceptance_fails_at_once():
+    switch, clock = make()
+    request_id = _request_id(_to_selecting(switch, clock))
+    effects = switch.mode_request_error(request_id, "input_mode_not_selectable",
+                                        "input mode is not selectable: pikavelocity")
+    state = switch.state_event()
+    assert state["phase"] == "failed"
+    assert state["detail"] == "pikavelocity refused: input mode is not selectable: pikavelocity"
+    assert any(e.kind == "send_event" for e in effects)
+
+
+def test_bridge_pending_timeout_is_ignored():
+    switch, clock = make()
+    effects = _to_selecting(switch, clock)
+    accept(switch, effects, 7)
+    assert switch.mode_request_error(_request_id(effects), "input_mode_timeout", "timed out") == []
+    assert switch.state_event()["phase"] == "selecting"
+    switch.tick(mode(active="pikavelocity", request_id=7))
+    assert switch.state_event()["phase"] == "on"
+
+
+def test_bridge_error_for_other_request_is_ignored():
+    switch, clock = make()
+    _to_selecting(switch, clock)
+    assert switch.mode_request_error("p1", "input_mode_unavailable", "x") == []
+    assert switch.state_event()["phase"] == "selecting"
+
+
+def test_refusal_then_error_and_snapshot_stop_only_once():
+    switch, clock = make()
+    effects = _turn_off(switch, clock)
+    request_id = _request_id(effects)
+    stops = kinds(accept(switch, effects, 8, accepted=False, message="busy"))
+    # The bridge follows a refusal with an input_mode_rejected error, and a FAILED snapshot may arrive too.
+    stops += kinds(switch.mode_request_error(request_id, "input_mode_rejected", "busy"))
+    stops += kinds(switch.tick(mode(active="pikavelocity", phase="FAILED", requested="none", detail="busy",
+                                    request_id=8)))
+    assert stops.count(("helper", "stop")) == 1
+
+
+def test_error_after_snapshot_failure_does_not_stop_twice():
+    switch, clock = make()
+    effects = _turn_off(switch, clock)
+    accept(switch, effects, 8)
+    stops = kinds(switch.tick(mode(active="pikavelocity", phase="FAILED", requested="none", detail="busy",
+                                   request_id=8)))
+    stops += kinds(switch.mode_request_error(_request_id(effects), "input_mode_failed", "busy"))
+    assert stops.count(("helper", "stop")) == 1

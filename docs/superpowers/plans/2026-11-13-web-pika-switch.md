@@ -843,6 +843,7 @@ class PikaSwitch:
     def command(self, client_id: str, request_id: str, enabled: bool, mode: ModeView) -> list[PikaEffect]
     def mode_request_result(self, request_id: str, accepted: bool, executor_request_id: int,
                             message: str) -> list[PikaEffect]
+    def mode_request_error(self, request_id: str, code: str, message: str) -> list[PikaEffect]
     def helper_result(self, action: str, ok: bool, payload: dict[str, Any], *,
                       epoch: int | None = None) -> list[PikaEffect]
     def input_received(self, arm: str) -> None
@@ -856,7 +857,7 @@ Effects: `helper` payload `{"action": "start"|"stop"}` or `{"action": "status", 
 
 `_epoch` increments with every start/stop helper effect; a status result whose `epoch` differs from the current one is stale and ignored (`helper_result` returns `[]`, nothing changes). Calls without `epoch` always apply.
 
-Mode requests are correlated by the executor request id: `mode_request_result(request_id, accepted, executor_request_id, message)` is the bridge's `input_mode_result` for the outstanding `pika-<n>` (others are ignored). Accepted remembers the executor id; refused fails `selecting` (`"{mode} refused: {message}"`) or, in the off sequence, records `"{off_mode} refused: {message}"` and stops the stack at once. `tick` decides mode outcomes only from snapshots with `request_id == executor id` (ACTIVE in the target mode / FAILED) or a newer one (`superseded by another input mode request`); before the id is known only "router unavailable" and the switch's own `mode_switch_timeout_sec` apply. The bridge's 5 s pending timeout is never a failure for the switch (the entry MoveJ can take up to 120 s).
+Mode requests are correlated by the executor request id: `mode_request_result(request_id, accepted, executor_request_id, message)` is the bridge's `input_mode_result` for the outstanding `pika-<n>` (others are ignored). Accepted remembers the executor id; refused fails `selecting` (`"{mode} refused: {message}"`) or, in the off sequence, records `"{off_mode} refused: {message}"` and stops the stack at once. `mode_request_error(request_id, code, message)` takes the bridge's `error` events for the outstanding `pika-<n>` and handles them exactly like a refusal, except code `input_mode_timeout` (the bridge's 5 s pending timeout), which is ignored. A refusal clears the outstanding request, so a later error or FAILED snapshot for it is a no-op (one helper stop only). `tick` decides mode outcomes only from snapshots with `request_id == executor id` (ACTIVE in the target mode / FAILED) or a newer one (`superseded by another input mode request`); before the id is known only "router unavailable" and the switch's own `mode_switch_timeout_sec` apply. The bridge's 5 s pending timeout is never a failure for the switch (the entry MoveJ can take up to 120 s).
 
 - [ ] **Step 1: Write the failing tests**
 
@@ -1268,6 +1269,61 @@ def test_every_phase_change_broadcasts_state():
     effects = switch.command("c1", "p1", True, mode())
     assert any(e.kind == "send_event" and e.client_id is None and e.payload["type"] == "pika_switch_state"
                for e in effects)
+
+
+def _request_id(effects):
+    [select] = selects(effects)
+    return select.payload["request_id"]
+
+
+def test_bridge_error_before_acceptance_fails_at_once():
+    switch, clock = make()
+    request_id = _request_id(_to_selecting(switch, clock))
+    effects = switch.mode_request_error(request_id, "input_mode_not_selectable",
+                                        "input mode is not selectable: pikavelocity")
+    state = switch.state_event()
+    assert state["phase"] == "failed"
+    assert state["detail"] == "pikavelocity refused: input mode is not selectable: pikavelocity"
+    assert any(e.kind == "send_event" for e in effects)
+
+
+def test_bridge_pending_timeout_is_ignored():
+    switch, clock = make()
+    effects = _to_selecting(switch, clock)
+    accept(switch, effects, 7)
+    assert switch.mode_request_error(_request_id(effects), "input_mode_timeout", "timed out") == []
+    assert switch.state_event()["phase"] == "selecting"
+    switch.tick(mode(active="pikavelocity", request_id=7))
+    assert switch.state_event()["phase"] == "on"
+
+
+def test_bridge_error_for_other_request_is_ignored():
+    switch, clock = make()
+    _to_selecting(switch, clock)
+    assert switch.mode_request_error("p1", "input_mode_unavailable", "x") == []
+    assert switch.state_event()["phase"] == "selecting"
+
+
+def test_refusal_then_error_and_snapshot_stop_only_once():
+    switch, clock = make()
+    effects = _turn_off(switch, clock)
+    request_id = _request_id(effects)
+    stops = kinds(accept(switch, effects, 8, accepted=False, message="busy"))
+    # The bridge follows a refusal with an input_mode_rejected error, and a FAILED snapshot may arrive too.
+    stops += kinds(switch.mode_request_error(request_id, "input_mode_rejected", "busy"))
+    stops += kinds(switch.tick(mode(active="pikavelocity", phase="FAILED", requested="none", detail="busy",
+                                    request_id=8)))
+    assert stops.count(("helper", "stop")) == 1
+
+
+def test_error_after_snapshot_failure_does_not_stop_twice():
+    switch, clock = make()
+    effects = _turn_off(switch, clock)
+    accept(switch, effects, 8)
+    stops = kinds(switch.tick(mode(active="pikavelocity", phase="FAILED", requested="none", detail="busy",
+                                   request_id=8)))
+    stops += kinds(switch.mode_request_error(_request_id(effects), "input_mode_failed", "busy"))
+    assert stops.count(("helper", "stop")) == 1
 ```
 
 - [ ] **Step 2: Run tests to verify they fail**
@@ -1286,7 +1342,8 @@ On:  helper start -> both /pika/{l,r}/cartesian_velocity fresh -> select `mode`.
 Off: select `off_mode` (only when `mode` is active or requested) -> helper stop.
 Mode requests go through the input-mode bridge under the switch's own client id
 and are correlated by the executor request id from the bridge's
-`input_mode_result`; the bridge's short pending timeout is not a failure here,
+`input_mode_result`; bridge errors for the request count as refusals except
+the bridge's short pending timeout, which is not a failure here,
 only `mode_switch_timeout_sec` is (it covers the entry MoveJ).
 The owner serializes all calls and applies the returned effects in order.
 """
@@ -1301,6 +1358,7 @@ PIKA_CLIENT_ID = "pika_switch"
 PIKA_ARMS = ("l", "r")
 TRANSITIONS = frozenset({"starting", "waiting_input", "selecting", "stopping"})
 SUPERSEDED = "superseded by another input mode request"
+BRIDGE_TIMEOUT = "input_mode_timeout"
 
 
 @dataclass(frozen=True)
@@ -1385,12 +1443,17 @@ class PikaSwitch:
         if accepted:
             self._executor_request_id = executor_request_id
             return []
-        self._mode_request = None
-        if self._phase == "selecting":
-            return self._enter("failed", f"{self._config.mode} refused: {message}")
-        if self._phase == "stopping" and self._stop_after_mode:
-            return self._finish_off_mode(f"{self._config.off_mode} refused: {message}")
-        return []
+        return self._refused(message)
+
+    def mode_request_error(self, request_id: str, code: str, message: str) -> list[PikaEffect]:
+        """A bridge `error` event for the outstanding request counts as a refusal.
+
+        `input_mode_timeout` is the bridge's own short pending timeout; the entry
+        MoveJ can take longer, so only `mode_switch_timeout_sec` ends the wait.
+        """
+        if self._mode_request is None or request_id != self._mode_request or code == BRIDGE_TIMEOUT:
+            return []
+        return self._refused(message)
 
     def helper_result(self, action: str, ok: bool, payload: dict[str, Any], *,
                       epoch: int | None = None) -> list[PikaEffect]:
@@ -1489,6 +1552,15 @@ class PikaSwitch:
     def _fresh(self, arm: str, now: float) -> bool:
         received = self._last_input.get(arm)
         return received is not None and (now - received) * 1000 < self._config.input_fresh_ms
+
+    def _refused(self, message: str) -> list[PikaEffect]:
+        # Clearing the request makes any later signal for it (error, snapshot) a no-op.
+        self._mode_request = None
+        if self._phase == "selecting":
+            return self._enter("failed", f"{self._config.mode} refused: {message}")
+        if self._phase == "stopping" and self._stop_after_mode:
+            return self._finish_off_mode(f"{self._config.off_mode} refused: {message}")
+        return []
 
     def _finish_off_mode(self, detail: str) -> list[PikaEffect]:
         """End the off sequence's mode step and stop the stack."""
@@ -1824,13 +1896,17 @@ In `_apply_input_mode_effects`, the `send_event` branch keeps bridge replies add
                             payload["request_id"], bool(payload["accepted"]),
                             int(payload["executor_request_id"]), str(payload.get("message", "")),
                         ))
+                    elif payload.get("type") == "error" and payload.get("request_id"):
+                        self._apply_pika_effects(self._pika.mode_request_error(
+                            payload["request_id"], str(payload.get("code", "")), str(payload.get("message", "")),
+                        ))
                     else:
                         self.get_logger().debug(f"Pika switch: dropped input-mode event {payload.get('type')}")
                     continue
                 self._server.send_event(effect.payload, effect.client_id)
 ```
 
-Bridge errors to `PIKA_CLIENT_ID` (including its 5 s pending timeout) are dropped on purpose: the switch keeps its own `mode_switch_timeout_sec`, which covers the entry MoveJ.
+Bridge `error` events to `PIKA_CLIENT_ID` count as refusals of the Pika request, except `input_mode_timeout` (the bridge's 5 s pending timeout), which `mode_request_error` ignores: the switch keeps its own `mode_switch_timeout_sec`, which covers the entry MoveJ. Other events to that client are dropped.
 
 Also store `self._pika_mode_id = web_config.pika_mode` next to `self._pika_helper_url`. Confirm `threading` is imported (it is: `threading.RLock` is used).
 

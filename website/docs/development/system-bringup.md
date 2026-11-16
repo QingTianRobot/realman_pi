@@ -318,6 +318,10 @@ rm65_docker_remote_rviz_status
 创建或重建容器后，Docker 会在主机重启、Docker daemon 重启或容器异常退出后自动恢复该
 ROS 图；如果运维人员显式执行 `docker compose stop realman_bringup_remote`，则不会自动重启。
 
+`realman_web_control`（:8765）和 `realman_recording`（:8770）同样配置了 `restart: unless-stopped`，
+主机开机后与 bringup 一起自动恢复；需要让它们停着时用 `docker compose stop <service>`。相机和 Pika
+栈运行在宿主机上，不受这个策略管理，开机后仍需手动启动。
+
 `./rm65 bt <tree>` 不要求通过 `./rm65 up` 启动这个容器。入口会在 Docker 全局运行容器中查找
 `com.docker.compose.service=realman_bringup_remote` 标签，并直接对唯一匹配的容器执行行为树；因此
 生产机也可以由独立 Compose project 或 `docker compose run --rm realman_bringup_remote` 启动 bringup。

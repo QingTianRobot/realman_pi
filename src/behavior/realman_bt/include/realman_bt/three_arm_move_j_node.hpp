@@ -14,7 +14,12 @@ namespace realman_bt {
 
 /**
  * Starts one MoveJ goal for l, m, and r in the same tree tick and completes
- * only after all three action results report success.
+ * only after all their action results report success.
+ *
+ * A joint port set to "skip" (any case, surrounding spaces ignored) leaves that
+ * arm out: no action client, no goal, and it counts as done. This lets a host
+ * with a powered-off arm (SJDrealman's m) still run the synchronized entry
+ * MoveJ for the others. At least one arm must remain.
  */
 class ThreeArmMoveJNode final : public bt_core::ActionNode {
  public:
@@ -41,6 +46,7 @@ class ThreeArmMoveJNode final : public bt_core::ActionNode {
     bool failed{false};
     bool cancel_requested{false};
     bool handed_off{false};
+    bool skipped{false};
   };
 
   bool initialize();
@@ -65,6 +71,8 @@ class ThreeArmMoveJNode final : public bt_core::ActionNode {
   bool dry_run_logged_{false};
   bool failed_{false};
   bool completed_{false};
+  bool goals_sent_{false};
+  std::string moving_arms_;  // e.g. "l, r (m skipped)", for the log line
 };
 
 }  // namespace realman_bt

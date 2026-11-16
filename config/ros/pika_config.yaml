@@ -7,6 +7,8 @@ pika_default_pose:
     tcp_pose:
       position: [-0.323, -0.028, 0.304]
       orientation_xyzw: [0.990, 0.003, -0.045, -0.137]
+  # A powered-off arm can be left out of the entry MoveJ with `skip: true`
+  # (SJDrealman sets it for middle; see website/docs/development/pika-teleop.md).
   middle:
     joint_degrees: [0.0, 17.997, 70.0, 0.0, 90.0, 8.997]
   right:

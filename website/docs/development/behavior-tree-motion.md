@@ -54,7 +54,10 @@ goal，并在三路都成功后返回 SUCCESS。任一路失败或超时会使�
 机械臂在物理上完全同一时刻到达。
 
 `ThreeArmMoveJ` 的三个目标端口是 `l_joint_degrees`、`m_joint_degrees`、`r_joint_degrees`，每个
-端口接收六个逗号分隔的有限角度值，默认均为零；该节点固定控制三臂，没有 `arm_id` 端口。公共参数
+端口接收六个逗号分隔的有限角度值，默认均为零；该节点固定控制三臂，没有 `arm_id` 端口。某个端口写
+`skip`（不区分大小写，忽略首尾空格）时该臂被跳过：不创建 Action 客户端、不发 goal、直接算作完成，日志写成
+`sent synchronized MoveJ goals to l, r (m skipped)`。三个端口都是 `skip` 是配置错误，节点直接失败。用于
+有一台机械臂长期断电的部署（SJDrealman 的 m 臂）：否则被拒绝的那一路会让同步 MoveJ 取消其余两臂。公共参数
 `dry_run`、`velocity_percent`、`blend_radius_percent`、`timeout_sec` 默认分别为 `true`、`10`、`0`、
 `120`。成功要求三路 Action 均返回 `SUCCEEDED`，且每个结果消息的 `success=true`。超时从节点初始化
 开始计算，包含等待服务器就绪的时间。

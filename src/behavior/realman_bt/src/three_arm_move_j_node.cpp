@@ -1,5 +1,7 @@
 #include "realman_bt/three_arm_move_j_node.hpp"
 
+#include <algorithm>
+#include <cctype>
 #include <cmath>
 #include <sstream>
 #include <stdexcept>
@@ -28,6 +30,16 @@ std::array<double, 6> parseJoints(const std::string& text) {
     throw std::invalid_argument("joint_degrees must contain exactly six values");
   }
   return result;
+}
+
+// "skip" (any case, surrounding whitespace ignored) leaves an arm out of the MoveJ.
+bool isSkip(std::string text) {
+  const auto not_space = [](unsigned char c) { return !std::isspace(c); };
+  text.erase(text.begin(), std::find_if(text.begin(), text.end(), not_space));
+  text.erase(std::find_if(text.rbegin(), text.rend(), not_space).base(), text.end());
+  std::transform(text.begin(), text.end(), text.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return text == "skip";
 }
 
 std::uint64_t timestampMilliseconds() {
@@ -64,9 +76,9 @@ std::string resultCode(rclcpp_action::ResultCode code) {
 bt_core::PortsList ThreeArmMoveJNode::providedPorts() {
   return bt_core::makePorts(
       bt_core::InputPort<bool>("dry_run", "true", "Validate without sending motion goals"),
-      bt_core::InputPort<std::string>("l_joint_degrees", "0,0,0,0,0,0", "L arm joint angles in degrees"),
-      bt_core::InputPort<std::string>("m_joint_degrees", "0,0,0,0,0,0", "M arm joint angles in degrees"),
-      bt_core::InputPort<std::string>("r_joint_degrees", "0,0,0,0,0,0", "R arm joint angles in degrees"),
+      bt_core::InputPort<std::string>("l_joint_degrees", "0,0,0,0,0,0", "L arm joint angles in degrees, or skip"),
+      bt_core::InputPort<std::string>("m_joint_degrees", "0,0,0,0,0,0", "M arm joint angles in degrees, or skip"),
+      bt_core::InputPort<std::string>("r_joint_degrees", "0,0,0,0,0,0", "R arm joint angles in degrees, or skip"),
       bt_core::InputPort<int>("velocity_percent", "10", "MoveJ velocity ratio [1, 100]"),
       bt_core::InputPort<int>("blend_radius_percent", "0", "Blend radius ratio [0, 100]"),
       bt_core::InputPort<double>("timeout_sec", "120", "Timeout in seconds"));
@@ -86,16 +98,30 @@ bool ThreeArmMoveJNode::readGoals() {
   if (!std::isfinite(timeout_sec_) || timeout_sec_ <= 0.0) {
     throw std::invalid_argument("timeout_sec must be positive");
   }
+  std::string moving;
+  std::string skipped;
   for (std::size_t index = 0; index < arms_.size(); ++index) {
+    const std::string joints = getInput<std::string>(ports[index]).value_or("");
+    if (isSkip(joints)) {
+      arms_[index].skipped = true;
+      arms_[index].completed = true;  // nothing to wait for
+      skipped += (skipped.empty() ? "" : ", ") + std::string(arms_[index].id);
+      continue;
+    }
+    moving += (moving.empty() ? "" : ", ") + std::string(arms_[index].id);
     arms_[index].goal.command = Action::Goal::MOVEJ;
     arms_[index].goal.reference_type = Action::Goal::BASE;
     arms_[index].goal.reference_name = "base";
-    arms_[index].goal.joint_degrees = parseJoints(getInput<std::string>(ports[index]).value_or(""));
+    arms_[index].goal.joint_degrees = parseJoints(joints);
     arms_[index].goal.velocity_percent = static_cast<std::uint32_t>(velocity);
     arms_[index].goal.blend_radius_percent = static_cast<std::uint32_t>(blend);
     arms_[index].goal.connect = false;
     arms_[index].goal.timeout_sec = static_cast<float>(timeout_sec_);
   }
+  if (moving.empty()) {
+    throw std::invalid_argument("at least one arm must move; l, m and r are all skip");
+  }
+  moving_arms_ = skipped.empty() ? moving : moving + " (" + skipped + " skipped)";
   return true;
 }
 
@@ -108,6 +134,7 @@ bool ThreeArmMoveJNode::initialize() {
   initialized_ = true;
   if (!dry_run_) {
     for (auto& arm : arms_) {
+      if (arm.skipped) continue;
       arm.client = rclcpp_action::create_client<Action>(
           ros_node_->get_node_base_interface(), ros_node_->get_node_graph_interface(),
           ros_node_->get_node_logging_interface(), ros_node_->get_node_waitables_interface(),
@@ -128,6 +155,7 @@ void ThreeArmMoveJNode::recordEvent(const ArmState& arm, const std::string& phas
 
 bool ThreeArmMoveJNode::allActionServersReady() const {
   for (const auto& arm : arms_) {
+    if (arm.skipped) continue;
     if (!arm.client || !arm.client->wait_for_action_server(std::chrono::milliseconds(0))) {
       return false;
     }
@@ -235,7 +263,11 @@ bt_core::NodeStatus ThreeArmMoveJNode::tick() {
   if (dry_run_) {
     if (!dry_run_logged_) {
       for (const auto& arm : arms_) {
-        recordEvent(arm, "result", "dry-run validation completed; no goal sent");
+        if (arm.skipped) {
+          recordEvent(arm, "skipped", "arm skipped by configuration; no goal sent");
+        } else {
+          recordEvent(arm, "result", "dry-run validation completed; no goal sent");
+        }
       }
       dry_run_logged_ = true;
     }
@@ -247,20 +279,27 @@ bt_core::NodeStatus ThreeArmMoveJNode::tick() {
     fail("ThreeArmMoveJ timed out after " + std::to_string(timeout_sec_) + " seconds");
     return bt_core::NodeStatus::FAILURE;
   }
-  if (!arms_[0].sent && !allActionServersReady()) {
-    for (const auto& arm : arms_) recordEvent(arm, "wait_server", "waiting for action server");
+  if (!goals_sent_ && !allActionServersReady()) {
+    for (const auto& arm : arms_) {
+      if (!arm.skipped) recordEvent(arm, "wait_server", "waiting for action server");
+    }
     return bt_core::NodeStatus::RUNNING;
   }
-  if (!arms_[0].sent) {
+  if (!goals_sent_) {
     try {
+      goals_sent_ = true;
       for (auto& arm : arms_) {
+        if (arm.skipped) {
+          recordEvent(arm, "skipped", "arm skipped by configuration; no goal sent");
+          continue;
+        }
         arm.goal_future = arm.client->async_send_goal(arm.goal);
         arm.sent = true;
         recordEvent(arm, "send_goal", "MoveJ goal sent");
       }
       RCLCPP_INFO(ros_node_->get_logger(),
-                  "[%s] sent synchronized MoveJ goals to l, m, and r",
-                  name().c_str());
+                  "[%s] sent synchronized MoveJ goals to %s",
+                  name().c_str(), moving_arms_.c_str());
     } catch (const std::exception& error) {
       fail(error.what());
       RCLCPP_ERROR(ros_node_->get_logger(), "[%s] cannot send all MoveJ goals: %s",
@@ -273,8 +312,8 @@ bt_core::NodeStatus ThreeArmMoveJNode::tick() {
     if (!arm.completed) return bt_core::NodeStatus::RUNNING;
   }
   completed_ = true;
-  RCLCPP_INFO(ros_node_->get_logger(), "[%s] all three MoveJ goals completed",
-              name().c_str());
+  RCLCPP_INFO(ros_node_->get_logger(), "[%s] all MoveJ goals completed: %s",
+              name().c_str(), moving_arms_.c_str());
   return bt_core::NodeStatus::SUCCESS;
 }
 
@@ -320,6 +359,8 @@ void ThreeArmMoveJNode::reset() {
   dry_run_logged_ = false;
   failed_ = false;
   completed_ = false;
+  goals_sent_ = false;
+  moving_arms_.clear();
   setFailureReason("");
 }
 

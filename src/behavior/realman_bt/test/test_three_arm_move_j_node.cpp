@@ -1,3 +1,5 @@
+// Assert-style test: keep assert() (and the calls inside it) in Release builds.
+#undef NDEBUG
 #include <cassert>
 #include <array>
 #include <chrono>
@@ -44,6 +46,7 @@ struct ServerState {
   int completed{0};
   bool release_r{false};
   bool fail_m{false};
+  int expected{3};  // goals the server waits for before finishing any of them
   std::array<std::array<double, 6>, 3> goals{};
 };
 
@@ -94,6 +97,32 @@ int main(int argc, char** argv) {
   assert(!invalid_move.failureReason().empty());
   assert(invalid_diagnostics.snapshot().events.empty());
 
+  // "skip" leaves an arm out: no goal, no action client, counted as done.
+  realman_bt::RuntimeDiagnostics skip_diagnostics;
+  auto skip_config = validConfig(ros_node.get(), &skip_diagnostics);
+  skip_config.port_values["m_joint_degrees"] = " Skip ";
+  realman_bt::ThreeArmMoveJNode skip_move("skip_m_dry_run", skip_config);
+  assert(skip_move.executeTick() == bt_core::NodeStatus::SUCCESS);
+  std::set<std::string> skip_results;
+  std::set<std::string> skipped_interfaces;
+  for (const auto& event : skip_diagnostics.snapshot().events) {
+    if (event.source != "ACTION") continue;
+    if (event.phase == "result") skip_results.insert(event.interface_name);
+    if (event.phase == "skipped") skipped_interfaces.insert(event.interface_name);
+  }
+  assert(skip_results == std::set<std::string>({"/l/execute_motion", "/r/execute_motion"}));
+  assert(skipped_interfaces == std::set<std::string>({"/m/execute_motion"}));
+
+  // Every arm skipped is a configuration error, not a silent success.
+  realman_bt::RuntimeDiagnostics all_skip_diagnostics;
+  auto all_skip_config = validConfig(ros_node.get(), &all_skip_diagnostics);
+  all_skip_config.port_values["l_joint_degrees"] = "skip";
+  all_skip_config.port_values["m_joint_degrees"] = "skip";
+  all_skip_config.port_values["r_joint_degrees"] = "skip";
+  realman_bt::ThreeArmMoveJNode all_skip_move("all_skip", all_skip_config);
+  assert(all_skip_move.executeTick() == bt_core::NodeStatus::FAILURE);
+  assert(all_skip_move.failureReason().find("at least one arm") != std::string::npos);
+
   ServerState server_state;
   const std::array<const char*, 3> arm_ids{{"l", "m", "r"}};
   std::array<rclcpp_action::Server<Action>::SharedPtr, 3> servers;
@@ -116,7 +145,7 @@ int main(int argc, char** argv) {
               ++server_state.received;
               server_state.changed.notify_all();
               server_state.changed.wait(lock, [&]() {
-                return server_state.received == 3;
+                return server_state.received == server_state.expected;
               });
               should_fail = server_state.fail_m && index == 1;
               if (index == 2) {
@@ -230,6 +259,34 @@ int main(int argc, char** argv) {
         return status == bt_core::NodeStatus::SUCCESS;
       },
       std::chrono::seconds(5)));
+
+  // Live run with m skipped: only l and r receive goals, and the node succeeds
+  // without an /m/execute_motion server being involved.
+  {
+    std::lock_guard<std::mutex> lock(server_state.mutex);
+    server_state.received = 0;
+    server_state.completed = 0;
+    server_state.goals = {};
+    server_state.expected = 2;
+    server_state.release_r = true;
+  }
+  realman_bt::RuntimeDiagnostics skip_live_diagnostics;
+  auto skip_live_config = validConfig(ros_node.get(), &skip_live_diagnostics, false);
+  skip_live_config.port_values["m_joint_degrees"] = "skip";
+  realman_bt::ThreeArmMoveJNode skip_live_move("skip_m_live", skip_live_config);
+  assert(tickUntil(
+      skip_live_move,
+      [](bt_core::NodeStatus status) {
+        return status == bt_core::NodeStatus::SUCCESS;
+      },
+      std::chrono::seconds(5)));
+  {
+    std::lock_guard<std::mutex> lock(server_state.mutex);
+    const std::array<double, 6> untouched{};
+    assert(server_state.received == 2);
+    assert(server_state.completed == 2);
+    assert(server_state.goals[1] == untouched);  // no goal reached the m server
+  }
 
   executor.cancel();
   spin_thread.join();

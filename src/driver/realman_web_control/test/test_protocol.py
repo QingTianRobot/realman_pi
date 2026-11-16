@@ -301,3 +301,14 @@ def test_quality_mark_is_global_and_validates_kind_and_reason():
 def test_quality_mark_rejects_malformed_commands(message):
     with pytest.raises(ProtocolError):
         parse_message(json.dumps(message))
+
+
+def test_pika_switch_needs_request_id_and_boolean_enabled():
+    assert parse_message('{"type":"pika_switch","request_id":"p-1","enabled":true}') == {
+        "type": "pika_switch", "request_id": "p-1", "enabled": True,
+    }
+    assert parse_message('{"type":"pika_switch","request_id":"p-2","enabled":false}')["enabled"] is False
+    for bad in ({"request_id": "p-3"}, {"request_id": "p-3", "enabled": 1}, {"enabled": True},
+                {"request_id": "p-3", "enabled": "true"}):
+        with pytest.raises(ProtocolError):
+            parse_message(json.dumps({"type": "pika_switch", **bad}))

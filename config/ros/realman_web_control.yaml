@@ -43,6 +43,24 @@ docker_restart:
   timeout_sec: 2.0  # Per-request limit; the restart itself runs in the helper.
   service: realman_bringup_remote
 
+# "Pika 速度控制" switch on :8765. scripts/pika_process_helper.py runs on the robot host
+# (./rm65 pika-helper install) with the commands in config/docker/pika_helper.json.
+# On: start the Pika stack, wait for /pika/{l,r}/cartesian_velocity, select `mode`.
+# Off: select `off_mode`, then stop the Pika stack.
+pika_switch:
+  helper_url: http://127.0.0.1:8783  # Empty string hides the switch (or no helper answers).
+  # Per helper call. Above the helper's worst start (status_timeout_sec 5 + timeout_sec 20 + status 5 s)
+  # and a stop that ends within stop_grace_sec 8; a stop that also needs kill can exceed it and then
+  # shows failed. A start/stop with no answer after this + 5 s fails the switch.
+  helper_timeout_sec: 40.0
+  input_fresh_ms: 500  # Both l and r Pika velocity must be newer than this.
+  input_wait_timeout_sec: 30.0  # Stack started but no Pika data from an arm -> failed (stack stays up).
+  status_poll_sec: 2.0  # Helper status poll; shows a stack started or stopped by hand.
+  mode_switch_timeout_sec: 150.0  # Covers the entry MoveJ (pika_default_pose.timeout_sec 120).
+  off_mode_timeout_sec: 10.0  # Off step: wait this long for `off_mode`, then stop the stack anyway.
+  mode: pikavelocity
+  off_mode: none
+
 param_tuning:
   catalog_file: web-control/param_catalog.yaml  # The /params.html page; empty string disables it. Writes need ./config/ros mounted read-write.
   readback_timeout_sec: 0.5  # Per-node GetParameters wait for the 运行值 column.

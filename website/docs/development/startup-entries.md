@@ -35,6 +35,7 @@ rm65_project_help
 ./rm65 down
 ./rm65 sync               # 校验 main 后同步生产端
 ./rm65 restart-helper install  # 宿主机一次性安装 :8765“重启 Docker”按钮背后的 systemd helper
+./rm65 pika-helper install|uninstall|status|run  # 宿主机 :8765“Pika 速度控制”开关背后的 systemd 用户单元（启停 tmux 会话 pika）
 ```
 
 默认相机链路是 `rm65_camera_ros2 color`，用 ROS2 节点发布三路 Orbbec（`/camera_left|middle|right`）

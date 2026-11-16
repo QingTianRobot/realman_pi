@@ -140,7 +140,7 @@ docker exec realman_pi-realman_bringup_remote-1 cat /opt/rm65_ws/config/ros/grip
 
 逐项读回实际值，不要只看容器状态是不是 `Up`：
 
-- `/{l,m,r}/joint_states` 约 10 Hz，夹爪状态约 20 Hz，相机约 30 Hz（用 `ros2 topic hz` 看）。
+- `/{l,m,r}/joint_states` 约 30 Hz，夹爪状态约 20 Hz，相机约 30 Hz（用 `ros2 topic hz` 看）。
 - `:8765` 和 `:8770` 返回 200；`:8765` 页面引用的每个 `/assets/*` 也返回 200。
 - 用 `ros2 param dump` / `ros2 param get` 读回关键参数，例如 router 的限速和 `dry_run`、执行器的 `policy_task.task_names`。
 - 要跑策略时：`/policy/stats` 有输出，而且带 `prompt` 字段（见[行为树里的 policy 任务](./policy-task)）。

@@ -283,7 +283,7 @@ Pika 主机和生产机之间**没有共同的有线网段**，唯一共用的�
 ### 测量时的陷阱
 
 - driver 的 `/<arm>/cartesian_velocity/state` 里 `measured_angular_velocity_radps` 是**欧拉角 (rx, ry, rz) 的变化率**，不是真正的角速度。要真实角速度，用 TF `r/base_link → r/link_6` 的四元数做差分。有转动指令时，手臂跟随得很好（真实角速度与指令之比约 0.95，方向余弦约 0.96）。
-- `joint_states` 和速度状态 topic 都是 `10 Hz`，时间精度只有约 `0.1 s`。
+- `joint_states` 和速度状态 topic 按驱动的 `state_publish_rate` 发布（生产 `30 Hz`），时间精度约 `33 ms`。
 - 左臂在 Pika 不动时是干净的"零命令"试验台。
 
 ### 运行时的陷阱

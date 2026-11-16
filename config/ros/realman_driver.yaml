@@ -21,8 +21,9 @@
     auto_connect: true
     # Retry a failed or lost startup connection every 5 seconds; zero disables retries.
     reconnect_interval: 5.0
-    # State publication period in Hz. Must be greater than zero.
-    state_publish_rate: 10.0
+    # Joint-state publication rate in Hz (also drives the arm TF tree via robot_state_publisher).
+    # 30 Hz matches the 30 fps cameras and recording export. Must be greater than zero.
+    state_publish_rate: 30.0
     # Publish joint currents (mA, JointState.effort) on joint_currents with every joint state;
     # PolicyRun records them in the attempt trace. One extra SDK read per state tick.
     publish_joint_currents: true
@@ -53,7 +54,7 @@
     mock_mode: false
     auto_connect: true
     reconnect_interval: 5.0
-    state_publish_rate: 10.0
+    state_publish_rate: 30.0
     # Publish joint currents (mA, JointState.effort) on joint_currents with every joint state;
     # PolicyRun records them in the attempt trace. One extra SDK read per state tick.
     publish_joint_currents: true
@@ -81,7 +82,7 @@
     mock_mode: false
     auto_connect: true
     reconnect_interval: 5.0
-    state_publish_rate: 10.0
+    state_publish_rate: 30.0
     # Publish joint currents (mA, JointState.effort) on joint_currents with every joint state;
     # PolicyRun records them in the attempt trace. One extra SDK read per state tick.
     publish_joint_currents: true

@@ -219,7 +219,7 @@ node_modules/.bin/playwright test --config ../config/recording/playwright.config
 | 数据种类 | 典型频率 | 对齐策略 |
 | --- | --- | --- |
 | 图像（RGB） | 每路 15 Hz（当前配置） | 基准（anchor），导出帧时间轴；多路相机不会合并成更高频率。默认配置录制左、右腕部相机和全局 D435 三路，middle 相机恢复后在 `config/ros/recording.yaml` 的 `camera_ids` / `camera_image_topics` 补回即为四路。 |
-| 机械臂（State/Action） | 约 10 Hz（当前驱动） | 线性插值；仅在相邻样本间隔不超过 `max_gap_ns` 时允许。 |
+| 机械臂（State/Action） | 约 30 Hz（驱动 `state_publish_rate`） | 线性插值；仅在相邻样本间隔不超过 `max_gap_ns` 时允许。 |
 | 夹爪（Gripper） | 约 20 Hz（当前驱动） | 开关量默认 `FORWARD_FILL`（最后一个因果状态）；可显式选 `NEAREST`；连续力控夹爪用线性插值。 |
 
 所有 anchor 和样本时间戳均为 ROS 2 `SYSTEM_TIME` wall-time 纳秒，必须非空且严格递增；重复、乱序、非整数时间戳会拒绝导出。线性流要求每个样本具有相同的有限数值维度，避免关节向量静默截断。`max_gap_ns` 由 exporter 按数据流配置：超过间隔的插值或保持会失败，调用方必须舍弃该图像帧或把它显式标为缺失，而不能伪造训练观测。

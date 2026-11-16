@@ -256,6 +256,26 @@
 #previews .camera-card{aspect-ratio:auto;min-height:0;height:100%}
 #previews .camera-card img{object-fit:contain;background:#080b12}
 
+/* Camera health badge: server-side receive rate and last-frame age (camera_rate.py).
+   Unhealthy tiles get a coloured outline so a frozen or slow camera stands out. */
+#previews .camera-card{--camera-health:var(--muted);outline:2px solid transparent;outline-offset:-2px;transition:outline-color .2s}
+#previews .camera-card[data-camera-state="ok"]{--camera-health:var(--green)}
+#previews .camera-card[data-camera-state="warming"]{--camera-health:var(--blue)}
+#previews .camera-card[data-camera-state="low_fps"]{--camera-health:var(--amber);outline-color:var(--amber)}
+#previews .camera-card[data-camera-state="stale"],#previews .camera-card[data-camera-state="no_data"]{--camera-health:var(--red);outline-color:var(--red)}
+#previews .camera-card[data-camera-state="stale"] img{opacity:.4;filter:grayscale(1)}
+#previews .camera-health{position:absolute;left:10px;bottom:9px;display:flex;align-items:center;gap:7px;max-width:calc(100% - 20px);padding:4px 8px;border-radius:5px;background:#080b12d9;color:var(--text);font:11px ui-monospace,SFMono-Regular,Menlo,monospace;white-space:nowrap;overflow:hidden}
+#previews .camera-health-state{color:var(--camera-health);font-weight:700}
+#previews .camera-health-state::before{content:"";display:inline-block;width:7px;height:7px;margin-right:5px;border-radius:50%;background:var(--camera-health);vertical-align:1px}
+#previews .camera-health-detail:empty{display:none}
+#previews .camera-card .camera-label{max-width:calc(100% - 20px);overflow:hidden;text-overflow:ellipsis;white-space:nowrap}
+#previews .no-feed{display:flex;flex-direction:column;align-items:center;justify-content:center;gap:4px;text-align:center;padding:12px}
+#previews .no-feed-title{color:var(--muted)}
+#previews .camera-card[data-camera-state="no_data"] .no-feed-title{color:var(--red);font-weight:600}
+#previews .no-feed-topic{font:11px ui-monospace,Menlo,monospace;color:#65748b;word-break:break-all}
+#previews .no-feed-topic:empty{display:none}
+.camera-count-alert{color:var(--amber)!important}
+
 /* Pika tracker window beside the three-arm 3D view. */
 .pika-panel .grid-stack-item-content{overflow:hidden}
 .pika-head{display:flex;align-items:center;gap:10px}

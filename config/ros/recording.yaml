@@ -129,6 +129,14 @@
     preview_fps: 5.0
     camera_ids: [orbbec-left, orbbec-right, d435]
     camera_image_topics: [/camera_left/color/image_raw, /camera_right/color/image_raw, /camera_global/d435/color/image_raw]
+    # Camera tile health, measured from this bridge's image-topic receive times
+    # (monotonic). One nominal rate for all cameras or one per camera_ids entry;
+    # a tile turns LOW below expected x low_fps_ratio and STALE after stale_after_sec
+    # without a frame. Requires preview_enabled (it owns the image subscriptions).
+    camera_expected_fps: [30.0]
+    camera_rate_window_sec: 2.0
+    camera_stale_after_sec: 1.0
+    camera_low_fps_ratio: 0.7
     arm_namespaces: [l, m, r]
     # Read-only driver telemetry paired with arm_namespaces. The dashboard plots
     # commanded_* against measured_* and shows the latter in 3D; vectors are in each

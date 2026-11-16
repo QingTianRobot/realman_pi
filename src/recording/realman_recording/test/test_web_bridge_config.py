@@ -26,3 +26,13 @@ def test_pika_topics_configure_the_web_bridge():
     assert bridge["pika_sides"] == ["l", "r"]
     assert len(bridge["pika_pose_topics"]) == len(bridge["pika_sides"])
     assert not any(key.startswith("pika_") for key in recorder)
+
+
+def test_camera_rate_health_configures_the_web_bridge():
+    bridge, recorder = _bridge_params()
+    expected = bridge["camera_expected_fps"]
+    assert all(isinstance(value, float) and value > 0 for value in expected)
+    assert len(expected) in (1, len(bridge["camera_ids"]))
+    assert bridge["camera_stale_after_sec"] > 0
+    assert 0 < bridge["camera_low_fps_ratio"] <= 1
+    assert not any(key.startswith("camera_rate") or key.startswith("camera_stale") for key in recorder)

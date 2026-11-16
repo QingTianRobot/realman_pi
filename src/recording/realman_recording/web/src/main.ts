@@ -32,6 +32,13 @@ type CartesianVelocity = {
   measured_valid?: boolean;
   measured_age_ms?: number;
 };
+// Measured by the bridge from image-topic receive times (monotonic), not by the
+// browser: see camera_rate.py. fps/age_ms are null until there is data.
+type CameraState = "no_data" | "stale" | "warming" | "low_fps" | "ok";
+type CameraStats = {
+  state: CameraState; fps: number | null; age_ms: number | null;
+  expected_fps: number | null; frames_total: number; topic?: string;
+};
 type Snapshot = {
   type: "recording_snapshot";
   recording: Record<string, any>;
@@ -40,6 +47,8 @@ type Snapshot = {
     cartesian_velocity?: CartesianVelocity;
   }>>;
   preview_cameras: Record<string, number>;
+  camera_stats_enabled?: boolean;
+  camera_stats?: Record<string, CameraStats>;
   grippers?: Record<string, Record<string, number | boolean>>;
   gripper_limits?: Record<string, GripperLimits>;
   pika?: PikaSnapshot;
@@ -422,24 +431,76 @@ function layoutCameraGrid() {
 new ResizeObserver(layoutCameraGrid).observe(previewsEl);
 
 const previewTimes: Record<string, number> = {};
-function renderCameras(cameras: Record<string, number>) {
+const CAMERA_STATE_LABEL: Record<CameraState | "disabled" | "unknown", string> = {
+  ok: "LIVE", low_fps: "LOW FPS", warming: "STARTING", stale: "STALE", no_data: "NO DATA",
+  disabled: "PREVIEW OFF", unknown: "NO SIGNAL",
+};
+
+function formatFrameAge(ageMs: number | null): string {
+  if (ageMs === null || !Number.isFinite(ageMs)) return "—";
+  if (ageMs < 1000) return `${Math.round(ageMs)} ms`;
+  if (ageMs < 60_000) return `${(ageMs / 1000).toFixed(1)} s`;
+  if (ageMs < 3_600_000) return `${(ageMs / 60_000).toFixed(1)} min`;
+  return `${(ageMs / 3_600_000).toFixed(1)} h`;
+}
+
+function cameraHealthText(stats: CameraStats | undefined, enabled: boolean, previewNs: number): {
+  state: CameraState | "disabled" | "unknown"; badge: string; detail: string; title: string;
+} {
+  if (!enabled) {
+    return { state: "disabled", badge: CAMERA_STATE_LABEL.disabled, detail: "", title: "preview_enabled 关闭，桥接未订阅图像话题" };
+  }
+  if (!stats) {
+    // Older bridge without camera_stats: fall back to the preview capture time.
+    const ageSec = previewNs ? (Date.now() * 1e6 - previewNs) / 1e9 : Infinity;
+    return ageSec < 3
+      ? { state: "ok", badge: `LIVE · ${ageSec.toFixed(1)}s`, detail: "", title: "" }
+      : { state: "unknown", badge: CAMERA_STATE_LABEL.unknown, detail: "", title: "" };
+  }
+  const fps = stats.fps === null ? "— fps" : `${stats.fps.toFixed(1)} fps`;
+  const expected = stats.expected_fps ? ` / ${stats.expected_fps.toFixed(0)}` : "";
+  const age = formatFrameAge(stats.age_ms);
+  const title = `${stats.topic ?? ""} · 已收 ${stats.frames_total} 帧 · 统计来自桥接收图时间`;
+  if (stats.state === "no_data") {
+    return { state: "no_data", badge: CAMERA_STATE_LABEL.no_data, detail: "", title };
+  }
+  return { state: stats.state, badge: CAMERA_STATE_LABEL[stats.state], detail: `${fps}${expected} · ${age}`, title };
+}
+
+function renderCameras(cameras: Record<string, number>, stats: Record<string, CameraStats> | undefined, enabled: boolean) {
   const names = Object.keys(cameras);
-  $("#camera-count").textContent = names.length ? `${names.length} 路 · 低清预览` : "等待视频流";
+  const unhealthy = stats ? names.filter((name) => stats[name] && stats[name].state !== "ok" && stats[name].state !== "warming").length : 0;
+  $("#camera-count").textContent = !names.length
+    ? "等待视频流"
+    : unhealthy ? `${names.length} 路 · ${unhealthy} 路异常` : `${names.length} 路 · 低清预览`;
+  $("#camera-count").classList.toggle("camera-count-alert", unhealthy > 0);
   if (!names.length) return;
   previewsEl.querySelector(".empty")?.remove();
   names.forEach((cameraName) => {
-    let card = previewsEl.querySelector(`[data-camera="${CSS.escape(cameraName)}"]`);
+    let card = previewsEl.querySelector<HTMLElement>(`[data-camera="${CSS.escape(cameraName)}"]`);
     if (!card) {
       card = document.createElement("div");
       card.className = "camera-card";
       card.setAttribute("data-camera", cameraName);
-      card.innerHTML = `<img class="preview-img" alt="${cameraName}" style="display:none"><div class="no-feed">等待视频帧…</div><span class="camera-label">${cameraName}</span><span class="camera-health">NO SIGNAL</span>`;
+      card.innerHTML = `<img class="preview-img" alt="" style="display:none"><div class="no-feed"><span class="no-feed-title">等待视频帧…</span><span class="no-feed-topic"></span></div><span class="camera-label"></span><span class="camera-health"><b class="camera-health-state">NO SIGNAL</b><span class="camera-health-detail"></span></span>`;
+      (card.querySelector(".preview-img") as HTMLImageElement).alt = cameraName;
+      (card.querySelector(".camera-label") as HTMLElement).textContent = cameraName;
       previewsEl.append(card);
     }
-    (card as HTMLElement).style.display = "block";
-    const health = card.querySelector(".camera-health") as HTMLElement | null;
-    const ageSec = cameras[cameraName] ? (Date.now() * 1e6 - cameras[cameraName]) / 1e9 : Infinity;
-    if (health) health.textContent = ageSec < 3 ? `LIVE · ${ageSec.toFixed(1)}s` : "NO SIGNAL";
+    card.style.display = "block";
+    const health = cameraHealthText(stats?.[cameraName], enabled, cameras[cameraName]);
+    card.dataset.cameraState = health.state;
+    (card.querySelector(".camera-health-state") as HTMLElement).textContent = health.badge;
+    (card.querySelector(".camera-health-detail") as HTMLElement).textContent = health.detail;
+    (card.querySelector(".camera-health") as HTMLElement).title = health.title;
+    const noFeed = card.querySelector(".no-feed");
+    if (noFeed) {
+      const topic = stats?.[cameraName]?.topic ?? "";
+      (noFeed.querySelector(".no-feed-title") as HTMLElement).textContent =
+        health.state === "no_data" ? "未收到图像帧" : health.state === "disabled" ? "预览未启用" : "等待视频帧…";
+      (noFeed.querySelector(".no-feed-topic") as HTMLElement).textContent =
+        health.state === "no_data" ? `检查话题 ${topic} 是否在发布` : "";
+    }
     if (!cameras[cameraName]) return;
     // Throttle the preview refresh: re-sourcing the image faster than it can
     // load (over a tunnel) keeps naturalWidth at 0, so the frame never appears.
@@ -452,7 +513,7 @@ function renderCameras(cameras: Record<string, number>) {
     // Show the image before setting src: browsers skip loading `display:none` images.
     img.style.display = "block";
     img.onload = () => {
-      card.querySelector(".no-feed")?.remove();
+      card!.querySelector(".no-feed")?.remove();
     };
     img.src = `/preview/${encodeURIComponent(cameraName)}.jpg?ts=${now}`;
   });
@@ -497,7 +558,7 @@ function renderLiveRobot(payload: Snapshot) {
   (Object.keys(arms) as ArmId[]).forEach((arm) => updateMotion(arm, arms[arm]?.cartesian_velocity));
   renderMotionCards();
   renderGrippers(payload.grippers ?? {}, payload.gripper_limits);
-  renderCameras(payload.preview_cameras ?? {});
+  renderCameras(payload.preview_cameras ?? {}, payload.camera_stats, payload.camera_stats_enabled ?? true);
 }
 
 // 开合度 uses each gripper's effective limits from gripper_manager (/<gripper>/limits,

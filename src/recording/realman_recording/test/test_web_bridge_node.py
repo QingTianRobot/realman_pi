@@ -79,3 +79,61 @@ def test_export_all_reports_timeout_when_future_never_completes(monkeypatch):
         assert "timed out" in str(error)
     else:
         raise AssertionError("expected a timeout RuntimeError")
+
+
+class _SnapshotServer:
+    def __init__(self):
+        self.snapshots = []
+
+    def send_snapshot(self, payload):
+        self.snapshots.append(payload)
+
+
+def _bridge_with_camera(monkeypatch, now_ns):
+    import threading
+    import time as _time
+
+    from realman_recording.camera_rate import CameraRateTracker
+    from realman_recording.camera_workers import CameraSource
+    from realman_recording.pika_motion import PikaMotionCache
+    from realman_recording.web_bridge_node import RecordingWebBridgeNode
+
+    monkeypatch.setattr(_time, "monotonic_ns", lambda: now_ns["value"])
+    node = object.__new__(RecordingWebBridgeNode)
+    node._camera_sources = (CameraSource("orbbec-left", "/camera_left/color/image_raw"),)
+    node._camera_rates = CameraRateTracker(["orbbec-left"], expected_fps={"orbbec-left": 30.0})
+    node._preview_worker = object()
+    node._preview_lock = threading.Lock()
+    node._preview_frames = {}
+    node._arms = ()
+    node._recording_status = {}
+    node._gripper = {}
+    node._gripper_limits = {}
+    node._pika = PikaMotionCache([], [], [])
+    node._server = _SnapshotServer()
+    return node
+
+
+def test_image_callback_counts_frames_before_decoding(monkeypatch):
+    __import__("pytest").importorskip("rclpy")
+    now = {"value": 0}
+    node = _bridge_with_camera(monkeypatch, now)
+    node._preview_worker = None  # decoding skipped entirely; the frame still counts
+    for index in range(31):
+        now["value"] = 1_000_000_000 + index * 33_333_333
+        node._preview_image("orbbec-left", object())
+    stats = node._camera_rates.snapshot(now["value"] + 1_000_000)["orbbec-left"]
+    assert stats["frames_total"] == 31
+    assert stats["state"] == "ok"
+
+
+def test_snapshot_carries_camera_stats(monkeypatch):
+    __import__("pytest").importorskip("rclpy")
+    now = {"value": 5_000_000_000}
+    node = _bridge_with_camera(monkeypatch, now)
+    node._send_snapshot()
+    payload = node._server.snapshots[-1]
+    assert payload["camera_stats_enabled"] is True
+    assert payload["camera_stats"]["orbbec-left"]["state"] == "no_data"
+    assert payload["camera_stats"]["orbbec-left"]["topic"] == "/camera_left/color/image_raw"
+    assert payload["preview_cameras"] == {"orbbec-left": 0}

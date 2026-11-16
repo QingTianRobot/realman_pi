@@ -66,6 +66,23 @@ LeRobot v3 的每个向量 feature 都在 `features.<key>.names` 中声明分量
 
 `相机预览` 不再在面板内滚动：所有已配置相机同时铺满面板，前端按面板尺寸选出 16:9 画面最大的行列数（`#previews` 的 `data-camera-layout`，如 `3x1`），画面 `object-fit: contain`。拖大或拖小面板即可整体缩放全部画面。
 
+### 相机帧率与新鲜度
+
+每个相机格子左下角显示该路的状态、帧率和最新一帧的年龄，例如 `LIVE 29.8 fps / 30 · 21 ms`。这些数在**服务端**统计：桥接节点在每个 ROS `Image` 订阅回调一进入、JPEG 压缩之前，就用单调时钟（`time.monotonic_ns()`）记下接收时间（`camera_rate.py` 的 `CameraRateTracker`）。帧率是最近 `camera_rate_window_sec` 秒窗口内的帧数除以窗口跨度，年龄是现在减去最后一帧的接收时间。它们和浏览器实际刷新了多少张预览图无关（预览图本身每 3 秒才刷新一次）。快照里以 `camera_stats.<camera_id>` 下发，字段为 `state`、`fps`、`age_ms`、`expected_fps`、`frames_total`、`topic`；`camera_stats_enabled` 表示桥接是否订阅了图像话题。
+
+| 状态 | 角标 | 条件 | 样式 |
+| --- | --- | --- | --- |
+| `ok` | `LIVE` | 正常 | 绿点 |
+| `warming` | `STARTING` | 刚开始（或中断后恢复）收帧的前 0.5 s，帧率还不可信，显示 `— fps` | 蓝点 |
+| `low_fps` | `LOW FPS` | 帧率 < `camera_expected_fps` × `camera_low_fps_ratio` | 琥珀色描边 |
+| `stale` | `STALE` | 超过 `camera_stale_after_sec` 没有新帧 | 红色描边，最后一帧画面变灰变暗 |
+| `no_data` | `NO DATA` | 桥接启动后从未收到这一路的帧 | 红色描边，格子写"未收到图像帧"和要检查的话题 |
+| — | `PREVIEW OFF` | `preview_enabled=false`，桥接不订阅图像，没有统计 | 灰点 |
+
+面板标题在有异常相机时变为琥珀色的"N 路 · M 路异常"（`warming` 不计入）。例如 11-16 左相机启动后约一分钟只有 5 Hz，会显示 `LOW FPS 5.0 fps / 30`；PCIe USB 卡掉线时相机完全不发布，会显示 `NO DATA`，中途停止则为 `STALE`。
+
+注意这是"桥接收到的帧率"：它能反映相机驱动、DDS 链路和话题本身的问题，但如果 Web bridge 进程自身过载而丢帧，数字也会偏低。要区分时用 `ros2 topic hz` 在主机上对照，或看录制 session `media-index.json` 里每路的 `accepted/dropped`。
+
 `机械臂状态`、`末端运动 · 2D`、`夹爪状态` 三个状态面板（`index.html` 中带 `fit-content` 类）同样不在面板内滚动：前端用 `ResizeObserver` 监听其内容，内容或宽度变化时把面板高度设为恰好容纳全部卡片的行数，并锁定该高度（这三个面板的高度不能手动拖动，宽度和位置仍可调整）。窄屏单列时卡片纵向排列，面板随之变高，整页向下滚动即可看到。为让面板底部贴近内容，网格行高为 20 px（`index.html` 里的 `gs-h` 是 3 的倍数），布局缓存键为 `recording-layout-v5`，旧的自定义拖拽布局会被重置一次；只保存桌面 12 列布局。
 
 `夹爪状态` 的开合度不再写死行程：桥接节点以 reliable + transient-local QoS 订阅 `gripper_limits_topics`（默认 `/gripper_{left,mid,right}/limits`，`gripper_ros2_msgs/GripperLimits`），这是 `gripper_manager` 当前生效的开/闭位（`gripper.yaml` 加 :8765 写入的覆盖值），快照中以 `gripper_limits.<夹爪名>` 下发。开合度 = `(close_position − 位置) / (close_position − open_position)`，限制在 0–100%；卡片同时显示原始位置与开/闭位。尚未收到某夹爪的限位时只显示原始位置和"等待 /<夹爪>/limits"，不再猜测百分比。回放帧使用同一组当前限位计算。
@@ -157,6 +174,7 @@ session manifest、相机 `media-index.json` 和 LeRobot `lerobot-v3.json` recei
   `l/m/r/work/cell`，若控制器切换 base/tool frame，必须同步修改配置，导出器会拒绝混用；
 - `gripper_limits_topics` 提供 `夹爪状态` 开合度所用的实时开/闭位，留空（`[""]`）时网页只显示原始位置；
 - `preview_*` 是 Web 独立预览限制，`preview_enabled=true` 才启动低清 JPEG 重压缩 worker；
+- `camera_expected_fps`（一个值用于所有相机，或与 `camera_ids` 一一对应；≤0 表示不判低帧率，默认 `[30.0]`）、`camera_rate_window_sec`（默认 2.0）、`camera_stale_after_sec`（默认 1.0）、`camera_low_fps_ratio`（默认 0.7）决定相机格子的帧率/新鲜度判定，只影响网页显示，依赖 `preview_enabled=true`；
 - `pika_sides`、`pika_pose_topics`、`pika_command_velocity_topics` 是 `Pika 运动 3D` 窗口的只读输入，长度须一致（命令列表可为空），不进入录制数据；
 - LeRobot Web 回放已接入；Rerun 离线回放暂缓，不影响实时展示、原始数据录制或 LeRobot 导出。
 

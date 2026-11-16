@@ -414,3 +414,79 @@ test("gripper opening uses the live limits from gripper_manager, not hardcoded r
   await expect(page.locator('#grippers [data-gripper="gripper_left"]')).toContainText("开合度 100%");
   await expect(page.locator('#grippers [data-gripper="gripper_mid"]')).toContainText("开合度 50%");
 });
+
+test("camera tiles show the bridge-measured fps and frame age and flag slow, stale and silent cameras", async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.route(/\/preview\/.*\.jpg/, (route) => route.fulfill({ status: 404, body: "" }));
+  const stat = (extra: Record<string, unknown>) => ({
+    state: "ok", fps: 29.8, age_ms: 21, expected_fps: 30, frames_total: 900, topic: "/camera/color/image_raw", ...extra,
+  });
+  let sendRecovered: () => void = () => undefined;
+  await page.routeWebSocket("/ws", (socket) => {
+    const now = Date.now() * 1e6;
+    socket.send(JSON.stringify({
+      ...baseSnapshot,
+      preview_cameras: { "orbbec-left": now, "orbbec-right": now, d435: now - 4e9, "orbbec-middle": 0 },
+      camera_stats_enabled: true,
+      camera_stats: {
+        "orbbec-left": stat({ state: "low_fps", fps: 5.1, age_ms: 180, topic: "/camera_left/color/image_raw" }),
+        "orbbec-right": stat({ topic: "/camera_right/color/image_raw" }),
+        d435: stat({ state: "stale", fps: 0, age_ms: 4200, topic: "/camera_global/d435/color/image_raw" }),
+        "orbbec-middle": stat({ state: "no_data", fps: null, age_ms: null, frames_total: 0, topic: "/camera_middle/color/image_raw" }),
+      },
+    }));
+    sendRecovered = () => socket.send(JSON.stringify({
+      ...baseSnapshot,
+      preview_cameras: { "orbbec-left": now, "orbbec-right": now, d435: now, "orbbec-middle": now },
+      camera_stats_enabled: true,
+      camera_stats: {
+        "orbbec-left": stat({}), "orbbec-right": stat({}), d435: stat({}), "orbbec-middle": stat({ state: "warming", fps: null }),
+      },
+    }));
+  });
+  await page.goto("/");
+
+  const card = (name: string) => page.locator(`#previews [data-camera="${name}"]`);
+  await expect(card("orbbec-left")).toHaveAttribute("data-camera-state", "low_fps", { timeout: 15_000 });
+  await expect(card("orbbec-left").locator(".camera-health")).toHaveText(/LOW FPS\s*5\.1 fps \/ 30 · 180 ms/);
+  await expect(card("orbbec-right")).toHaveAttribute("data-camera-state", "ok");
+  await expect(card("orbbec-right").locator(".camera-health")).toHaveText(/LIVE\s*29\.8 fps \/ 30 · 21 ms/);
+  await expect(card("d435")).toHaveAttribute("data-camera-state", "stale");
+  await expect(card("d435").locator(".camera-health")).toHaveText(/STALE\s*0\.0 fps \/ 30 · 4\.2 s/);
+  await expect(card("orbbec-middle")).toHaveAttribute("data-camera-state", "no_data");
+  await expect(card("orbbec-middle").locator(".no-feed")).toContainText("未收到图像帧");
+  await expect(card("orbbec-middle").locator(".no-feed")).toContainText("/camera_middle/color/image_raw");
+  await expect(page.locator("#camera-count")).toHaveText("4 路 · 3 路异常");
+
+  // Unhealthy tiles are outlined so they stand out at a glance; healthy ones are not.
+  const outline = (name: string) => card(name).evaluate((el) => getComputedStyle(el).outlineColor);
+  expect(await outline("orbbec-left")).not.toBe("rgba(0, 0, 0, 0)");
+  expect(await outline("d435")).not.toBe("rgba(0, 0, 0, 0)");
+  expect(await outline("orbbec-right")).toBe("rgba(0, 0, 0, 0)");
+  // The badge stays inside its tile even in a narrow layout.
+  const inside = await card("orbbec-left").evaluate((el) => {
+    const badge = el.querySelector(".camera-health")!.getBoundingClientRect(), tile = el.getBoundingClientRect();
+    return badge.left >= tile.left - 1 && badge.right <= tile.right + 1 && badge.bottom <= tile.bottom + 1;
+  });
+  expect(inside).toBe(true);
+
+  sendRecovered();
+  await expect(card("orbbec-left")).toHaveAttribute("data-camera-state", "ok");
+  await expect(card("orbbec-middle")).toHaveAttribute("data-camera-state", "warming");
+  await expect(card("orbbec-middle").locator(".camera-health")).toHaveText(/STARTING\s*— fps \/ 30/);
+  await expect(page.locator("#camera-count")).toHaveText("4 路 · 低清预览");
+});
+
+test("camera tiles say so when the bridge preview is disabled", async ({ page }) => {
+  test.setTimeout(30_000);
+  await page.routeWebSocket("/ws", (socket) => {
+    socket.send(JSON.stringify({
+      ...baseSnapshot, preview_cameras: { "orbbec-left": 0 }, camera_stats_enabled: false, camera_stats: {},
+    }));
+  });
+  await page.goto("/");
+  const card = page.locator('#previews [data-camera="orbbec-left"]');
+  await expect(card).toHaveAttribute("data-camera-state", "disabled", { timeout: 15_000 });
+  await expect(card.locator(".camera-health")).toHaveText("PREVIEW OFF");
+  await expect(card.locator(".no-feed")).toContainText("预览未启用");
+});

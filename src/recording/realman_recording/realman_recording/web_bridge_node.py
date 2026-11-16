@@ -29,6 +29,7 @@ from gripper_ros2_msgs.msg import GripperLimits
 from realman_msgs.msg import CartesianVelocityState
 from realman_recording_msgs.msg import RecordingStatus
 from realman_recording_msgs.srv import ManageRecording
+from .camera_rate import CameraRateTracker, expected_fps_by_camera
 from .camera_workers import LatestFramePreview, PreviewFrame, downscale_jpeg, image_to_jpeg, load_camera_sources
 from .layout_manifest import build_recording_manifest
 from .pika_motion import PikaMotionCache
@@ -64,6 +65,12 @@ class RecordingWebBridgeNode(Node):
         self.declare_parameter("preview_fps", 5.0)
         self.declare_parameter("camera_ids", [""])
         self.declare_parameter("camera_image_topics", [""])
+        # Per-camera receive-rate health on the live tiles. One expected fps applies to
+        # every camera, or give one per camera_ids entry; <= 0 disables the low-rate flag.
+        self.declare_parameter("camera_expected_fps", [30.0])
+        self.declare_parameter("camera_rate_window_sec", 2.0)
+        self.declare_parameter("camera_stale_after_sec", 1.0)
+        self.declare_parameter("camera_low_fps_ratio", 0.7)
         self.declare_parameter("arm_namespaces", ["l", "m", "r"])
         self.declare_parameter("arm_velocity_topics", [""])
         self.declare_parameter("gripper_position_topics", [""])
@@ -113,6 +120,14 @@ class RecordingWebBridgeNode(Node):
         # decoding is disabled or a source has not produced its first frame yet.
         self._camera_sources = load_camera_sources(self)
         self._preview_worker: LatestFramePreview | None = self._create_preview_worker()
+        camera_ids = [source.camera_id for source in self._camera_sources]
+        self._camera_rates = CameraRateTracker(
+            camera_ids,
+            expected_fps=expected_fps_by_camera(camera_ids, self.get_parameter("camera_expected_fps").value),
+            window_sec=float(self.get_parameter("camera_rate_window_sec").value),
+            stale_after_sec=float(self.get_parameter("camera_stale_after_sec").value),
+            low_fps_ratio=float(self.get_parameter("camera_low_fps_ratio").value),
+        )
         # Full-resolution camera images are only needed for the lossy preview.
         # When preview is disabled, skip these subscriptions entirely: deserialising
         # ~4 x 640x480 frames per second would otherwise saturate the executor and
@@ -257,7 +272,12 @@ class RecordingWebBridgeNode(Node):
         )
 
     def _preview_image(self, camera_id: str, message: Image) -> None:
-        """JPEG-encode a raw frame and offer it to the lossy preview worker."""
+        """Count the frame for the tile's rate/age, then JPEG-encode it for the preview.
+
+        The receive time is taken before any decode so the rate reflects the image
+        topic as this bridge receives it, not how fast the preview keeps up.
+        """
+        self._camera_rates.record(camera_id, time.monotonic_ns())
         if self._preview_worker is None:
             return
         try:
@@ -430,9 +450,20 @@ class RecordingWebBridgeNode(Node):
                 "grippers": self._gripper,
                 "gripper_limits": self._gripper_limits,
                 "preview_cameras": preview_cameras,
+                # Rates exist only while the preview subscribes to the image topics.
+                "camera_stats_enabled": self._preview_worker is not None,
+                "camera_stats": self._camera_stats(),
                 "pika": self._pika.snapshot(time.monotonic_ns()),
             }
         )
+
+    def _camera_stats(self) -> dict[str, dict[str, Any]]:
+        """Rate/age per camera plus its image topic, so an empty tile can name it."""
+        stats = self._camera_rates.snapshot(time.monotonic_ns())
+        return {
+            source.camera_id: {**stats[source.camera_id], "topic": source.image_topic}
+            for source in self._camera_sources
+        }
 
     def _send_rerun_snapshot(self) -> None:
         """Log only timer-coalesced numeric state; Rerun is outside recording's data path."""

@@ -18,7 +18,7 @@ CONFIG = {
     "bind_host": "127.0.0.1", "port": 8783, "timeout_sec": 20,
     "start": ["tmux", "new-session", "-d", "-s", "pika", "~/start.sh"],
     "status": ["tmux", "has-session", "-t", "=pika"],
-    "stop": ["tmux", "send-keys", "-t", "=pika", "C-c"],
+    "stop": ["tmux", "send-keys", "-t", "=pika:", "C-c"],
     "stop_grace_sec": 1,
     "kill": ["tmux", "kill-session", "-t", "=pika"],
 }
@@ -92,8 +92,11 @@ class PikaProcessTest(unittest.TestCase):
         config = helper.load_config(ROOT / "config/docker/pika_helper.json")
         self.assertEqual(config["port"], 8783)
         self.assertEqual(config["status"], ["tmux", "has-session", "-t", "=pika"])
-        self.assertEqual(config["stop"], ["tmux", "send-keys", "-t", "=pika", "C-c"])
+        self.assertEqual(config["stop"], ["tmux", "send-keys", "-t", "=pika:", "C-c"])
         self.assertEqual(config["kill"], ["tmux", "kill-session", "-t", "=pika"])
+        # send-keys needs a pane: tmux 3.2a rejects "=pika" ("can't find pane"), so Ctrl-C was
+        # never sent and every stop fell through to kill-session, orphaning the official stack.
+        self.assertTrue(config["stop"][3].endswith(":"))
 
     def test_load_config_rejects_missing_and_bad_commands(self):
         for broken in ({k: v for k, v in CONFIG.items() if k != "kill"}, {**CONFIG, "start": []},
@@ -203,6 +206,151 @@ class PikaProcessTest(unittest.TestCase):
         self.assertFalse(worker.is_alive())
         self.assertEqual(len(results), 1)
         self.assertTrue(results[0]["ok"])
+
+
+LOCATOR = ["/home/op/pika_ros/install/pika_locator/lib/pika_locator/pika_double_locator_node", "--ros-args"]
+OFFICIAL_LAUNCH = ["/usr/bin/python3", "/opt/ros/humble/bin/ros2", "launch", "sensor_tools",
+                   "open_multi_sensor_with_teleop.launch.py", "l_serial_port:=/dev/tty_pika_left"]
+LEFTOVER_CONFIG = {**CONFIG, "leftover_processes": ["open_multi_sensor_with_teleop.launch.py", "pika_double_locator_node"],
+                   "leftover_grace_sec": 2}
+
+
+class FakeProcs:
+    """Process table; a group exits on the first signal in its `dies_on` set."""
+
+    def __init__(self, processes=(), dies_on=None):
+        self.processes = list(processes)
+        self.dies_on = dies_on or {}
+        self.sent = []
+
+    def scan(self):
+        return list(self.processes)
+
+    def kill_group(self, pgid, signal_number):
+        self.sent.append((pgid, signal_number))
+        if signal_number in self.dies_on.get(pgid, {helper.signal.SIGINT}):
+            self.processes = [p for p in self.processes if p[1] != pgid]
+
+
+def make_leftover(tmux, procs, sleep=None, own_pgid=500):
+    return helper.PikaProcess(LEFTOVER_CONFIG, runner=tmux, sleep=sleep or FakeSleep(), home="/home/op",
+                              scan=procs.scan, kill_group=procs.kill_group, own_pgid=own_pgid)
+
+
+class LeftoverTest(unittest.TestCase):
+    def test_repo_config_outlasts_the_official_supervisor(self):
+        config = helper.load_config(ROOT / "config/docker/pika_helper.json")
+        # pika_teleop's official_stack_supervisor waits 10 s after SIGINT and 3 s after SIGTERM;
+        # a kill-session before that kills it mid-cleanup and orphans the official group.
+        self.assertGreater(config["stop_grace_sec"], 13)
+        for name in ("pika_double_locator_node", "serial_gripper_imu", "open_multi_sensor_with_teleop.launch.py"):
+            self.assertIn(name, config["leftover_processes"])
+        # Worst stop (grace + leftover INT/TERM/KILL + status probes) stays below helper_timeout_sec 40.
+        self.assertLess(config["stop_grace_sec"] + config["leftover_grace_sec"] + 2 * helper.LEFTOVER_TERM_WAIT_SEC
+                        + 2 * config["status_timeout_sec"], 40)
+        # Worst start clears leftovers first.
+        self.assertLess(2 * config["status_timeout_sec"] + config["timeout_sec"] + config["leftover_grace_sec"]
+                        + 2 * helper.LEFTOVER_TERM_WAIT_SEC, 40)
+
+    def test_leftover_names_must_be_plain_names(self):
+        for broken in ({**CONFIG, "leftover_processes": "pika"}, {**CONFIG, "leftover_processes": ["/bin/x"]},
+                       {**CONFIG, "leftover_processes": [""]}, {**CONFIG, "leftover_grace_sec": 0}):
+            with self.assertRaises(ValueError):
+                helper.validate_config(broken)
+
+    def test_is_leftover_matches_executables_and_interpreted_launches_only(self):
+        names = frozenset(LEFTOVER_CONFIG["leftover_processes"])
+        self.assertTrue(helper.is_leftover(LOCATOR, names))
+        self.assertTrue(helper.is_leftover(OFFICIAL_LAUNCH, names))
+        self.assertFalse(helper.is_leftover(["strings", LOCATOR[0]], names))
+        self.assertFalse(helper.is_leftover(["bash", "-c", "pgrep -f pika_double_locator_node"], names))
+        self.assertFalse(helper.is_leftover(["vim", "open_multi_sensor_with_teleop.launch.py"], names))
+        self.assertFalse(helper.is_leftover(LOCATOR, frozenset()))
+
+    def test_status_counts_leftovers_without_a_session_as_running(self):
+        procs = FakeProcs([(10, 10, OFFICIAL_LAUNCH), (11, 10, LOCATOR)])
+        status = make_leftover(FakeTmux(running=False), procs).status()
+        self.assertEqual((status["running"], status["session"], status["leftover_groups"]), (True, False, [10]))
+        self.assertEqual(procs.sent, [])
+
+    def test_own_group_and_init_are_never_leftovers(self):
+        procs = FakeProcs([(10, 500, LOCATOR), (11, 1, LOCATOR), (12, 0, LOCATOR)])
+        self.assertFalse(make_leftover(FakeTmux(running=False), procs).status()["running"])
+
+    def test_stop_without_session_interrupts_leftover_groups(self):
+        procs = FakeProcs([(10, 10, OFFICIAL_LAUNCH), (11, 10, LOCATOR), (20, 20, ["/usr/bin/bash"])])
+        tmux = FakeTmux(running=False)
+        process = make_leftover(tmux, procs)
+        result = process.stop()
+        self.assertTrue(result["ok"])
+        self.assertEqual(procs.sent, [(10, helper.signal.SIGINT)])
+        self.assertIn("SIGINT to leftover Pika process groups 10", result["output_tail"])
+        self.assertFalse(any(call[1] in ("send-keys", "kill-session") for call in tmux.calls))
+        self.assertFalse(process.status()["running"])
+
+    def test_stop_escalates_to_sigterm_then_sigkill(self):
+        procs = FakeProcs([(11, 10, LOCATOR)], dies_on={10: {helper.signal.SIGKILL}})
+        sleep = FakeSleep()
+        self.assertTrue(make_leftover(FakeTmux(running=False), procs, sleep).stop()["ok"])
+        self.assertEqual([sig for _group, sig in procs.sent],
+                         [helper.signal.SIGINT, helper.signal.SIGTERM, helper.signal.SIGKILL])
+        self.assertGreaterEqual(sleep.total, LEFTOVER_CONFIG["leftover_grace_sec"])
+
+    def test_stop_fails_when_leftovers_survive_sigkill(self):
+        procs = FakeProcs([(11, 10, LOCATOR)], dies_on={10: set()})
+        with self.assertRaises(helper.ActionFailed) as failed:
+            make_leftover(FakeTmux(running=False), procs).stop()
+        self.assertIn("leftover Pika processes still running: groups 10", failed.exception.output_tail)
+
+    def test_stop_waits_for_the_session_to_clean_its_own_group(self):
+        procs = FakeProcs([(11, 10, LOCATOR)])
+        tmux = FakeTmux(running=True, stops_after=0)
+        polls = []
+
+        def sleep(seconds):
+            polls.append(seconds)
+            if len(polls) == 2:  # within stop_grace_sec 1 (two 0.5 s polls)
+                procs.processes = []  # the supervisor finished its SIGINT cleanup
+
+        result = make_leftover(tmux, procs, sleep).stop()
+        self.assertTrue(result["ok"])
+        self.assertEqual(procs.sent, [])
+        self.assertFalse(any(call[1] == "kill-session" for call in tmux.calls))
+
+    def test_stop_cleans_leftovers_after_kill_session(self):
+        procs = FakeProcs([(11, 10, LOCATOR)])
+        tmux = FakeTmux(running=True, stops_after=10_000)
+        result = make_leftover(tmux, procs).stop()
+        self.assertTrue(result["ok"])
+        self.assertIn(["tmux", "kill-session", "-t", "=pika"], tmux.calls)
+        self.assertEqual(procs.sent, [(10, helper.signal.SIGINT)])
+
+    def test_start_clears_leftovers_before_starting(self):
+        procs = FakeProcs([(11, 10, LOCATOR)])
+        tmux = FakeTmux(running=False)
+        result = make_leftover(tmux, procs).start()
+        self.assertTrue(result["ok"])
+        self.assertEqual(procs.sent, [(10, helper.signal.SIGINT)])
+        self.assertIn(["tmux", "new-session", "-d", "-s", "pika", "/home/op/start.sh"], tmux.calls)
+
+    def test_start_refuses_when_leftovers_survive(self):
+        procs = FakeProcs([(11, 10, LOCATOR)], dies_on={10: set()})
+        tmux = FakeTmux(running=False)
+        with self.assertRaises(helper.ActionFailed):
+            make_leftover(tmux, procs).start()
+        self.assertFalse(any(call[1] == "new-session" for call in tmux.calls))
+
+    def test_scan_processes_reads_proc(self):
+        import tempfile
+        with tempfile.TemporaryDirectory() as tmp:
+            proc = Path(tmp)
+            (proc / "self").mkdir()
+            (proc / "42").mkdir()
+            (proc / "42" / "cmdline").write_bytes(b"/usr/bin/python3\0/opt/ros/humble/bin/ros2\0launch\0")
+            (proc / "42" / "stat").write_text("42 (ros2 (launch)) S 1 4242 4242 0 -1", encoding="utf-8")
+            (proc / "43").mkdir()  # exited between listing and reading
+            self.assertEqual(helper.scan_processes(proc),
+                             [(42, 4242, ["/usr/bin/python3", "/opt/ros/humble/bin/ros2", "launch"])])
 
 
 class HttpTest(unittest.TestCase):

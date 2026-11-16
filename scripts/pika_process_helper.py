@@ -7,6 +7,15 @@ and DISPLAY. Listens on localhost only; realman_web_control (network_mode: host)
 calls it. Every command is a fixed argv from config/docker/pika_helper.json; the
 HTTP request never carries a command. Only one action runs at a time.
 
+Leftover processes: the Pika stack runs the official launch in its own process
+group (pika_teleop's official_stack_supervisor), outside the tmux session. If
+the supervisor dies before it has stopped that group, the locator and gripper
+nodes keep running (and keep publishing /pika_pose_*), and a later start opens
+the trackers a second time. So `leftover_processes` names those processes:
+the helper counts them as running, a stop sends SIGINT/SIGTERM/SIGKILL to their
+process groups after the session is gone, and a start clears them first. Only
+processes of the helper's own user are considered.
+
 Standard library only so it runs on the host's system Python.
 """
 
@@ -16,6 +25,7 @@ import argparse
 import json
 import os
 from pathlib import Path
+import signal
 import subprocess
 import sys
 import threading
@@ -29,11 +39,17 @@ OUTPUT_TAIL_LINES = 12
 COMMAND_KEYS = ("start", "status", "stop", "kill")
 STOP_POLL_SEC = 0.5
 DEFAULT_STATUS_TIMEOUT_SEC = 5.0
+DEFAULT_LEFTOVER_GRACE_SEC = 5.0
+LEFTOVER_TERM_WAIT_SEC = 1.0
 # `tmux has-session` exits 1 when the session is missing; any other non-zero exit
 # (124 timeout, 127 no tmux, ...) is no answer about the session.
 NOT_RUNNING_EXIT = 1
 
 Runner = Callable[[Sequence[str], float], tuple[int, str]]
+# (pid, process group id, argv) of one process of the helper's user.
+ProcessInfo = tuple[int, int, list[str]]
+Scanner = Callable[[], list[ProcessInfo]]
+GroupSignal = Callable[[int, int], None]
 
 
 class Busy(Exception):
@@ -62,9 +78,9 @@ def validate_config(document: Any) -> dict[str, Any]:
     port = document["port"]
     if isinstance(port, bool) or not isinstance(port, int) or not 1 <= port <= 65535:
         raise ValueError("port must be from 1 through 65535")
-    for key in ("timeout_sec", "stop_grace_sec", "status_timeout_sec"):
+    for key in ("timeout_sec", "stop_grace_sec", "status_timeout_sec", "leftover_grace_sec"):
         if key not in document:
-            continue  # status_timeout_sec is optional
+            continue  # status_timeout_sec and leftover_grace_sec are optional
         value = document[key]
         if isinstance(value, bool) or not isinstance(value, (int, float)) or value <= 0:
             raise ValueError(f"{key} must be positive")
@@ -72,6 +88,9 @@ def validate_config(document: Any) -> dict[str, Any]:
         command = document[key]
         if not isinstance(command, list) or not command or not all(isinstance(part, str) and part for part in command):
             raise ValueError(f"{key} must be a non-empty argv list of strings")
+    names = document.get("leftover_processes", [])
+    if not isinstance(names, list) or not all(isinstance(name, str) and name and "/" not in name for name in names):
+        raise ValueError("leftover_processes must be a list of process names (no paths)")
     return document
 
 
@@ -97,9 +116,58 @@ def _tail(output: str) -> list[str]:
     return [line for line in output.splitlines() if line.strip()][-OUTPUT_TAIL_LINES:]
 
 
+def scan_processes(proc: Path = Path("/proc")) -> list[ProcessInfo]:
+    """Processes of this user from /proc (Linux); empty where /proc is missing."""
+    uid = os.getuid()
+    found: list[ProcessInfo] = []
+    try:
+        entries = list(proc.iterdir())
+    except OSError:
+        return found
+    for entry in entries:
+        if not entry.name.isdigit():
+            continue
+        try:
+            if entry.stat().st_uid != uid:
+                continue
+            argv = [part.decode("utf-8", "replace") for part in (entry / "cmdline").read_bytes().split(b"\0") if part]
+            # Field 5 of /proc/<pid>/stat; the command name in parentheses may contain spaces.
+            pgid = int((entry / "stat").read_text(encoding="utf-8", errors="replace").rsplit(")", 1)[1].split()[2])
+        except (OSError, ValueError, IndexError):
+            continue  # exited meanwhile, or a kernel thread
+        if argv:
+            found.append((int(entry.name), pgid, argv))
+    return found
+
+
+def signal_group(pgid: int, signal_number: int) -> None:
+    try:
+        os.killpg(pgid, signal_number)
+    except (ProcessLookupError, PermissionError):
+        pass
+
+
+def is_leftover(argv: Sequence[str], names: frozenset[str]) -> bool:
+    """The executable is a listed name, or an interpreter (python*, ros2) runs one.
+
+    Other commands that only mention a name (an editor, `strings <binary>`, a shell
+    one-liner) do not count, so the helper never signals an operator's shell.
+    """
+    if not argv or not names:
+        return False
+    bases = [os.path.basename(part) for part in argv]
+    if bases[0] in names:
+        return True
+    if bases[0].startswith("python") or bases[0] == "ros2":
+        return any(base in names for base in bases[1:])
+    return False
+
+
 class PikaProcess:
     def __init__(self, config: dict[str, Any], runner: Runner = run_command,
-                 sleep: Callable[[float], None] = time.sleep, home: str | None = None) -> None:
+                 sleep: Callable[[float], None] = time.sleep, home: str | None = None,
+                 scan: Scanner = scan_processes, kill_group: GroupSignal = signal_group,
+                 own_pgid: int | None = None) -> None:
         home = home if home is not None else os.path.expanduser("~")
         # Only a leading "~/" is expanded; nothing else in the argv is interpreted.
         self.commands = {
@@ -109,8 +177,13 @@ class PikaProcess:
         self.timeout_sec = float(config["timeout_sec"])
         self.stop_grace_sec = float(config["stop_grace_sec"])
         self.status_timeout_sec = float(config.get("status_timeout_sec", DEFAULT_STATUS_TIMEOUT_SEC))
+        self.leftover_names = frozenset(config.get("leftover_processes", []))
+        self.leftover_grace_sec = float(config.get("leftover_grace_sec", DEFAULT_LEFTOVER_GRACE_SEC))
         self._runner = runner
         self._sleep = sleep
+        self._scan = scan
+        self._kill_group = kill_group
+        self._own_pgid = own_pgid if own_pgid is not None else os.getpgid(0)
         self._lock = threading.Lock()
         self._busy: str | None = None
         self._last: dict[str, Any] = {}
@@ -119,11 +192,47 @@ class PikaProcess:
         timeout = self.status_timeout_sec if key == "status" else self.timeout_sec
         return self._runner(self.commands[key], timeout)
 
-    def _running(self) -> bool:
+    def _session(self) -> bool:
         exit_code, output = self._run("status")
         if exit_code not in (0, NOT_RUNNING_EXIT):
             raise StatusError(exit_code, output)
         return exit_code == 0
+
+    def _leftover_groups(self) -> list[int]:
+        if not self.leftover_names:
+            return []
+        groups = {pgid for _pid, pgid, argv in self._scan()
+                  if pgid > 1 and pgid != self._own_pgid and is_leftover(argv, self.leftover_names)}
+        return sorted(groups)
+
+    def _running(self) -> bool:
+        return self._session() or bool(self._leftover_groups())
+
+    def _wait_leftovers(self, seconds: float) -> list[int]:
+        waited = 0.0
+        groups = self._leftover_groups()
+        while groups and waited < seconds:
+            self._sleep(STOP_POLL_SEC)
+            waited += STOP_POLL_SEC
+            groups = self._leftover_groups()
+        return groups
+
+    def _stop_leftovers(self, groups: list[int]) -> str:
+        """SIGINT, then SIGTERM, then SIGKILL to each group; returns a log of what was sent."""
+        lines = []
+        for signal_number, wait in ((signal.SIGINT, self.leftover_grace_sec),
+                                    (signal.SIGTERM, LEFTOVER_TERM_WAIT_SEC),
+                                    (signal.SIGKILL, LEFTOVER_TERM_WAIT_SEC)):
+            if not groups:
+                break
+            lines.append(f"{signal.Signals(signal_number).name} to leftover Pika process groups "
+                         + " ".join(str(group) for group in groups))
+            for group in groups:
+                self._kill_group(group, signal_number)
+            groups = self._wait_leftovers(wait)
+        if groups:
+            lines.append("leftover Pika processes still running: groups " + " ".join(str(g) for g in groups))
+        return "\n".join(lines)
 
     def _begin(self, action: str) -> None:
         with self._lock:
@@ -146,12 +255,20 @@ class PikaProcess:
     def start(self) -> dict[str, Any]:
         self._begin("start")
         try:
-            if self._running():
+            if self._session():
                 return self._finish(0, "already running")
+            # Leftovers of an earlier stack hold the trackers; a second locator would crash-loop on them.
+            note = ""
+            groups = self._leftover_groups()
+            if groups:
+                note = self._stop_leftovers(groups) + "\n"
+                if self._leftover_groups():
+                    return self._finish(1, note + "not started")
             exit_code, output = self._run("start")
             # Judge by the end state: a lost race ("duplicate session") still leaves Pika running.
-            if exit_code != 0 and self._running():
+            if exit_code != 0 and self._session():
                 exit_code = 0
+            output = note + output
         except StatusError as error:
             return self._finish(error.exit_code, f"{error.output}\n{error}")
         except BaseException:
@@ -164,18 +281,26 @@ class PikaProcess:
         try:
             if not self._running():
                 return self._finish(0, "not running")
-            exit_code, output = self._run("stop")
-            waited = 0.0
-            while self._running() and waited < self.stop_grace_sec:
-                self._sleep(STOP_POLL_SEC)
-                waited += STOP_POLL_SEC
-            if self._running():
-                exit_code, output = self._run("kill")
-                output = f"{output}\nkilled after {self.stop_grace_sec:g} s"
+            exit_code, output = 0, ""
+            if self._session():
+                exit_code, output = self._run("stop")
+                # Give the session time to stop the official group itself (its supervisor needs
+                # SIGINT + SIGTERM timeouts), so leftovers are only the fallback.
+                waited = 0.0
+                while self._running() and waited < self.stop_grace_sec:
+                    self._sleep(STOP_POLL_SEC)
+                    waited += STOP_POLL_SEC
+                if self._session():
+                    exit_code, output = self._run("kill")
+                    output = f"{output}\nkilled after {self.stop_grace_sec:g} s"
+                if self._session():
+                    return self._finish(exit_code or 1, f"{output}\npika session still running after kill")
+            groups = self._leftover_groups()
+            if groups:
+                output = f"{output}\n{self._stop_leftovers(groups)}"
             # Judge by the end state, not by the last command's exit code.
-            if self._running():
+            if self._leftover_groups():
                 exit_code = exit_code or 1
-                output = f"{output}\npika session still running after kill"
             else:
                 exit_code = 0
         except StatusError as error:
@@ -193,13 +318,16 @@ class PikaProcess:
         with self._lock:
             busy = self._busy is not None
             last = dict(self._last)
-        # A status probe during an action is fine: tmux has-session is read-only.
+        # A status probe during an action is fine: tmux has-session and /proc are read-only.
+        leftovers = self._leftover_groups()
         try:
-            return {"running": self._running(), "busy": busy, "last": last}
+            session = self._session()
         except StatusError as error:
             tail = _tail(error.output)
-            return {"running": False, "busy": busy, "last": last,
-                    "error": "; ".join([str(error), *tail[-3:]])}
+            return {"running": bool(leftovers), "session": False, "leftover_groups": leftovers,
+                    "busy": busy, "last": last, "error": "; ".join([str(error), *tail[-3:]])}
+        return {"running": session or bool(leftovers), "session": session, "leftover_groups": leftovers,
+                "busy": busy, "last": last}
 
 
 def make_handler(process: PikaProcess) -> type[BaseHTTPRequestHandler]:

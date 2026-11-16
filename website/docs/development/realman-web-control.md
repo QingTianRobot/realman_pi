@@ -433,7 +433,7 @@ web_control 日志记一次。Web 服务启动（或重启）时用同样的方�
 
 Pika 栈是宿主机原生安装（USB 串口、libsurvive 配置、定位器需要 `DISPLAY`），不在容器里，所以由宿主机上的
 `scripts/pika_process_helper.py` 启停。它与重启 helper 同形：只用标准库、只监听 `127.0.0.1:8783`，一次只做一个操作
-（忙时 409），提供 `GET /status`（`running`、`busy`、`last`）、`POST /start`、`POST /stop`。执行的命令是
+（忙时 409），提供 `GET /status`（`running`、`session`、`leftover_groups`、`busy`、`last`）、`POST /start`、`POST /stop`。执行的命令是
 `config/docker/pika_helper.json` 中固定的 argv 列表（`~` 由 helper 展开），HTTP 请求体不带任何命令、路径或参数：
 
 ```json
@@ -444,17 +444,34 @@ Pika 栈是宿主机原生安装（USB 串口、libsurvive 配置、定位器需
   "status_timeout_sec": 5,
   "start": ["tmux", "new-session", "-d", "-s", "pika", "~/pika_teleop_ws/start_pika_bag.sh"],
   "status": ["tmux", "has-session", "-t", "=pika"],
-  "stop": ["tmux", "send-keys", "-t", "=pika", "C-c"],
-  "stop_grace_sec": 8,
-  "kill": ["tmux", "kill-session", "-t", "=pika"]
+  "stop": ["tmux", "send-keys", "-t", "=pika:", "C-c"],
+  "stop_grace_sec": 15,
+  "kill": ["tmux", "kill-session", "-t", "=pika"],
+  "leftover_processes": [
+    "pika_bag.launch.py",
+    "pika_teleop_bringup.official_stack_supervisor",
+    "open_multi_sensor_with_teleop.launch.py",
+    "pika_double_locator_node",
+    "serial_gripper_imu"
+  ],
+  "leftover_grace_sec": 5
 }
 ```
 
+- `stop` 的目标必须是 `=pika:`（带冒号，指会话的当前窗格）：`send-keys` 需要窗格，tmux 3.2a 对 `=pika` 报
+  `can't find pane`，Ctrl-C 根本发不出去，每次关闭都只能等满 `stop_grace_sec` 再 `kill-session`。
 - `status` 退出码 0 即 `running`，**只有**退出码 1（会话不存在）算未运行；`=pika` 精确匹配会话名，不会误中 `pika_xxx`。
   其它非零退出码（124 超时、127 找不到 tmux 等）不是关于会话的答复：`/start`、`/stop` 带该输出失败（500），
   `/status` 返回 `"running": false` 加 `error`。
-- `start` 在已运行时直接算成功；`stop` 先发 Ctrl-C，轮询 `status` 至多 `stop_grace_sec` 秒，仍在运行再执行 `kill`。
-  已停止也算成功。`status` 每次最长 `status_timeout_sec`（可选，默认 5 s），其它命令最长 `timeout_sec` 秒。
+- `start` 在 tmux 会话已存在时直接算成功；`stop` 先发 Ctrl-C，轮询至多 `stop_grace_sec` 秒（会话和残留进程都消失即结束），
+  会话仍在再执行 `kill`。已停止也算成功。`stop_grace_sec` 必须大于 pika_teleop `official_stack_supervisor` 的清理时间
+  （SIGINT 后等 10 s，SIGTERM 后等 3 s），否则 `kill-session` 会在它清理途中杀掉它。
+- **残留进程**：官方 Pika 栈由 supervisor 放在独立进程组里，不在 tmux 会话内。supervisor 没清完就死掉时，定位节点和
+  夹爪节点会成为孤儿继续运行，`/pika_pose_{l,r}` 照发（:8770 的 Pika 3D 窗口因此仍在动），下次启动还会第二次打开追踪器，
+  导致定位节点崩溃循环。`leftover_processes` 列出这些进程名：只匹配 helper 同一用户的进程，且只认可执行文件本身或
+  python/ros2 解释器运行的该名字（`strings`、`grep`、shell 一行命令里出现名字不算）。有残留时 `status` 也报
+  `running: true`（另给 `session`、`leftover_groups`）；`stop` 在会话结束后依次向残留进程组发 SIGINT（等
+  `leftover_grace_sec`，默认 5 s）、SIGTERM、SIGKILL（各等 1 s）；`start` 先清理残留，清不掉则不启动。`status` 每次最长 `status_timeout_sec`（可选，默认 5 s），其它命令最长 `timeout_sec` 秒。
 - `last` 记录动作、退出码、起止时间和输出末尾 12 行；失败时 `detail` 带错误和输出末尾几行。
 
 helper 以 **systemd 用户单元**运行（不是重启 helper 那样的系统单元）：它要以桌面用户身份运行才能用该用户的 tmux 和
@@ -474,9 +491,9 @@ loginctl enable-linger "$USER" # 只需一次：没有登录会话时用户单�
 ```yaml
 pika_switch:
   helper_url: http://127.0.0.1:8783  # Empty string hides the switch (or no helper answers).
-  # Per helper call. Above the helper's worst start (status_timeout_sec 5 + timeout_sec 20 + status 5 s)
-  # and a stop that ends within stop_grace_sec 8; a stop that also needs kill can exceed it and then
-  # shows failed. A start/stop with no answer after this + 5 s fails the switch.
+  # Per helper call. Above the helper's worst start (status 5 + leftover cleanup 7 + timeout_sec 20 + status 5 s)
+  # and worst stop (stop_grace_sec 15 + kill + leftover cleanup 7 s + status probes).
+  # A start/stop with no answer after this + 5 s fails the switch.
   helper_timeout_sec: 40.0
   input_fresh_ms: 500  # Both l and r Pika velocity must be newer than this.
   input_wait_timeout_sec: 30.0  # Stack started but no Pika data from an arm -> failed (stack stays up).
@@ -488,8 +505,8 @@ pika_switch:
 ```
 
 `helper_timeout_sec` 是 Web 服务调用 helper 的 HTTP 超时，大于一次 start 的最坏耗时（`status_timeout_sec` +
-`timeout_sec` + `status_timeout_sec` = 30 s）和正常的 stop（Ctrl-C 后 `stop_grace_sec` 内退出）；还要 `kill` 的 stop
-可能更久，此时开关显示 `failed`。helper 调用不在控制线程上执行，任何异常也会作为失败结果串行送回状态机；start/stop 在
+残留清理 7 s + `timeout_sec` + `status_timeout_sec` = 37 s）和 stop 的最坏耗时（`stop_grace_sec` 15 s + `kill` +
+残留清理 7 s，另加 `status` 探测）。helper 调用不在控制线程上执行，任何异常也会作为失败结果串行送回状态机；start/stop 在
 `helper_timeout_sec` + 5 s 内没有答复时状态机自行判 `failed`（`Pika helper <action> got no answer`），之后迟到的同一次答复
 照常处理，不会再触发新的过渡。`off_mode_timeout_sec`（默认 10 s）是关闭时等待 `none` 的上限。
 

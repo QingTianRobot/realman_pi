@@ -274,6 +274,9 @@ services:
       # (same mount as the bringup container).
       - ./config/ros:/opt/rm65_ws/config/ros:rw
       - ./logs:/opt/rm65_ws/logs
+    # Production :8765 console: recover after host reboot or Docker restart like
+    # realman_bringup_remote; `docker compose stop` still keeps it down.
+    restart: unless-stopped
     command:
       - ros2
       - launch
@@ -286,6 +289,8 @@ services:
   # It intentionally does not start drivers, motion control, or camera streaming.
   realman_recording:
     <<: *realman-common
+    # Production :8770 recorder: same reboot/Docker-restart recovery as bringup.
+    restart: unless-stopped
     command:
       - ros2
       - launch

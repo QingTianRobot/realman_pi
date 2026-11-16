@@ -18,7 +18,7 @@ CONFIG = {
     "bind_host": "127.0.0.1", "port": 8783, "timeout_sec": 20,
     "start": ["tmux", "new-session", "-d", "-s", "pika", "~/start.sh"],
     "status": ["tmux", "has-session", "-t", "=pika"],
-    "stop": ["tmux", "send-keys", "-t", "=pika", "C-c"],
+    "stop": ["tmux", "send-keys", "-t", "=pika:", "C-c"],
     "stop_grace_sec": 1,
     "kill": ["tmux", "kill-session", "-t", "=pika"],
 }
@@ -92,8 +92,11 @@ class PikaProcessTest(unittest.TestCase):
         config = helper.load_config(ROOT / "config/docker/pika_helper.json")
         self.assertEqual(config["port"], 8783)
         self.assertEqual(config["status"], ["tmux", "has-session", "-t", "=pika"])
-        self.assertEqual(config["stop"], ["tmux", "send-keys", "-t", "=pika", "C-c"])
+        self.assertEqual(config["stop"], ["tmux", "send-keys", "-t", "=pika:", "C-c"])
         self.assertEqual(config["kill"], ["tmux", "kill-session", "-t", "=pika"])
+        # send-keys needs a pane: tmux 3.2a rejects "=pika" ("can't find pane"), so Ctrl-C was
+        # never sent and every stop fell through to kill-session, orphaning the official stack.
+        self.assertTrue(config["stop"][3].endswith(":"))
 
     def test_load_config_rejects_missing_and_bad_commands(self):
         for broken in ({k: v for k, v in CONFIG.items() if k != "kill"}, {**CONFIG, "start": []},

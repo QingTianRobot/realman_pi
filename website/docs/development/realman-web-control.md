@@ -444,7 +444,7 @@ Pika 栈是宿主机原生安装（USB 串口、libsurvive 配置、定位器需
   "status_timeout_sec": 5,
   "start": ["tmux", "new-session", "-d", "-s", "pika", "~/pika_teleop_ws/start_pika_bag.sh"],
   "status": ["tmux", "has-session", "-t", "=pika"],
-  "stop": ["tmux", "send-keys", "-t", "=pika", "C-c"],
+  "stop": ["tmux", "send-keys", "-t", "=pika:", "C-c"],
   "stop_grace_sec": 15,
   "kill": ["tmux", "kill-session", "-t", "=pika"],
   "leftover_processes": [
@@ -458,6 +458,8 @@ Pika 栈是宿主机原生安装（USB 串口、libsurvive 配置、定位器需
 }
 ```
 
+- `stop` 的目标必须是 `=pika:`（带冒号，指会话的当前窗格）：`send-keys` 需要窗格，tmux 3.2a 对 `=pika` 报
+  `can't find pane`，Ctrl-C 根本发不出去，每次关闭都只能等满 `stop_grace_sec` 再 `kill-session`。
 - `status` 退出码 0 即 `running`，**只有**退出码 1（会话不存在）算未运行；`=pika` 精确匹配会话名，不会误中 `pika_xxx`。
   其它非零退出码（124 超时、127 找不到 tmux 等）不是关于会话的答复：`/start`、`/stop` 带该输出失败（500），
   `/status` 返回 `"running": false` 加 `error`。

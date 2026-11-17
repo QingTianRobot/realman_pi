@@ -217,8 +217,10 @@ def read_state_streams(session_dir: Path, manifest: dict[str, Any]) -> dict[str,
 
     from .joint_state import ordered_joint_position
 
+    # rosbag2 writes ``state.mcap`` as a bag directory (metadata.yaml + *.mcap);
+    # the reader takes that path as its URI, exactly like the exporter.
     bag = session_dir / "state.mcap"
-    if not bag.is_file():
+    if not bag.exists():
         return {}
     layout = replay_topics(manifest)
     wanted = set(layout["joint_topics"]) | set(layout["arm_action_topics"]) | set(layout["arm_velocity_topics"])

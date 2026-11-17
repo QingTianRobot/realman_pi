@@ -500,7 +500,8 @@ class RecordingWebServer:
         mcap = directory / "state.mcap"
         key = (
             str(directory), fps, manifest_path.stat().st_mtime_ns,
-            mcap.stat().st_mtime_ns if mcap.is_file() else 0,
+            # state.mcap is a rosbag2 directory; its mtime moves when the bag is written.
+            mcap.stat().st_mtime_ns if mcap.exists() else 0,
         )
         cache: dict[Any, dict[str, Any]] = self.__dict__.setdefault("_raw_replay_cache", {})
         if key in cache:

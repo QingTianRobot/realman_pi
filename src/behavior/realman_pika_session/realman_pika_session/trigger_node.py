@@ -23,6 +23,14 @@ SERVICE_TIMEOUT_SEC = 10.0
 RESULT_MARGIN_SEC = 5.0
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 BEST_EFFORT = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
+MODE_TOPIC = "/realman_bt_executor/input_mode_state"
+# The recorder holds or is about to hold a session: a key press must not open a second one.
+RECORDER_BUSY = (
+    RecordingStatus.SCHEDULED, RecordingStatus.ARMED, RecordingStatus.COUNTDOWN,
+    RecordingStatus.RECORDING, RecordingStatus.FINALIZING,
+)
+# The session named in /recording/status is still running and a STOP would end it.
+RECORDER_ACTIVE = (RecordingStatus.COUNTDOWN, RecordingStatus.RECORDING)
 
 
 class TriggerNode(Node):
@@ -54,9 +62,14 @@ class TriggerNode(Node):
         self._state_pub = self.create_publisher(String, "/pika_episode/state", LATCHED)
         self._last_published: dict | None = None
         self._last_publish_time = 0.0
+        # Last mode fed to the machine; "" also stands for "no BT executor publishing".
+        self._fed_mode = ""
+        # Latest /recording/status as (session_id, state); None until the first message.
+        self._recorder_status: tuple[str, int] | None = None
 
-        self.create_subscription(Bool, episode_config.keyboard_topic, self._on_keyboard, 10)
-        self.create_subscription(InputModeState, "/realman_bt_executor/input_mode_state", self._on_mode, LATCHED)
+        # Best effort matches both reliable and best-effort keyboard publishers; the machine compares levels.
+        self.create_subscription(Bool, episode_config.keyboard_topic, self._on_keyboard, BEST_EFFORT)
+        self.create_subscription(InputModeState, MODE_TOPIC, self._on_mode, LATCHED)
         self.create_subscription(RecordingStatus, "/recording/status", self._on_recording_status, 10)
         for arm in arms:
             self.create_subscription(
@@ -81,11 +94,37 @@ class TriggerNode(Node):
 
     def _on_mode(self, message: InputModeState) -> None:
         mode = message.active_mode if message.phase == InputModeState.ACTIVE else ""
+        self._feed_mode(mode)
+
+    def _feed_mode(self, mode: str) -> None:
+        self._fed_mode = mode
         self._apply(self._machine.on_mode(mode, time.monotonic()))
 
+    def _check_mode_publisher(self) -> None:
+        """A stopped or crashed BT executor publishes no final state; its latched mode must not outlive it."""
+        if self._fed_mode != "" and self.count_publishers(MODE_TOPIC) == 0:
+            self.get_logger().warning(f"no publisher on {MODE_TOPIC}: treating the input mode as unknown")
+            self._feed_mode("")
+
     def _on_recording_status(self, message: RecordingStatus) -> None:
-        recording = message.state in (RecordingStatus.COUNTDOWN, RecordingStatus.RECORDING)
-        self._machine.on_recording_status(recording, message.session_id)
+        self._recorder_status = (message.session_id, message.state)
+        self._machine.on_recording_status(message.state in RECORDER_BUSY, message.session_id)
+
+    def _stop_blocker(self, session_id: str) -> str:
+        """Why a STOP for `session_id` must not be sent ("" = send it).
+
+        The recorder's STOP ends whatever session is active, so it is only sent while /recording/status
+        names our session as active. With no status yet, or a status that still shows an older idle
+        session (it can lag the START reply by a tick), nothing else is running and STOP is safe.
+        """
+        if self._recorder_status is None:
+            return ""
+        status_session, state = self._recorder_status
+        if status_session == session_id:
+            return "" if state in RECORDER_ACTIVE else "session already ended externally"
+        if state in RECORDER_BUSY:
+            return "session already ended externally"
+        return ""
 
     def _on_timer(self) -> None:
         now = time.monotonic()
@@ -100,6 +139,7 @@ class TriggerNode(Node):
         for arm, (episode, deadline) in list(self._home_deadlines.items()):
             if now > deadline:
                 self._finish_home(arm, episode, False, "no MoveJ result in time")
+        self._check_mode_publisher()
         self._apply(self._machine.tick(now))  # _apply always publishes (on change or once a second)
 
     # ---- actions ------------------------------------------------------
@@ -126,6 +166,12 @@ class TriggerNode(Node):
         else:
             request.command = ManageRecording.Request.STOP
             request.session_id = self._machine.snapshot()["session_id"]
+            blocker = self._stop_blocker(request.session_id)
+            if blocker:
+                self.get_logger().warning(
+                    f"not sending STOP for {request.session_id}: {blocker} (status={self._recorder_status})")
+                self._service_result(kind, False, request.session_id, blocker)
+                return
         if not self._recording.service_is_ready():
             self._service_result(kind, False, "", "/recording/manage is not available")
             return
@@ -159,6 +205,11 @@ class TriggerNode(Node):
             return
         session_id = response.session_id
         self.get_logger().error(f"late START success after timeout, stopping orphan session {session_id}")
+        blocker = self._stop_blocker(session_id)
+        if blocker:
+            self.get_logger().error(
+                f"not stopping orphan session {session_id}: {blocker} (status={self._recorder_status})")
+            return
         if not self._recording.service_is_ready():
             self.get_logger().error(f"cannot stop orphan session {session_id}: /recording/manage is not available")
             return
@@ -173,13 +224,13 @@ class TriggerNode(Node):
             self.get_logger().error(f"stopping orphan session {session_id} failed: {future.exception()}")
             return
         response = future.result()
-        log = self.get_logger().info if response.success else self.get_logger().error
-        log(f"orphan session {session_id} stop {'ok' if response.success else 'failed'}: {response.message}")
+        self._log_outcome(
+            response.success, f"orphan session {session_id} stop {'ok' if response.success else 'failed'}: {response.message}")
 
     def _service_result(self, kind: str, success: bool, session_id: str, message: str) -> None:
         now = time.monotonic()
-        log = self.get_logger().info if success else self.get_logger().warning
-        log(f"recording {kind} {'ok' if success else 'failed'}: session={session_id} {message}")
+        self._log_outcome(
+            success, f"recording {kind} {'ok' if success else 'failed'}: session={session_id} {message}", "warning")
         if kind == "start":
             self._apply(self._machine.on_start_result(success, session_id, message, now))
         else:
@@ -224,9 +275,18 @@ class TriggerNode(Node):
         if self._home_deadlines.get(arm, (None,))[0] != episode:
             return  # timed out already, or a late result from an older homing
         del self._home_deadlines[arm]
-        log = self.get_logger().info if success else self.get_logger().error
-        log(f"homing /{arm} {'done' if success else 'failed'}: {message}")
+        self._log_outcome(success, f"homing /{arm} {'done' if success else 'failed'}: {message}")
         self._apply(self._machine.on_home_result(arm, success, message, time.monotonic()))
+
+    def _log_outcome(self, success: bool, text: str, failure_level: str = "error") -> None:
+        # rclpy rejects one call site logging at two severities ("Logger severity cannot be changed
+        # between calls"), so each severity keeps its own call.
+        if success:
+            self.get_logger().info(text)
+        elif failure_level == "warning":
+            self.get_logger().warning(text)
+        else:
+            self.get_logger().error(text)
 
     # ---- state topic --------------------------------------------------
     def _publish_state(self, force: bool = False) -> None:

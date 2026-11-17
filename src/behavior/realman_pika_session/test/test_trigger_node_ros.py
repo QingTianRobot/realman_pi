@@ -16,6 +16,7 @@ from std_msgs.msg import Bool, String  # noqa: E402
 
 from realman_msgs.action import ExecuteMotion  # noqa: E402
 from realman_msgs.msg import InputModeState  # noqa: E402
+from realman_recording_msgs.msg import RecordingStatus  # noqa: E402
 from realman_recording_msgs.srv import ManageRecording  # noqa: E402
 
 from realman_pika_session.config_loader import EpisodeConfig  # noqa: E402
@@ -42,6 +43,7 @@ class FakeWorld(Node):
             ActionServer(self, ExecuteMotion, f"/{arm}/execute_motion", self._make_execute(arm))
         self.keyboard = self.create_publisher(Bool, "/foot_pedal/enabled", 10)
         self.mode = self.create_publisher(InputModeState, "/realman_bt_executor/input_mode_state", LATCHED)
+        self.status = self.create_publisher(RecordingStatus, "/recording/status", 10)
         self.create_subscription(String, "/pika_episode/state", lambda m: self.states.append(json.loads(m.data)), LATCHED)
 
     def _manage(self, request, response):
@@ -67,10 +69,17 @@ class FakeWorld(Node):
         message.phase = InputModeState.ACTIVE
         self.mode.publish(message)
 
+    def stop_mode_publisher(self):
+        """The BT executor stopped or crashed: its latched publisher disappears without a final message."""
+        self.destroy_publisher(self.mode)
+
+    def publish_status(self, session_id, state):
+        self.status.publish(RecordingStatus(session_id=session_id, state=state))
+
 
 @pytest.fixture
 def graph():
-    os.environ["ROS_DOMAIN_ID"] = str(150 + os.getpid() % 50)
+    os.environ["ROS_DOMAIN_ID"] = str(60 + os.getpid() % 40)
     rclpy.init()
     world = FakeWorld()
     node = TriggerNode(CONFIG, HOME)
@@ -112,6 +121,21 @@ def ready_for_keys(world, node, executor, mode):
     assert spin_until(executor, lambda: world.keyboard.get_subscription_count() > 0)
 
 
+def status_seen(world, node, executor, session_id, state):
+    """Publish /recording/status until the node holds it (the subscription may still be matching)."""
+    def seen():
+        world.publish_status(session_id, state)
+        return node._recorder_status == (session_id, state)
+    assert spin_until(executor, seen)
+
+
+def start_recording(world, node, executor):
+    ready_for_keys(world, node, executor, "pikavelocity")
+    press(world, executor, False)
+    press(world, executor, True)
+    assert spin_until(executor, lambda: last_state(world) == "recording")
+
+
 def test_one_key_episode_records_and_homes(graph):
     world, node, executor = graph
     ready_for_keys(world, node, executor, "pikavelocity")
@@ -119,6 +143,8 @@ def test_one_key_episode_records_and_homes(graph):
     press(world, executor, True)
     assert spin_until(executor, lambda: last_state(world) == "recording")
     assert world.requests[0][:3] == (ManageRecording.Request.START, "pick cable", "teleop_v1")
+    # The recorder reports our session active, so the STOP is ours to send.
+    status_seen(world, node, executor, "sess-1", RecordingStatus.RECORDING)
     press(world, executor, False)
     assert spin_until(executor, lambda: last_state(world) == "idle" and len(world.goals) == 2)
     assert world.requests[1] == (ManageRecording.Request.STOP, "", "", "sess-1")
@@ -139,6 +165,37 @@ def test_keys_do_nothing_outside_pikavelocity(graph):
     spin_until(executor, lambda: False, timeout=0.5)
     assert world.requests == []
     assert world.states[-1]["detail"] == "ignored: mode is none"
+
+
+def test_bt_stopped_during_recording_stops_and_never_homes(graph):
+    world, node, executor = graph
+    start_recording(world, node, executor)
+    world.stop_mode_publisher()
+    assert spin_until(executor, lambda: last_state(world) == "failed", timeout=2.5)  # before keyboard_stale_sec
+    assert [r[0] for r in world.requests] == [ManageRecording.Request.START, ManageRecording.Request.STOP]
+    assert world.states[-1]["detail"] == "abnormal stop: mode changed to unknown"
+    spin_until(executor, lambda: False, timeout=0.5)
+    assert world.goals == {}
+
+
+def test_bt_back_after_a_stop_restores_the_mode(graph):
+    world, node, executor = graph
+    ready_for_keys(world, node, executor, "pikavelocity")
+    world.stop_mode_publisher()
+    assert spin_until(executor, lambda: node._machine._mode == "")
+    world.mode = world.create_publisher(InputModeState, "/realman_bt_executor/input_mode_state", LATCHED)
+    world.publish_mode("pikavelocity")
+    assert spin_until(executor, lambda: node._machine._mode == "pikavelocity")
+
+
+def test_stop_skipped_when_another_session_is_active(graph):
+    world, node, executor = graph
+    start_recording(world, node, executor)
+    status_seen(world, node, executor, "other-9", RecordingStatus.RECORDING)  # ours ended, someone else records
+    press(world, executor, False)
+    assert spin_until(executor, lambda: last_state(world) == "failed" and len(world.goals) == 2)
+    assert [r[0] for r in world.requests] == [ManageRecording.Request.START]  # no STOP: it would hit other-9
+    assert world.states[-1]["detail"] == "stop failed: session already ended externally"
 
 
 # ---- stubbed-client tests: futures have no executor, so their done callbacks run synchronously ----
@@ -169,7 +226,7 @@ class StubMoveJClient:
 
 @pytest.fixture
 def lone_node():
-    os.environ["ROS_DOMAIN_ID"] = str(150 + os.getpid() % 50)
+    os.environ["ROS_DOMAIN_ID"] = str(60 + os.getpid() % 40)
     rclpy.init()
     node = TriggerNode(CONFIG, HOME, service_timeout_sec=0.05)
     yield node
@@ -244,3 +301,53 @@ def test_late_movej_result_from_an_older_episode_is_ignored(lone_node):
     assert machine.snapshot()["state"] == "homing"
     node._finish_home("r", 2, True, "")
     assert machine.snapshot()["state"] == "idle"
+
+
+def test_late_start_orphan_not_stopped_when_another_session_is_active(lone_node):
+    node = lone_node
+    stub = StubRecordingClient()
+    node._recording = stub
+    node._on_mode(InputModeState(active_mode="pikavelocity", phase=InputModeState.ACTIVE))
+    node._on_keyboard(Bool(data=False))
+    node._on_keyboard(Bool(data=True))
+    time.sleep(0.1)
+    node._on_timer()  # START times out
+    node._on_recording_status(RecordingStatus(session_id="policy-3", state=RecordingStatus.RECORDING))
+    stub.calls[0][1].set_result(recording_response(True, "sess-late"))
+    assert len(stub.calls) == 1  # a STOP now would stop policy-3, not the orphan
+
+
+def test_late_start_orphan_stopped_when_status_shows_it_active(lone_node):
+    node = lone_node
+    stub = StubRecordingClient()
+    node._recording = stub
+    node._on_mode(InputModeState(active_mode="pikavelocity", phase=InputModeState.ACTIVE))
+    node._on_keyboard(Bool(data=False))
+    node._on_keyboard(Bool(data=True))
+    time.sleep(0.1)
+    node._on_timer()
+    node._on_recording_status(RecordingStatus(session_id="sess-late", state=RecordingStatus.COUNTDOWN))
+    stub.calls[0][1].set_result(recording_response(True, "sess-late"))
+    assert len(stub.calls) == 2 and stub.calls[1][0].session_id == "sess-late"
+
+
+def test_scheduled_session_counts_as_recording_busy(lone_node):
+    node = lone_node
+    node._on_mode(InputModeState(active_mode="pikavelocity", phase=InputModeState.ACTIVE))
+    node._on_recording_status(RecordingStatus(session_id="policy-4", state=RecordingStatus.SCHEDULED))
+    node._on_keyboard(Bool(data=False))
+    node._on_keyboard(Bool(data=True))
+    assert node._machine.snapshot()["detail"] == "ignored: recording busy (policy-4)"
+
+
+def test_outcome_logs_switch_severity_without_raising(lone_node):
+    """rclpy raises when one call site logs at two severities; ok and failed outcomes must both log."""
+    node = lone_node
+    node._service_result("start", True, "s", "accepted")
+    node._service_result("start", False, "", "preflight failed")
+    for success in (True, False, True):
+        node._home_deadlines["l"] = (7, time.monotonic() + 60.0)
+        node._finish_home("l", 7, success, "")
+        future = Future()
+        future.set_result(recording_response(success, "s"))
+        node._on_orphan_stop_done("s", future)

@@ -1200,7 +1200,7 @@ from realman_pika_session.config_loader import load_episode_config, load_home_po
 
 def _config_root() -> Path:
     fallback = Path(get_package_share_directory("realman_pika_session")) / "config"
-    return Path(os.environ.get("REALMAN_CONFIG_ROOT", fallback))
+    return Path(os.environ.get("REALMAN_CONFIG_ROOT") or fallback)
 
 
 def generate_launch_description():

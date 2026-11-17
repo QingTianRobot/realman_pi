@@ -241,3 +241,63 @@ def test_mode_lost_while_recording_is_abnormal_and_names_unknown():
     assert machine.on_stop_result(True, "", 2.1) == []
     assert machine.state is State.FAILED
     assert machine.snapshot()["detail"] == "abnormal stop: mode changed to unknown"
+
+
+# ---- a press while the :8765 switch is still entering pikavelocity ------------
+
+def waiting_for_mode(now: float = 0.0) -> EpisodeMachine:
+    machine = EpisodeMachine(CONFIG)
+    machine.on_mode("none", now)
+    assert machine.on_keyboard(False, now) == []
+    assert machine.on_keyboard(True, now + 0.1) == []
+    assert machine.snapshot()["detail"] == "ignored: mode is none"
+    return machine
+
+
+def test_press_before_the_mode_starts_once_the_mode_arrives():
+    machine = waiting_for_mode()
+    machine.on_keyboard(True, 0.5)
+    assert machine.on_mode("pikavelocity", 0.6) == START
+    assert machine.state is State.STARTING
+    assert machine.snapshot()["detail"] == ""
+    assert machine.on_mode("pikavelocity", 0.7) == []  # repeated mode messages start nothing more
+
+
+def test_press_released_before_the_mode_starts_nothing():
+    machine = waiting_for_mode()
+    machine.on_keyboard(False, 0.5)
+    assert machine.on_mode("pikavelocity", 0.6) == []
+    assert machine.state is State.IDLE
+
+
+def test_stale_keyboard_when_the_mode_arrives_starts_nothing():
+    machine = waiting_for_mode()
+    assert machine.on_mode("pikavelocity", 5.0) == []  # last keyboard message 4.9 s ago > 3 s
+    assert machine.state is State.IDLE
+
+
+def test_mode_without_an_ignored_press_starts_nothing():
+    machine = EpisodeMachine(CONFIG)
+    machine.on_mode("none", 0.0)
+    machine.on_keyboard(True, 0.0)  # baseline: teleop was already on when the node started
+    machine.on_keyboard(True, 0.5)
+    assert machine.on_mode("pikavelocity", 0.6) == []
+
+
+def test_press_ignored_for_a_busy_recorder_does_not_start_later():
+    machine = EpisodeMachine(CONFIG)
+    machine.on_mode("pikavelocity", 0.0)
+    machine.on_keyboard(False, 0.0)
+    machine.on_recording_status(True, "policy-7")
+    machine.on_keyboard(True, 0.1)
+    machine.on_mode("none", 0.2)
+    machine.on_recording_status(False, "")
+    assert machine.on_mode("pikavelocity", 0.3) == []
+
+
+def test_pending_press_waits_for_another_recorder_to_finish():
+    machine = waiting_for_mode()
+    machine.on_recording_status(True, "policy-7")
+    machine.on_keyboard(True, 0.5)
+    assert machine.on_mode("pikavelocity", 0.6) == []
+    assert machine.snapshot()["detail"] == "ignored: recording busy (policy-7)"

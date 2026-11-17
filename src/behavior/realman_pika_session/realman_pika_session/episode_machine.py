@@ -46,6 +46,10 @@ class EpisodeMachine:
         self._stop_message = ""
         self._release_started = 0.0
         self._home_pending: set[str] = set()
+        # A press made while the mode was not yet `required_mode`. The :8765 Pika switch selects the
+        # mode only after that press has made Pika publish, so the first press of an activation
+        # always lands here; it starts the episode once the mode arrives while the key is still on.
+        self._press_waiting_for_mode = False
 
     # ---- inputs -------------------------------------------------------
     def on_keyboard(self, enabled: bool, now: float) -> list[Action]:
@@ -57,9 +61,15 @@ class EpisodeMachine:
         return self._rising(now) if enabled else self._falling()
 
     def on_mode(self, active_mode: str, now: float) -> list[Action]:
+        entered = active_mode == self._config.required_mode and self._mode != active_mode
         self._mode = active_mode
         if self.state is State.RECORDING and active_mode != self._config.required_mode:
             return self._abnormal_stop(f"mode changed to {active_mode or 'unknown'}")
+        if entered and self._press_waiting_for_mode:
+            self._press_waiting_for_mode = False
+            fresh = now - self._keyboard_stamp <= self._config.keyboard_stale_sec
+            if self.state is State.IDLE and self._keyboard is True and fresh:
+                return self._start_if_free()
         return []
 
     def on_velocity_session(self, arm: str, active: bool, now: float) -> list[Action]:
@@ -144,7 +154,11 @@ class EpisodeMachine:
             return self._ignore_busy()
         if self._mode != self._config.required_mode:
             self._detail = f"ignored: mode is {self._mode or 'unknown'}"
+            self._press_waiting_for_mode = True
             return []
+        return self._start_if_free()
+
+    def _start_if_free(self) -> list[Action]:
         if self._external_session:
             self._detail = f"ignored: recording busy ({self._external_session})"
             return []
@@ -158,6 +172,7 @@ class EpisodeMachine:
         return [Action("start")]
 
     def _falling(self) -> list[Action]:
+        self._press_waiting_for_mode = False
         if self.state is State.STARTING:
             self._pending_stop = True
             return []

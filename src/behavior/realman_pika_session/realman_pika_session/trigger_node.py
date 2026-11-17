@@ -245,7 +245,7 @@ class TriggerNode(Node):
         goal = ExecuteMotion.Goal()
         goal.command = ExecuteMotion.Goal.MOVEJ
         goal.reference_type = ExecuteMotion.Goal.BASE
-        goal.reference_name = ""
+        goal.reference_name = "base"  # the driver rejects an empty name, like the BT MoveJ nodes
         goal.joint_degrees = list(self._home_pose[arm])
         goal.velocity_percent = self._config.home_velocity_percent
         goal.blend_radius_percent = 0

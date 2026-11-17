@@ -177,6 +177,7 @@ def test_one_key_episode_records_and_homes(graph):
     goal = world.goals["l"]
     assert goal.command == ExecuteMotion.Goal.MOVEJ
     assert goal.reference_type == ExecuteMotion.Goal.BASE
+    assert goal.reference_name == "base"  # the driver rejects an empty reference_name
     assert list(goal.joint_degrees) == list(HOME["l"])
     assert goal.velocity_percent == 30
     assert goal.connect is False
@@ -190,6 +191,17 @@ def test_keys_do_nothing_outside_pikavelocity(graph):
     spin_until(executor, lambda: False, timeout=0.5)
     assert world.requests == []
     assert world.states[-1]["detail"] == "ignored: mode is none"
+
+
+def test_first_press_records_once_the_switch_reaches_pikavelocity(graph):
+    """The :8765 switch selects pikavelocity only after the press has made Pika publish."""
+    world, node, executor = graph
+    ready_for_keys(world, node, executor, "none")
+    press(world, executor, False)
+    press(world, executor, True)
+    world.publish_mode("pikavelocity")
+    assert spin_until(executor, lambda: last_state(world) == "recording")
+    assert world.requests[0][0] == ManageRecording.Request.START
 
 
 def test_bt_stopped_during_recording_stops_and_never_homes(graph):

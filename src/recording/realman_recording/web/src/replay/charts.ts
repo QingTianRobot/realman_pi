@@ -276,8 +276,8 @@ export function initCharts(): ChartApi {
       chartEl.innerHTML = "";
       plot = new uPlot(
         {
-          width: chartEl.clientWidth || 800,
-          height: chartEl.clientHeight || 240,
+          width: chartEl.clientWidth || chartEl.parentElement?.clientWidth || 800,
+          height: chartEl.clientHeight || 260,
           series,
           axes: [
             {

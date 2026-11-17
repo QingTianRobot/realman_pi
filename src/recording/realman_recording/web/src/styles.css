@@ -320,7 +320,8 @@ input[type="search"]:hover { border-color: var(--accent-bar); background: var(--
 .inspector-selectors label { display: grid; gap: 4px; color: var(--text-3); font-size: 10px; font-weight: 700; letter-spacing: .06em; }
 .inspector-selectors .studio-select { margin: 0; }
 #replay-feature-chart { height: clamp(200px, 30vh, 300px); overflow: hidden; }
-#replay-feature-chart:empty { display: none; }
+/* Collapse but keep layout width while empty: uPlot is created from clientWidth. */
+#replay-feature-chart:empty { height: 0; }
 #replay-feature-chart .uplot { font-family: var(--mono); }
 .chart-legend { display: flex; flex-wrap: wrap; gap: 4px 10px; }
 .chart-legend:empty { display: none; }

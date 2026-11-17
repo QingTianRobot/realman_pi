@@ -42,6 +42,7 @@ src/recording/
 │   │   ├── lerobot_exporter.py            # ADOPT 后异步写入 LeRobot v3 episode
 │   │   ├── adapters/pi05.py               # canonical → 显式 π0.5 state/action view
 │   │   ├── lerobot_web_replay.py          # Web 只读 LeRobot v3 帧/图像读取
+│   │   ├── raw_replay.py                  # 待转换 session 内联回放：state.mcap + JPEG → 回放帧
 │   │   ├── replay.py                      # 后续 Rerun 回放实验骨架（当前不验收）
 │   │   ├── rerun_adapter.py               # 可选实时 Rerun 适配器（非采集依赖）
 │   │   └── static/                        # Vite 构建产物（index.html + assets/，随包安装）
@@ -171,7 +172,7 @@ Web 只做实时只读展示，不放录制控制按钮。页面组件建议保�
 ## 8. LeRobot Web 回放与 Rerun 边界
 
 Web 仪表盘的“回放”页读取已 ADOPT 且 LeRobot 导出成功的 episode，提供 LeRobot Studio
-风格的深色工作台：左侧 episode 侧栏、中央同步相机拼图和播放时间轴、右侧 Canonical 字段检视器，下面排列回放 3D、关节和夹爪组件。深色中性底色配蓝色交互强调，仅用于当前选择、焦点和时间轴；录制页的组件位置保持不变。向量字段可逐分量选择曲线；关节、EE pose/velocity 和 Cartesian command 根据 receipt 中的 joint/frame metadata 显示语义标签。回放支持播放速度/逐帧、关节/夹爪/3D viewer、Canonical 字段选择和
+风格的工作台，配色和组件与 :8765 共用（`@web-control/theme.css`）：左侧 episode 侧栏与待转换列表，右侧同步相机一行、播放时间轴、Canonical 字段曲线和当前帧检视器。待转换 session 也在同一工作区内联回放（`raw_replay.py` + `/api/lerobot/<id>/raw/replay`，全部相机原始 JPEG + 曲线），不再弹窗。向量字段可逐分量选择曲线；关节、EE pose/velocity 和 Cartesian command 根据 receipt 中的 joint/frame metadata 显示语义标签。回放支持播放速度/逐帧、关节/夹爪/3D viewer、Canonical 字段选择和
 SVG 曲线，以及按需 JPEG 图像接口：`/api/lerobot`、
 `/api/lerobot/<session>/frames`、`/api/lerobot/<session>/frames/<index>/cameras/<id>`。
 它只读取 LeRobot v3，不回退到 MCAP/JPEG 原始文件，也不连接实时 ROS 图。帧 API 会根据当前数据集 schema 动态返回全部非图像标量/向量字段，包括可选 `action.command.gripper` 和后续新增的数值/布尔字段；图像仍通过独立按需 JPEG endpoint 获取。回放摘要公开 receipt 中的 `quality_sync_source_ids`，字段检视器据此为 `quality.sync_error_ns` 向量标注相机/topic 名；帧 API 另返回 `source_timestamps_ns`，即策略帧 walltime 加对应 signed skew。该绝对纳秒时间以十进制字符串传输，避免 JavaScript number 丢失 Unix epoch 纳秒精度。若 source ID 数量与同步误差向量宽度不一致，回放明确报错而不猜测映射。

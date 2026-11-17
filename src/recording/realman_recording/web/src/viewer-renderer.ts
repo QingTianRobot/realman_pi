@@ -14,7 +14,7 @@ export function createViewerRenderer(original: HTMLCanvasElement): { canvas: HTM
       const renderer = new THREE.WebGLRenderer({ canvas: original, context, antialias: false, alpha: false });
       renderer.setPixelRatio(Math.min(window.devicePixelRatio, 1.5));
       renderer.outputColorSpace = THREE.SRGBColorSpace;
-      renderer.setClearColor(0x091114, 1);
+      renderer.setClearColor(0xf6f8fb, 1);
       original.parentElement!.dataset.renderer = "webgl";
       return { canvas: original, renderer: { mode: "webgl", setSize: (w, h, style) => renderer.setSize(w, h, style), render: (scene, camera) => renderer.render(scene, camera) } };
     }
@@ -29,7 +29,7 @@ export function createViewerRenderer(original: HTMLCanvasElement): { canvas: HTM
   canvas.parentElement!.dataset.renderer = "canvas";
   const badge = document.createElement("span");
   badge.textContent = "简化 3D · 拖动旋转 / 滚轮缩放";
-  Object.assign(badge.style, { position: "absolute", left: "12px", top: "12px", color: "#8793a8", fontSize: "12px", pointerEvents: "none" });
+  Object.assign(badge.style, { position: "absolute", left: "12px", top: "12px", color: "#6b7385", fontSize: "12px", pointerEvents: "none" });
   canvas.parentElement!.append(badge);
   const project = (point: THREE.Vector3, camera: THREE.Camera) => {
     const p = point.clone().project(camera);
@@ -44,7 +44,7 @@ export function createViewerRenderer(original: HTMLCanvasElement): { canvas: HTM
     mode: "canvas",
     setSize(width, height) { canvas.width = Math.max(1, Math.round(width)); canvas.height = Math.max(1, Math.round(height)); },
     render(scene, camera) {
-      ctx.fillStyle = "#091114"; ctx.fillRect(0, 0, canvas.width, canvas.height);
+      ctx.fillStyle = "#f6f8fb"; ctx.fillRect(0, 0, canvas.width, canvas.height);
       scene.updateMatrixWorld(true); camera.updateMatrixWorld(true);
       scene.traverseVisible((node: THREE.Object3D & { isURDFLink?: boolean; isLine?: boolean; isLineSegments?: boolean; geometry?: THREE.BufferGeometry; material?: THREE.Material & { color?: THREE.Color } }) => {
         if (node.isURDFLink) {
@@ -53,7 +53,7 @@ export function createViewerRenderer(original: HTMLCanvasElement): { canvas: HTM
           if (!parent) return;
           let root: THREE.Object3D = node;
           while (root.parent && !root.userData.compatColor) root = root.parent;
-          const color = root.userData.compatColor ?? "#55a6ff";
+          const color = root.userData.compatColor ?? "#3e7bd6";
           const world = node.getWorldPosition(new THREE.Vector3());
           line(parent.getWorldPosition(new THREE.Vector3()), world, camera, color, 4);
           const p = project(world, camera);
@@ -61,13 +61,13 @@ export function createViewerRenderer(original: HTMLCanvasElement): { canvas: HTM
         } else if (node.isLine && node.geometry) {
           const position = node.geometry.getAttribute("position");
           if (!position) return;
-          const color = node.material?.color?.getStyle() ?? "#385363";
+          const color = node.material?.color?.getStyle() ?? "#b3c1d1";
           for (let i = 0; i + 1 < position.count; i += node.isLineSegments ? 2 : 1) {
             line(new THREE.Vector3().fromBufferAttribute(position, i).applyMatrix4(node.matrixWorld), new THREE.Vector3().fromBufferAttribute(position, i + 1).applyMatrix4(node.matrixWorld), camera, color, 2);
           }
         } else if (node.geometry?.type === "SphereGeometry") {
           const p = project(node.getWorldPosition(new THREE.Vector3()), camera);
-          if (p) { ctx.fillStyle = node.material?.color?.getStyle() ?? "#55a6ff"; ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.fill(); }
+          if (p) { ctx.fillStyle = node.material?.color?.getStyle() ?? "#3e7bd6"; ctx.beginPath(); ctx.arc(p.x, p.y, 5, 0, Math.PI * 2); ctx.fill(); }
         }
       });
     },

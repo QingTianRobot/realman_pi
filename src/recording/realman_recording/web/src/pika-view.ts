@@ -22,7 +22,7 @@ export type PikaSide = {
 };
 export type PikaSnapshot = { sides: Record<string, PikaSide> };
 
-const SIDE_COLORS: Record<string, number> = { l: 0x55a6ff, r: 0xf4bb63 };
+const SIDE_COLORS: Record<string, number> = { l: 0x3e7bd6, r: 0xd98a2b };
 const SIDE_LABELS: Record<string, string> = { l: "左 Pika", r: "右 Pika" };
 const TRAIL_POINTS = 150;
 
@@ -63,8 +63,8 @@ export function initPikaView(viewer: HTMLElement, cards: HTMLElement, status: HT
     controls.enableDamping = true;
     controls.target.set(0, 0, 1);
     controls.addEventListener("start", () => { follow = false; });
-    scene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
-    const grid = new THREE.GridHelper(4, 40, 0x567078, 0x263b40);
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xd3dbe5, 2.4));
+    const grid = new THREE.GridHelper(4, 40, 0xb3c1d1, 0xdde4ec);
     grid.rotation.x = Math.PI / 2;
     scene.add(grid, new THREE.AxesHelper(0.2));
     for (const [side, color] of Object.entries(SIDE_COLORS)) {
@@ -169,7 +169,7 @@ export function initPikaView(viewer: HTMLElement, cards: HTMLElement, status: HT
       const command = data.command_active
         ? `<span class="pika-teleop on">遥操作中 · 线 ${norm(data.command_linear_mps)!.toFixed(3)} m/s · 角 ${norm(data.command_angular_radps)!.toFixed(3)} rad/s</span>`
         : `<span class="pika-teleop" title="${data.command_topic || "未配置命令话题"} 无数据">遥操作未 START</span>`;
-      return `<article class="pika-card ${data.state}" id="pika-${side}" style="--pika-color:#${(SIDE_COLORS[side] ?? 0x8793a8).toString(16).padStart(6, "0")}"><h4>${label}<span>${badge}</span></h4>${body}${command}</article>`;
+      return `<article class="pika-card ${data.state}" id="pika-${side}" style="--pika-color:#${(SIDE_COLORS[side] ?? 0x6b7385).toString(16).padStart(6, "0")}"><h4>${label}<span>${badge}</span></h4>${body}${command}</article>`;
     }).join("");
     updateScene(sides);
   }

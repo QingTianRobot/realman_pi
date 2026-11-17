@@ -14,7 +14,7 @@ export type HealthMeta = {
   max_sync_error_ns?: number;
 };
 
-type ReplayFeatureValue = number | boolean | ReplayFeatureValue[];
+type ReplayFeatureValue = number | boolean | null | ReplayFeatureValue[];
 
 export type ChartFrame = {
   frame_index: number;
@@ -49,21 +49,28 @@ function escapeHtml(value: string): string {
   })[character] ?? character);
 }
 
-function numericComponents(value: ReplayFeatureValue | undefined): number[] {
+// null marks "no sample yet" in raw (待转换) replay: keep the slot as a gap so
+// later dimensions do not shift onto the wrong label.
+function numericComponents(value: ReplayFeatureValue | null | undefined): number[] {
+  if (value === null) return [Number.NaN];
   if (typeof value === "number" && Number.isFinite(value)) return [value];
   if (typeof value === "boolean") return [value ? 1 : 0];
-  if (Array.isArray(value)) return value.flatMap((item) => numericComponents(item));
+  if (Array.isArray(value)) return value.flatMap((item) => numericComponents(item as ReplayFeatureValue | null));
   return [];
 }
 
+// Mid-dark hues that read on the white :8765-style card (the old palette was tuned for a dark page).
 const PALETTE = [
-  "#67d391", "#55a6ff", "#f4bb63", "#ff717c", "#b18cff", "#4ec9d8",
-  "#e8c547", "#ff9e64", "#7ee787", "#79c0ff", "#f97583", "#d2a8ff",
-  "#56d4dd", "#e3b341", "#ffa657", "#a5d6ff", "#6ee7b7", "#c084fc",
+  "#2f9e6e", "#3e7bd6", "#d98a2b", "#d9485f", "#8b5cf6", "#0e9aa7",
+  "#b7950b", "#e0662f", "#4c9a2a", "#2563eb", "#c2410c", "#a21caf",
+  "#0f766e", "#a16207", "#be123c", "#1d4ed8", "#15803d", "#7c3aed",
 ];
+const AXIS_TEXT = "#6b7385";
+const GRID_LINE = "#e3e8ef";
+const MARKER_LINE = "#3e63dd";
 
 function colorFor(index: number): string {
-  return PALETTE[index % PALETTE.length] ?? "#67d391";
+  return PALETTE[index % PALETTE.length] ?? "#2f9e6e";
 }
 
 function shortName(feature: string): string {
@@ -260,26 +267,30 @@ export function initCharts(): ChartApi {
       const xs = lastFrames.map((_, i) => i);
       const data: uPlot.AlignedData = [
         xs,
-        ...dims.map((dim) => lastFrames.map((frame) => numericComponents(frame.features?.[selectedFeature])[dim] ?? Number.NaN)),
+        // uPlot needs null for a gap: a NaN poisons its min/max and blanks the plot.
+        ...dims.map((dim) => lastFrames.map((frame) => {
+          const value = numericComponents(frame.features?.[selectedFeature])[dim];
+          return value !== undefined && Number.isFinite(value) ? value : null;
+        })),
       ];
       chartEl.innerHTML = "";
       plot = new uPlot(
         {
-          width: chartEl.clientWidth || 800,
-          height: chartEl.clientHeight || 240,
+          width: chartEl.clientWidth || chartEl.parentElement?.clientWidth || 800,
+          height: chartEl.clientHeight || 260,
           series,
           axes: [
             {
-              stroke: "#263246",
-              grid: { stroke: "#263246", width: 1 },
-              ticks: { stroke: "#263246", width: 1 },
+              stroke: AXIS_TEXT,
+              grid: { stroke: GRID_LINE, width: 1 },
+              ticks: { stroke: GRID_LINE, width: 1 },
               font: "10px ui-monospace,Menlo,monospace",
               size: 24,
             },
             {
-              stroke: "#263246",
-              grid: { stroke: "#263246", width: 1 },
-              ticks: { stroke: "#263246", width: 1 },
+              stroke: AXIS_TEXT,
+              grid: { stroke: GRID_LINE, width: 1 },
+              ticks: { stroke: GRID_LINE, width: 1 },
               font: "10px ui-monospace,Menlo,monospace",
               size: 56,
             },
@@ -291,10 +302,12 @@ export function initCharts(): ChartApi {
           hooks: {
             draw: [(u) => {
               if (markerIndex < 0) return;
-              const x = u.valToPos(markerIndex, "x");
+              // canvas pixels (true): bbox is in canvas pixels, and plot-relative CSS
+              // pixels would draw the playhead one y-axis gutter too far left.
+              const x = u.valToPos(markerIndex, "x", true);
               if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
               u.ctx.save();
-              u.ctx.strokeStyle = "#8793a8";
+              u.ctx.strokeStyle = MARKER_LINE;
               u.ctx.lineWidth = 1;
               u.ctx.beginPath();
               u.ctx.moveTo(x, u.bbox.top);
@@ -334,7 +347,7 @@ export function initCharts(): ChartApi {
           const markerX = x(Math.max(0, Math.min(values.length - 1, lastIndex)));
           return (
             `<div class="split-mini"><div class="split-mini-head"><span style="--chip:${colorFor(dim)}">${escapeHtml(dimensions[dim])}</span><b>${max.toPrecision(3)}</b></div>` +
-            `<svg viewBox="0 0 ${width} ${SPLIT_HEIGHT}" preserveAspectRatio="none"><polyline points="${polyline}" fill="none" stroke="${colorFor(dim)}" stroke-width="1.5" vector-effect="non-scaling-stroke"/><line x1="${markerX.toFixed(1)}" x2="${markerX.toFixed(1)}" y1="${PAD}" y2="${SPLIT_HEIGHT - PAD}" stroke="#8793a8" stroke-width="1"/></svg></div>`
+            `<svg viewBox="0 0 ${width} ${SPLIT_HEIGHT}" preserveAspectRatio="none"><polyline points="${polyline}" fill="none" stroke="${colorFor(dim)}" stroke-width="1.5" vector-effect="non-scaling-stroke"/><line x1="${markerX.toFixed(1)}" x2="${markerX.toFixed(1)}" y1="${PAD}" y2="${SPLIT_HEIGHT - PAD}" stroke="${MARKER_LINE}" stroke-width="1"/></svg></div>`
           );
         }).join("")
       : '<div class="empty">未选择任何维度</div>';
@@ -366,7 +379,11 @@ export function initCharts(): ChartApi {
     lastFrames = frames;
     lastIndex = index;
     const values = numericComponents(frame.features?.[selectedFeature]);
-    const labels = componentLabels(selectedFeature, values.length, summary, canonical);
+    // A raw-replay frame can carry null for a whole feature before its first
+    // sample; the declared shape keeps the dimension count stable.
+    const declared = summary[selectedFeature]?.shape?.[0];
+    const count = typeof declared === "number" && declared > 0 ? declared : values.length;
+    const labels = componentLabels(selectedFeature, count, summary, canonical);
     renderJointFilter(labels);
 
     rawEl.textContent = JSON.stringify(
@@ -400,6 +417,10 @@ export function initCharts(): ChartApi {
     resetZoomBtn.style.display = "none";
   }
 
+  // uPlot draws at a fixed pixel size: follow the panel when the window resizes.
+  new ResizeObserver(() => {
+    if (plot && chartEl.clientWidth) plot.setSize({ width: chartEl.clientWidth, height: chartEl.clientHeight || 240 });
+  }).observe(chartEl);
   splitToggle.addEventListener("click", () => {
     splitMode = !splitMode;
     splitToggle.classList.toggle("active", splitMode);

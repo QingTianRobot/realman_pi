@@ -128,52 +128,42 @@ test("replay workspace synchronizes camera tiles and exposes added canonical fea
   await page.route("**/api/lerobot/episode-1/video/*", (route) =>
     route.fulfill({ status: 200, contentType: "video/mp4", body: "" }),
   );
+  await page.route("**/api/lerobot/pending", (route) => route.fulfill({ json: { sessions: [] } }));
+  await page.route("**/api/lerobot/trash", (route) => route.fulfill({ json: { sessions: [] } }));
 
   await page.goto("/");
-  await expect(page.locator("html")).toHaveCSS("--blue", "#55a6ff");
-  await page.getByRole("button", { name: "回放" }).click();
+  // :8770 shares :8765's token sheet (realman_web_control theme.css): light page, hue 250.
+  await expect(page.locator("html")).toHaveCSS("--hue", "250");
+  await expect(page.locator(".topbar .brand-mark svg.arm-icon")).toHaveCount(1);
+  await page.getByRole("button", { name: "回放 · 转换" }).click();
   await expect(page.locator("#replay-search")).toBeVisible();
   await expect(page.locator('#replay-filter option[value="pick the object"]')).toHaveCount(1);
-  await expect(page.locator('.episode-item[data-session="episode-1"] .episode-action')).toHaveText("隐藏");
   await page.locator('.episode-item[data-session="episode-1"] .episode-main').click();
 
+  await expect(page.locator("#replay-source")).toHaveText("已转换 · LeRobot");
   await expect(page.locator("#replay-cameras .camera-card")).toHaveCount(2);
   await expect(page.locator('#replay-cameras .camera-card[data-camera="front"] video')).toHaveAttribute("src", /\/api\/lerobot\/episode-1\/video\/front$/);
-  await expect(page.locator('#replay-feature-select option[value="action.command.gripper"]')).toHaveCount(0);
+  // Every camera sits in one row of the media panel (stacked on a phone).
+  const wide = (page.viewportSize()?.width ?? 0) >= 1000;
+  await expect(page.locator("#replay-cameras")).toHaveAttribute("data-camera-layout", wide ? "2x1" : "1x2");
+  await expect(page.locator('#replay-feature-select option[value="action.command.gripper"]')).toHaveCount(1);
   await expect(page.locator('#replay-feature-select option[value="observation.user_added_scalar"]')).toHaveCount(1);
-  await expect(page.locator('#replay-action-select option[value="action.command.gripper"]')).toHaveCount(1);
-  const dimensionSelect = page.locator("#replay-feature-component");
-  await expect(dimensionSelect.locator("option")).toHaveCount(18);
-  await dimensionSelect.selectOption("r.joint_6");
+  await page.locator("#replay-feature-select").selectOption("observation.joint_position");
   const rawFrame = page.locator("#replay-feature-raw");
-  await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").component).toBe("r.joint_6");
-  await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").state_component).toBe(17);
-  const chartPoints = (await page.locator("#replay-feature-chart .chart-state").getAttribute("points")) ?? "";
-  const firstY = Number(chartPoints.split(" ")[0]?.split(",")[1]);
-  const secondY = Number(chartPoints.split(" ")[1]?.split(",")[1]);
-  expect(firstY).toBeLessThan(secondY);
+  await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").dimensions?.at(-1)).toBe("r.joint_6");
+  await expect(page.locator("#replay-feature-chart .uplot")).toBeVisible();
   await page.locator("#replay-feature-select").selectOption("quality.sync_error_ns");
-  await expect(page.locator("#replay-feature-component option")).toHaveText([
-    "image:front",
-    "/l/joint_states",
-  ]);
-  await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").source_timestamps_ns)
-    .toEqual({ "image:front": "1000000001", "/l/joint_states": "999999999" });
-  await page.locator("#replay-feature-select").selectOption("quality.valid");
-  await expect(page.locator("#replay-feature-component option")).toHaveText(["valid"]);
-  await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").state_value).toEqual([true]);
-  await expect(page.locator("#replay-feature-chart .chart-state")).toBeVisible();
-  await expect(page.locator(".layout.replay-layout #viewer")).toBeVisible();
-  await expect(page.locator(".layout.replay-layout #previews")).toBeHidden();
+  await expect.poll(async () => JSON.parse((await rawFrame.textContent()) ?? "{}").dimensions)
+    .toEqual(["image:front", "/l/joint_states"]);
   const pageWidth = await page.evaluate(() => ({
     document: document.documentElement.scrollWidth,
     viewport: window.innerWidth,
   }));
   expect(pageWidth.document).toBeLessThanOrEqual(pageWidth.viewport + 1);
 
-  await page.getByRole("button", { name: "退出回放" }).click();
+  await page.getByRole("button", { name: "关闭回放" }).click();
+  await expect(page.locator("#replay-source")).toHaveText("未选择");
   await page.getByRole("button", { name: "录制" }).click();
-  await expect(page.locator(".layout")).not.toHaveClass(/replay-layout/);
   await expect(page.locator("#previews")).toBeVisible();
 });
 
@@ -489,4 +479,125 @@ test("camera tiles say so when the bridge preview is disabled", async ({ page })
   await expect(card).toHaveAttribute("data-camera-state", "disabled", { timeout: 15_000 });
   await expect(card.locator(".camera-health")).toHaveText("PREVIEW OFF");
   await expect(card.locator(".no-feed")).toContainText("预览未启用");
+});
+
+// A real (4x4) JPEG: raw tiles swap in a frame only after it has loaded.
+const TINY_JPEG = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAEAAQDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCnRRRXrHnn/9k=";
+
+test("a pending session replays inline: all cameras in sync plus action/state curves, no popup", async ({ page }) => {
+  const S = 1_000_000_000;
+  const cameras = ["d435", "orbbec-left", "orbbec-right"];
+  const imageRequests: string[] = [];
+  await page.route("**/api/lerobot", (route) => route.fulfill({ json: { sessions: [] } }));
+  await page.route("**/api/lerobot/trash", (route) => route.fulfill({ json: { sessions: [] } }));
+  await page.route("**/api/lerobot/pending", (route) => route.fulfill({ json: { sessions: [
+    { session_id: "raw-1", session_number: 12, task: "pick_only", complete: true },
+  ] } }));
+  await page.route("**/api/lerobot/raw-1/raw/replay", (route) => route.fulfill({ json: {
+    session_id: "raw-1", session_number: 12, task: "pick_only", fps: 10, duration_s: 0.3, state_error: "",
+    cameras, camera_frame_counts: { d435: 4, "orbbec-left": 4, "orbbec-right": 4 },
+    topics_present: ["/l/joint_states"],
+    summary: { features: {
+      "observation.joint_position": { dtype: "float32", shape: [18], names: Array.from({ length: 18 }, (_, i) => `${"lmr"[Math.floor(i / 6)]}.joint_${(i % 6) + 1}`) },
+      "action.command_action": { dtype: "float32", shape: [6], names: ["l.vx", "l.vy", "l.vz", "l.wx", "l.wy", "l.wz"] },
+    }, canonical: {} },
+    frames: [0, 1, 2, 3].map((index) => ({
+      frame_index: index, timestamp_ns: index * S / 10, walltime_ns: String(10 * S + index * S / 10),
+      state: [...Array.from({ length: 18 }, (_, j) => (j < 6 ? index / 10 : null)), null, null, null],
+      action: [],
+      features: {
+        "observation.joint_position": Array.from({ length: 18 }, (_, j) => (j < 6 ? index / 10 : null)),
+        // No command sample before frame 2: a gap, not zeros.
+        "action.command_action": index < 2 ? null : [0.01 * index, 0, 0, 0, 0, 0],
+      },
+      camera_frames: Object.fromEntries(cameras.map((camera) => [camera, `${10 * S + index * S / 10}.jpg`])),
+    })),
+  } }));
+  await page.route(/\/api\/lerobot\/raw-1\/raw\/image\//, (route) => {
+    imageRequests.push(new URL(route.request().url()).pathname);
+    return route.fulfill({ contentType: "image/jpeg", body: Buffer.from(TINY_JPEG, "base64") });
+  });
+
+  await page.goto("/");
+  await page.getByRole("button", { name: "回放 · 转换" }).click();
+  await page.locator('#replay-pending .episode-item[data-session="raw-1"] .episode-main').click();
+
+  await expect(page.locator("#replay-source")).toHaveText("待转换 · 原始数据");
+  await expect(page.locator("#replay-pending .episode-item.active")).toHaveAttribute("data-session", "raw-1");
+  await expect(page.locator("#replay-cameras .camera-card img")).toHaveCount(3);
+  const wide = (page.viewportSize()?.width ?? 0) >= 1000;
+  await expect(page.locator("#replay-cameras")).toHaveAttribute("data-camera-layout", wide ? "3x1" : "1x3");
+  await expect(page.locator("#replay-camera-count")).toContainText("3 路");
+  // No modal of any kind opened for the replay.
+  await expect(page.locator("dialog[open], .raw-modal")).toHaveCount(0);
+  await expect(page.locator('#replay-feature-select option[value="action.command_action"]')).toHaveCount(1);
+  await expect(page.locator("#replay-feature-chart .uplot")).toBeVisible();
+  // Annotation/deviation editing belongs to converted episodes only.
+  await expect(page.locator("#annotation-toggle")).toBeHidden();
+  await expect(page.locator(".raw-note")).toBeVisible();
+
+  // Stepping moves every camera to its JPEG for that frame.
+  await page.locator("#replay-next").click();
+  await page.locator("#replay-next").click();
+  await expect(page.locator("#replay-frame-label")).toHaveText("3 / 4");
+  for (const camera of cameras) {
+    await expect(page.locator(`#replay-cameras .camera-card[data-camera="${camera}"] img`))
+      .toHaveAttribute("src", new RegExp(`/raw/image/${camera}/${10 * S + 2 * S / 10}\\.jpg\\?w=`));
+  }
+  await page.locator("#replay-feature-select").selectOption("action.command_action");
+  const raw = page.locator("#replay-feature-raw");
+  await expect.poll(async () => JSON.parse((await raw.textContent()) ?? "{}").value?.[0]).toBeCloseTo(0.02);
+  await page.locator("#replay-prev").click();
+  await page.locator("#replay-prev").click();
+  // Before the first command sample the raw value is null and the dimension count stays 6.
+  await expect.poll(async () => JSON.parse((await raw.textContent()) ?? "{}").dimensions?.length).toBe(6);
+  await expect.poll(async () => JSON.parse((await raw.textContent()) ?? "{}").value).toBeNull();
+
+  // Play runs to the end on its own and every camera was requested.
+  await page.locator("#replay-play").click();
+  await expect(page.locator("#replay-frame-label")).toHaveText("4 / 4", { timeout: 5000 });
+  for (const camera of cameras) expect(imageRequests.some((path) => path.includes(`/raw/image/${camera}/`))).toBe(true);
+  const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
+  expect(pageWidth).toBeLessThanOrEqual(1);
+});
+
+test("the chart playhead is drawn at the current frame", async ({ page }) => {
+  await page.route("**/api/lerobot", (route) => route.fulfill({ json: { sessions: [] } }));
+  await page.route("**/api/lerobot/trash", (route) => route.fulfill({ json: { sessions: [] } }));
+  await page.route("**/api/lerobot/pending", (route) => route.fulfill({ json: { sessions: [{ session_id: "raw-m", session_number: 1, task: "t", complete: true }] } }));
+  await page.route("**/api/lerobot/raw-m/raw/replay", (route) => route.fulfill({ json: {
+    fps: 10, cameras: [], camera_frame_counts: {}, topics_present: [], duration_s: 9.9, state_error: "",
+    summary: { features: { "observation.gripper_position": { dtype: "float32", shape: [1], names: ["gripper_left"] } }, canonical: {} },
+    frames: Array.from({ length: 100 }, (_, index) => ({ frame_index: index, timestamp_ns: index * 1e8, state: [], action: [],
+      features: { "observation.gripper_position": [index] }, camera_frames: {} })),
+  } }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "回放 · 转换" }).click();
+  await page.locator('#replay-pending .episode-item[data-session="raw-m"] .episode-main').click();
+  await expect(page.locator("#replay-feature-chart .uplot")).toBeVisible();
+  for (let i = 0; i < 50; i++) await page.locator("#replay-next").click();
+  await expect(page.locator("#replay-frame-label")).toHaveText("51 / 100");
+  // Count playhead-colored pixels in the canvas column for frame 50 and one y-axis gutter to its left.
+  const hits = await page.locator("#replay-feature-chart").evaluate((element) => {
+    const over = element.querySelector(".u-over") as HTMLElement;
+    const canvas = element.querySelector("canvas") as HTMLCanvasElement;
+    const ratio = canvas.width / canvas.getBoundingClientRect().width;
+    const left = over.offsetLeft, width = over.offsetWidth;
+    const context = canvas.getContext("2d")!;
+    const columnHits = (cssX: number) => {
+      const x = Math.round(cssX * ratio);
+      let count = 0;
+      for (let y = Math.round((over.offsetTop + 4) * ratio); y < Math.round((over.offsetTop + 30) * ratio); y += 1) {
+        for (const dx of [-1, 0, 1]) {
+          const [r, g, b] = context.getImageData(x + dx, y, 1, 1).data;
+          if (b > 180 && r < 110 && g < 140) { count += 1; break; } // #3e63dd
+        }
+      }
+      return count;
+    };
+    const expected = left + (50 / 99) * width;
+    return { atFrame: columnHits(expected), gutterLeft: columnHits(expected - left) };
+  });
+  expect(hits.atFrame).toBeGreaterThan(10);
+  expect(hits.gutterLeft).toBe(0);
 });

@@ -49,6 +49,7 @@ from .export_queue import SerialExportWorker, should_auto_export
 from .kinematics import urdf_joint_limits
 from .lerobot_schema import schema_from_parameters
 from .preflight import PreflightChecker, PreflightRequirements, PreflightResult, configured_required_topics
+from .synthetic_arms import parse_synthetic_arms, preflight_arms, preflight_topics
 from .provenance import snapshot_optional_file
 from .quality_events import MARK_KINDS, LiveQualityTracker, load_quality_reasons
 from .session_store import SessionState, SessionStore
@@ -107,6 +108,11 @@ class RecordingRecorderNode(Node):
         # Explicit PREPARE gate. Keep optional force/alarm/action topics out unless a
         # recording profile genuinely requires them to be live before START.
         self.declare_parameter("preflight_required_topics", [""])
+        # Parked ("synthetic") arms: configured arms that are not recorded, e.g. powered off.
+        # They keep the three-arm schema but no longer block PREPARE, and export fills their
+        # joint states with this parked pose (six degrees per arm) and zero velocity.
+        self.declare_parameter("synthetic_arms", [""])
+        self.declare_parameter("synthetic_arm_joint_degrees", [0.0])
         self.declare_parameter("camera_ids", [""])
         self.declare_parameter("camera_image_topics", [""])
         # Per-recorder bounded queue for raw ROS image messages; conversion to
@@ -151,6 +157,16 @@ class RecordingRecorderNode(Node):
         # wall-time domain for cross-process data alignment and ordinary rosbag tooling.
         self._receipt_wall_clock = Clock(clock_type=ClockType.SYSTEM_TIME)
         self._arms = tuple(str(item) for item in self.get_parameter("arm_namespaces").value)
+        self._synthetic_arms = parse_synthetic_arms(
+            self._arms,
+            self.get_parameter("synthetic_arms").value,
+            self.get_parameter("synthetic_arm_joint_degrees").value,
+        )
+        if self._synthetic_arms:
+            self.get_logger().warning(
+                "synthetic (parked) arms, not required by PREPARE and filled on export: "
+                + ", ".join(sorted(self._synthetic_arms))
+            )
         self._lock = threading.RLock()
         # Service callbacks use a reentrant ROS callback group so status/subscription
         # work can continue, but lifecycle commands themselves must be serialized:
@@ -453,6 +469,13 @@ class RecordingRecorderNode(Node):
                     "start_at_walltime_ns": scheduled_at,
                     "topic_types": self._topic_types,
                     "preflight": self._preflight_payload(),
+                    # Parked arms of this session: the exporter fills their joint states with
+                    # this pose and their velocity with zero, and lists what it synthesized.
+                    "synthetic_arms": {
+                        arm: {"joint_positions_rad": list(pose), "velocity": "zero",
+                              "source": "synthetic_arms parameter (arm not recorded)"}
+                        for arm, pose in self._synthetic_arms.items()
+                    },
                     "alignment": {
                         "enabled": bool(self.get_parameter("alignment_enabled").value),
                         "required": self._last_alignment_required,
@@ -593,13 +616,14 @@ class RecordingRecorderNode(Node):
             tuple(f"/{arm}/joint_states" for arm in self._arms)
             + tuple(str(topic) for topic in self.get_parameter("gripper_position_topics").value if str(topic))
         )
-        required_topics = base_topics + (
+        # A parked arm publishes nothing; only its joint stream and driver are skipped.
+        required_topics = preflight_topics(base_topics, self._synthetic_arms) + (
             tuple(source.image_topic for source in self._camera_sources()) if record_cameras else ()
         )
         camera_ids = tuple(str(item) for item in self.get_parameter("camera_ids").value) if record_cameras else ()
         return PreflightRequirements(
             required_topics=required_topics,
-            required_arms=self._arms,
+            required_arms=preflight_arms(self._arms, self._synthetic_arms),
             required_cameras=camera_ids,
             max_age_ns=int(max_age_sec * 1e9),
             min_free_space_bytes=int(self.get_parameter("min_free_space_bytes").value),

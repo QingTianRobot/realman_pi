@@ -166,6 +166,14 @@ session manifest、相机 `media-index.json` 和 LeRobot `lerobot-v3.json` recei
 - `max_state_queue` 是有界内存队列容量，满时必须计入丢失而不能阻塞订阅回调；
 - `arm_namespaces` 与夹爪 topic 列表决定订阅集合；
 - `preflight_required_topics` 决定非相机的 PREPARE 硬门限；可按任务加入力控、报警或 action topic，未列出的录制 topic 不会阻止开始；
+- `synthetic_arms` 与 `synthetic_arm_joint_degrees`（每臂六个角度，按 `synthetic_arms` 顺序）声明**停放的机械臂**：
+  在 `arm_namespaces` 里、但这台机器不录（例如 SJDrealman 的 m 臂断电）。三臂 schema 不变，数据仍可与真实三臂数据合并；
+  该臂不再参与 PREPARE 的连接检查，它的 `/<arm>/joint_states` 也从必需 topic 中去掉（夹爪等其它 topic 照旧）。
+  录制时停放位姿（弧度）写进 session 元数据 `synthetic_arms`；导出时只有该臂**完全没有样本**的流才被填充：
+  `/<arm>/joint_states` 填停放位姿、`/<arm>/cartesian_velocity/state` 填零速度，时间轴取第一条真实臂的关节流；
+  真实数据始终优先。导出回执 `export/lerobot-v3.json` 的 `synthetic_streams` 列出被填充的流。仓库默认不停放任何臂；
+  没有这项设置时，断电臂会让 PREPARE 报 `topic_stale:/m/joint_states, arm_disconnected:m`，而导出也会报
+  `required LeRobot v3 stream has no samples: /m/joint_states`；
 - `preflight_alignment_trigger_sec` 是仅用于请求离线对齐的 receipt-walltime 差阈值；`alignment_enabled` 关闭时仍保留检测结论，但不请求后处理；
 - `camera_ids` 和 `camera_image_topics` 必须一一对应；后者必须是 `sensor_msgs/msg/Image` 的绝对 topic 名称；
 - `web_state_hz` 是网页快照上限，不是采样或图像帧率。

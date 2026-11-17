@@ -157,7 +157,7 @@ realman_bt_executor:
       # clear). After an attempt lifts the object, the right arm goes to lift_joint_degrees, turns joint release_joint
       # (1-based: 1 = J1) to release_joint_deg, opens the gripper there and WhiteObjectsRemain checks the table.
       # lift_joint_degrees is the right arm's start pose (pika_config.yaml) until a dedicated lift pose is measured
-      # (decision 2026-10-20). Velocities are the XML's (10%). The turn from the lift pose to J1 -135 (clockwise seen from
+      # (decision 2026-10-20). Velocities are the XML's (60% since 2026-11-02). The turn from the lift pose to J1 -135 (clockwise seen from
       # above) was run on the robot at 5% without an object on 2026-10-20 and the operator saw no obstacle on the path.
       # 2026-10-30: release at J1 -163 instead (user decision), turning further the same way; -135..-163 not yet path-checked.
       # regrasp_attempts: policy runs within one attempt (the first counts; -1 = no limit). After a miss (or another

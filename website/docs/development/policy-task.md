@@ -132,8 +132,8 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
    - 策略服务超时不在原地重试：内层设置了 `timeouts_to_parent="true"`，带着 `policy_timeout` 立即交给外层，由外层按 `timeout_retry` 等待、回位并单独计数，与原来的行为相同。故障（`policy_fault`）使两层都立即放弃。
 2. **竖直抬起**：`CartesianVelocityForDuration` 在恒等工作坐标系 `work/pikabase`（即右臂竖直安装的基座系，+Z 向上）中以 0.03 m/s 向上运动 2 s（含加减速约 5.5 cm）。策略停下时夹爪还贴着桌面，先竖直离开桌面，后面的关节空间 MoveJ 就不会拖着物体扫过垫子。
 3. **搬运全程监测**：第 2–4 步都包在 `WhileGraspHeld` 里，并且和抓取一起位于 `RetryUnlessFault` 之内。每个 tick 先读 `/gripper_right/position`：位置在 `verdict.empty_position_min` 以上持续 `grasp_check.carry_lost_sec`（0.3 s），就是物体掉了，立即 halt 正在执行的运动并返回可重试的失败，外层 `RetryUnlessFault`（大重试）张开夹爪、回位后重新运行策略。掉落消耗一次 `attempts`（此时右臂已离开桌面，不做小重试）。搬运中的运动失败或超过 `gripper_ready.position_stale_sec` 读不到夹爪位置，由 `WhileGraspHeld` 置位 `policy_fault`，不重试，与这些运动放在重试外面时的行为一致。
-4. **抬升到固定位姿**：右臂 `MoveJ` 到 `pick_cycle.lift_joint_degrees`。目前取右臂起始位姿（`pika_config.yaml`），等测出专门的抬升位姿后在配置里修改即可，不用改 XML。
-5. **转到放置侧**：`MoveJointTo` 只把 J1（`pick_cycle.release_joint`）转到 `pick_cycle.release_joint_deg`（-163°），以 20% 速度转动（2026-10-30 起，原为 10%），其余关节保持不动。从上往下看是顺时针转动（J1 角度减小约 153°）。2026-10-20 在真机上空载、以 5% 速度从抬升位姿转到 -135° 再转回，现场确认路径上没有障碍；2026-10-30 起放置角改为 -163°，沿同一方向多转 28°，-135° 到 -163° 这一段还没有空载确认过。
+4. **抬升到固定位姿**：右臂 `MoveJ` 以 60% 速度（2026-11-02 起，原为 10%）到 `pick_cycle.lift_joint_degrees`。目前取右臂起始位姿（`pika_config.yaml`），等测出专门的抬升位姿后在配置里修改即可，不用改 XML。
+5. **转到放置侧**：`MoveJointTo` 只把 J1（`pick_cycle.release_joint`）转到 `pick_cycle.release_joint_deg`（-163°），以 60% 速度转动（2026-11-02 起；2026-10-30 起为 20%，更早为 10%），其余关节保持不动。从上往下看是顺时针转动（J1 角度减小约 153°）。2026-10-20 在真机上空载、以 5% 速度从抬升位姿转到 -135° 再转回，现场确认路径上没有障碍；2026-10-30 起放置角改为 -163°，沿同一方向多转 28°，-135° 到 -163° 这一段还没有空载确认过。
 6. **松开**：`GripperReady` 张开右夹爪，物体落在放置侧。
 7. **检测**：`WhiteObjectsRemain` 读一帧全局相机（D435）图像，判断垫子上是否还有白色物体。有物体就返回 `SUCCESS`，`Repeat` 开始下一个周期；没有物体就写入 `pick_table_clear=true` 并返回失败，以此结束 `Repeat`。
 

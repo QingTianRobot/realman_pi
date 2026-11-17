@@ -481,6 +481,9 @@ test("camera tiles say so when the bridge preview is disabled", async ({ page })
   await expect(card.locator(".no-feed")).toContainText("预览未启用");
 });
 
+// A real (4x4) JPEG: raw tiles swap in a frame only after it has loaded.
+const TINY_JPEG = "/9j/4AAQSkZJRgABAQAAAQABAAD/2wBDAAgGBgcGBQgHBwcJCQgKDBQNDAsLDBkSEw8UHRofHh0aHBwgJC4nICIsIxwcKDcpLDAxNDQ0Hyc5PTgyPC4zNDL/2wBDAQkJCQwLDBgNDRgyIRwhMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjIyMjL/wAARCAAEAAQDASIAAhEBAxEB/8QAHwAAAQUBAQEBAQEAAAAAAAAAAAECAwQFBgcICQoL/8QAtRAAAgEDAwIEAwUFBAQAAAF9AQIDAAQRBRIhMUEGE1FhByJxFDKBkaEII0KxwRVS0fAkM2JyggkKFhcYGRolJicoKSo0NTY3ODk6Q0RFRkdISUpTVFVWV1hZWmNkZWZnaGlqc3R1dnd4eXqDhIWGh4iJipKTlJWWl5iZmqKjpKWmp6ipqrKztLW2t7i5usLDxMXGx8jJytLT1NXW19jZ2uHi4+Tl5ufo6erx8vP09fb3+Pn6/8QAHwEAAwEBAQEBAQEBAQAAAAAAAAECAwQFBgcICQoL/8QAtREAAgECBAQDBAcFBAQAAQJ3AAECAxEEBSExBhJBUQdhcRMiMoEIFEKRobHBCSMzUvAVYnLRChYkNOEl8RcYGRomJygpKjU2Nzg5OkNERUZHSElKU1RVVldYWVpjZGVmZ2hpanN0dXZ3eHl6goOEhYaHiImKkpOUlZaXmJmaoqOkpaanqKmqsrO0tba3uLm6wsPExcbHyMnK0tPU1dbX2Nna4uPk5ebn6Onq8vP09fb3+Pn6/9oADAMBAAIRAxEAPwCnRRRXrHnn/9k=";
+
 test("a pending session replays inline: all cameras in sync plus action/state curves, no popup", async ({ page }) => {
   const S = 1_000_000_000;
   const cameras = ["d435", "orbbec-left", "orbbec-right"];
@@ -512,7 +515,7 @@ test("a pending session replays inline: all cameras in sync plus action/state cu
   } }));
   await page.route(/\/api\/lerobot\/raw-1\/raw\/image\//, (route) => {
     imageRequests.push(new URL(route.request().url()).pathname);
-    return route.fulfill({ status: 404, body: "" });
+    return route.fulfill({ contentType: "image/jpeg", body: Buffer.from(TINY_JPEG, "base64") });
   });
 
   await page.goto("/");
@@ -556,4 +559,45 @@ test("a pending session replays inline: all cameras in sync plus action/state cu
   for (const camera of cameras) expect(imageRequests.some((path) => path.includes(`/raw/image/${camera}/`))).toBe(true);
   const pageWidth = await page.evaluate(() => document.documentElement.scrollWidth - window.innerWidth);
   expect(pageWidth).toBeLessThanOrEqual(1);
+});
+
+test("the chart playhead is drawn at the current frame", async ({ page }) => {
+  await page.route("**/api/lerobot", (route) => route.fulfill({ json: { sessions: [] } }));
+  await page.route("**/api/lerobot/trash", (route) => route.fulfill({ json: { sessions: [] } }));
+  await page.route("**/api/lerobot/pending", (route) => route.fulfill({ json: { sessions: [{ session_id: "raw-m", session_number: 1, task: "t", complete: true }] } }));
+  await page.route("**/api/lerobot/raw-m/raw/replay", (route) => route.fulfill({ json: {
+    fps: 10, cameras: [], camera_frame_counts: {}, topics_present: [], duration_s: 9.9, state_error: "",
+    summary: { features: { "observation.gripper_position": { dtype: "float32", shape: [1], names: ["gripper_left"] } }, canonical: {} },
+    frames: Array.from({ length: 100 }, (_, index) => ({ frame_index: index, timestamp_ns: index * 1e8, state: [], action: [],
+      features: { "observation.gripper_position": [index] }, camera_frames: {} })),
+  } }));
+  await page.goto("/");
+  await page.getByRole("button", { name: "回放 · 转换" }).click();
+  await page.locator('#replay-pending .episode-item[data-session="raw-m"] .episode-main').click();
+  await expect(page.locator("#replay-feature-chart .uplot")).toBeVisible();
+  for (let i = 0; i < 50; i++) await page.locator("#replay-next").click();
+  await expect(page.locator("#replay-frame-label")).toHaveText("51 / 100");
+  // Count playhead-colored pixels in the canvas column for frame 50 and one y-axis gutter to its left.
+  const hits = await page.locator("#replay-feature-chart").evaluate((element) => {
+    const over = element.querySelector(".u-over") as HTMLElement;
+    const canvas = element.querySelector("canvas") as HTMLCanvasElement;
+    const ratio = canvas.width / canvas.getBoundingClientRect().width;
+    const left = over.offsetLeft, width = over.offsetWidth;
+    const context = canvas.getContext("2d")!;
+    const columnHits = (cssX: number) => {
+      const x = Math.round(cssX * ratio);
+      let count = 0;
+      for (let y = Math.round((over.offsetTop + 4) * ratio); y < Math.round((over.offsetTop + 30) * ratio); y += 1) {
+        for (const dx of [-1, 0, 1]) {
+          const [r, g, b] = context.getImageData(x + dx, y, 1, 1).data;
+          if (b > 180 && r < 110 && g < 140) { count += 1; break; } // #3e63dd
+        }
+      }
+      return count;
+    };
+    const expected = left + (50 / 99) * width;
+    return { atFrame: columnHits(expected), gutterLeft: columnHits(expected - left) };
+  });
+  expect(hits.atFrame).toBeGreaterThan(10);
+  expect(hits.gutterLeft).toBe(0);
 });

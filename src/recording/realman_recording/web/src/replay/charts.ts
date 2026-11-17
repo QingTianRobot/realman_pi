@@ -302,7 +302,9 @@ export function initCharts(): ChartApi {
           hooks: {
             draw: [(u) => {
               if (markerIndex < 0) return;
-              const x = u.valToPos(markerIndex, "x");
+              // canvas pixels (true): bbox is in canvas pixels, and plot-relative CSS
+              // pixels would draw the playhead one y-axis gutter too far left.
+              const x = u.valToPos(markerIndex, "x", true);
               if (x < u.bbox.left || x > u.bbox.left + u.bbox.width) return;
               u.ctx.save();
               u.ctx.strokeStyle = MARKER_LINE;

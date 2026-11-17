@@ -48,7 +48,9 @@ function escapeHtml(value: string): string {
   })[character] ?? character);
 }
 
-type RawTile = { img: HTMLImageElement; cameraId: string; shown: string; pending: string; loading: boolean };
+// `loader` fetches the next JPEG off-screen; the visible <img> only switches once
+// it has arrived, so a slow link never blanks the tile mid-playback.
+type RawTile = { img: HTMLImageElement; loader: HTMLImageElement; cameraId: string; shown: string; pending: string; loading: boolean };
 
 export function initVideo(callbacks: VideoCallbacks): VideoApi {
   const camerasEl = $("#replay-cameras");
@@ -88,7 +90,7 @@ export function initVideo(callbacks: VideoCallbacks): VideoApi {
     if (tile.loading || !tile.pending || tile.pending === tile.shown) return;
     tile.loading = true;
     tile.shown = tile.pending;
-    tile.img.src = rawUrl(tile.cameraId, tile.pending);
+    tile.loader.src = rawUrl(tile.cameraId, tile.pending);
   }
 
   function showRawFrame(index: number): void {
@@ -245,10 +247,15 @@ export function initVideo(callbacks: VideoCallbacks): VideoApi {
           const total = next.cameraFrameCounts?.[cameraId];
           const card = buildTile(cameraId, `<img alt="${escapeHtml(cameraId)} 原始帧" decoding="async">`, total ? `${total} 帧` : "");
           const img = card.querySelector("img")!;
-          const tile: RawTile = { img, cameraId, shown: "", pending: "", loading: false };
-          const settle = () => { tile.loading = false; requestTile(tile); };
-          img.addEventListener("load", settle);
-          img.addEventListener("error", settle);
+          const loader = new Image();
+          loader.decoding = "async";
+          const tile: RawTile = { img, loader, cameraId, shown: "", pending: "", loading: false };
+          loader.addEventListener("load", () => {
+            img.src = loader.src; // already decoded and cached: swaps without a blank frame
+            tile.loading = false;
+            requestTile(tile);
+          });
+          loader.addEventListener("error", () => { tile.loading = false; requestTile(tile); });
           tiles.push(tile);
           camerasEl.append(card);
         } else {

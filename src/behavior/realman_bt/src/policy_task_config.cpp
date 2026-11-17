@@ -33,6 +33,12 @@ void PolicyTaskConfig::validate() const {
   const auto gripper = gripper_for_arm.find(arm);
   require(gripper != gripper_for_arm.end() && !gripper->second.empty(),
           "policy_task.gripper_for_arm needs a gripper name for arm " + arm);
+  for (const auto& skipped : skipped_arms) {
+    require(skipped == "l" || skipped == "m" || skipped == "r",
+            "policy_task skipped arm must be l, m or r, got " + skipped);
+  }
+  require(skipped_arms.count(arm) == 0,
+          "policy_task.arm " + arm + " is skipped (pika_default_pose skip: true) but must be driven");
 
   for (std::size_t joint = 0; joint < joint_lo.size(); ++joint) {
     require(std::isfinite(joint_lo[joint]) && std::isfinite(joint_hi[joint]) &&

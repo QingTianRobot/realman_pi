@@ -243,6 +243,7 @@ PolicyRunNode::Missing PolicyRunNode::missingForStart(Clock::time_point now) con
   {
     std::lock_guard<std::mutex> lock(mutex_);
     for (const char* name : {"l", "m", "r"}) {
+      if (config_->skipped_arms.count(name) != 0) continue;  // powered off: not watched
       const auto at = joints_at_.find(name);
       if (at == joints_at_.end() || age(at->second) > config_->joint_state_stale_sec) {
         other.push_back(std::string(name) + " joint_states");

@@ -199,7 +199,7 @@ pika_default_pose:
     joint_degrees: [0.0, 17.997, 70.0, 0.0, 90.0, 8.997]
 ```
 
-launch 把它作为 `pika_m_joint_degrees: skip` 注入，`ThreeArmMoveJ` 不给该臂发 goal。不写 `skip` 时三臂都移动
+launch 把它作为 `pika_m_joint_degrees: skip` 注入，`ThreeArmMoveJ` 不给该臂发 goal；策略任务的 `PolicyRun` 也不再等待、监视这条臂（见[策略任务](./policy-task.md#断电的臂)）。不写 `skip` 时三臂都移动
 （仓库默认）。`skip` 必须是布尔值，三臂不能全部跳过。没有这个设置时，断电臂的 goal 被拒绝，同步 MoveJ 随即
 取消另外两臂，驱动重置连接并隔离事件通道，行为树每 200 ms 重试一次，最终报
 `pikavelocity failed: input mode switch timed out`。

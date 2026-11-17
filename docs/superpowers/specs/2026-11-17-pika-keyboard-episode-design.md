@@ -53,7 +53,7 @@ SJDrealman (domain 65)
 
 - `episode_machine.py`：纯 Python 状态机，不 import rclpy。输入是事件（键盘边沿、模式变化、速度会话状态、服务/Action 结果、时间推进），输出是要执行的动作（START、STOP、MoveJ 某臂）和新状态。可直接 pytest。
 - `pose_config.py`：读取 `config/ros/pika_config.yaml` 的 `pika_default_pose`，校验规则与 `control_router.launch.py` 一致（每臂 6 个有限角度或 `skip: true`，至少保留一臂）。
-- `trigger_node.py`：ROS 外壳，负责订阅、调用和发布，把回调转换成状态机事件；`MultiThreadedExecutor`。
+- `trigger_node.py`：ROS 外壳，负责订阅、调用和发布，把回调转换成状态机事件；单线程 executor，所有 service/action 调用都是异步的，回调不阻塞。
 - `launch/pika_episode.launch.py`：读取配置，`enabled: false` 时不启动节点。
 
 ### 配置 `config/ros/pika_episode.yaml`（新）
@@ -112,7 +112,7 @@ FAILED ──键盘 false→true──► IDLE（只清除故障，不开录、�
 - STOP 失败（录制服务报错或不可用）仍执行归位，但 HOMING 完成后进入 FAILED 而不是 IDLE，录制状态不伪造为成功。
 - `release_timeout` 到时仍有臂 `session_active=true`：照常发 MoveJ；驱动若因忙拒绝，按 MoveJ 失败进入 FAILED。
 - 链路断开或模式被切走属于异常停止，不自动归位，与旧正式模式一致。
-- 节点启动时不运动，进入 IDLE。若 `/recording/status` 显示已有活动 session（不是本节点开的，例如策略尝试自动录制），不接管、不 STOP；此时按键开录会被录制服务拒绝，按 START 失败处理。
+- 节点启动时不运动，进入 IDLE。若 `/recording/status` 显示已有活动 session（不是本节点开的，例如策略尝试自动录制），不接管、不 STOP；此时按键不调用 START，`detail` 写 `ignored: recording busy (<id>)`。
 - 录制结束后的导出沿用录制平台的 `auto_export_on_stop`；坏 episode 在 `:8770` 回放页隐藏或 DISCARD。
 - 归位时不动夹爪：enine 的 Pika 夹爪流持续发布，SJD 侧发“全开”会立刻被覆盖。
 

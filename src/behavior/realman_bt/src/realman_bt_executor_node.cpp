@@ -105,6 +105,12 @@ RealmanBtExecutorNode::RealmanBtExecutorNode(const rclcpp::NodeOptions& options)
   // blackboard values so the XML can refer to them as {policy_cycles} / {policy_attempts} /
   // {policy_timeout_attempts} / {policy_timeout_backoff_sec}.
   policy_task_config_ = declareAndLoadPolicyTaskConfig(*this);
+  // An arm the entry MoveJ skips (pika_default_pose.<arm>.skip: true -> "skip") is powered off:
+  // PolicyRun must not wait for or watch its joint_states either.
+  if (isSkipJoints(pika_l_joint_degrees)) policy_task_config_.skipped_arms.insert("l");
+  if (isSkipJoints(pika_m_joint_degrees)) policy_task_config_.skipped_arms.insert("m");
+  if (isSkipJoints(pika_r_joint_degrees)) policy_task_config_.skipped_arms.insert("r");
+  policy_task_config_.validate();
   blackboard_->set<const PolicyTaskConfig*>(kPolicyTaskConfigBlackboardKey, &policy_task_config_);
   blackboard_->set<int>(kPolicyCyclesKey, policy_task_config_.cycles);
   blackboard_->set<int>(kPolicyAttemptsKey, policy_task_config_.attempts);

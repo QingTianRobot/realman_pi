@@ -32,16 +32,6 @@ std::array<double, 6> parseJoints(const std::string& text) {
   return result;
 }
 
-// "skip" (any case, surrounding whitespace ignored) leaves an arm out of the MoveJ.
-bool isSkip(std::string text) {
-  const auto not_space = [](unsigned char c) { return !std::isspace(c); };
-  text.erase(text.begin(), std::find_if(text.begin(), text.end(), not_space));
-  text.erase(std::find_if(text.rbegin(), text.rend(), not_space).base(), text.end());
-  std::transform(text.begin(), text.end(), text.begin(),
-                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
-  return text == "skip";
-}
-
 std::uint64_t timestampMilliseconds() {
   const auto now = std::chrono::system_clock::now();
   return static_cast<std::uint64_t>(std::chrono::duration_cast<std::chrono::milliseconds>(
@@ -73,6 +63,15 @@ std::string resultCode(rclcpp_action::ResultCode code) {
 
 }  // namespace
 
+bool isSkipJoints(std::string text) {
+  const auto not_space = [](unsigned char c) { return !std::isspace(c); };
+  text.erase(text.begin(), std::find_if(text.begin(), text.end(), not_space));
+  text.erase(std::find_if(text.rbegin(), text.rend(), not_space).base(), text.end());
+  std::transform(text.begin(), text.end(), text.begin(),
+                 [](unsigned char c) { return static_cast<char>(std::tolower(c)); });
+  return text == "skip";
+}
+
 bt_core::PortsList ThreeArmMoveJNode::providedPorts() {
   return bt_core::makePorts(
       bt_core::InputPort<bool>("dry_run", "true", "Validate without sending motion goals"),
@@ -102,7 +101,7 @@ bool ThreeArmMoveJNode::readGoals() {
   std::string skipped;
   for (std::size_t index = 0; index < arms_.size(); ++index) {
     const std::string joints = getInput<std::string>(ports[index]).value_or("");
-    if (isSkip(joints)) {
+    if (isSkipJoints(joints)) {
       arms_[index].skipped = true;
       arms_[index].completed = true;  // nothing to wait for
       skipped += (skipped.empty() ? "" : ", ") + std::string(arms_[index].id);

@@ -234,6 +234,7 @@ void PolicySupervisor::start(double now, const std::string& task_name) {
   start_time_ = now;
   last_eval_time_ = now;
   for (const char* arm : {"l", "m", "r"}) {
+    if (config_.skipped_arms.count(arm) != 0) continue;  // powered off: not watched
     const auto reading = arms_.find(arm);
     if (reading == arms_.end() || !reading->second.valid) continue;
     if (arm == config_.arm) {
@@ -325,6 +326,7 @@ const Verdict& PolicySupervisor::evaluate(double now) {
   }
 
   for (const char* arm : {"l", "m", "r"}) {
+    if (config_.skipped_arms.count(arm) != 0) continue;  // powered off: not watched
     const auto reading = arms_.find(arm);
     const double last = reading != arms_.end() && reading->second.valid
                             ? std::max(reading->second.received_time, start_time_)

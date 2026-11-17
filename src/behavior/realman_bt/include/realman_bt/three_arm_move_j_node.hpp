@@ -12,6 +12,10 @@
 
 namespace realman_bt {
 
+// True for a joint port value of "skip" (any case, surrounding spaces ignored): that arm is left
+// out. The executor also uses it to tell PolicyRun which arms are powered off.
+bool isSkipJoints(std::string text);
+
 /**
  * Starts one MoveJ goal for l, m, and r in the same tree tick and completes
  * only after all their action results report success.

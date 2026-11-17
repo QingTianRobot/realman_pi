@@ -225,7 +225,7 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 
 `PolicyRun` 依次执行以下步骤：
 
-1. **预检**：确认 `/policy/activate`、`/policy/deactivate`、`/policy/emergency_stop`、`/policy_router/emergency_stop` 四个服务均已发现；三条臂的 `joint_states`、夹爪位置和 `/policy/stats` 都是最新数据；桥接报告自身处于 policy 模式。与此同时，`PolicyRun` 把任务的 prompt 发布到 `prompt_topic`（`/policy/prompt`，等待期间每 0.5 s 重发一次），直到 `/policy/stats` 中的 `prompt` 值与之一致才继续。桥接切换 prompt 时会清空动作队列，并立即重新发布统计。桥接处于暂停状态不会阻塞预检：下一步的 `/policy/activate` 会解除暂停。等待 `service_wait_sec` 后仍有项目不满足时，此时不会启动任何动作：如果缺的只是桥接本身（三个 `/policy/*` 服务或 `/policy/stats`），判为 `policy_timeout`；其余情况（机械臂或夹爪数据、路由服务、桥接不在 policy 模式、prompt 不一致、桥接版本过旧）判为故障。
+1. **预检**：确认 `/policy/activate`、`/policy/deactivate`、`/policy/emergency_stop`、`/policy_router/emergency_stop` 四个服务均已发现；三条臂的 `joint_states`（`pika_config.yaml` 里 `skip: true` 的断电臂除外，见[断电的臂](#断电的臂)）、夹爪位置和 `/policy/stats` 都是最新数据；桥接报告自身处于 policy 模式。与此同时，`PolicyRun` 把任务的 prompt 发布到 `prompt_topic`（`/policy/prompt`，等待期间每 0.5 s 重发一次），直到 `/policy/stats` 中的 `prompt` 值与之一致才继续。桥接切换 prompt 时会清空动作队列，并立即重新发布统计。桥接处于暂停状态不会阻塞预检：下一步的 `/policy/activate` 会解除暂停。等待 `service_wait_sec` 后仍有项目不满足时，此时不会启动任何动作：如果缺的只是桥接本身（三个 `/policy/*` 服务或 `/policy/stats`），判为 `policy_timeout`；其余情况（机械臂或夹爪数据、路由服务、桥接不在 policy 模式、prompt 不一致、桥接版本过旧）判为故障。
 2. **激活**：`activation: auto` 时由 `PolicyRun` 调用 `/policy/activate`；`activation: operator` 时只等待操作员调用，等待期间不会有任何运动。
 3. **监督**：每个 tick 评估一次，判定规则见下表。
 4. **停止**：无论成败，依次调用 `/policy/deactivate`（`data: true`；`false` 反而会激活桥接）、`/policy/emergency_stop`、`/policy_router/emergency_stop`，每一步都等待回应或超时。最后再等待 `router_release_sec`，让路由释放速度会话，避免与下一步的 `ThreeArmMoveJ` 冲突。被 `halt()` 时，同样的三个调用会立即发出，但不等待回应。
@@ -242,7 +242,7 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 | 夹爪闭合且指令几乎为零，持续 `stall.sec` | 失败，`stall` | 是 |
 | 某个关节电流持续 `current_guard.sustain_sec` 高于 `current_guard.limits_ma`（手臂顶在桌面或其他东西上） | 失败，`overcurrent` | 是：张开夹爪、回到起始位姿后重新抓取 |
 | 桥接因推理连续超时而自行暂停、桥接统计中断超过 `stats_stale_sec`、预检时桥接迟迟未就绪、`/policy/activate` 无回应 | 失败，`policy_timeout` | 是，按 `timeout_retry` 单独计数，先等待 `backoff_sec` |
-| 关节超出范围、关节速度过大、另外两臂漂移、`joint_states` 丢失、路由服务缺失、夹爪无法张开 | 故障，`fault` | 否，经 `FailInputMode` 进入 `FAILED` |
+| 关节超出范围、关节速度过大、另外两臂漂移（跳过的臂不查）、`joint_states` 丢失、路由服务缺失、夹爪无法张开 | 故障，`fault` | 否，经 `FailInputMode` 进入 `FAILED` |
 | `lift_and_hold`：夹着物体转向收纳盒一侧 | 故障，`wrong_task` | 否，经 `FailInputMode` 进入 `FAILED` |
 | `lift_and_hold`：抓空后转向收纳盒一侧 | 失败，`wrong_side_empty` | 是 |
 
@@ -348,6 +348,17 @@ REALMAN_BT_DRY_RUN=true ./scripts/bt.sh control     # 选择 policy：回位只�
 ```bash
 REALMAN_BT_DRY_RUN=false ./scripts/bt.sh control    # 然后在 Web 中选择 policy，或调用 select_input_mode
 ```
+
+
+## 断电的臂
+
+某台机械臂长期断电时（例如 SJDrealman 的 m 臂），在 `config/ros/pika_config.yaml` 的 `pika_default_pose` 下给它写
+`skip: true`。这一个设置同时作用于两处：入口 `ThreeArmMoveJ` 不给该臂发 goal（见 [Pika 遥操作](./pika-teleop.md)）；
+executor 启动时也把它记进 `PolicyRun` 的跳过列表，预检不再等这条臂的 `joint_states`，运行中不会因为它没有数据而判故障，
+也不检查它的漂移。另一条不受驱动的臂照常检查。被驱动的臂（`policy_task.arm` 或 `PolicyRun` 的 `arm_id`）不能跳过，
+否则 executor 启动时直接报错。不加这个设置，断电臂会让每次尝试都在预检阶段以
+`policy is not ready to start ... m joint_states` 故障结束（2026-11-17 在 SJDrealman 上实测）。跳过列表只在 executor
+启动时读取一次，改了 `pika_config.yaml` 之后要重启行为树才生效。
 
 ## 排障
 

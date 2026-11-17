@@ -54,7 +54,7 @@ struct Rig {
     if (arm_alive) sup.onJoints("r", arm, t, t);
     if (lm_alive) {
       sup.onJoints("l", l, t, t);
-      sup.onJoints("m", m, t, t);
+      if (m_alive) sup.onJoints("m", m, t, t);
     }
     if (stats_alive) sup.onBridgeStats(stats, t);
     sup.onPolicyGripperCommand(policy_gripper, t);
@@ -74,6 +74,7 @@ struct Rig {
   BridgeStats stats{true, true, false};
   bool arm_alive{true};
   bool lm_alive{true};
+  bool m_alive{true};  // only read while lm_alive
   bool stats_alive{true};
   bool gripper_alive{true};
   bool currents_alive{true};
@@ -219,6 +220,51 @@ void testLostJointStatesAreAFault() {
   rig.run(1.5);  // joint_state_stale_sec = 1.0
   assert(rig.verdict.finished && rig.verdict.fault);
   assert(rig.verdict.reason.find("joint_states") != std::string::npos);
+}
+
+// A powered-off arm (pika_default_pose skip: true) publishes nothing; it must not end the attempt.
+void testASkippedArmNeedsNoJointStates() {
+  PolicyTaskConfig cfg = liftConfig();
+  cfg.skipped_arms = {"m"};
+  Rig rig(cfg);
+  rig.m_alive = false;
+  rig.start();
+  rig.run(3.0);  // joint_state_stale_sec = 1.0
+  assert(!rig.verdict.finished);
+}
+
+// Skipping m does not switch off the drift guard of the arm that is still there.
+void testASkippedArmLeavesTheOtherArmWatched() {
+  PolicyTaskConfig cfg = liftConfig();
+  cfg.skipped_arms = {"m"};
+  Rig rig(cfg);
+  rig.m_alive = false;
+  rig.start();
+  rig.run(1.0);
+  rig.l[2] += 1.5;
+  rig.step();
+  assert(rig.verdict.finished && rig.verdict.fault);
+  assert(rig.verdict.reason.find("arm l") != std::string::npos);
+}
+
+void testTheSupervisedArmCannotBeSkipped() {
+  PolicyTaskConfig cfg = liftConfig();
+  cfg.skipped_arms = {"r"};
+  bool threw = false;
+  try {
+    cfg.validate();
+  } catch (const std::invalid_argument& error) {
+    threw = std::string(error.what()).find("skipped") != std::string::npos;
+  }
+  assert(threw);
+  cfg.skipped_arms = {"x"};
+  threw = false;
+  try {
+    cfg.validate();
+  } catch (const std::invalid_argument&) {
+    threw = true;
+  }
+  assert(threw);
 }
 
 void testLostJointStatesOfTheOtherArmsAreAFault() {
@@ -1078,6 +1124,9 @@ int main() {
   testTheOtherArmsDriftingIsAFault();
   testSmallMovementOfTheOtherArmsIsTolerated();
   testLostJointStatesAreAFault();
+  testASkippedArmNeedsNoJointStates();
+  testASkippedArmLeavesTheOtherArmWatched();
+  testTheSupervisedArmCannotBeSkipped();
   testLostJointStatesOfTheOtherArmsAreAFault();
   testAPausedBridgeIsAPolicyTimeout();
   testAPauseReportedBeforeTheStartIsTheOneTheActivationCleared();

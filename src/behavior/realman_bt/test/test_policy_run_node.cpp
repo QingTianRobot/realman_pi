@@ -436,6 +436,22 @@ void testMissingJointStatesOfAnotherArmIsAFault() {
   assert(f.stack.calls.empty());
 }
 
+// SJDrealman's middle arm is powered off (pika_default_pose middle skip: true): no m joint_states,
+// and the attempt still starts and finishes.
+void testASkippedArmWithoutJointStatesDoesNotBlockTheStart() {
+  PolicyTaskConfig cfg = fastConfig();
+  cfg.skipped_arms = {"m"};
+  Fixture f(false, cfg);
+  f.stack.serve();
+  f.stack.m_alive = false;
+  GraspScenario scenario(true);
+
+  assert(f.run(8s, std::ref(scenario)) == NodeStatus::SUCCESS);
+
+  assert(!f.faultRaised());
+  assert(f.text(realman_bt::kPolicyAttemptResultKey) == "released_held");
+}
+
 void testNoGripperReadingIsAFault() {
   Fixture f;
   f.stack.serve();
@@ -1365,6 +1381,7 @@ void testACarryThatNeverReportedEndsBeforeTheNextAttempt() {
 int main(int argc, char** argv) {
   rclcpp::init(argc, argv);
   testDryRunTouchesNothing();
+  testASkippedArmWithoutJointStatesDoesNotBlockTheStart();
   testAMissingServiceIsAFaultAndNothingIsSent();
   testMissingJointStatesOfAnotherArmIsAFault();
   testNoGripperReadingIsAFault();

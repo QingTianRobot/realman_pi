@@ -2,6 +2,7 @@
 
 #include <array>
 #include <map>
+#include <set>
 #include <string>
 #include <vector>
 
@@ -190,6 +191,11 @@ struct PolicyTaskConfig {
   std::array<double, 6> joint_hi{40.1, 107.0, 124.3, 70.8, 108.2, 49.0};
   double max_joint_speed_dps{50.0};
   double lm_drift_limit_deg{1.0};
+  // Powered-off arms that PolicyRun does not watch: no joint_states needed to start, no stale-data
+  // fault, no drift check. Not a policy_task.yaml key: the executor fills it from the arms that
+  // pika_config.yaml marks `skip: true` (the same arms the entry ThreeArmMoveJ leaves out), so one
+  // setting covers both. The supervised arm can never be skipped.
+  std::set<std::string> skipped_arms;
   double joint_state_stale_sec{1.0};
   double stats_stale_sec{5.0};
   double service_wait_sec{10.0};

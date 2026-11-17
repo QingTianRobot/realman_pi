@@ -805,7 +805,7 @@ Co-Authored-By: Claude Opus 5.5 <noreply@anthropic.com>"
 - Produces：
   - 可执行 `pika_episode_trigger`，节点名 `pika_episode_trigger`，ROS 参数 `episode_config_file`（str）、`pika_config_file`（str）。
   - `class TriggerNode(Node)`，构造参数 `episode_config: EpisodeConfig, home_pose: dict[str, tuple[float, ...]]`；方法 `interfaces_ready() -> bool`（录制服务和所有归位臂的 MoveJ server 都已发现）；`main()` 从参数读文件后构造。
-  - launch 参数 `config_root`（默认 `$REALMAN_CONFIG_ROOT`，再退到包 share 目录）。
+  - 配置根目录取环境变量 `REALMAN_CONFIG_ROOT`（为空或未设时退到包 share 目录的 `config/`），与其它 launch 一致；不声明 launch 参数。
 
 ROS 接口（全部绝对名）：
 - 订阅 `keyboard_topic`（`std_msgs/Bool`，reliable，depth 10）。

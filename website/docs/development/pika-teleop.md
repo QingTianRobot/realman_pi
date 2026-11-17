@@ -208,7 +208,7 @@ launch 把它作为 `pika_m_joint_degrees: skip` 注入，`ThreeArmMoveJ` 不给
 
 enine 上的外接 W/A/S/D 小键盘由 `pika_foot_pedal` 节点读取（节点名沿用脚踏板，实际读的是键盘）。打开本功能后，一条示教 episode 只需要按两次键：
 
-1. 在 `:8765` 进入 `pikavelocity`（l、r 先 MoveJ 到 `pika_default_pose`）。
+1. 在 `:8765` 进入 `pikavelocity`（l、r 先 MoveJ 到 `pika_default_pose`）。用“Pika 速度控制”开关时可以直接进行第 2 步：开关要等按键后 Pika 发出速度才切模式，这次按键先挂起，模式到达时键盘仍为“开”就开始录制（入场 MoveJ 期间的不到 1 s 不在录制内）。
 2. 按一次 W/A/S/D：左右遥操作开始，同时 `/recording/manage` START，任务标签取自配置。
 3. 再按一次：遥操作停止，录制 STOP；等 l、r 的速度会话结束（最多 `release_timeout_sec`），再把 l、r MoveJ 回 `pika_default_pose`。`skip: true` 的臂不动。
 4. 录制结束后按录制平台的 `auto_export_on_stop` 自动导出；不要的 episode 在 `:8770` 回放页隐藏或 DISCARD。
@@ -228,7 +228,7 @@ enine 上的外接 W/A/S/D 小键盘由 `pika_foot_pedal` 节点读取（节点�
 
 | 情况 | 行为 |
 | --- | --- |
-| 输入模式不是 `pikavelocity` | 按键不开录、不运动，`detail` 写 `ignored: mode is <x>` |
+| 按键时输入模式不是 `pikavelocity` | 先不开录，`detail` 写 `ignored: mode is <x>`；之后模式切到 `pikavelocity` 时，若键盘仍为“开”且键盘状态未过期（`keyboard_stale_sec`），立即开录。按键前就已为“开”（节点启动时的基线）不算 |
 | 已有别人开的录制（例如策略尝试自动录制；录制状态为 SCHEDULED、ARMED、COUNTDOWN、RECORDING 或 FINALIZING） | 按键不开录，`detail` 写 `ignored: recording busy (<session_id>)` |
 | START 被拒（预检不过）或超时 | 遥操作照常，本条不录；这次遥操作结束时也不归位，需手动归位或重新进入 `pikavelocity` |
 | 开录途中就松键 | START 成功后立即 STOP 并归位 |

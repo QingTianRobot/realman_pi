@@ -84,3 +84,17 @@ def test_home_pose_rejects_non_finite(tmp_path):
     path = _write(tmp_path, "p.yaml", POSE_TEMPLATE.format(middle_extra="", right="[1, 2, 3, 4, 5, .nan]"))
     with pytest.raises(ValueError, match="finite"):
         load_home_pose(path)
+
+
+def test_missing_file_is_a_value_error_naming_the_path(tmp_path):
+    missing = tmp_path / "nope.yaml"
+    with pytest.raises(ValueError, match="nope.yaml"):
+        load_episode_config(missing)
+    with pytest.raises(ValueError, match="nope.yaml"):
+        load_home_pose(missing)
+
+
+def test_invalid_yaml_is_a_value_error_naming_the_path(tmp_path):
+    bad = _write(tmp_path, "broken.yaml", "enabled: [true\n")
+    with pytest.raises(ValueError, match="broken.yaml"):
+        load_episode_config(bad)

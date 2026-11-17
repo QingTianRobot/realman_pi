@@ -25,7 +25,12 @@ class EpisodeConfig:
 
 
 def _read(path: Path) -> dict:
-    document = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    try:
+        document = yaml.safe_load(Path(path).read_text(encoding="utf-8"))
+    except OSError as error:
+        raise ValueError(f"{path}: cannot read ({error.strerror or error})") from error
+    except yaml.YAMLError as error:
+        raise ValueError(f"{path}: invalid YAML ({error})") from error
     if not isinstance(document, dict):
         raise ValueError(f"{path}: expected a mapping")
     return document

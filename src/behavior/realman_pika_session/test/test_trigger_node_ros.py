@@ -1,4 +1,5 @@
 """Isolated-graph test: fake recorder service and fake MoveJ servers drive one full episode."""
+import itertools
 import json
 import os
 import time
@@ -7,7 +8,7 @@ import pytest
 
 rclpy = pytest.importorskip("rclpy")
 
-from rclpy.action import ActionServer  # noqa: E402
+from rclpy.action import ActionServer, get_action_server_names_and_types_by_node  # noqa: E402
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
 from rclpy.node import Node  # noqa: E402
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy  # noqa: E402
@@ -30,11 +31,20 @@ CONFIG = EpisodeConfig(
     keyboard_stale_sec=3.0, release_timeout_sec=0.5, home_velocity_percent=30, home_timeout_sec=5.0,
 )
 HOME = {"l": (1.0, 2.0, 3.0, 4.0, 5.0, 6.0), "r": (6.0, 5.0, 4.0, 3.0, 2.0, 1.0)}
+# The previous test's world can linger in the next test's graph for a moment after rclpy.shutdown(), so
+# name-agnostic checks such as ActionClient.server_is_ready() pass on its entities and turn false again when
+# they leave. Every test therefore gets its own domain and world name, and readiness is checked per node.
+TEST_SEQUENCE = itertools.count()
+
+
+def isolated_domain() -> str:
+    """A domain no earlier test of this process used (60..99; within the ROS 2 limit of 101)."""
+    return str(60 + (os.getpid() + next(TEST_SEQUENCE)) % 40)
 
 
 class FakeWorld(Node):
     def __init__(self):
-        super().__init__("fake_world")
+        super().__init__(f"fake_world_{os.getpid()}_{os.environ['ROS_DOMAIN_ID']}")
         self.requests = []
         self.goals = {}
         self.states = []
@@ -79,7 +89,7 @@ class FakeWorld(Node):
 
 @pytest.fixture
 def graph():
-    os.environ["ROS_DOMAIN_ID"] = str(60 + os.getpid() % 40)
+    os.environ["ROS_DOMAIN_ID"] = isolated_domain()
     rclpy.init()
     world = FakeWorld()
     node = TriggerNode(CONFIG, HOME)
@@ -87,12 +97,27 @@ def graph():
     executor.add_node(world)
     executor.add_node(node)
     # Discovery takes a moment; a key press before it would be a START failure, not the case under test.
-    assert spin_until(executor, node.interfaces_ready)
+    assert spin_until(executor, lambda: world_discovered(node, world.get_name()))
     yield world, node, executor
     executor.shutdown()
     node.destroy_node()
     world.destroy_node()
     rclpy.shutdown()
+
+
+def world_discovered(node, world_name):
+    """True once the node sees THIS world's recorder service and MoveJ servers, not a previous test's."""
+    try:
+        servers = {name for name, _ in get_action_server_names_and_types_by_node(node, world_name, "/")}
+        services = {name for name, _ in node.get_service_names_and_types_by_node(world_name, "/")}
+        publishers = {name for name, _ in node.get_publisher_names_and_types_by_node(world_name, "/")}
+    except Exception:  # noqa: BLE001 - the world node itself is not discovered yet
+        return False
+    actions = [f"/{arm}/execute_motion" for arm in HOME]
+    # server_is_ready() also needs each action's feedback and status publishers, so wait for this world's.
+    topics = {f"{action}/_action/{topic}" for action in actions for topic in ("feedback", "status")}
+    return (set(actions) <= servers and "/recording/manage" in services and topics <= publishers
+            and node.interfaces_ready())
 
 
 def spin_until(executor, predicate, timeout=10.0):
@@ -226,7 +251,7 @@ class StubMoveJClient:
 
 @pytest.fixture
 def lone_node():
-    os.environ["ROS_DOMAIN_ID"] = str(60 + os.getpid() % 40)
+    os.environ["ROS_DOMAIN_ID"] = isolated_domain()
     rclpy.init()
     node = TriggerNode(CONFIG, HOME, service_timeout_sec=0.05)
     yield node

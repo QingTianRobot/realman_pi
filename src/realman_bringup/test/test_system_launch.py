@@ -27,6 +27,7 @@ def test_disabled_system_launch_expands_without_starting_processes(tmp_path, mon
             "start_bt_launcher",
             "start_camera_calibration",
             "update_layout_after_calibration",
+            "start_pika_episode",
         )
     ]
     service = LaunchService()

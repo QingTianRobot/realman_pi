@@ -18,6 +18,7 @@ setup(
     ],
     install_requires=["setuptools"],
     tests_require=["pytest"],
+    extras_require={"test": ["pytest"]},  # setuptools>=72 drops tests_require; colcon reads this
     zip_safe=True,
     maintainer="RealMan maintainers",
     maintainer_email="maintainer@example.com",

@@ -107,6 +107,9 @@ FAILED ──键盘 false→true──► IDLE（只清除故障，不开录、�
 规则：
 
 - 非 `required_mode` 时键盘边沿只记日志，不开录、不运动，保证策略运行等其它模式下不会被键盘触发 MoveJ。
+- STARTING 期间模式被切走：START 成功后立即按异常停止处理（STOP、FAILED、不归位）。
+- 进入 HOMING 前再检查一次模式：已不是 `required_mode` 时不发 MoveJ，直接 FAILED，`detail` 写 `home skipped: mode changed to <x>`。覆盖 STOPPING、RELEASING 及释放超时三条路径。
+- 节点给每次归位的 MoveJ 结果带上 episode 编号，上一条 episode 迟到的结果不计入当前 episode。
 - STARTING 期间键盘回到 false 不丢弃：记住它，START 成功后直接 STOP 并归位，避免录制无人收尾。
 - STOPPING / RELEASING / HOMING 期间的键盘边沿忽略并记日志。HOMING 期间驱动本来就拒绝新的速度会话。
 - STOP 失败（录制服务报错或不可用）仍执行归位，但 HOMING 完成后进入 FAILED 而不是 IDLE，录制状态不伪造为成功。

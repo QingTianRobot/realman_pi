@@ -59,7 +59,7 @@ class EpisodeMachine:
     def on_mode(self, active_mode: str, now: float) -> list[Action]:
         self._mode = active_mode
         if self.state is State.RECORDING and active_mode != self._config.required_mode:
-            return self._abnormal_stop(f"mode changed to {active_mode}")
+            return self._abnormal_stop(f"mode changed to {active_mode or 'unknown'}")
         return []
 
     def on_velocity_session(self, arm: str, active: bool, now: float) -> list[Action]:
@@ -93,6 +93,8 @@ class EpisodeMachine:
         if self._abnormal:
             self.state = State.FAILED
             self._detail = f"abnormal stop: {self._abnormal}"
+            if not success:
+                self._detail += f"; stop failed: {message}"
             return []
         self._stop_ok = success
         self._stop_message = message
@@ -185,6 +187,12 @@ class EpisodeMachine:
         if self._mode != self._config.required_mode:
             self.state = State.FAILED
             self._detail = f"home skipped: mode changed to {self._mode or 'unknown'}"
+            self._home_pending.clear()
+            return []
+        if self._keyboard is True:
+            # The operator switched teleop back on before the arms were homed: never fight the Pika stream.
+            self.state = State.FAILED
+            self._detail = "home skipped: teleop re-enabled"
             self._home_pending.clear()
             return []
         self.state = State.HOMING

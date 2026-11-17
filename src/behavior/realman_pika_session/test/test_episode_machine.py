@@ -192,3 +192,52 @@ def test_release_timeout_with_mode_changed_keeps_failed_detail():
     assert machine.tick(13.1) == []
     assert machine.state is State.FAILED
     assert machine.snapshot()["detail"] == "home skipped: mode changed to policy"
+
+
+def test_key_pressed_again_during_releasing_skips_home():
+    machine = recording()
+    machine.on_velocity_session("l", True, 1.5)
+    assert machine.on_keyboard(False, 5.0) == STOP
+    assert machine.on_stop_result(True, "", 5.1) == []
+    assert machine.state is State.RELEASING
+    assert machine.on_keyboard(True, 6.0) == []  # teleop back on before the arms were homed
+    assert machine.on_velocity_session("l", False, 7.0) == []
+    assert machine.state is State.FAILED
+    assert machine.snapshot()["detail"] == "home skipped: teleop re-enabled"
+
+
+def test_key_pressed_again_during_stopping_skips_home():
+    machine = recording()
+    assert machine.on_keyboard(False, 5.0) == STOP
+    assert machine.on_keyboard(True, 5.05) == []
+    assert machine.on_stop_result(True, "", 5.1) == []
+    assert machine.state is State.FAILED
+    assert machine.snapshot()["detail"] == "home skipped: teleop re-enabled"
+
+
+def test_key_pressed_again_then_release_timeout_skips_home():
+    machine = recording()
+    machine.on_velocity_session("l", True, 1.5)
+    machine.on_keyboard(False, 5.0)
+    machine.on_stop_result(True, "", 5.0)
+    machine.on_keyboard(True, 6.0)
+    assert machine.tick(13.1) == []
+    assert machine.state is State.FAILED
+    assert machine.snapshot()["detail"] == "home skipped: teleop re-enabled"
+
+
+def test_abnormal_stop_with_failed_stop_keeps_both_reasons():
+    machine = recording()
+    assert machine.on_mode("policy", 2.0) == STOP
+    assert machine.on_stop_result(False, "no active recording session to stop", 2.1) == []
+    assert machine.state is State.FAILED
+    assert machine.snapshot()["detail"] == (
+        "abnormal stop: mode changed to policy; stop failed: no active recording session to stop")
+
+
+def test_mode_lost_while_recording_is_abnormal_and_names_unknown():
+    machine = recording()
+    assert machine.on_mode("", 2.0) == STOP
+    assert machine.on_stop_result(True, "", 2.1) == []
+    assert machine.state is State.FAILED
+    assert machine.snapshot()["detail"] == "abnormal stop: mode changed to unknown"

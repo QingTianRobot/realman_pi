@@ -242,6 +242,7 @@ class RecordingWebServer:
             "/api/lerobot/{session_id}/video/{camera_id}", self._lerobot_video
         )
         app.router.add_get("/api/lerobot/{session_id}/raw", self._lerobot_raw)
+        app.router.add_get("/api/lerobot/{session_id}/raw/replay", self._lerobot_raw_replay)
         app.router.add_get(
             "/api/lerobot/{session_id}/raw/image/{camera_id}/{filename}",
             self._lerobot_raw_image,
@@ -485,6 +486,62 @@ class RecordingWebServer:
         try:
             directory = self._session_directory(session_id)
             payload = await asyncio.to_thread(self._read_raw_session, directory)
+        except ValueError as error:
+            raise web.HTTPNotFound(text=str(error)) from error
+        return web.json_response(payload)
+
+    def _build_raw_replay(self, directory: Path, fps: float) -> dict[str, Any]:
+        """Read one pending session into the inline replay payload (cached per manifest mtime)."""
+        from .raw_replay import build_raw_replay, camera_frames, read_state_streams
+
+        manifest_path = directory / "manifest.json"
+        if not manifest_path.is_file():
+            raise ValueError("recording session has no finalized manifest.json")
+        mcap = directory / "state.mcap"
+        key = (
+            str(directory), fps, manifest_path.stat().st_mtime_ns,
+            mcap.stat().st_mtime_ns if mcap.is_file() else 0,
+        )
+        cache: dict[Any, dict[str, Any]] = self.__dict__.setdefault("_raw_replay_cache", {})
+        if key in cache:
+            return cache[key]
+        manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+        if not isinstance(manifest, dict):
+            raise ValueError("recording manifest must be a JSON object")
+        reader = getattr(self, "_raw_stream_reader", None) or read_state_streams
+        try:
+            streams = reader(directory, manifest)
+            stream_error = ""
+        except Exception as error:  # noqa: BLE001 - cameras still replay without state
+            self._logger.warning(f"raw replay could not read state.mcap for {directory.name}: {error}")
+            streams, stream_error = {}, str(error)
+        payload = build_raw_replay(manifest, streams, camera_frames(directory), fps=fps)
+        metadata = manifest.get("metadata") or {}
+        number = metadata.get("session_number")
+        payload.update({
+            "session_id": directory.name,
+            "session_number": number if isinstance(number, int) else 0,
+            "task": metadata.get("task", ""),
+            "state": manifest.get("state", ""),
+            "state_error": stream_error,
+        })
+        while len(cache) >= 4:
+            cache.pop(next(iter(cache)))
+        cache[key] = payload
+        return payload
+
+    async def _lerobot_raw_replay(self, request: Any) -> Any:
+        """Return a pending session as replay frames: features, state and per-camera JPEG names."""
+        from aiohttp import web
+        session_id = request.match_info["session_id"]
+        try:
+            fps = float(request.query.get("fps", "15"))
+        except ValueError:
+            fps = 15.0
+        fps = min(30.0, max(1.0, fps))
+        try:
+            directory = self._session_directory(session_id)
+            payload = await asyncio.to_thread(self._build_raw_replay, directory, fps)
         except ValueError as error:
             raise web.HTTPNotFound(text=str(error)) from error
         return web.json_response(payload)

@@ -279,7 +279,8 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
   function pendingRow(item: PendingMeta, number: number): string {
     const label = String(number).padStart(6, "0");
     const task = item.task ? `<small>${escapeHtml(item.task)}</small>` : "";
-    return `<div class="episode-item" data-session="${escapeHtml(item.session_id)}" title="${escapeHtml(item.session_id)}"><div class="episode-main"><strong>${escapeHtml(label)}</strong>${task}<small>待转换 · ${item.complete ? "已标注" : "待补齐"}</small></div><div class="episode-actions"><button class="episode-action" data-action="tags" data-session="${escapeHtml(item.session_id)}">标签</button><button class="episode-action" data-action="remove-pending" data-session="${escapeHtml(item.session_id)}" title="删除该 session（永久删除，不可恢复）">删除</button></div></div>`;
+    const active = activeId === item.session_id ? " active" : "";
+    return `<div class="episode-item pending${active}" data-session="${escapeHtml(item.session_id)}" title="点击在右侧回放全部相机与曲线 · ${escapeHtml(item.session_id)}"><div class="episode-main"><strong>${escapeHtml(label)}</strong>${task}<small>待转换 · ${item.complete ? "已标注" : "待补齐"}</small></div><div class="episode-actions"><button class="episode-action" data-action="tags" data-session="${escapeHtml(item.session_id)}">标签</button><button class="episode-action" data-action="remove-pending" data-session="${escapeHtml(item.session_id)}" title="删除该 session（永久删除，不可恢复）">删除</button></div></div>`;
   }
 
   function render(): void {
@@ -487,8 +488,8 @@ export function initSidebar(callbacks: SidebarCallbacks): SidebarApi {
       else if (action === "tags") void tagEditor.openEpisode(sessionId).catch((error) => toast(String(error), true));
       return;
     }
-    // A 待转换 row has no LeRobot export yet, so it opens the raw preview
-    // instead of the episode replay.
+    // A 待转换 row has no LeRobot export yet, so it replays from the raw
+    // session (state.mcap + JPEGs) in the same workspace.
     if (pending.some((item) => item.session_id === sessionId)) {
       callbacks.onSelectPending?.(sessionId);
       return;

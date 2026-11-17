@@ -40,7 +40,7 @@ ROS Image ──► bounded JPEG archive ──► videos/
 
 录制可选配置 `calibration_snapshot_path` 指向已解算的相机标定结果。配置后，START 会将该文件复制入 session metadata 并写入 SHA-256/version；未配置时 metadata 明确标为 `UNAVAILABLE`，不会把占位内参/外参当成真实几何数据。
 
-网页保留两个互不混合的 3D 组件：`三臂 3D 姿态` 只提取 `realman_web_control` 的 Three.js/URDF 实时关节模型，不带运动控制按钮、动作协议、SDK 调用或末端运动标记；独立的 `末端运动 3D` 显示三臂 FK 末端位置点和轨迹。实时页只读订阅 ROS 快照：末端位置由 `/<arm>/joint_states` 在浏览器 URDF 中做 FK，`/<arm>/cartesian_velocity/state` 的 `commanded_*` 和 `measured_*` 直接透传为 2D 控制/实际速度曲线。末端运动 3D 从同一 FK 末端点绘制两支线速度箭头：蓝色是 `commanded_linear_velocity_mps` 控制输入，绿色是 `measured_linear_velocity_mps` 实测结果；方向表示向量方向、长度按模长缩放。实测箭头仅在 `measured_valid=true` 且 `measured_frame_id=<arm>/base_link` 时绘制。绝不以浏览器帧差分估算速度。回放页采用 LeRobot Studio 风格的工作台布局：左侧 episode 侧栏、中央同步相机拼图与播放时间轴、右侧 Canonical 字段图表/raw inspector，下方显示与帧同步的 3D、关节和夹爪组件。采用深色中性底色与蓝色交互强调；实时监控页布局不变。回放通过 `/api/lerobot`、`/api/lerobot/<session>/summary`、`/api/lerobot/<session>/frames` 和相机 JPEG endpoint 读取已导出的 LeRobot v3 episode。回放绝对时间根据 receipt 的 `first_walltime_ns`、帧索引和固定 `fps` 网格重建，不以 LeRobot 浮点 `timestamp` 反推；单个源时间戳可用该帧策略时间加 `quality.sync_error_ns` 中对应 source 的偏差恢复。摘要将 receipt 的 `quality_sync_source_ids` 暴露给字段检视器，为同步误差向量显示相机/topic 名；帧 API 提供 `source_timestamps_ns` 十进制字符串映射，保留 Unix epoch 纳秒的整数精度。source ID 与向量宽度不一致时拒绝返回猜测结果。Rerun 离线回放不属于当前验收范围。
+网页保留两个互不混合的 3D 组件：`三臂 3D 姿态` 只提取 `realman_web_control` 的 Three.js/URDF 实时关节模型，不带运动控制按钮、动作协议、SDK 调用或末端运动标记；独立的 `末端运动 3D` 显示三臂 FK 末端位置点和轨迹。实时页只读订阅 ROS 快照：末端位置由 `/<arm>/joint_states` 在浏览器 URDF 中做 FK，`/<arm>/cartesian_velocity/state` 的 `commanded_*` 和 `measured_*` 直接透传为 2D 控制/实际速度曲线。末端运动 3D 从同一 FK 末端点绘制两支线速度箭头：蓝色是 `commanded_linear_velocity_mps` 控制输入，绿色是 `measured_linear_velocity_mps` 实测结果；方向表示向量方向、长度按模长缩放。实测箭头仅在 `measured_valid=true` 且 `measured_frame_id=<arm>/base_link` 时绘制。绝不以浏览器帧差分估算速度。回放页布局见下文「回放与整理」：左侧 episode/待转换列表，右侧同步相机一行、时间轴、Canonical 字段曲线与当前帧检视器，配色与 :8765 共用同一套浅色 token。回放通过 `/api/lerobot`、`/api/lerobot/<session>/summary`、`/api/lerobot/<session>/frames` 和相机 JPEG endpoint 读取已导出的 LeRobot v3 episode。回放绝对时间根据 receipt 的 `first_walltime_ns`、帧索引和固定 `fps` 网格重建，不以 LeRobot 浮点 `timestamp` 反推；单个源时间戳可用该帧策略时间加 `quality.sync_error_ns` 中对应 source 的偏差恢复。摘要将 receipt 的 `quality_sync_source_ids` 暴露给字段检视器，为同步误差向量显示相机/topic 名；帧 API 提供 `source_timestamps_ns` 十进制字符串映射，保留 Unix epoch 纳秒的整数精度。source ID 与向量宽度不一致时拒绝返回猜测结果。Rerun 离线回放不属于当前验收范围。
 向量字段检视器提供独立分量选择，时间序列和当前帧 selected value 同步更新；joint、EE pose/velocity、Cartesian command 优先用 receipt 中的关节名和 frame 为分量命名，其他向量显示索引。
 帧 API 根据数据集 schema 动态返回所有非图像标量/向量字段，包含可选 `action.command.gripper`，因此后续追加数值或布尔 Canonical feature 时不需再为每个字段修改 API；图像仍通过独立的按需 JPEG endpoint 读取。
 
@@ -100,6 +100,8 @@ LeRobot v3 的每个向量 feature 都在 `features.<key>.names` 中声明分量
 | `GET /api/lerobot/<id>/summary`、`/frames` | 摘要与动态字段帧数据（见上文） |
 | `GET /api/lerobot/<id>/video/<camera>` | 导出视频，支持 `Range`（返回 `206`） |
 | `GET /api/lerobot/<id>/frames/<n>/cameras/<camera>` | 单帧 JPEG（调试用，前端不再使用） |
+| `GET /api/lerobot/<id>/raw/replay?fps=15` | **待转换** session 的内联回放数据：读 `state.mcap` 与原始 JPEG 时间戳，按固定网格返回 `frames[]`（`features`、`state`、每路相机该帧的 JPEG 名 `camera_frames`）和字段名；结果按 manifest/MCAP mtime 缓存 4 个 |
+| `GET /api/lerobot/<id>/raw/image/<camera>/<file>.jpg?w=640` | 待转换 session 的一张原始 JPEG，`w` 为服务端缩放宽度 |
 | `POST /api/lerobot/<id>/delete` | **软隐藏**一个 episode（"回收站"），原始文件保留 |
 | `GET /api/lerobot/trash` | 列出被隐藏的 episode |
 | `POST /api/lerobot/<id>/restore` | 把隐藏的 episode 恢复回目录 |
@@ -108,7 +110,14 @@ LeRobot v3 的每个向量 feature 都在 `features.<key>.names` 中声明分量
 
 **子任务标注**：请求体 `{"subtasks": [{"index", "label", "start_frame", "end_frame"}, …]}`，要求 `index` 严格递增、`label` 非空、`0 ≤ start_frame ≤ end_frame < 帧数`、片段互不重叠，否则拒绝。标注原子写入，并在导出时进入 LeRobot v3 数据集：schema 声明 `subtask_index` 特征，同时导出一张子任务标签表（写在 `save_episode` 之前）。同一 session 被重复导出时有防止多 episode 标注互相覆盖的保护。
 
-**前端**（`web/`，`npm run build:recording` 构建）：左侧 episode 侧栏支持搜索、筛选、隐藏/恢复和就地编辑任务；中央同步多相机视频与时间轴，可在时间轴上标注子任务；右侧是 action 与 state 的对比曲线和健康面板；导出队列面板显示转换进度。回放渲染循环被限频，图表做了记忆化，视频 I/O 在工作线程里，选择范围被钳制。
+**前端**（`web/`，`npm run build:recording` 构建）：页面与 :8765 是同一套设计系统——`theme.css`（hue 250 的 oklch token、白色卡片、按钮/输入样式）、机械臂图标和 favicon 都直接从 `realman_web_control/web` 引入（Vite 别名 `@web-control`），不复制；三维视图的浅色背景、网格和每臂颜色（l 青、m 橙、r 灰）也与 :8765 一致。顶栏是同款粘性毛玻璃 header，「录制 / 回放 · 转换」两个分段标签。
+
+「回放 · 转换」页左侧是已转换 episode 侧栏（搜索、标签筛选、隐藏/恢复、编辑任务）和待转换列表（批量转换、转换进度）；右侧依次是同步相机、播放条与时间轴、动作/状态曲线和当前帧检视器。**已转换 episode 和待转换 session 都在这里内联回放，不再弹窗**：
+
+- 已转换：每路相机一个 `<video>`（LeRobot mp4），曲线来自 parquet 帧；可标注子任务、编辑偏离区间。
+- 待转换：点击行即回放。前端取 `/raw/replay`，每路相机一个 `<img>`，按帧显示服务端选好的原始 JPEG；播放按时钟推进，每个画面上一张加载完才请求下一张，慢网络下丢帧而不排队。曲线显示关节、夹爪、Cartesian 控制/实测速度。某个话题在首个样本之前是空值（曲线留空），不是 0。这是检查用的对齐（采样保持），不是导出对齐，标注与偏离编辑在转换后才可用。`state.mcap` 读不出时相机仍可回放，并提示原因。
+
+所有相机在宽度允许时（每格 ≥ 260 px）排成一行，以便曲线留在同一屏；窄屏改为纵向堆叠。回放渲染循环被限频，图表做了记忆化，选择范围被钳制。
 
 训练端（server5090 的 `realman-train`）只读这些标签：pull 时把 `episode_meta.json` 里本数据集的行快照成
 `episode_tags.json`，`realman-train tags refresh` 更新，`clean --where` 按标签选数据。见[训练命令行](./training-cli-walkthrough.md)。
@@ -148,7 +157,7 @@ session manifest、相机 `media-index.json` 和 LeRobot `lerobot-v3.json` recei
 
 `/recording/status` (`RecordingStatus`) 是网页状态的唯一权威来源。倒计时由 recorder 的单调时钟计算，浏览器仅显示它，不能用前端定时器决定结束录制。
 
-网页控制台采用深色工业控制台布局：顶部显示连接与 session 状态，上方为低清相机网格，下方按机械臂展示连接状态与关节值。坐标状态只允许有限的数值字段进入浏览器，非法 JSON、未知字段和非有限值会被丢弃。预览图片按时间戳增量刷新，不会随每次状态快照重复重载；WebSocket 断开时只影响操作台，不影响录制节点。
+网页控制台与 :8765 共用浅色设计系统：顶部显示连接与 session 状态，上方为低清相机网格，下方按机械臂展示连接状态与关节值。坐标状态只允许有限的数值字段进入浏览器，非法 JSON、未知字段和非有限值会被丢弃。预览图片按时间戳增量刷新，不会随每次状态快照重复重载；WebSocket 断开时只影响操作台，不影响录制节点。
 
 ## 策略尝试自动录制与偏离打点
 

@@ -4,9 +4,12 @@ import { OrbitControls } from "three/examples/jsm/controls/OrbitControls.js";
 import URDFLoader from "urdf-loader";
 import { GridStack, type GridItemHTMLElement } from "gridstack";
 import "gridstack/dist/gridstack.min.css";
+// One design system with :8765: the token sheet and robot-arm mark are imported
+// from realman_web_control, not copied, so the two consoles cannot drift apart.
+import "@web-control/theme.css";
+import { ARM_ICON_SVG } from "@web-control/arm_icon";
 import "./styles.css";
 import { initSidebar } from "./replay/sidebar";
-import { initRawViewer } from "./replay/raw";
 import { renderAnalysis } from "./replay/analysis";
 import { initVideo, type VideoContext } from "./replay/video";
 import { initCharts, renderHealth } from "./replay/charts";
@@ -15,6 +18,8 @@ import { initQuality } from "./replay/quality";
 import { initPikaView, type PikaSnapshot } from "./pika-view";
 
 type ArmId = "l" | "m" | "r";
+// Arm identity colors shared with :8765 (realman_web_control main.ts ARM_COLORS).
+const ARM_COLORS: Record<ArmId, number> = { l: 0x2d9b9d, m: 0xd47746, r: 0x84949a };
 type Robot = {
   id: ArmId;
   model: string;
@@ -55,6 +60,7 @@ type Snapshot = {
 };
 
 const $ = <T extends HTMLElement>(selector: string) => document.querySelector(selector) as T;
+for (const mark of document.querySelectorAll(".brand-mark")) mark.innerHTML = ARM_ICON_SVG;
 const statusEl = $("#recording");
 const connection = $("#connection");
 const armsEl = $("#arms");
@@ -164,7 +170,7 @@ function vectorFrom(values: unknown): THREE.Vector3 | null {
 }
 
 function createMotionVisuals() {
-  const colors: Record<ArmId, number> = { l: 0x55a6ff, m: 0x67d391, r: 0xf4bb63 };
+  const colors: Record<ArmId, number> = ARM_COLORS;
   (Object.keys(colors) as ArmId[]).forEach((arm) => {
     if (motionVisuals[arm]) return;
     const trail = new THREE.Line(
@@ -178,8 +184,8 @@ function createMotionVisuals() {
     // Green is the measured physical velocity; blue is the controller input.
     // They share the FK end-effector origin, so direction and relative magnitude
     // make tracking error visible without any recorder-side computation.
-    const actualArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.001, 0x67d391, 0.035, 0.018);
-    const commandedArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.001, 0x55a6ff, 0.028, 0.014);
+    const actualArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.001, 0x2f9e6e, 0.035, 0.018);
+    const commandedArrow = new THREE.ArrowHelper(new THREE.Vector3(1, 0, 0), new THREE.Vector3(), 0.001, 0x3e7bd6, 0.028, 0.014);
     actualArrow.visible = false;
     commandedArrow.visible = false;
     motionScene.add(trail, marker, actualArrow, commandedArrow);
@@ -323,8 +329,8 @@ function initMotionScene() {
   motionControls = new OrbitControls(motionCamera, motionCanvas);
   motionControls.enableDamping = true;
   motionControls.target.set(0, 0, 0.55);
-  motionScene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
-  const grid = new THREE.GridHelper(3.5, 22, 0x567078, 0x263b40);
+  motionScene.add(new THREE.HemisphereLight(0xffffff, 0xd3dbe5, 2.4));
+  const grid = new THREE.GridHelper(3.5, 22, 0xb3c1d1, 0xdde4ec);
   grid.rotation.x = Math.PI / 2;
   motionScene.add(grid, new THREE.AxesHelper(0.25));
 
@@ -348,20 +354,34 @@ function initMotionScene() {
   requestAnimationFrame(frame);
 }
 
+// Same per-arm finish as the :8765 viewer, so an arm reads the same on both pages.
+function paintArms() {
+  for (const [arm, urdf] of Object.entries(robotScenes) as [ArmId, any][]) {
+    urdf?.traverse((object: any) => {
+      if (!(object instanceof THREE.Mesh) || object.userData.armPainted) return;
+      object.material = new THREE.MeshStandardMaterial({ color: ARM_COLORS[arm], metalness: 0.25, roughness: 0.56 });
+      object.userData.armPainted = true;
+    });
+  }
+}
+
 async function loadFleet() {
   if (!manifest || !renderer) return;
   viewerState.textContent = "加载 URDF…";
   viewerState.removeAttribute("hidden");
-  const loader = new URDFLoader();
+  // STL meshes stream in after loadAsync resolves; paint them once the manager is idle.
+  const manager = new THREE.LoadingManager();
+  manager.onLoad = paintArms;
+  const loader = new URDFLoader(manager);
   loader.parseVisual = renderer?.mode === "webgl";
   loader.packages = { rm65_description: `${location.origin}/models` };
   try {
-    scene.add(new THREE.HemisphereLight(0xe7f0ed, 0x263438, 2.5));
+    scene.add(new THREE.HemisphereLight(0xffffff, 0xd3dbe5, 2.4));
     const key = new THREE.DirectionalLight(0xffffff, 4);
     key.position.set(2, -3, 4);
     key.castShadow = true;
   scene.add(key);
-  const grid = new THREE.GridHelper(3.5, 22, 0x567078, 0x263b40);
+  const grid = new THREE.GridHelper(3.5, 22, 0xb3c1d1, 0xdde4ec);
   grid.rotation.x = Math.PI / 2;
   scene.add(grid);
   createMotionVisuals();
@@ -373,11 +393,13 @@ async function loadFleet() {
       const urdf = await loader.loadAsync(`${location.origin}${config.urdf_url}`);
       urdf.position.set(config.transform.x - middle.x, config.transform.y - middle.y, config.transform.z - middle.z);
       urdf.rotation.set(config.transform.roll, config.transform.pitch, config.transform.yaw, "ZYX");
-      urdf.userData.compatColor = { l: "#55a6ff", m: "#67d391", r: "#f4bb63" }[config.id];
+      urdf.userData.compatColor = `#${ARM_COLORS[config.id].toString(16).padStart(6, "0")}`;
+
       scene.add(urdf);
       robotScenes[config.id] = urdf;
       setRobotJoints(config.id, Array(6).fill(manifest!.default_joint_position_rad));
     }
+    paintArms();
     viewerState.setAttribute("hidden", "");
     if (latestLiveSnapshot) renderLiveRobot(latestLiveSnapshot);
   } catch (error) {
@@ -396,7 +418,7 @@ function renderArms(arms: Snapshot["arms"]) {
       const positions = arm.positions_rad ?? [];
       const pose = getEndEffectorPose(name);
       const poseHtml = pose
-        ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font:11px ui-monospace,Menlo,monospace;color:var(--muted)">位置 <b style="color:var(--text)">${vectorText(pose.basePosition)}</b> m<br>姿态 <b style="color:var(--text)">[${pose.baseQuaternion.w.toFixed(3)}, ${pose.baseQuaternion.x.toFixed(3)}, ${pose.baseQuaternion.y.toFixed(3)}, ${pose.baseQuaternion.z.toFixed(3)}]</b></div>`
+        ? `<div class="arm-pose">位置 <b>${vectorText(pose.basePosition)}</b> m<br>姿态 <b>[${pose.baseQuaternion.w.toFixed(3)}, ${pose.baseQuaternion.x.toFixed(3)}, ${pose.baseQuaternion.y.toFixed(3)}, ${pose.baseQuaternion.z.toFixed(3)}]</b></div>`
         : "";
       return `<article class="arm-card ${arm.connected ? "connected" : ""}"><h4>${name.toUpperCase()} <span>${arm.connected ? "CONNECTED" : "OFFLINE"}</span></h4><div class="joint-list">${
         positions.length
@@ -587,7 +609,7 @@ function gripperBar(name: string, value: number): string {
   const meta = limits
     ? `位置 ${value} · 开 ${limits.open_position} / 闭 ${limits.close_position}`
     : `位置 ${value} · 等待 /${key}/limits`;
-  return `<article class="gripper-card" data-gripper="${key}"><h4>${label}</h4><div class="gripper-pct" style="margin-bottom:4px;font:11px ui-monospace,Menlo,monospace;color:#8793a8">开合度 ${pct === null ? "—" : `${pct}%`}</div><div class="gripper-meta" style="margin-bottom:8px;font:10px ui-monospace,Menlo,monospace;color:#64738a">${meta}</div><div style="height:8px;background:#0b0f17;border:1px solid #202c40;border-radius:4px;overflow:hidden"><div style="height:100%;width:${pct ?? 0}%;background:linear-gradient(90deg,#55a6ff,#67d391);transition:width .2s"></div></div></article>`;
+  return `<article class="gripper-card" data-gripper="${key}"><h4>${label}</h4><div class="gripper-pct">开合度 ${pct === null ? "—" : `${pct}%`}</div><div class="gripper-meta">${meta}</div><div class="gripper-track"><div class="gripper-fill" style="width:${pct ?? 0}%"></div></div></article>`;
 }
 
 function renderGrippers(grippers: NonNullable<Snapshot["grippers"]>, limits: Snapshot["gripper_limits"]) {
@@ -619,13 +641,93 @@ type ReplaySummary = {
   canonical?: Record<string, unknown>;
   quality?: Record<string, number>;
 };
-let replay: { session: string; frames: ReplayFrame[]; index: number; fps: number; summary: ReplaySummary; cameras: string[] } | null = null;
+// kind "episode" = converted LeRobot episode (parquet + mp4); kind "raw" = a 待转换
+// session replayed straight from state.mcap + its JPEGs (/raw/replay).
+type ReplayKind = "episode" | "raw";
+type RawReplayPayload = {
+  fps: number;
+  frames: (ReplayFrame & { camera_frames?: Record<string, string | null> })[];
+  cameras: string[];
+  camera_frame_counts?: Record<string, number>;
+  summary: ReplaySummary;
+  task?: string;
+  session_number?: number;
+  duration_s?: number;
+  state_error?: string;
+  topics_present?: string[];
+};
+let replay: {
+  kind: ReplayKind; session: string; frames: ReplayFrame[]; index: number; fps: number;
+  summary: ReplaySummary; cameras: string[];
+  cameraFrames?: (Record<string, string | null> | undefined)[];
+  cameraFrameCounts?: Record<string, number>;
+} | null = null;
+let replayRequest = 0;
+const replayTab = $("#tab-replay");
+const replaySource = $("#replay-source");
+
+function setReplayKind(kind: ReplayKind | null): void {
+  if (kind) replayTab.dataset.replayKind = kind;
+  else delete replayTab.dataset.replayKind;
+  replaySource.textContent = kind === "raw" ? "待转换 · 原始数据" : kind === "episode" ? "已转换 · LeRobot" : "未选择";
+  replaySource.className = `source-pill${kind ? ` ${kind}` : ""}`;
+}
+
+async function selectPendingSession(sessionId: string) {
+  const request = ++replayRequest;
+  video.clear();
+  setReplayKind("raw");
+  sidebar.setActive(sessionId);
+  $("#replay-camera-count").textContent = "读取原始数据…";
+  try {
+    const response = await fetch(`/api/lerobot/${encodeURIComponent(sessionId)}/raw/replay`);
+    if (!response.ok) throw new Error(`HTTP ${response.status}`);
+    const payload = (await response.json()) as RawReplayPayload;
+    if (request !== replayRequest) return;
+    const frames = payload.frames ?? [];
+    replay = {
+      kind: "raw", session: sessionId, frames, index: 0, fps: payload.fps || 15,
+      summary: payload.summary ?? {}, cameras: payload.cameras ?? [],
+      cameraFrames: frames.map((frame) => frame.camera_frames),
+      cameraFrameCounts: payload.camera_frame_counts,
+    };
+    const featureNames = Object.keys(payload.summary?.features ?? {});
+    charts.setFeatures(featureNames, payload.summary);
+    const number = payload.session_number ? String(payload.session_number).padStart(6, "0") : sessionId;
+    replayTask.textContent = payload.task ? `${number} · ${payload.task}` : number;
+    replayDatasetMeta.textContent = `${frames.length} 帧 · ${replay.fps.toFixed(0)} Hz 采样 · ${(payload.duration_s ?? 0).toFixed(1)} s`;
+    replayExit.style.display = "";
+    video.load();
+    renderRawHealth(payload);
+    annotation.clear();
+    quality.clear();
+    renderReplayFrame(0);
+    if (payload.state_error) notify(`状态曲线不可用（相机仍可回放）：${payload.state_error}`, true);
+  } catch (error) {
+    if (request !== replayRequest) return;
+    notify(`无法回放该待转换数据：${error instanceof Error ? error.message : String(error)}`, true);
+    exitReplay();
+  }
+}
+
+function renderRawHealth(payload: RawReplayPayload): void {
+  const counts = payload.camera_frame_counts ?? {};
+  const rows = [
+    ["来源", "state.mcap + 原始 JPEG"],
+    ["相机", payload.cameras.length ? payload.cameras.map((camera) => `${camera} ${counts[camera] ?? 0}`).join(" · ") : "—"],
+    ["状态话题", payload.topics_present?.length ? String(payload.topics_present.length) : "—"],
+  ];
+  $("#replay-health").innerHTML = rows
+    .map(([label, value]) => `<div class="health-stat"><span>${label}</span><b>${value}</b></div>`)
+    .join("");
+}
 
 async function selectReplaySession(sessionId: string) {
   if (!sessionId) {
     exitReplay();
     return;
   }
+  const request = ++replayRequest;
   try {
     const [framesResponse, summaryResponse] = await Promise.all([
       fetch(`/api/lerobot/${encodeURIComponent(sessionId)}/frames`),
@@ -636,6 +738,7 @@ async function selectReplaySession(sessionId: string) {
     }
     const index = await framesResponse.json();
     const summary = (await summaryResponse.json()) as ReplaySummary;
+    if (request !== replayRequest) return;
     const session = sidebar.getSession(sessionId);
     // Camera tiles are the synchronized <video> elements in the replay media
     // panel; the inspector chart stays focused on numeric frame features.
@@ -645,7 +748,8 @@ async function selectReplaySession(sessionId: string) {
     const cameraIds = imageKeys.length
       ? imageKeys.map((name) => name.slice("observation.images.".length))
       : Object.keys(index.frames?.[0]?.cameras ?? {});
-    replay = { session: sessionId, frames: index.frames ?? [], index: 0, fps: session?.fps || 15, summary, cameras: cameraIds };
+    replay = { kind: "episode", session: sessionId, frames: index.frames ?? [], index: 0, fps: session?.fps || 15, summary, cameras: cameraIds };
+    setReplayKind("episode");
     charts.setFeatures(featureNames, summary);
     replayTask.textContent = session?.task || "未标注 task";
     const invalid = summary.quality?.invalid_frames ?? 0;
@@ -663,6 +767,8 @@ async function selectReplaySession(sessionId: string) {
 }
 
 function exitReplay() {
+  replayRequest += 1;
+  setReplayKind(null);
   video.clear();
   charts.clear();
   annotation.clear();
@@ -693,22 +799,26 @@ function renderReplayFrame(frameIndex: number) {
   const armIds: ArmId[] = ["l", "m", "r"];
   armsEl.innerHTML = armIds
     .map((armId, i) => {
-      const joints = frame.state.slice(i * 6, i * 6 + 6);
-      setRobotJoints(armId, joints);
+      const joints = frame.state.slice(i * 6, i * 6 + 6) as (number | null)[];
+      const known = joints.length === 6 && joints.every((value) => typeof value === "number" && Number.isFinite(value));
+      if (known) setRobotJoints(armId, joints as number[]);
       const rows = joints
-        .map((value, j) => `<span>J${j + 1} <b>${((value * 180) / Math.PI).toFixed(1)}°</b></span>`)
+        .map((value, j) => `<span>J${j + 1} <b>${typeof value === "number" ? `${((value * 180) / Math.PI).toFixed(1)}°` : "—"}</b></span>`)
         .join("");
-      const pose = getEndEffectorPose(armId);
+      const pose = known ? getEndEffectorPose(armId) : null;
       const poseHtml = pose
-        ? `<div style="margin-top:8px;padding-top:8px;border-top:1px solid var(--line);font:11px ui-monospace,Menlo,monospace;color:var(--muted)">位置 <b style="color:var(--text)">${vectorText(pose.basePosition)}</b> m<br>姿态 <b style="color:var(--text)">[${pose.baseQuaternion.w.toFixed(3)}, ${pose.baseQuaternion.x.toFixed(3)}, ${pose.baseQuaternion.y.toFixed(3)}, ${pose.baseQuaternion.z.toFixed(3)}]</b></div>`
+        ? `<div class="arm-pose">位置 <b>${vectorText(pose.basePosition)}</b> m<br>姿态 <b>[${pose.baseQuaternion.w.toFixed(3)}, ${pose.baseQuaternion.x.toFixed(3)}, ${pose.baseQuaternion.y.toFixed(3)}, ${pose.baseQuaternion.z.toFixed(3)}]</b></div>`
         : "";
-      return `<article class="arm-card"><h4>${armId.toUpperCase()} <span style="color:var(--blue)">REPLAY</span></h4><div class="joint-list">${rows}</div>${poseHtml}</article>`;
+      return `<article class="arm-card"><h4>${armId.toUpperCase()} <span class="replay-badge">REPLAY</span></h4><div class="joint-list">${rows}</div>${poseHtml}</article>`;
     })
     .join("");
   $("#arm-count").textContent = `回放帧 ${frameIndex + 1}/${replay.frames.length}`;
 
   grippersEl.innerHTML = ["left", "mid", "right"]
-    .map((name, i) => gripperBar(name, frame.state[18 + i] ?? 0))
+    .map((name, i) => {
+      const value = frame.state[18 + i] as number | null | undefined;
+      return typeof value === "number" ? gripperBar(name, value) : `<article class="gripper-card"><h4>${name}</h4><div class="muted">无数据</div></article>`;
+    })
     .join("");
   charts.render(frame, replay.frames, replay.index);
   annotation.onFrameChange(frameIndex);
@@ -740,11 +850,11 @@ function refreshProgress(): void {
 function connect() {
   socket = new WebSocket(`${location.protocol === "https:" ? "wss" : "ws"}://${location.host}/ws`);
   socket.onopen = () => {
-    connection.className = "connection online";
-    connection.querySelector("span")!.textContent = "WebSocket 已连接 · 只读机器人";
+    connection.className = "status-pill ready";
+    connection.querySelector("span")!.textContent = "已连接 · 只读";
   };
   socket.onclose = () => {
-    connection.className = "connection";
+    connection.className = "status-pill offline";
     connection.querySelector("span")!.textContent = "已断开 · 2 秒后重连";
     setTimeout(connect, 2000);
   };
@@ -779,7 +889,13 @@ replayExit.addEventListener("click", exitReplay);
 
 function getReplayVideoContext(): VideoContext | null {
   if (!replay) return null;
-  return { sessionId: replay.session, fps: replay.fps, frameCount: replay.frames.length, cameraIds: replay.cameras };
+  const current = replay;
+  return {
+    kind: current.kind === "raw" ? "frames" : "video",
+    sessionId: current.session, fps: current.fps, frameCount: current.frames.length, cameraIds: current.cameras,
+    frameImage: (index, cameraId) => current.cameraFrames?.[index]?.[cameraId] ?? null,
+    cameraFrameCounts: current.cameraFrameCounts,
+  };
 }
 
 const video = initVideo({ getSession: getReplayVideoContext, onFrameChange: renderReplayFrame });
@@ -794,15 +910,14 @@ const quality = initQuality({
   getRepoId: () => (replay ? sidebar.getSession(replay.session)?.repo_id ?? null : null),
   notify,
 });
-const rawViewer = initRawViewer({ notify });
 const sidebar = initSidebar({
   onSelect: (sessionId) => {
-    rawViewer.close();
     sidebar.setActive(sessionId);
-    selectReplaySession(sessionId);
+    void selectReplaySession(sessionId);
   },
+  // A 待转换 session plays in the same workspace (all cameras + curves), not a popup.
   onSelectPending: (sessionId) => {
-    void rawViewer.open(sessionId);
+    void selectPendingSession(sessionId);
   },
   onChanged: () => {
     // handleAction already refreshed the sidebar; only check whether the
@@ -900,10 +1015,10 @@ function switchTab(tab: "record" | "replay") {
   document.querySelectorAll(".tab").forEach((button) => {
     button.classList.toggle("active", button.getAttribute("data-tab") === tab);
   });
-  const recordTab = document.querySelector<HTMLElement>("#tab-record");
-  const replayTab = document.querySelector<HTMLElement>("#tab-replay");
-  if (recordTab) recordTab.style.display = tab === "replay" ? "none" : "";
-  if (replayTab) replayTab.style.display = tab === "replay" ? "" : "none";
+  $("#tab-record").hidden = tab === "replay";
+  replayTab.hidden = tab !== "replay";
+  // The camera tiles size themselves to the panel, which had no box while hidden.
+  if (tab === "replay") window.dispatchEvent(new Event("resize"));
   if (tab !== "replay" && replay) exitReplay();
 }
 document.querySelectorAll(".tab").forEach((button) => {

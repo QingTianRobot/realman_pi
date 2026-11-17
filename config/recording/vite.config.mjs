@@ -11,6 +11,8 @@ const websiteDirectory = resolve(repositoryDirectory, "website");
 const webDirectory = resolve(repositoryDirectory, "src/recording/realman_recording/web");
 const staticDirectory = resolve(repositoryDirectory, "src/recording/realman_recording/realman_recording/static");
 const descriptionDirectory = resolve(repositoryDirectory, "src/rm65_description");
+// :8770 shares :8765's design tokens, robot-arm mark and favicon (single source).
+const webControlDirectory = resolve(repositoryDirectory, "src/driver/realman_web_control/web");
 const requireFromWebsite = createRequire(resolve(websiteDirectory, "package.json"));
 const { defineConfig } = requireFromWebsite("vite");
 const YAML = requireFromWebsite("yaml");
@@ -66,8 +68,10 @@ export default defineConfig({
   root: webDirectory,
   cacheDir: resolve(websiteDirectory, "node_modules/.vite-realman-recording"),
   base: "/",
+  publicDir: resolve(webControlDirectory, "public"),
   resolve: {
     alias: {
+      "@web-control": resolve(webControlDirectory, "src"),
       three: resolve(websiteDirectory, "node_modules/three"),
       "urdf-loader": resolve(websiteDirectory, "node_modules/urdf-loader"),
       gridstack: resolve(websiteDirectory, "node_modules/gridstack"),
@@ -80,5 +84,8 @@ export default defineConfig({
     sourcemap: false,
     rollupOptions: { input: { recording: resolve(webDirectory, "index.html") } },
   },
-  server: { host: "127.0.0.1", port: 4175, strictPort: true },
+  server: {
+    host: "127.0.0.1", port: 4175, strictPort: true,
+    fs: { allow: [webDirectory, webControlDirectory, websiteDirectory] },
+  },
 });

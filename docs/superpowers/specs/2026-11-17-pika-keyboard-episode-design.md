@@ -75,7 +75,7 @@ SJDrealman (domain 65)
 
 ### 启动位置
 
-`realman_bringup` 的 `system.launch.py` / `remote_rviz.launch.py` 包含 `pika_episode.launch.py`；`enabled: false` 时等于不存在。Dockerfile 的 colcon 清单加入新包。
+`realman_bringup` 的 `system.launch.py` 包含 `pika_episode.launch.py`（`remote_rviz.launch.py` 不包含）；配置读不到或不合法时该 launch 只打一条 `pika_episode_trigger NOT started: ...` 日志，不让整个 bringup 失败；`enabled: false` 时等于不存在。Dockerfile 的 colcon 清单加入新包。
 
 ### enine 侧（主机文件，不在本仓库）
 

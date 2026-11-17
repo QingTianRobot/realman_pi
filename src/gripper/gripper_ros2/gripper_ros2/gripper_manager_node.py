@@ -46,8 +46,13 @@ class GripperManagerNode:
             self._publish_limits(name)
         result = self.manager.connect_all()
         for port, connected in result.items():
-            level = node.get_logger().info if connected else node.get_logger().warning
-            level(f"Changingtek bus {port}: {'connected' if connected else 'offline; reconnect enabled'}")
+            # Two call sites on purpose: rclpy rejects a severity change at one call site
+            # ("Logger severity cannot be changed between calls."), which crashed the manager
+            # whenever one bus was connected and another offline at startup.
+            if connected:
+                node.get_logger().info(f"Changingtek bus {port}: connected")
+            else:
+                node.get_logger().warning(f"Changingtek bus {port}: offline; reconnect enabled")
         self.manager.start_all()
         self._timer = node.create_timer(0.05, self._publish_feedback)
 

@@ -210,3 +210,57 @@ class ManagerNodeTest(unittest.TestCase):
 
 if __name__ == "__main__":
     unittest.main()
+
+
+TWO_BUS_CONFIG = """buses:
+  - port: /dev/fake_right
+    grippers:
+      - {name: gripper_right, slave_id: 1, open_position: 4000, close_position: 8500, min_position: 0, max_position: 8500}
+  - port: /dev/fake_offline
+    grippers:
+      - {name: gripper_mid, slave_id: 2, open_position: 0, close_position: 900, min_position: 0, max_position: 900}
+"""
+
+
+class OfflineOnOnePortSDK(FakeSDK):
+    """/dev/fake_offline neither opens nor answers, like an unplugged adapter."""
+
+    def connect(self):
+        return self.port != "/dev/fake_offline"
+
+    def _r(self, address, count=1):
+        if self.port == "/dev/fake_offline":
+            raise OSError("No communication with the instrument (no answer)")
+        return super()._r(address, count)
+
+
+@unittest.skipUnless(HAVE_ROS, "needs a ROS 2 environment with gripper_ros2_msgs built")
+class StartupWithOfflineBusTest(unittest.TestCase):
+    """An offline bus at startup must not crash the manager (SJDrealman 2026-11-17).
+
+    The startup loop used one call site for both info and warning; rclpy's logger
+    rejects a severity change at the same call site ("Logger severity cannot be
+    changed between calls."), so one connected bus plus one offline bus killed
+    gripper_manager and took every gripper down.
+    """
+
+    def setUp(self):
+        import rclpy.logging
+
+        self.original = gd.Changingtek_rtu_psdk
+        gd.Changingtek_rtu_psdk = OfflineOnOnePortSDK
+        self.addCleanup(setattr, gd, "Changingtek_rtu_psdk", self.original)
+        self.tmp = tempfile.TemporaryDirectory()
+        self.addCleanup(self.tmp.cleanup)
+        self.config = Path(self.tmp.name) / "gripper.yaml"
+        self.config.write_text(TWO_BUS_CONFIG, encoding="utf-8")
+        self.node = StubNode()
+        # The real rclpy logger enforces one severity per call site; the stub does not.
+        real_logger = rclpy.logging.get_logger("gripper_manager_offline_bus_test")
+        self.node.get_logger = lambda: real_logger
+
+    def test_one_connected_and_one_offline_bus_start_cleanly(self):
+        adapter = gmn.GripperManagerNode(self.node, str(self.config))
+        self.addCleanup(adapter.destroy)
+        self.assertTrue(adapter.manager.get_bus("/dev/fake_right").connected)
+        self.assertFalse(adapter.manager.get_bus("/dev/fake_offline").connected)

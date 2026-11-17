@@ -149,3 +149,46 @@ def test_press_clears_failed_without_starting():
     assert machine.state is State.IDLE
     assert machine.on_keyboard(False, 8.0) == []
     assert machine.on_keyboard(True, 9.0) == START
+
+
+def test_mode_change_during_starting_is_abnormal():
+    machine = ready()
+    assert machine.on_keyboard(True, 1.0) == START
+    assert machine.on_mode("policy", 1.1) == []
+    assert machine.on_start_result(True, "s3", "", 1.2) == STOP
+    assert machine.state is State.STOPPING
+    assert machine.on_stop_result(True, "", 1.3) == []
+    assert machine.state is State.FAILED
+    assert machine.snapshot()["detail"] == "abnormal stop: mode changed to policy"
+
+
+def test_mode_change_while_releasing_skips_home():
+    machine = recording()
+    machine.on_velocity_session("l", True, 1.5)
+    assert machine.on_keyboard(False, 5.0) == STOP
+    assert machine.on_stop_result(True, "", 5.1) == []
+    assert machine.state is State.RELEASING
+    assert machine.on_mode("policy", 6.0) == []
+    assert machine.on_velocity_session("l", False, 7.0) == []
+    assert machine.state is State.FAILED
+    assert machine.snapshot()["detail"] == "home skipped: mode changed to policy"
+
+
+def test_mode_change_before_stop_result_skips_home():
+    machine = recording()
+    assert machine.on_keyboard(False, 5.0) == STOP
+    assert machine.on_mode("none", 5.05) == []
+    assert machine.on_stop_result(True, "", 5.1) == []
+    assert machine.state is State.FAILED
+    assert machine.snapshot()["detail"] == "home skipped: mode changed to none"
+
+
+def test_release_timeout_with_mode_changed_keeps_failed_detail():
+    machine = recording()
+    machine.on_velocity_session("l", True, 1.5)
+    machine.on_keyboard(False, 5.0)
+    machine.on_stop_result(True, "", 5.0)
+    machine.on_mode("policy", 6.0)
+    assert machine.tick(13.1) == []
+    assert machine.state is State.FAILED
+    assert machine.snapshot()["detail"] == "home skipped: mode changed to policy"

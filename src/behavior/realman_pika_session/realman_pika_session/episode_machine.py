@@ -81,6 +81,8 @@ class EpisodeMachine:
         self._session_id = session_id
         self.state = State.RECORDING
         self._detail = ""
+        if self._mode != self._config.required_mode:
+            return self._abnormal_stop(f"mode changed to {self._mode or 'unknown'}")
         if self._pending_stop:
             return self._normal_stop()
         return []
@@ -122,7 +124,8 @@ class EpisodeMachine:
             return self._abnormal_stop("keyboard state stale")
         if self.state is State.RELEASING and now - self._release_started > self._config.release_timeout_sec:
             actions = self._home()
-            self._detail = "release timeout"
+            if actions:
+                self._detail = "release timeout"
             return actions
         return []
 
@@ -179,6 +182,11 @@ class EpisodeMachine:
         return not any(self._velocity_active.get(arm, False) for arm in self._config.home_arms)
 
     def _home(self) -> list[Action]:
+        if self._mode != self._config.required_mode:
+            self.state = State.FAILED
+            self._detail = f"home skipped: mode changed to {self._mode or 'unknown'}"
+            self._home_pending.clear()
+            return []
         self.state = State.HOMING
         self._home_pending = set(self._config.home_arms)
         return [Action("home", self._config.home_arms)]

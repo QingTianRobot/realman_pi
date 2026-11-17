@@ -1,3 +1,4 @@
+import re
 from pathlib import Path
 
 import pytest
@@ -13,39 +14,51 @@ def _write(tmp_path: Path, name: str, text: str) -> Path:
     return path
 
 
-def test_repo_episode_config_defaults_to_disabled():
+def _set(text: str, key: str, value: str) -> str:
+    """Replace one top-level `key: value` line, whatever value the host config has."""
+    result, count = re.subn(rf"^{key}: .*$", f"{key}: {value}", text, flags=re.M)
+    assert count == 1, key
+    return result
+
+
+# The repo config files are copied from the host into the image build, and a robot
+# host may enable the trigger, change the task or skip an arm. Tests that read them
+# therefore check validity only; exact values are asserted on tmp copies.
+
+
+def test_repo_episode_config_is_valid():
     config = load_episode_config(REPO_CONFIG / "pika_episode.yaml")
-    assert config == EpisodeConfig(
-        enabled=False,
-        task="",
-        profile="teleop_v1",
-        record_cameras=True,
-        keyboard_topic="/foot_pedal/enabled",
-        required_mode="pikavelocity",
-        keyboard_stale_sec=3.0,
-        release_timeout_sec=8.0,
-        home_velocity_percent=30,
-        home_timeout_sec=120.0,
-    )
+    assert isinstance(config, EpisodeConfig)
+    assert config.keyboard_topic == "/foot_pedal/enabled"
+    assert config.required_mode == "pikavelocity"
+
+
+def test_episode_config_values_are_parsed(tmp_path):
+    text = (REPO_CONFIG / "pika_episode.yaml").read_text(encoding="utf-8")
+    text = _set(_set(text, "enabled", "false"), "task", '""')
+    config = load_episode_config(_write(tmp_path, "e.yaml", text))
+    assert config.enabled is False and config.task == ""
+    text = _set(_set(text, "enabled", "true"), "task", "pick_and_place")
+    config = load_episode_config(_write(tmp_path, "e.yaml", text))
+    assert config.enabled is True and config.task == "pick_and_place"
 
 
 def test_episode_config_rejects_bad_values(tmp_path):
     base = (REPO_CONFIG / "pika_episode.yaml").read_text(encoding="utf-8")
-    bad = _write(tmp_path, "e.yaml", base.replace("home_velocity_percent: 30", "home_velocity_percent: 0"))
+    bad = _write(tmp_path, "e.yaml", _set(base, "home_velocity_percent", "0"))
     with pytest.raises(ValueError, match="home_velocity_percent"):
         load_episode_config(bad)
-    bad = _write(tmp_path, "e2.yaml", base.replace("keyboard_stale_sec: 3.0", "keyboard_stale_sec: -1"))
+    bad = _write(tmp_path, "e2.yaml", _set(base, "keyboard_stale_sec", "-1"))
     with pytest.raises(ValueError, match="keyboard_stale_sec"):
         load_episode_config(bad)
-    bad = _write(tmp_path, "e3.yaml", base.replace("enabled: false", "enabled: maybe"))
+    bad = _write(tmp_path, "e3.yaml", _set(base, "enabled", "maybe"))
     with pytest.raises(ValueError, match="enabled"):
         load_episode_config(bad)
 
 
-def test_repo_home_pose_has_three_arms():
+def test_repo_home_pose_is_valid():
     pose = load_home_pose(REPO_CONFIG / "pika_config.yaml")
-    assert sorted(pose) == ["l", "m", "r"]
-    assert pose["l"] == (12.172, 25.223, 73.054, -16.703, 80.307, 14.455)
+    assert pose and set(pose) <= {"l", "m", "r"}
     assert all(len(v) == 6 for v in pose.values())
 
 

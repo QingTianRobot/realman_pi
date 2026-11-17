@@ -1,5 +1,6 @@
 """The episode launch must never raise into the bringup: config errors become a LogInfo."""
 import importlib.util
+import re
 from pathlib import Path
 
 import pytest
@@ -25,8 +26,10 @@ def _config_root(tmp_path: Path, enabled: bool, pika_text: str | None = None) ->
     ros = tmp_path / "ros"
     ros.mkdir()
     episode = (REPO_CONFIG / "pika_episode.yaml").read_text(encoding="utf-8")
-    (ros / "pika_episode.yaml").write_text(
-        episode.replace("enabled: false", f"enabled: {'true' if enabled else 'false'}"), encoding="utf-8")
+    # The repo file may be a robot host's copy (enabled or not); force the flag either way.
+    episode, count = re.subn(r"^enabled: .*$", f"enabled: {'true' if enabled else 'false'}", episode, flags=re.M)
+    assert count == 1
+    (ros / "pika_episode.yaml").write_text(episode, encoding="utf-8")
     (ros / "pika_config.yaml").write_text(
         pika_text if pika_text is not None else (REPO_CONFIG / "pika_config.yaml").read_text(encoding="utf-8"),
         encoding="utf-8")

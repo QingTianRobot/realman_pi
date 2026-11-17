@@ -168,3 +168,66 @@ def test_pika_config_follow_matches_what_the_router_launch_forwards():
 
     assert isinstance(document["pika_velocity"]["follow"], bool)
     assert '"pika_velocity_follow"' in LAUNCH.read_text(encoding="utf-8")
+
+
+def _control_router_launch():
+    import importlib.util
+    import sys
+
+    sys.path.insert(0, str(LAUNCH.parent))
+    spec = importlib.util.spec_from_file_location("control_router_launch", LAUNCH)
+    module = importlib.util.module_from_spec(spec)
+    spec.loader.exec_module(module)
+    return module
+
+
+def _pose_file(tmp_path, middle: str) -> Path:
+    path = tmp_path / "pika_config.yaml"
+    path.write_text(
+        "pika_default_pose:\n"
+        "  left:\n    joint_degrees: [1, 2, 3, 4, 5, 6]\n"
+        f"  middle:\n{middle}"
+        "  right:\n    joint_degrees: [6, 5, 4, 3, 2, 1]\n",
+        encoding="utf-8",
+    )
+    return path
+
+
+def test_repo_pika_default_pose_moves_all_three_arms():
+    values = _control_router_launch()._load_pika_joint_defaults(CONFIG)
+    assert "skip" not in values.values()
+
+
+def test_pika_default_pose_can_skip_an_arm_that_is_powered_off(tmp_path):
+    # SJDrealman's middle arm is normally off: its entry MoveJ goal was rejected and the
+    # synchronized ThreeArmMoveJ then cancelled l and r, so no Pika mode could start.
+    module = _control_router_launch()
+    values = module._load_pika_joint_defaults(_pose_file(tmp_path, "    skip: true\n"))
+    assert values == {
+        "pika_l_joint_degrees": "1,2,3,4,5,6",
+        "pika_m_joint_degrees": "skip",
+        "pika_r_joint_degrees": "6,5,4,3,2,1",
+    }
+    # Joint angles may stay in the file while the arm is skipped.
+    kept = module._load_pika_joint_defaults(
+        _pose_file(tmp_path, "    skip: true\n    joint_degrees: [0, 18, 70, 0, 90, 9]\n"))
+    assert kept["pika_m_joint_degrees"] == "skip"
+    moving = module._load_pika_joint_defaults(
+        _pose_file(tmp_path, "    skip: false\n    joint_degrees: [0, 18, 70, 0, 90, 9]\n"))
+    assert moving["pika_m_joint_degrees"] == "0,18,70,0,90,9"
+
+
+def test_pika_default_pose_skip_must_be_boolean_and_one_arm_must_move(tmp_path):
+    import pytest
+
+    module = _control_router_launch()
+    with pytest.raises(ValueError, match="middle.skip must be true or false"):
+        module._load_pika_joint_defaults(_pose_file(tmp_path, "    skip: \"yes\"\n"))
+    every_arm_skipped = tmp_path / "all_skipped.yaml"
+    every_arm_skipped.write_text(
+        "pika_default_pose:\n"
+        "  left: {skip: true}\n  middle: {skip: true}\n  right: {skip: true}\n",
+        encoding="utf-8",
+    )
+    with pytest.raises(ValueError, match="at least one arm"):
+        module._load_pika_joint_defaults(every_arm_skipped)

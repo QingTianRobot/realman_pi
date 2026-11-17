@@ -48,7 +48,7 @@ flowchart LR
 | `pikavelocity` | Pika / 速度控制 | `cartesian_velocity`（`work/pikabase`） | `CartesianVelocity`：`follow=false`，l/r 周期 `10 ms` | 手速直接映射为末端速度，可离合 |
 | `pikamixed` | Pika / Mixed 控制 | 速度（XYZ）+ 位姿（姿态） | 单个 `CartesianPose` session | 位置用速度积分（可离合），姿态跟随手的旋转量（不漂移） |
 
-三种模式共用同一套门控：进入前由行为树先用 `ThreeArmMoveJ` 把 l/m/r 移到 `pika_default_pose`，成功后才发布
+三种模式共用同一套门控：进入前由行为树先用 `ThreeArmMoveJ` 把 l/m/r（`skip: true` 的臂除外）移到 `pika_default_pose`，成功后才发布
 `ACTIVE`；其它模式下 router 丢弃 Pika 输入，不自动开合夹爪。
 
 ### 交互：逐个模式看数据怎么走
@@ -189,6 +189,20 @@ Pika 速度 Action 使用 `WORK` 和 `pikabase`。driver 收到该 Goal 时，�
 `control_router.launch.py` 启动时读取这三组关节角并注入行为树黑板；同一配置中的 `tcp_pose` 不参与
 这次初始 MoveJ。修改默认姿态只需更新该 YAML 并重启控制树，不要再修改 `control.xml`。准备动作失败
 或切换期间被取消时，不会进入 Pika `ACTIVE`。
+
+某台机械臂长期断电时（例如 SJDrealman 的 m 臂），在该臂下写 `skip: true`，准备动作就只移动其余两臂：
+
+```yaml
+pika_default_pose:
+  middle:
+    skip: true            # 关节角可以保留；skip 为 true 时不使用
+    joint_degrees: [0.0, 17.997, 70.0, 0.0, 90.0, 8.997]
+```
+
+launch 把它作为 `pika_m_joint_degrees: skip` 注入，`ThreeArmMoveJ` 不给该臂发 goal。不写 `skip` 时三臂都移动
+（仓库默认）。`skip` 必须是布尔值，三臂不能全部跳过。没有这个设置时，断电臂的 goal 被拒绝，同步 MoveJ 随即
+取消另外两臂，驱动重置连接并隔离事件通道，行为树每 200 ms 重试一次，最终报
+`pikavelocity failed: input mode switch timed out`。
 
 ## 发送端消息规范
 

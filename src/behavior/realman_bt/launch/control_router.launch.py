@@ -37,7 +37,7 @@ def _default_runtime_snapshot_file() -> str:
 
 
 def _load_pika_joint_defaults(config_file: Path) -> dict[str, str]:
-    """Load the production Pika schema and expose only its joint angles."""
+    """Load the production Pika schema and expose only its joint angles ("skip" for skipped arms)."""
     with config_file.open("r", encoding="utf-8") as stream:
         document = yaml.safe_load(stream) or {}
     pose = document.get("pika_default_pose")
@@ -51,6 +51,13 @@ def _load_pika_joint_defaults(config_file: Path) -> dict[str, str]:
         ("right", "pika_r_joint_degrees"),
     ):
         arm = pose.get(config_name)
+        # `skip: true` leaves a powered-off arm out of the entry MoveJ (ThreeArmMoveJ "skip").
+        skip = arm.get("skip", False) if isinstance(arm, dict) else False
+        if not isinstance(skip, bool):
+            raise ValueError(f"{config_file}: pika_default_pose.{config_name}.skip must be true or false")
+        if skip:
+            values[blackboard_name] = "skip"
+            continue
         joints = arm.get("joint_degrees") if isinstance(arm, dict) else None
         if not isinstance(joints, list) or len(joints) != 6:
             raise ValueError(
@@ -66,6 +73,8 @@ def _load_pika_joint_defaults(config_file: Path) -> dict[str, str]:
                 f"{config_file}: pika_default_pose.{config_name}.joint_degrees must be finite numbers"
             )
         values[blackboard_name] = ",".join(format(float(value), ".15g") for value in joints)
+    if all(value == "skip" for value in values.values()):
+        raise ValueError(f"{config_file}: pika_default_pose must keep at least one arm (all are skip: true)")
     return values
 
 

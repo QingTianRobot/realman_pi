@@ -427,6 +427,8 @@ const PIKA_TRANSITIONS = new Set(["starting", "waiting_input", "selecting", "sto
 // 关闭 is allowed during waiting_input and selecting (the entry MoveJ); only the helper calls are busy.
 const PIKA_BUSY = new Set(["starting", "stopping"]);
 const PIKA_NOTICE_MS = 6000;
+// The input-wait timeout detail from pika_switch.py: "no /pika/l, /pika/r input for 30 s".
+const PIKA_NO_INPUT = /^no \/pika\/\S+.* input for /;
 let activeInputModeRequest = "";
 let activeInputModeExecutorRequest: number | undefined;
 let pendingInputModeId = "";
@@ -726,11 +728,12 @@ function pikaSwitchPhaseText(state: PikaSwitchState) {
   const mark = (age: number | null) => (age !== null && age < state.input_fresh_ms ? "✓" : "…");
   switch (state.phase) {
     case "starting": return "启动中";
-    case "waiting_input": return `等待 Pika 数据 l${mark(state.input_age_ms.l)} r${mark(state.input_age_ms.r)}`;
+    // Pika publishes velocity only after the operator's start key, so name the key, not the data.
+    case "waiting_input": return `按 W/A/S/D 开始 l${mark(state.input_age_ms.l)} r${mark(state.input_age_ms.r)}`;
     case "selecting": return "切换模式";
     case "on": return state.mode_lost ? "运行中（当前不是 Pika 模式）" : "运行中";
     case "stopping": return "关闭中";
-    case "failed": return `失败: ${state.detail}`;
+    case "failed": return `失败: ${state.detail}${PIKA_NO_INPUT.test(state.detail) ? "（没按 W/A/S/D？）" : ""}`;
     default: return state.stack_running ? "Pika 已运行（未切换模式）" : "未启动";
   }
 }

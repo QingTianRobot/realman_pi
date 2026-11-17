@@ -1981,7 +1981,7 @@ test("Pika switch starts and stops Pika velocity control", async ({ page }) => {
   await pika({ phase: "waiting_input", stack_running: true, input_age_ms: { l: 20, r: null } });
   await expect(button).toBeEnabled();
   await expect(button).toHaveText("关闭 Pika");
-  await expect(state).toHaveText("等待 Pika 数据 l✓ r…");
+  await expect(state).toHaveText("按 W/A/S/D 开始 l✓ r…");
   await pika({ phase: "selecting", stack_running: true });
   await expect(button).toBeEnabled();
   await expect(button).toHaveText("关闭 Pika");
@@ -1998,7 +1998,7 @@ test("Pika switch starts and stops Pika velocity control", async ({ page }) => {
   expect((await sent()).at(-1)).toMatchObject({ type: "pika_switch", enabled: false });
 
   await pika({ phase: "failed", stack_running: true, detail: "no /pika/r input for 30 s" });
-  await expect(state).toHaveText("失败: no /pika/r input for 30 s");
+  await expect(state).toHaveText("失败: no /pika/r input for 30 s（没按 W/A/S/D？）");
   await expect(button).toHaveText("关闭 Pika");
 });
 
@@ -2034,12 +2034,12 @@ test("Pika switch row shows refusals, helper reachability and the server freshne
   await expect(page.locator("#pika-switch")).toBeEnabled();
 
   await pika({ phase: "waiting_input", stack_running: true, input_fresh_ms: 100, input_age_ms: { l: 50, r: 200 } });
-  await expect(state).toHaveText("等待 Pika 数据 l✓ r…");
+  await expect(state).toHaveText("按 W/A/S/D 开始 l✓ r…");
   await emitWebSocketEvent(page, {
     type: "pika_switch_state", available: true, phase: "waiting_input", stack_running: true,
     input_age_ms: { l: 50, r: 400 }, mode_lost: false, detail: "",
   });
-  await expect(state).toHaveText("等待 Pika 数据 l✓ r✓");  // fallback 500 ms
+  await expect(state).toHaveText("按 W/A/S/D 开始 l✓ r✓");  // fallback 500 ms
 
   await page.evaluate(() => {
     const socket = (window as any).__webSocket;

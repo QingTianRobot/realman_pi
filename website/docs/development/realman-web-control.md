@@ -381,7 +381,7 @@ helper 未运行时按钮灰显，悬停提示需要安装；`docker_restart.url
 
 **按钮规则**：
 
-- “关闭 Pika”在 `waiting_input`（等待 Pika 数据）和 `selecting`（切换模式，含最长 120 s 的入场 MoveJ）阶段也可按：
+- “关闭 Pika”在 `waiting_input`（按 W/A/S/D 开始）和 `selecting`（切换模式，含最长 120 s 的入场 MoveJ）阶段也可按：
   `waiting_input` 时还没选模式，直接关闭栈；`selecting` 时放弃尚未完成的 `pikavelocity` 请求（它之后的结果和错误都被忽略），
   选择 `none`，再关闭栈。
 - 只有 `starting` 和 `stopping`（helper 调用进行中）按钮禁用，此时再发命令回错误 `pika_switch_busy`；`waiting_input`
@@ -398,7 +398,7 @@ helper 未运行时按钮灰显，悬停提示需要安装；`docker_restart.url
 | --- | --- | --- |
 | `off` | 未启动 / Pika 已运行（未切换模式） | Pika 栈未运行；或栈在运行但当前不是 Pika 模式（例如手动启动） |
 | `starting` | 启动中 | helper `/start` 进行中；`helper_timeout_sec` + 5 s 内没有答复则 `failed`（`Pika helper start got no answer`） |
-| `waiting_input` | 等待 Pika 数据 l✓ r… | 栈已启动，等两路速度都比 `input_fresh_ms` 新；✓ 表示该臂数据新鲜。可按“关闭 Pika” |
+| `waiting_input` | 按 W/A/S/D 开始 l✓ r… | 栈已启动，等两路速度都比 `input_fresh_ms` 新；✓ 表示该臂数据新鲜。Pika 只在操作员按开始键（键盘 W/A/S/D）后才发速度，位姿（:8770 上看到的 `/pika_web/pose_*`）有数据不代表速度有。可按“关闭 Pika” |
 | `selecting` | 切换模式 | 已通过输入模式 bridge 请求 `pikavelocity`，等它 ACTIVE（含入场 MoveJ）。可按“关闭 Pika” |
 | `on` | 运行中 / 运行中（当前不是 Pika 模式） | Pika 速度控制在运行；别处切走了模式时显示后者（`mode_lost`），栈不停 |
 | `stopping` | 关闭中 | 先切 `none`（如需要，最多 `off_mode_timeout_sec`），再 helper `/stop`；`/stop` 在 `helper_timeout_sec` + 5 s 内没有答复则 `failed` |
@@ -519,7 +519,7 @@ pika_switch:
 | helper start/stop 没有答复 | `helper_timeout_sec` + 5 s 后 `failed`，`detail` 为 `Pika helper start got no answer` / `... stop ...` |
 | 控制树未运行 | “启动 Pika”被拒绝，阶段仍为“未启动”，原因显示在 Pika 这一行，不启动栈 |
 | 启动命令失败 | `failed`，`detail` 带 helper 输出末尾 |
-| 某臂一直没有 Pika 数据（例如右 tracker 没插） | 30 s 后 `失败: no /pika/r input for 30 s`，**栈保留运行**便于排查，按“关闭 Pika”关闭 |
+| 某臂一直没有 Pika 速度（没按 W/A/S/D，或右 tracker 没插） | 30 s 后 `失败: no /pika/r input for 30 s（没按 W/A/S/D？）`，**栈保留运行**便于排查，按“关闭 Pika”关闭 |
 | `pikavelocity` 被拒绝、切换失败、被其它请求顶替、路由不可用或 150 s 未 ACTIVE | `failed`，栈保留运行 |
 | 关闭时 `none` 被拒绝、超时（10 s 或 bridge 在接受前超时）、被顶替或路由不可用 | 仍关闭栈，原因只在这些情况下写在关闭后的 `detail`；没有输入后路由在 `input_timeout_ms` = 3 s 后释放会话，机械臂照样停止 |
 | 切换模式（入场 MoveJ）中按“关闭 Pika” | 放弃 `pikavelocity` 请求，切 `none`，再关闭栈 |
@@ -541,7 +541,7 @@ git（沿用 `.env` / skip-worktree 的做法）。
    并确认 `start_pika_bag.sh` 在非交互 tmux shell 里能跑：`tmux new-session -d -s pikatest ~/pika_teleop_ws/start_pika_bag.sh`
    后 `tmux attach -t pikatest` 查看输出，再 `tmux kill-session -t pikatest`。
 3. 部署 web_control（代码 + 重建的静态页面），只重启 `realman_web_control` 容器。
-4. 在 :8765 以真实运动启动控制树，按“启动 Pika”：依次显示 启动中 → 等待 Pika 数据 → 切换模式 → 运行中；
+4. 在 :8765 以真实运动启动控制树，按“启动 Pika”：依次显示 启动中 → 按 W/A/S/D 开始 → （按键后）切换模式 → 运行中；
    双臂到 Pika 默认位姿并跟随。
 5. 按“关闭 Pika”：关闭中 → 未启动；双臂停止；`tmux has-session -t pika` 失败。
 6. 再按“启动 Pika”，在入场 MoveJ（切换模式）期间按“关闭 Pika”：切到无输入，栈关闭。

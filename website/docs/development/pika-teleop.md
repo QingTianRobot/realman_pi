@@ -228,22 +228,22 @@ enine 上的外接 W/A/S/D 小键盘由 `pika_foot_pedal` 节点读取（节点�
 
 | 情况 | 行为 |
 | --- | --- |
-| 输入模式不是 `pikavelocity` | 按键不开录、不运动 |
-| 已有别人开的录制（例如策略尝试自动录制） | 按键不开录，`detail` 写 `recording busy` |
-| START 被拒（预检不过） | 遥操作照常，本条不录 |
+| 输入模式不是 `pikavelocity` | 按键不开录、不运动，`detail` 写 `ignored: mode is <x>` |
+| 已有别人开的录制（例如策略尝试自动录制） | 按键不开录，`detail` 写 `ignored: recording busy (<session_id>)` |
+| START 被拒（预检不过）或超时 | 遥操作照常，本条不录；这次遥操作结束时也不归位，需手动归位或重新进入 `pikavelocity` |
 | 开录途中就松键 | START 成功后立即 STOP 并归位 |
 | 开录途中模式被切走 | START 成功后立即按异常停止处理：STOP，进入 FAILED，不归位 |
-| 录制中键盘状态超过 3 s 没更新（桥断）或模式被切走 | STOP 录制，进入 FAILED，不归位 |
+| 录制中键盘状态超过 `keyboard_stale_sec`（默认 3 s）没更新（桥断）或模式被切走 | STOP 录制，进入 FAILED，不归位 |
 | STOP 失败 | 仍归位，但最终 FAILED |
 | 将要归位时模式已离开 `pikavelocity` | 不发 MoveJ；FAILED，`detail` 写 `home skipped: mode changed to <x>` |
 | 归位 MoveJ 被拒或失败 | FAILED，不重试 |
-| FAILED 后再按一次键 | 只清除故障，下一次按键才开新的一条 |
+| FAILED 之后 | 键盘下一次切到“开”只清除故障（这次遥操作照常但不录、结束不归位），再按一次关、一次开才开始新的一条；故障发生时键盘若是“开”（桥断、录制中切模式），要先按一次切到“关”（不起作用）。看 `/pika_episode/state` 的 `detail: cleared` 确认 |
 
 如果录制端在节点的 10 s 超时之后才回复 START 且结果为成功，节点记录一条错误日志，并立即 STOP 这个无人认领的 session。
 
 归位时不动夹爪：enine 的 Pika 夹爪流一直在发，机器人侧的夹爪命令会被立即覆盖。
 
-观察状态（reliable + transient_local，JSON 含 `state`、`session_id`、`task`、`detail`）：
+观察状态（reliable + transient_local，JSON 含 `state`、`session_id`、`task`、`detail`、`stamp_ns`）：
 
 ```bash
 ros2 topic echo /pika_episode/state --qos-durability transient_local

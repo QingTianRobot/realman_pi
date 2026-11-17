@@ -204,6 +204,53 @@ launch 把它作为 `pika_m_joint_degrees: skip` 注入，`ThreeArmMoveJ` 不给
 取消另外两臂，驱动重置连接并隔离事件通道，行为树每 200 ms 重试一次，最终报
 `pikavelocity failed: input mode switch timed out`。
 
+## 键盘一键采集（`pika_episode_trigger`）
+
+enine 上的外接 W/A/S/D 小键盘由 `pika_foot_pedal` 节点读取（节点名沿用脚踏板，实际读的是键盘）。打开本功能后，一条示教 episode 只需要按两次键：
+
+1. 在 `:8765` 进入 `pikavelocity`（l、r 先 MoveJ 到 `pika_default_pose`）。
+2. 按一次 W/A/S/D：左右遥操作开始，同时 `/recording/manage` START，任务标签取自配置。
+3. 再按一次：遥操作停止，录制 STOP；等 l、r 的速度会话结束（最多 `release_timeout_sec`），再把 l、r MoveJ 回 `pika_default_pose`。`skip: true` 的臂不动。
+4. 录制结束后按录制平台的 `auto_export_on_stop` 自动导出；不要的 episode 在 `:8770` 回放页隐藏或 DISCARD。
+
+节点运行在机器人主机的 bringup 里（domain 65），只消费桥过来的键盘启停状态 `/foot_pedal/enabled`（`std_msgs/Bool`）。enine 的 `pika_domain_bridge.yaml` 必须多转这个话题：
+
+```yaml
+  /foot_pedal/enabled:
+    type: std_msgs/msg/Bool
+```
+
+改完重启 enine 的 `realman-pika-bridge` 用户单元。
+
+配置在 `config/ros/pika_episode.yaml`，仓库默认 `enabled: false`；机器人主机在自己的配置里打开并填 `task`，换任务或材料时改 `task` 后重启 bringup。归位位姿不单独配置，就是 `pika_config.yaml` 的 `pika_default_pose`。
+
+`system.launch.py` 的 launch 参数 `start_pika_episode`（默认 `true`）会包含 `pika_episode.launch.py`，但节点仍只在 `pika_episode.yaml` 里 `enabled: true` 时才启动。该 launch 从环境变量 `REALMAN_CONFIG_ROOT` 读取配置根目录（为空或未设置时用包内安装的配置），没有对应的 launch 参数。
+
+| 情况 | 行为 |
+| --- | --- |
+| 输入模式不是 `pikavelocity` | 按键不开录、不运动 |
+| 已有别人开的录制（例如策略尝试自动录制） | 按键不开录，`detail` 写 `recording busy` |
+| START 被拒（预检不过） | 遥操作照常，本条不录 |
+| 开录途中就松键 | START 成功后立即 STOP 并归位 |
+| 开录途中模式被切走 | START 成功后立即按异常停止处理：STOP，进入 FAILED，不归位 |
+| 录制中键盘状态超过 3 s 没更新（桥断）或模式被切走 | STOP 录制，进入 FAILED，不归位 |
+| STOP 失败 | 仍归位，但最终 FAILED |
+| 将要归位时模式已离开 `pikavelocity` | 不发 MoveJ；FAILED，`detail` 写 `home skipped: mode changed to <x>` |
+| 归位 MoveJ 被拒或失败 | FAILED，不重试 |
+| FAILED 后再按一次键 | 只清除故障，下一次按键才开新的一条 |
+
+如果录制端在节点的 10 s 超时之后才回复 START 且结果为成功，节点记录一条错误日志，并立即 STOP 这个无人认领的 session。
+
+归位时不动夹爪：enine 的 Pika 夹爪流一直在发，机器人侧的夹爪命令会被立即覆盖。
+
+观察状态（reliable + transient_local，JSON 含 `state`、`session_id`、`task`、`detail`）：
+
+```bash
+ros2 topic echo /pika_episode/state --qos-durability transient_local
+```
+
+部署注意：`system.launch.py` 现在总会查找 `realman_pika_session` 包，机器人主机必须先换上重新构建的镜像再使用这版 bringup；不要把 `system.launch.py` 热拷贝到旧镜像上。
+
 ## 发送端消息规范
 
 Pika 发送端应以标称 `20 Hz`（`50 ms` 周期）分别发布左右臂，消息字段如下；`header.stamp` 必须使用发送节点当前 ROS

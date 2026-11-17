@@ -27,6 +27,7 @@ from .lerobot_schema import LeRobotV3Schema, schema_from_parameters
 from .lerobot_dataset_store import dataset_lock
 from .json_io import atomic_json_write
 from .provenance import verify_optional_snapshot
+from .synthetic_arms import JOINT_COUNT, fill_synthetic_streams
 
 
 @dataclass(frozen=True)
@@ -152,6 +153,8 @@ class LeRobotExporter:
         )
         camera_archive_quality = self._camera_archive_quality(request.session_dir)
         streams = self._read_mcap_streams(request.session_dir, schema)
+        # Parked arms recorded in this session's own metadata (never today's config).
+        streams, synthesized = fill_synthetic_streams(streams, schema, self._session_synthetic_arms(manifest))
         _unused_anchors, camera_frames = self._read_camera_anchors(request.session_dir)
         required = self._v3_streams(streams, schema)
         anchors = self._v3_anchors(required, camera_frames, schema, request.max_gap_sec)
@@ -255,6 +258,7 @@ class LeRobotExporter:
             urdf_path,
             camera_archive_quality,
             quality,
+            synthesized,
         )
         self._report(request, 100, 100)
         return dataset_root
@@ -275,6 +279,21 @@ class LeRobotExporter:
         if max_gap_sec <= 0:
             raise ValueError("LeRobot v3 export max_gap_sec must be positive")
         return int(max_gap_sec * 1e9)
+
+    @staticmethod
+    def _session_synthetic_arms(manifest: dict[str, Any]) -> dict[str, tuple[float, ...]]:
+        """``{arm: parked joint positions (rad)}`` from the session metadata; {} if none."""
+        raw = manifest.get("metadata", {}).get("synthetic_arms") or {}
+        if not isinstance(raw, dict):
+            raise ValueError("session metadata synthetic_arms must be an object")
+        parked: dict[str, tuple[float, ...]] = {}
+        for arm, entry in raw.items():
+            values = entry.get("joint_positions_rad") if isinstance(entry, dict) else None
+            if (not isinstance(values, list) or len(values) != JOINT_COUNT
+                    or not all(isinstance(value, (int, float)) and not isinstance(value, bool) for value in values)):
+                raise ValueError(f"session synthetic arm {arm!r} needs six numeric joint_positions_rad")
+            parked[str(arm)] = tuple(float(value) for value in values)
+        return parked
 
     @staticmethod
     def _zero_action_samples(reference: Sequence[TimedSample]) -> list[TimedSample]:
@@ -419,10 +438,14 @@ class LeRobotExporter:
         urdf_path: Path,
         camera_archive_quality: dict[str, Any],
         quality: dict[str, Any],
+        synthesized: Sequence[str] = (),
     ) -> None:
         receipt = {"dataset_root": str(root), "repo_id": schema.repo_id, "fps": schema.fps, "episode_index": episode_index,
                    "schema_fingerprint": schema.fingerprint, "frame_count": len(anchors),
                    "quality": quality,
+                   # Streams filled for parked arms instead of recorded (see synthetic_arms.py).
+                   "synthetic_streams": list(synthesized),
+                   "synthetic_arms": manifest.get("metadata", {}).get("synthetic_arms") or {},
                    "first_walltime_ns": anchors[0], "last_walltime_ns": anchors[-1],
                    "source_session_id": manifest.get("session_id", session_dir.name),
                    "canonical": {

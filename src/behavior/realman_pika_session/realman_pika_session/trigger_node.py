@@ -26,9 +26,15 @@ BEST_EFFORT = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 
 
 class TriggerNode(Node):
-    def __init__(self, episode_config: EpisodeConfig, home_pose: dict[str, tuple[float, ...]]) -> None:
+    def __init__(
+        self,
+        episode_config: EpisodeConfig,
+        home_pose: dict[str, tuple[float, ...]],
+        service_timeout_sec: float = SERVICE_TIMEOUT_SEC,
+    ) -> None:
         super().__init__("pika_episode_trigger")
         self._config = episode_config
+        self._service_timeout_sec = service_timeout_sec
         self._home_pose = home_pose
         arms = tuple(sorted(home_pose))
         self._machine = EpisodeMachine(MachineConfig(
@@ -40,6 +46,8 @@ class TriggerNode(Node):
         self._recording = self.create_client(ManageRecording, "/recording/manage")
         self._movej = {arm: ActionClient(self, ExecuteMotion, f"/{arm}/execute_motion") for arm in arms}
         self._pending_call = None  # (kind, future, deadline)
+        # START calls that timed out: a late success means the recorder did start, so that session is stopped.
+        self._orphan_start_futures: set = set()
         # arm -> (home episode, deadline); the episode token drops late results from an older homing.
         self._home_episode = 0
         self._home_deadlines: dict[str, tuple[int, float]] = {}
@@ -84,13 +92,15 @@ class TriggerNode(Node):
         if self._pending_call is not None and now > self._pending_call[2]:
             kind, future, _ = self._pending_call
             self._pending_call = None
-            future.cancel()
+            if kind == "start":
+                self._orphan_start_futures.add(future)  # keep listening: a late success must be stopped
+            else:
+                future.cancel()
             self._service_result(kind, False, "", "recording service timed out")
         for arm, (episode, deadline) in list(self._home_deadlines.items()):
             if now > deadline:
                 self._finish_home(arm, episode, False, "no MoveJ result in time")
-        self._apply(self._machine.tick(now))
-        self._publish_state()
+        self._apply(self._machine.tick(now))  # _apply always publishes (on change or once a second)
 
     # ---- actions ------------------------------------------------------
     def _apply(self, actions: list[Action]) -> None:
@@ -99,6 +109,7 @@ class TriggerNode(Node):
                 self._call_recording(action.kind)
             elif action.kind == "home":
                 self._home_episode += 1
+                self._home_deadlines.clear()  # older episodes' results are ignored anyway; no stale timeouts
                 for arm in action.arms:
                     self._send_home(arm, self._home_episode)
         self._publish_state()
@@ -120,10 +131,14 @@ class TriggerNode(Node):
             return
         self.get_logger().info(f"recording {kind} requested")
         future = self._recording.call_async(request)
-        self._pending_call = (kind, future, time.monotonic() + SERVICE_TIMEOUT_SEC)
+        self._pending_call = (kind, future, time.monotonic() + self._service_timeout_sec)
         future.add_done_callback(lambda done, kind=kind: self._on_service_done(kind, done))
 
     def _on_service_done(self, kind: str, future) -> None:
+        if future in self._orphan_start_futures:
+            self._orphan_start_futures.discard(future)
+            self._on_late_start(future)
+            return
         if self._pending_call is None or self._pending_call[1] is not future:
             return  # timed out already
         self._pending_call = None
@@ -132,6 +147,34 @@ class TriggerNode(Node):
             return
         response = future.result()
         self._service_result(kind, response.success, response.session_id, response.message)
+
+    def _on_late_start(self, future) -> None:
+        """A START reply after the timeout; the machine already went back to IDLE, so stop the session here."""
+        if future.cancelled() or future.exception() is not None:
+            self.get_logger().warning(f"late START reply after timeout failed: {future.exception()}")
+            return
+        response = future.result()
+        if not response.success or not response.session_id:
+            self.get_logger().warning(f"late START reply after timeout, not started: {response.message}")
+            return
+        session_id = response.session_id
+        self.get_logger().error(f"late START success after timeout, stopping orphan session {session_id}")
+        if not self._recording.service_is_ready():
+            self.get_logger().error(f"cannot stop orphan session {session_id}: /recording/manage is not available")
+            return
+        request = ManageRecording.Request()
+        request.command = ManageRecording.Request.STOP
+        request.session_id = session_id
+        self._recording.call_async(request).add_done_callback(
+            lambda done, session_id=session_id: self._on_orphan_stop_done(session_id, done))
+
+    def _on_orphan_stop_done(self, session_id: str, future) -> None:
+        if future.cancelled() or future.exception() is not None:
+            self.get_logger().error(f"stopping orphan session {session_id} failed: {future.exception()}")
+            return
+        response = future.result()
+        log = self.get_logger().info if response.success else self.get_logger().error
+        log(f"orphan session {session_id} stop {'ok' if response.success else 'failed'}: {response.message}")
 
     def _service_result(self, kind: str, success: bool, session_id: str, message: str) -> None:
         now = time.monotonic()

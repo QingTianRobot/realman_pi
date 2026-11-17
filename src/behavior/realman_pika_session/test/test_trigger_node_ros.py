@@ -11,6 +11,7 @@ from rclpy.action import ActionServer  # noqa: E402
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
 from rclpy.node import Node  # noqa: E402
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy  # noqa: E402
+from rclpy.task import Future  # noqa: E402
 from std_msgs.msg import Bool, String  # noqa: E402
 
 from realman_msgs.action import ExecuteMotion  # noqa: E402
@@ -18,6 +19,7 @@ from realman_msgs.msg import InputModeState  # noqa: E402
 from realman_recording_msgs.srv import ManageRecording  # noqa: E402
 
 from realman_pika_session.config_loader import EpisodeConfig  # noqa: E402
+from realman_pika_session.episode_machine import Action  # noqa: E402
 from realman_pika_session.trigger_node import TriggerNode  # noqa: E402
 
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
@@ -77,7 +79,7 @@ def graph():
     executor.add_node(node)
     # Discovery takes a moment; a key press before it would be a START failure, not the case under test.
     assert spin_until(executor, node.interfaces_ready)
-    yield world, executor
+    yield world, node, executor
     executor.shutdown()
     node.destroy_node()
     world.destroy_node()
@@ -103,10 +105,16 @@ def last_state(world):
     return world.states[-1]["state"] if world.states else None
 
 
+def ready_for_keys(world, node, executor, mode):
+    """Wait until the node really holds `mode` and hears the keyboard (the latched idle publish is not enough)."""
+    world.publish_mode(mode)
+    assert spin_until(executor, lambda: node._machine._mode == mode)
+    assert spin_until(executor, lambda: world.keyboard.get_subscription_count() > 0)
+
+
 def test_one_key_episode_records_and_homes(graph):
-    world, executor = graph
-    world.publish_mode("pikavelocity")
-    assert spin_until(executor, lambda: last_state(world) == "idle")
+    world, node, executor = graph
+    ready_for_keys(world, node, executor, "pikavelocity")
     press(world, executor, False)
     press(world, executor, True)
     assert spin_until(executor, lambda: last_state(world) == "recording")
@@ -124,9 +132,8 @@ def test_one_key_episode_records_and_homes(graph):
 
 
 def test_keys_do_nothing_outside_pikavelocity(graph):
-    world, executor = graph
-    world.publish_mode("none")
-    assert spin_until(executor, lambda: last_state(world) == "idle")
+    world, node, executor = graph
+    ready_for_keys(world, node, executor, "none")
     press(world, executor, False)
     press(world, executor, True)
     spin_until(executor, lambda: False, timeout=0.5)
@@ -134,31 +141,102 @@ def test_keys_do_nothing_outside_pikavelocity(graph):
     assert world.states[-1]["detail"] == "ignored: mode is none"
 
 
+# ---- stubbed-client tests: futures have no executor, so their done callbacks run synchronously ----
+class StubRecordingClient:
+    def __init__(self):
+        self.calls = []  # (request, future)
+
+    def service_is_ready(self):
+        return True
+
+    def call_async(self, request):
+        future = Future()
+        self.calls.append((request, future))
+        return future
+
+
+class StubMoveJClient:
+    def __init__(self):
+        self.goals = []
+
+    def server_is_ready(self):
+        return True
+
+    def send_goal_async(self, goal):
+        self.goals.append(goal)
+        return Future()  # never answers; the test delivers results itself
+
+
 @pytest.fixture
 def lone_node():
     os.environ["ROS_DOMAIN_ID"] = str(150 + os.getpid() % 50)
     rclpy.init()
-    node = TriggerNode(CONFIG, HOME)
+    node = TriggerNode(CONFIG, HOME, service_timeout_sec=0.05)
     yield node
     node.destroy_node()
     rclpy.shutdown()
 
 
+def recording_response(success, session_id):
+    response = ManageRecording.Response()
+    response.success = success
+    response.session_id = session_id
+    return response
+
+
+def test_late_start_success_after_timeout_stops_the_orphan_session(lone_node):
+    node = lone_node
+    stub = StubRecordingClient()
+    node._recording = stub
+    node._on_mode(InputModeState(active_mode="pikavelocity", phase=InputModeState.ACTIVE))
+    node._on_keyboard(Bool(data=False))
+    node._on_keyboard(Bool(data=True))
+    assert len(stub.calls) == 1 and stub.calls[0][0].command == ManageRecording.Request.START
+    time.sleep(0.1)
+    node._on_timer()  # START times out
+    assert node._machine.snapshot()["state"] == "idle"
+    stub.calls[0][1].set_result(recording_response(True, "sess-late"))  # the recorder did start
+    assert len(stub.calls) == 2
+    stop = stub.calls[1][0]
+    assert stop.command == ManageRecording.Request.STOP
+    assert stop.session_id == "sess-late"
+    stub.calls[1][1].set_result(recording_response(True, "sess-late"))
+    assert node._machine.snapshot()["state"] == "idle"
+    assert node._machine.snapshot()["session_id"] == ""
+
+
+def test_late_start_failure_after_timeout_sends_nothing(lone_node):
+    node = lone_node
+    stub = StubRecordingClient()
+    node._recording = stub
+    node._on_mode(InputModeState(active_mode="pikavelocity", phase=InputModeState.ACTIVE))
+    node._on_keyboard(Bool(data=False))
+    node._on_keyboard(Bool(data=True))
+    time.sleep(0.1)
+    node._on_timer()
+    stub.calls[0][1].set_result(recording_response(False, ""))
+    assert len(stub.calls) == 1
+    assert node._machine.snapshot()["state"] == "idle"
+
+
 def test_late_movej_result_from_an_older_episode_is_ignored(lone_node):
     node = lone_node
+    node._movej = {arm: StubMoveJClient() for arm in HOME}
     machine = node._machine
     machine.on_mode("pikavelocity", 0.0)
     machine.on_keyboard(False, 0.0)
     machine.on_keyboard(True, 1.0)
     machine.on_start_result(True, "sess-2", "", 1.0)
     machine.on_keyboard(False, 2.0)
-    assert machine.on_stop_result(True, "", 2.0)[0].kind == "home"
-    # Episode 2 is homing; episode 1's MoveJ goals are still out there.
-    far = time.monotonic() + 100.0
-    node._home_episode = 2
-    node._home_deadlines = {"l": (2, far), "r": (2, far)}
-    node._finish_home("l", 1, True, "")
-    assert node._home_deadlines["l"] == (2, far)
+    home = machine.on_stop_result(True, "", 2.0)
+    assert home == [Action("home", ("l", "r"))]
+    node._apply(home)  # episode 1: goals stay pending
+    node._apply(home)  # episode 2 (e.g. after a retry) while episode 1's goals are still out
+    assert {arm: entry[0] for arm, entry in node._home_deadlines.items()} == {"l": 2, "r": 2}
+    assert [len(client.goals) for client in node._movej.values()] == [2, 2]
+    node._finish_home("l", 1, True, "")  # late result of episode 1
+    assert node._home_deadlines["l"][0] == 2
+    assert machine.snapshot()["state"] == "homing"
     node._finish_home("l", 2, True, "")
     assert "l" not in node._home_deadlines
     assert machine.snapshot()["state"] == "homing"  # r is still pending

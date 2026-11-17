@@ -48,9 +48,17 @@ function escapeHtml(value: string): string {
   })[character] ?? character);
 }
 
-// `loader` fetches the next JPEG off-screen; the visible <img> only switches once
-// it has arrived, so a slow link never blanks the tile mid-playback.
+// Two <img> per tile, swapped like a double buffer: `loader` fetches AND decodes the
+// next JPEG off-screen, then replaces the visible element in the DOM. Changing the
+// visible element's src instead let Chrome paint the tile empty for one frame while
+// decoding (measured: 12-20 dark flashes per tile per 10 s on SJDrealman).
 type RawTile = { img: HTMLImageElement; loader: HTMLImageElement; cameraId: string; shown: string; pending: string; loading: boolean };
+
+function tileImage(cameraId: string): HTMLImageElement {
+  const image = new Image();
+  image.alt = `${cameraId} 原始帧`;
+  return image;
+}
 
 export function initVideo(callbacks: VideoCallbacks): VideoApi {
   const camerasEl = $("#replay-cameras");
@@ -245,17 +253,32 @@ export function initVideo(callbacks: VideoCallbacks): VideoApi {
       for (const cameraId of next.cameraIds) {
         if (next.kind === "frames") {
           const total = next.cameraFrameCounts?.[cameraId];
-          const card = buildTile(cameraId, `<img alt="${escapeHtml(cameraId)} 原始帧" decoding="async">`, total ? `${total} 帧` : "");
-          const img = card.querySelector("img")!;
-          const loader = new Image();
-          loader.decoding = "async";
-          const tile: RawTile = { img, loader, cameraId, shown: "", pending: "", loading: false };
-          loader.addEventListener("load", () => {
-            img.src = loader.src; // already decoded and cached: swaps without a blank frame
+          const card = buildTile(cameraId, "", total ? `${total} 帧` : "");
+          const img = tileImage(cameraId);
+          card.prepend(img);
+          const tile: RawTile = { img, loader: tileImage(cameraId), cameraId, shown: "", pending: "", loading: false };
+          const onLoad = (event: Event) => {
+            const loaded = event.currentTarget as HTMLImageElement;
+            if (loaded !== tile.loader) return;
+            // decode() resolves once the bitmap is ready to paint, so the swap is atomic.
+            void loaded.decode().catch(() => undefined).then(() => {
+              if (loaded !== tile.loader || !tiles.includes(tile)) return;
+              tile.img.replaceWith(loaded);
+              tile.loader = tile.img;
+              tile.img = loaded;
+              tile.loading = false;
+              requestTile(tile);
+            });
+          };
+          const onError = (event: Event) => {
+            if (event.currentTarget !== tile.loader) return;
             tile.loading = false;
             requestTile(tile);
-          });
-          loader.addEventListener("error", () => { tile.loading = false; requestTile(tile); });
+          };
+          for (const element of [tile.img, tile.loader]) {
+            element.addEventListener("load", onLoad);
+            element.addEventListener("error", onError);
+          }
           tiles.push(tile);
           camerasEl.append(card);
         } else {

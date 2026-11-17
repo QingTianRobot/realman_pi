@@ -271,6 +271,7 @@ input[type="search"]:hover { border-color: var(--accent-bar); background: var(--
 /* All cameras of the session side by side (video.ts picks the column count). */
 .replay-camera-grid { display: grid; grid-template-columns: repeat(var(--replay-columns, 3), minmax(0, 1fr)); gap: 10px; padding: 12px; min-height: 160px; }
 .replay-camera-grid .camera-card { aspect-ratio: 16 / 9; min-height: 0; }
+.replay-camera-grid .camera-card img:not([src]) { visibility: hidden; }
 .replay-camera-grid > .empty { grid-column: 1 / -1; align-self: center; }
 
 .replay-transport { padding: 12px 16px; }

@@ -194,8 +194,8 @@ COPY config /opt/rm65_ws/config
 
 RUN . /opt/ros/humble/setup.sh \
     && colcon build --symlink-install \
-        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock realman_recording realman_recording_msgs policy_bridge \
-    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock realman_recording realman_recording_msgs policy_bridge \
+        --packages-up-to realman_bringup realman_robot_driver realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock realman_pika_session realman_recording realman_recording_msgs policy_bridge \
+    && colcon test --packages-select xbox_controller_driver realman_robot_driver realman_bringup realman_msgs realman_web_control realman_camera_calibration gripper_ros2 gripper_ros2_msgs realman_bt realman_bt_mock realman_pika_session realman_recording realman_recording_msgs policy_bridge \
     && colcon test-result --verbose
 
 COPY --from=bt_editor_build /opt/bt_editor/dist /opt/rm65_ws/behavior_tree/editor-dist

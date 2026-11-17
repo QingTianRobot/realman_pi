@@ -34,6 +34,8 @@ ROS Image ──► bounded JPEG archive ──► videos/
    └─────► independent lossy preview ──► /preview/<camera>.jpg ──► 浏览器
 ```
 
+目前的 `/recording/manage` 上游有三个：人工命令行（`recording_service_client`）、行为树 PolicyRun（经 `/recording/attempt`），以及 Pika 键盘一键采集节点 `pika_episode_trigger`（见 [Pika 遥操作](./pika-teleop.md#键盘一键采集-pika-episode-trigger)），它只 START 自己的 session；录制端的 STOP 不看 `session_id`、会停掉当前任何活动 session，所以节点只在 `/recording/status` 显示自己的 session 仍在 COUNTDOWN/RECORDING 时才发 STOP（还没收到状态、或状态仍是更早的空闲 session 时也照发），别人的 session 在录就不发。
+
 持久化状态写入、原始相机录制、低清预览、浏览器 WebSocket 分别属于不同 worker。展示端只接收限频的小型状态快照；不得在 ROS 状态话题或该快照中传输 JPEG/WebP。浏览器断开、慢客户端、预览解码失败或相机单路失败均不应阻塞驱动订阅与状态归档。
 
 录制可选配置 `calibration_snapshot_path` 指向已解算的相机标定结果。配置后，START 会将该文件复制入 session metadata 并写入 SHA-256/version；未配置时 metadata 明确标为 `UNAVAILABLE`，不会把占位内参/外参当成真实几何数据。

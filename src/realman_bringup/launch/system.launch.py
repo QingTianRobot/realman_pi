@@ -40,6 +40,7 @@ def generate_launch_description():
     driver_share = Path(get_package_share_directory("realman_robot_driver"))
     web_control_share = Path(get_package_share_directory("realman_web_control"))
     calibration_share = Path(get_package_share_directory("realman_camera_calibration"))
+    pika_session_share = Path(get_package_share_directory("realman_pika_session"))
     three_drivers_launch = driver_share / "launch" / "three_realman_drivers.launch.py"
     # Docker mounts the repository configuration at REALMAN_CONFIG_ROOT so edits
     # are picked up on restart. Installed config remains the local build fallback.
@@ -70,6 +71,7 @@ def generate_launch_description():
     motion_config_file = LaunchConfiguration("motion_config_file")
     start_web_control = LaunchConfiguration("start_web_control")
     start_bt_launcher = LaunchConfiguration("start_bt_launcher")
+    start_pika_episode = LaunchConfiguration("start_pika_episode")
     start_camera_calibration = LaunchConfiguration("start_camera_calibration")
     camera_calibration_config_file = LaunchConfiguration("camera_calibration_config_file")
     update_layout_after_calibration = LaunchConfiguration("update_layout_after_calibration")
@@ -187,6 +189,11 @@ def generate_launch_description():
                 description="Let the :8765 page start behavior trees (needs bt-start, i.e. the bringup image).",
             ),
             DeclareLaunchArgument(
+                "start_pika_episode",
+                default_value="true",
+                description="Include the Pika keyboard episode trigger (it still obeys enabled in pika_episode.yaml).",
+            ),
+            DeclareLaunchArgument(
                 "start_web_control",
                 default_value="false",
                 description="Start the authenticated browser WebSocket/action bridge.",
@@ -290,6 +297,12 @@ def generate_launch_description():
                 name="bt_launcher",
                 output="screen",
                 condition=IfCondition(start_bt_launcher),
+            ),
+            IncludeLaunchDescription(
+                PythonLaunchDescriptionSource(
+                    str(pika_session_share / "launch" / "pika_episode.launch.py")
+                ),
+                condition=IfCondition(start_pika_episode),
             ),
             Node(
                 package="xbox_controller_driver",

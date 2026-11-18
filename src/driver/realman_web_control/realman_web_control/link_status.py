@@ -176,6 +176,38 @@ def match_camera_usb(spec: CameraSpec, devices: Iterable[dict[str, Any]]) -> dic
 
 
 @dataclass(frozen=True)
+class PikaSpec:
+    side: str
+    label: str
+    pose_topic: str
+    velocity_topic: str
+
+
+PIKA_LABELS = {"l": "左 Pika", "r": "右 Pika"}
+
+
+def pika_specs(recording_config_file: str | Path) -> list[PikaSpec]:
+    """Pika sides and topics as the recorder uses them (``/recording_web_bridge`` in recording.yaml).
+
+    On a host where Pika runs over Wi-Fi the pose topics are the throttled ``/pika_web/pose_*``
+    copies; reading the same list keeps :8765 from pulling the raw 125/250 Hz poses across the link.
+    """
+    params = (load_yaml(recording_config_file).get("/recording_web_bridge") or {}).get("ros__parameters") or {}
+    sides = [str(side) for side in params.get("pika_sides") or []]
+    poses = [str(topic) for topic in params.get("pika_pose_topics") or []]
+    velocities = [str(topic) for topic in params.get("pika_command_velocity_topics") or []]
+    return [
+        PikaSpec(
+            side=side,
+            label=PIKA_LABELS.get(side, f"{side} Pika"),
+            pose_topic=poses[index] if index < len(poses) else "",
+            velocity_topic=velocities[index] if index < len(velocities) else f"/pika/{side}/cartesian_velocity",
+        )
+        for index, side in enumerate(sides)
+    ]
+
+
+@dataclass(frozen=True)
 class ArmSpec:
     arm: str
     label: str
@@ -244,6 +276,8 @@ class LinkSettings:
     arms: tuple[str, ...] = ("l", "m", "r")
     usb_devices_root: str = "/sys/bus/usb/devices"
     gripper_link_stale_sec: float = 5.0
+    pika_expected_pose_hz: float = 20.0
+    pika_active_within_sec: float = 0.5
 
     @classmethod
     def from_dict(cls, raw: dict[str, Any] | None) -> "LinkSettings":
@@ -256,6 +290,8 @@ class LinkSettings:
             arms=tuple(str(arm) for arm in raw.get("arms", ("l", "m", "r"))),
             usb_devices_root=str(raw.get("usb_devices_root", "/sys/bus/usb/devices")),
             gripper_link_stale_sec=float(raw.get("gripper_link_stale_sec", 5.0)),
+            pika_expected_pose_hz=float(raw.get("pika_expected_pose_hz", 20.0)),
+            pika_active_within_sec=float(raw.get("pika_active_within_sec", 0.5)),
         )
 
 
@@ -281,7 +317,13 @@ class LinkState:
     arm_connected: dict[str, bool] = field(default_factory=dict)
     gripper_links: dict[str, tuple[float, dict[str, Any]]] = field(default_factory=dict)
     gripper_states: dict[str, dict[str, Any]] = field(default_factory=dict)
+    # Latest small status values (Pika keyboard start/stop, Pika episode state): key -> (monotonic, value).
+    values: dict[str, tuple[float, Any]] = field(default_factory=dict)
     lock: threading.Lock = field(default_factory=threading.Lock)
+
+    def set_value(self, key: str, value: Any, now: float | None = None) -> None:
+        with self.lock:
+            self.values[key] = (time.monotonic() if now is None else now, value)
 
     def set_arm_connected(self, arm: str, connected: bool) -> None:
         with self.lock:
@@ -302,6 +344,8 @@ def build_snapshot(
     gripper_bus: dict[str, dict[str, Any]],
     usb_devices: list[dict[str, Any]] | None = None,
     now: float | None = None,
+    pikas: list[PikaSpec] | None = None,
+    pika_switch: dict[str, Any] | None = None,
 ) -> dict[str, Any]:
     """``{"groups": [{"kind", "title", "items": [...]}, ...]}``; every item has id/label/tone/summary/details."""
     now = time.monotonic() if now is None else now
@@ -310,6 +354,7 @@ def build_snapshot(
         arm_connected = dict(state.arm_connected)
         gripper_links = dict(state.gripper_links)
         gripper_states = {name: dict(value) for name, value in state.gripper_states.items()}
+        values = dict(state.values)
 
     arm_items = []
     for arm in arms:
@@ -417,11 +462,78 @@ def build_snapshot(
             "details": details,
         })
 
+    pika_items = _pika_items(pikas or [], pika_switch, values, state.rates, settings, now)
     return {
         "type": "link_status",
         "groups": [
             {"kind": "arms", "title": "机械臂", "items": arm_items},
             {"kind": "cameras", "title": "相机", "items": camera_items},
             {"kind": "grippers", "title": "夹爪", "items": gripper_items},
+            {"kind": "pika", "title": "Pika", "items": pika_items},
         ],
     }
+
+
+PIKA_PHASE_TEXT = {
+    "off": "关闭", "starting": "启动中", "waiting_input": "等待 Pika 指令", "selecting": "切换模式中",
+    "on": "开启", "stopping": "关闭中", "failed": "失败",
+}
+
+
+def _pika_items(
+    pikas: list[PikaSpec],
+    switch: dict[str, Any] | None,
+    values: dict[str, tuple[float, Any]],
+    rates: RateTracker,
+    settings: LinkSettings,
+    now: float,
+) -> list[dict[str, Any]]:
+    """One item per Pika side: pose stream, teleop activity, stack and keyboard state.
+
+    ``off`` (grey) = the stack is not running and no pose arrives, which is the normal idle state;
+    ``down`` = the stack runs (or the switch is on) but this side sends no pose.
+    """
+    switch = switch or {}
+    stack_running = bool(switch.get("stack_running"))
+    phase = str(switch.get("phase", "off"))
+    expected_on = stack_running or phase not in ("off", "")
+    pedal = values.get("pika/keyboard_enabled")
+    episode = values.get("pika/episode")
+    episode_state = episode[1] if episode else {}
+    items = []
+    for pika in pikas:
+        rate, age = rates.read(f"pika_pose/{pika.side}")
+        cmd_rate, cmd_age = rates.read(f"pika_velocity/{pika.side}")
+        active = cmd_age is not None and cmd_age <= settings.pika_active_within_sec
+        pose_fresh = age is not None and age <= settings.stale_after_sec
+        if not pose_fresh:
+            if expected_on:
+                tone, reason = "down", "Pika 栈在运行，但这一侧没有位姿（追踪器未定位，或 Wi-Fi 链路断开）"
+            else:
+                tone, reason = "off", "Pika 未启动（:8765 的 Pika 速度控制开关可启动）"
+        elif settings.pika_expected_pose_hz > 0 and rate < settings.pika_expected_pose_hz * settings.low_rate_ratio:
+            tone, reason = "warn", f"位姿 {rate:.1f} Hz，低于期望 {settings.pika_expected_pose_hz:g} Hz 的 {settings.low_rate_ratio:.0%}（Wi-Fi 丢包？）"
+        else:
+            tone, reason = "ok", ""
+        if active and tone != "down":
+            reason = reason or f"正在遥操作：速度指令 {cmd_rate:.1f} Hz"
+        details = [
+            ["位姿", f"{rate:.1f} Hz · {age * 1000:.0f} ms 前" if pose_fresh else ("—" if age is None else f"已 {age:.1f} s 没有新位姿")],
+            ["位姿话题", pika.pose_topic or "未配置"],
+            ["速度指令", f"{cmd_rate:.1f} Hz（遥操作中）" if active else ("未发送（未按 W/A/S/D 开始）" if cmd_age is None else f"已停 {cmd_age:.1f} s")],
+            ["Pika 栈", ("运行中" if stack_running else "未运行") + ("" if switch.get("helper_reachable", False) else " · helper 不可达")],
+            ["速度控制开关", PIKA_PHASE_TEXT.get(phase, phase) + (f"（{switch['detail']}）" if switch.get("detail") else "")],
+            ["键盘启停", "—" if pedal is None else ("已开始" if pedal[1] else "未开始") + f" · {(now - pedal[0]) * 1000:.0f} ms 前"],
+        ]
+        if isinstance(episode_state, dict) and episode_state.get("state"):
+            details.append(["采集", f"{episode_state['state']}" + (f" · {episode_state.get('task')}" if episode_state.get("task") else "")])
+        items.append({
+            "id": pika.side,
+            "short": pika.side.upper(),
+            "label": pika.label,
+            "tone": tone,
+            "reason": reason,
+            "badge": "▶" if active else "",
+            "details": details,
+        })
+    return items

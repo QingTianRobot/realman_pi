@@ -67,7 +67,8 @@ param_tuning:
 
 # Topbar link strip on :8765 (GET /api/links): one dot per arm, camera and gripper, hover for
 # details. Cameras come from cameras_ros2.yaml (+ cameras_ros2.local.yaml), arm addresses from
-# realman_driver.yaml, gripper ports from gripper.yaml plus each gripper's /<name>/link topic.
+# realman_driver.yaml, gripper ports from gripper.yaml plus each gripper's /<name>/link topic,
+# Pika sides from recording.yaml plus the Pika switch, /foot_pedal/enabled and /pika_episode/state.
 link_status:
   arms: [l, m, r]  # Arms shown; drop one that is normally powered off on this station.
   rate_window_sec: 2.0  # joint_states / camera_info rate is counted over this window.
@@ -76,3 +77,7 @@ link_status:
   prefer_usb3: true  # A camera that negotiated USB 2.0 or slower shows amber.
   usb_devices_root: /sys/bus/usb/devices  # Host USB tree; sysfs is visible inside the container.
   gripper_link_stale_sec: 5.0  # /<name>/link older than this is ignored (gripper_manager gone).
+  # Pika dots: sides and pose topics come from recording.yaml (/recording_web_bridge pika_*), so a
+  # Wi-Fi Pika host's throttled /pika_web/pose_* is used and the raw poses never cross the link.
+  pika_expected_pose_hz: 20.0  # Pose rate below low_rate_ratio of this -> warn (0 disables).
+  pika_active_within_sec: 0.5  # A velocity command newer than this marks the side as teleoperating.

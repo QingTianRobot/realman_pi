@@ -16,7 +16,7 @@ from urllib.parse import quote
 import yaml
 
 from ament_index_python.packages import get_package_share_directory
-from geometry_msgs.msg import TwistStamped
+from geometry_msgs.msg import PoseStamped, TwistStamped
 from rcl_interfaces.srv import GetParameters, ListParameters
 import rclpy
 from rclpy.action import ActionClient
@@ -52,7 +52,7 @@ from .input_mode_bridge import InputModeBridge, InputModeEffect, InputModeOption
 from .joint_records import JointRecordStore
 from .keyboard_control import KeyboardArmCommand, load_keyboard_control_config
 from .keyboard_control_bridge import KeyboardControlBridge
-from .link_status import LinkSettings, LinkState, RateTracker, arm_specs, build_snapshot, camera_specs
+from .link_status import LinkSettings, LinkState, RateTracker, arm_specs, build_snapshot, camera_specs, pika_specs
 from .model_manifest import build_manifest
 from .param_readback import ParameterReadback
 from .param_tuning import CatalogError, ParamStore
@@ -140,6 +140,11 @@ class WebControlNode(Node):
         self.declare_parameter(
             "driver_config_file",
             str(config_root / "ros" / "realman_driver.yaml"),
+        )
+        # Pika sides and pose topics for the link strip (same list the :8770 recorder reads).
+        self.declare_parameter(
+            "recording_config_file",
+            str(config_root / "ros" / "recording.yaml"),
         )
         self.declare_parameter(
             "calibration_config_file",
@@ -508,7 +513,7 @@ class WebControlNode(Node):
                 # input_received only stores a float; it skips the control lock so the 20 Hz stream never waits.
                 self._web_subscriptions.append(self.create_subscription(
                     TwistStamped, f"/pika/{arm}/cartesian_velocity",
-                    lambda _message, arm=arm: self._pika.input_received(arm), 1,
+                    lambda _message, arm=arm: self._pika_velocity_received(arm), 1,
                     callback_group=self._callback_group,
                 ))
             self._pika_timer = self.create_timer(0.2, self._pika_tick, callback_group=self._callback_group)
@@ -849,6 +854,10 @@ class WebControlNode(Node):
                 self._request_keyboard_safe_mode()
         self._forget_mode_selection_futures()
 
+    def _pika_velocity_received(self, arm: str) -> None:
+        self._pika.input_received(arm)
+        self._link_state.rates.record(f"pika_velocity/{arm}")
+
     def _pika_mode_view(self) -> ModeView:
         snapshot = self._input_modes.snapshot
         return ModeView(
@@ -1008,12 +1017,42 @@ class WebControlNode(Node):
                 lambda _msg, key=f"camera/{camera.camera_id}": rates.record(key),
                 qos_profile_sensor_data, callback_group=self._callback_group,
             ))
+        try:
+            self._link_pikas = pika_specs(self._parameter("recording_config_file"))
+        except Exception as error:
+            self.get_logger().warning(f"link strip: no Pika list ({error})")
+            self._link_pikas = []
+        for pika in self._link_pikas:
+            if pika.pose_topic:
+                self._web_subscriptions.append(self.create_subscription(
+                    PoseStamped, pika.pose_topic,
+                    lambda _msg, key=f"pika_pose/{pika.side}": rates.record(key),
+                    qos_profile_sensor_data, callback_group=self._callback_group,
+                ))
+        self._web_subscriptions.extend([
+            self.create_subscription(
+                Bool, "/foot_pedal/enabled",
+                lambda msg: self._link_state.set_value("pika/keyboard_enabled", bool(msg.data)),
+                10, callback_group=self._callback_group,
+            ),
+            self.create_subscription(
+                String, "/pika_episode/state", self._pika_episode_state, 10, callback_group=self._callback_group,
+            ),
+        ])
         for arm in self._link_settings.arms:
             self._web_subscriptions.append(self.create_subscription(
                 Bool, f"/{arm}/connected",
                 lambda msg, selected=arm: self._link_state.set_arm_connected(selected, bool(msg.data)),
                 10, callback_group=self._callback_group,
             ))
+
+    def _pika_episode_state(self, message: String) -> None:
+        try:
+            payload = json.loads(message.data)
+        except json.JSONDecodeError:
+            return
+        if isinstance(payload, dict):
+            self._link_state.set_value("pika/episode", payload)
 
     def _gripper_link(self, name: str, message: String) -> None:
         try:
@@ -1032,6 +1071,8 @@ class WebControlNode(Node):
             cameras=self._link_cameras,
             grippers=self._grippers,
             gripper_bus=self._gripper_bus,
+            pikas=self._link_pikas,
+            pika_switch=self._pika.state_event(),
         )
 
     def _gripper_limits(self, name: str, message: GripperLimits) -> None:

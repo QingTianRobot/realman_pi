@@ -340,7 +340,7 @@ launcher 从不终止任何进程，停止仍走“终止行为树”。`realman
 
 ### 顶栏连接状态
 
-标题下方一行显示每个设备的连接情况：机械臂、相机、夹爪各一组，每台设备一个圆角点，
+标题下方一行显示每个设备的连接情况：机械臂、相机、夹爪、Pika 各一组，每台设备一个圆角点，
 绿色正常、黄色注意、红色断开。相机点上直接标出 USB 协商速度（`3.0`、`2.0`）。
 鼠标悬停（触屏上点一下）弹出该设备的详细卡片，每 2 s 跟着刷新：
 
@@ -349,6 +349,7 @@ launcher 从不终止任何进程，停止仍走“终止行为树”。`realman
 | 机械臂 | 控制器地址和端口、驱动 `/<arm>/connected`、`joint_states` 实测频率和期望频率、最近一条的时间 | 频率低于期望的 `low_rate_ratio` | 驱动报告未连接，或超过 `stale_after_sec` 没有 `joint_states` |
 | 相机 | 实测帧率 / 配置帧率、最近一帧、图像话题、USB 代际和速率、USB 端口路径和 bus、主机控制器 PCI 地址、设备名、USB 序列号 | 帧率偏低；`prefer_usb3: true` 时协商为 USB 2.0 或更慢；USB 上找不到这台相机 | 没收到帧或超过 `stale_after_sec` 没有新帧 |
 | 夹爪 | 是否连接、串口及实际 tty（如 `/dev/realman/gripper_left → ttyUSB0`）、Modbus 从站和波特率、实际轮询频率、报警位、USB 适配器的端口和速率 | 报警位非 0 | Modbus 无应答（`connected=false`） |
+| Pika | 位姿实测频率和最近一条、位姿话题、速度指令（遥操作中显示 ▶ 角标）、Pika 栈是否运行、速度控制开关阶段、键盘 W/A/S/D 启停状态、采集状态 | 位姿频率低于 `pika_expected_pose_hz` 的 `low_rate_ratio`（Wi-Fi 丢包） | Pika 栈在运行或开关已开，但这一侧没有位姿；栈未运行且没有位姿时显示灰色“未启动”，不算故障 |
 
 数据来源，全部只读：
 
@@ -359,11 +360,16 @@ launcher 从不终止任何进程，停止仍走“终止行为树”。`realman
 - 相机的 USB 信息直接读主机的 `/sys/bus/usb/devices`（容器里可见）：Orbbec 按序列号匹配；
   RealSense 的 USB 序列号与 librealsense 序列号不同，所以按型号（D435 = `8086:0b07`）匹配，同型号多台时不显示。
 - 机械臂地址和期望频率来自 `config/ros/realman_driver.yaml` 的 `robot_ip`、`robot_port`、`state_publish_rate`。
+- Pika 的左右两侧和位姿话题读 `config/ros/recording.yaml` 中 `/recording_web_bridge` 的 `pika_sides`、`pika_pose_topics`、
+  `pika_command_velocity_topics`，与 :8770 录制页同一份。Pika 跑在 Wi-Fi 主机上时这里是限流后的 `/pika_web/pose_*`，
+  所以控制页不会把 125/250 Hz 的原始位姿拉过无线链路；Pika 夹爪开合度话题频率不定，不订阅。
+  栈和开关状态来自“Pika 速度控制”开关，键盘启停来自 `/foot_pedal/enabled`，采集状态来自 `/pika_episode/state`。
 - 夹爪的串口只在 `realman_bringup_remote` 容器里有设备节点，所以 USB 信息由 `gripper_manager` 自己解析
   （设备号 → `/sys/dev/char/<主:次>` → 所属 USB 设备）并发布到 `/<name>/link`；超过 `gripper_link_stale_sec` 没收到就只显示配置里的串口。
 
 `realman_web_control.yaml` 的 `link_status` 段：`arms`（显示哪几条臂，平时断电的臂可以去掉）、`rate_window_sec`、
-`stale_after_sec`、`low_rate_ratio`、`prefer_usb3`、`usb_devices_root`、`gripper_link_stale_sec`。
+`stale_after_sec`、`low_rate_ratio`、`prefer_usb3`、`usb_devices_root`、`gripper_link_stale_sec`、
+`pika_expected_pose_hz`、`pika_active_within_sec`。
 
 ### 重启 Docker（驱动容器）
 

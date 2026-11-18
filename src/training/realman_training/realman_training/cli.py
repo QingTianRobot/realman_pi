@@ -428,7 +428,7 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--resume", action="store_true")
     p.add_argument("--init-from", metavar="CONFIG/EXP/STEP",
                    help="start from an earlier run's checkpoint instead of openpi.weights (pi05_base)")
-    p.add_argument("--share-gpus", action="store_true",
+    p.add_argument("--share-gpus", action="store_true", default=None,  # omitted: openpi.default_share_gpus
                    help="train on GPUs that already hold memory when openpi.train_need_mib is still free")
     p.add_argument("--attach", action="store_true", help="follow an already running training container")
     p.add_argument("--dry-run", action="store_true")
@@ -441,7 +441,7 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--checkpoints", help="e.g. 10000,29999 (default: the latest)")
     p.add_argument("--stride", type=int)
     p.add_argument("--no-prompt-swap", action="store_true")
-    p.add_argument("--share-gpus", action="store_true",
+    p.add_argument("--share-gpus", action="store_true", default=None,  # omitted: openpi.default_share_gpus
                    help="evaluate on a GPU that already holds memory when openpi.eval_need_mib is still free")
     p.add_argument("--dry-run", action="store_true")
     p = step("register", "write the model card and the registry row")

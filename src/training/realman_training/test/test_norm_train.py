@@ -422,3 +422,12 @@ def test_norm_on_uv_runs_cpu_only(env, tmp_path):
     assert out["computed"] is True
     call = runner.commands("opic-norm --config-name")[0]
     assert call[:3] == ["env", "JAX_PLATFORMS=cpu", "setsid"]
+
+
+def test_train_share_gpus_none_from_the_cli_means_the_config_default(env, tmp_path):
+    runner = (FakeRunner().on("python -", stdout=json.dumps(INFO)).on("test -e", returncode=1)
+              .on("nvidia-smi", stdout="1, 40000, 49140\n"))
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1", "share_gpus": None,
+              "config": uv_env(env, tmp_path, share="true")}
+    with pytest.raises(StepFailed, match="not enough free memory"):
+        train.run(params, RecordingLog(), runner=runner)

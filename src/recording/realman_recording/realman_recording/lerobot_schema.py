@@ -11,7 +11,7 @@ from __future__ import annotations
 from dataclasses import dataclass
 from hashlib import sha256
 import json
-from typing import Iterable
+from typing import Any, Iterable
 
 
 @dataclass(frozen=True)
@@ -244,6 +244,25 @@ class LeRobotV3Schema:
             "cartesian_command_frames": self.cartesian_command_frames,
         }
         return sha256(json.dumps(payload, sort_keys=True).encode()).hexdigest()
+
+
+def session_velocity_topics(manifest: dict[str, Any], configured: Iterable[str]) -> tuple[str, ...]:
+    """Measured EE-velocity topics to export for one recorded session.
+
+    The session's own ``canonical_config`` (written when it was recorded) wins, even
+    when it is an empty list: a session recorded without velocity streams must not be
+    asked for them because today's config has them.  Only manifests written before the
+    key existed fall back to ``configured``.  With topics, the exporter stores the
+    driver-measured velocity; without, it falls back to the FK shortest-arc estimate.
+    """
+    metadata = manifest.get("metadata") if isinstance(manifest, dict) else None
+    config = metadata.get("canonical_config") if isinstance(metadata, dict) else None
+    if isinstance(config, dict) and "arm_velocity_topics" in config:
+        recorded = config["arm_velocity_topics"]
+        if not isinstance(recorded, list) or not all(isinstance(item, str) for item in recorded):
+            raise ValueError("session canonical_config arm_velocity_topics must be a list of topic names")
+        return tuple(item for item in recorded if item)
+    return tuple(str(item) for item in configured if str(item))
 
 
 def schema_from_parameters(*, repo_id: str, fps: float, arms: Iterable[str], arm_action_topics: Iterable[str],

@@ -24,7 +24,7 @@ from .lerobot_align import AlignmentPolicy, TimedSample, align_streams
 from .canonical_features import materialize_canonical_frames, validate_command_frame
 from .joint_state import ordered_joint_position
 from .kinematics import UrdfKinematics
-from .lerobot_schema import LeRobotV3Schema, schema_from_parameters
+from .lerobot_schema import LeRobotV3Schema, schema_from_parameters, session_velocity_topics
 from .lerobot_dataset_store import dataset_lock
 from .lerobot_image_pipeline import (
     iter_decoded_frames,
@@ -729,7 +729,7 @@ def main(args: list[str] | None = None) -> int:
         repo_id=str(config.get("repo_id", "realman/pi05-three-arm")), fps=parsed.target_fps,
         arms=config.get("arms", ["l", "m", "r"]),
         arm_action_topics=config.get("arm_action_topics", []),
-        arm_velocity_topics=config.get("arm_velocity_topics", []),
+        arm_velocity_topics=session_velocity_topics(manifest, ()),
         gripper_position_topics=config.get("gripper_position_topics", []),
         gripper_action_topics=config.get("gripper_action_topics", []),
         camera_ids=config.get("camera_ids", []),

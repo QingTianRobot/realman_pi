@@ -80,3 +80,34 @@ def test_schema_does_not_fabricate_gripper_actions_when_unavailable():
     )
     assert schema.gripper_command_dim == 0
     assert "action.command.gripper" not in schema.features({"left": (240, 320, 3)})
+
+
+def test_session_velocity_topics_prefer_the_recorded_session_config():
+    from realman_recording.lerobot_schema import session_velocity_topics
+
+    manifest = {"metadata": {"canonical_config": {"arm_velocity_topics": ["/l/cartesian_velocity/state", ""]}}}
+    assert session_velocity_topics(manifest, ["/x/cartesian_velocity/state"]) == ("/l/cartesian_velocity/state",)
+
+
+def test_session_velocity_topics_keep_an_explicitly_empty_session_list():
+    from realman_recording.lerobot_schema import session_velocity_topics
+
+    # A session recorded without velocity streams must not be asked for them today.
+    manifest = {"metadata": {"canonical_config": {"arm_velocity_topics": []}}}
+    assert session_velocity_topics(manifest, ["/l/cartesian_velocity/state"]) == ()
+
+
+def test_session_velocity_topics_fall_back_to_configured_for_old_manifests():
+    from realman_recording.lerobot_schema import session_velocity_topics
+
+    assert session_velocity_topics({"metadata": {}}, ["/l/cartesian_velocity/state", ""]) == ("/l/cartesian_velocity/state",)
+    assert session_velocity_topics({}, ()) == ()
+
+
+def test_session_velocity_topics_reject_a_malformed_list():
+    import pytest
+
+    from realman_recording.lerobot_schema import session_velocity_topics
+
+    with pytest.raises(ValueError, match="arm_velocity_topics"):
+        session_velocity_topics({"metadata": {"canonical_config": {"arm_velocity_topics": "/l/x"}}}, ())

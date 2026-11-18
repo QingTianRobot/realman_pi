@@ -47,7 +47,7 @@ from .camera_workers import (
 from .lerobot_exporter import ExportRequest, LeRobotExporter
 from .export_queue import SerialExportWorker, should_auto_export
 from .kinematics import urdf_joint_limits
-from .lerobot_schema import schema_from_parameters
+from .lerobot_schema import schema_from_parameters, session_velocity_topics
 from .preflight import PreflightChecker, PreflightRequirements, PreflightResult, configured_required_topics
 from .synthetic_arms import parse_synthetic_arms, preflight_arms, preflight_topics
 from .provenance import snapshot_optional_file
@@ -824,9 +824,11 @@ class RecordingRecorderNode(Node):
         # or after it (rejected: the session is already RUNNING); it can never
         # interleave the re-check and the mark to slip a discarded session into export.
         profile = ""
+        session_manifest: dict = {}
         with self._decision_lock:
             try:
                 manifest = json.loads((directory / "manifest.json").read_text(encoding="utf-8"))
+                session_manifest = manifest if isinstance(manifest, dict) else {}
                 decision = manifest.get("decision") if isinstance(manifest, dict) else None
                 metadata = manifest.get("metadata") if isinstance(manifest, dict) else None
                 profile = str(metadata.get("profile", "")) if isinstance(metadata, dict) else ""
@@ -862,6 +864,11 @@ class RecordingRecorderNode(Node):
                         fps=float(self.get_parameter("export_target_fps").value),
                         arms=self._arms,
                         arm_action_topics=self.get_parameter("arm_action_topics").value,
+                        # Measured EE velocity as recorded in this session (else the
+                        # exporter silently falls back to the FK shortest-arc estimate).
+                        arm_velocity_topics=session_velocity_topics(
+                            session_manifest, self.get_parameter("arm_velocity_topics").value
+                        ),
                         gripper_position_topics=self.get_parameter("gripper_position_topics").value,
                         gripper_action_topics=self.get_parameter("gripper_action_topics").value,
                         camera_ids=self.get_parameter("camera_ids").value,

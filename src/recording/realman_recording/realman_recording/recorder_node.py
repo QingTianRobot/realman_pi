@@ -123,6 +123,7 @@ class RecordingRecorderNode(Node):
         self.declare_parameter("export_max_gap_sec", 2.0)
         self.declare_parameter("auto_export_on_stop", True)
         self.declare_parameter("export_workers", 3)
+        self.declare_parameter("export_image_workers", 4)
         self.declare_parameter("preflight_max_age_sec", 2.0)
         # A larger fresh-data skew requests asynchronous post-record alignment; it
         # never masks a stale/disconnected sensor, which remains a hard PREPARE fail.
@@ -875,6 +876,7 @@ class RecordingRecorderNode(Node):
                         cartesian_command_frames=self.get_parameter("cartesian_command_frames").value,
                     ),
                     progress_callback=self._export_progress_callback,
+                    image_workers=int(self.get_parameter("export_image_workers").value),
                 )
             )
         except Exception as error:  # noqa: BLE001 - failure is persisted for upstream polling

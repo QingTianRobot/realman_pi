@@ -9,7 +9,7 @@ description: RealMan 驱动输出的隔离录制、预检、低清展示与 LeRo
 
 `realman_recording` 是一个**订阅式数据录制与回放** ROS 2 节点组：它只订阅已有的驱动与夹爪输出，不创建 `Robotic_Arm`/RealMan SDK 客户端，也不发布机械臂运动命令。`./rm65 up` 通过 `realman_recording` 容器随生产 ROS 图一起启动它（默认开启）；正常实时展示继续由 `realman_web_control` 提供。recording 自带网页仅用于录制与已导出 episode 的只读回放，不发起任何录制控制；上游系统通过 `/recording/manage` Service 控制录制生命周期，不能复用或代理 `realman_web_control` 的运动面板。
 
-录制和数据集转换是两个阶段：停止时只原子收尾原始 MCAP/JPEG 帧 session；转换由独立的 LeRobot worker 完成。`config/ros/recording.yaml` 的 `auto_export_on_stop`（默认 `true`）让**干净收尾**的 session 在 STOP 后自动采用并入队导出，由单个串行 worker 一次只转换一个；有 MCAP 或相机写错误的 `FAILED` session 永远不会自动导出。设为 `false` 恢复手动 `ADOPT`。转换占用的 CPU、GPU、图像解码或失败均不得减慢下一次 ROS 数据录制。
+录制和数据集转换是两个阶段：停止时只原子收尾原始 MCAP/JPEG 帧 session；转换由独立的 LeRobot worker 完成。`config/ros/recording.yaml` 的 `auto_export_on_stop`（默认 `true`）让**干净收尾**的 session 在 STOP 后自动采用并入队导出（并行与加速见下文 [LeRobot 转换并行](#lerobot-转换并行)）；有 MCAP 或相机写错误的 `FAILED` session 永远不会自动导出。设为 `false` 恢复手动 `ADOPT`。转换占用的 CPU、GPU、图像解码或失败均不得减慢下一次 ROS 数据录制。
 
 MCAP 状态写入、ROS `Image` 有界 JPEG 录制、低清 JPEG 预览、夹爪/相机健康状态、Three.js/URDF 三臂展示、预检和预约控制已经接入。`ADOPT` 会在 ROS executor 外把完成 session 异步转换为 `lerobot==0.4.4` 的 canonical v3 episode；失败会持久化为 `FAILED`，不会伪造成功的数据集。
 MCAP 的 `accepted_samples` 仅在序列化并成功交给 writer 后递增；`enqueued_samples`
@@ -216,6 +216,22 @@ docker compose up realman_recording
 ```
 
 独立 launch 会创建 `logs/YYYYMMDD_HHMMSS/` 并设置 ROS 2 官方节点日志目录；使用 rcutils 彩色输出，不应添加自定义日志重定向。
+
+## LeRobot 转换并行
+
+一个 episode 的转换时间几乎都花在图像上：每帧每路相机先解码一张归档 JPEG，再由 SDK 的 `add_frame` 重编码成临时 PNG，最后才交给视频编码器。串行跑时三路 640×480 约 30 ms/帧。并行分三层，参数都在 `config/ros/recording.yaml`：
+
+| 层 | 参数 | 作用 |
+| --- | --- | --- |
+| session 之间 | `export_workers`（3） | 多个 session 同时做 MCAP 读取、对齐和 FK；同一数据集的追加（帧写入、`save_episode`、`finalize`）仍由数据集旁的 `fcntl` 锁串行，不同 `repo_id` 的数据集互不阻塞。 |
+| episode 内图像 | `export_image_workers`（8） | `lerobot_image_pipeline.py`：线程池按帧序预解码 JPEG（最多领先 2×workers 帧），同时开启 LeRobot 自带的线程版 `AsyncImageWriter` 并行写 PNG。Pillow 编解码时释放 GIL，因此线程比进程快（进程要 pickle 每帧约 1 MB 的数组）。`0` 恢复原来的完全串行。 |
+| 视频编码 | 无（SDK 内置） | `save_episode(parallel_encoding=True)` 已经是每路相机一个进程。 |
+
+两处保护：SDK 的 PNG 队列没有上限，导出器在队列超过 `4 × workers × 相机数` 张时等待，内存不随 episode 长度增长；SDK 的 `write_image` 写失败只打印不抛错，所以 `save_episode` 前会检查每一张暂存 PNG 都存在且非空，缺帧直接让导出 `FAILED`，而不是让编码器悄悄少一帧。
+
+本地实测（Apple M 系列 10 核，LeRobot 0.4.4，3 路 640×480、1200 帧，走真实 `_add_v3_frames` + `save_episode`）：串行 57.1 s（图像暂存 34.8 s + AV1 编码 22.4 s），`export_image_workers: 8` 为 27.9 s（暂存 7.0 s + 编码 20.8 s）；两种方式的 PNG 像素、parquet 表和每路视频帧数（1200）完全一致。剩下的大头是 AV1 编码，已经按相机并行。
+
+不使用 SDK 的 `streaming_encoding`（边加帧边编码、跳过 PNG）：同一基准里它更快（15 s），但其中一路相机的视频只有 1199 帧，训练数据不能接受丢帧。
 
 ## 实现状态与后续清单
 

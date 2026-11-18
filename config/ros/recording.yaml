@@ -74,7 +74,7 @@
     # window rejects; 2.0 s still catches a genuinely stopped stream.
     export_max_gap_sec: 2.0
     # Auto-adopt a cleanly finalized session on STOP and enqueue its LeRobot
-    # conversion (run one-at-a-time by a single serialized worker).  A FAILED
+    # conversion (export_workers / export_image_workers below).  A FAILED
     # session (MCAP/camera write errors) is never auto-exported; set false to
     # restore the manual ADOPT-only flow.  Manual export (option A) keeps new
     # sessions PENDING so the operator can review/hide them before batch-exporting
@@ -96,6 +96,11 @@
     # Concurrent LeRobot conversion workers.  Read/align phases overlap; the dataset's
     # own process-wide append lock still serializes the final parquet/video write.
     export_workers: 3
+    # Threads per export for JPEG decode + temporary PNG staging (LeRobot's own
+    # AsyncImageWriter).  Only one export per dataset holds its append lock at a time, so this is
+    # not multiplied by export_workers.  0 = the old fully serial loop.  Video
+    # encoding is unaffected (already one process per camera).
+    export_image_workers: 8
     # PREPARE requires each required ROS input to have a receipt no older than this.
     preflight_max_age_sec: 2.0
     # Fresh sensors exceeding this receipt-time span remain recordable, but PREPARE

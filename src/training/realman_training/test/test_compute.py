@@ -114,3 +114,107 @@ def test_remote_step_main_reports_result_and_failure(monkeypatch, capsys, tmp_pa
 
 def test_remote_step_refuses_local_kinds(config):
     assert compute.remote_step_main("pull", "t") == 2
+
+
+def test_cancel_before_the_step_starts_is_recorded_and_honoured(monkeypatch, capsys, config):
+    monkeypatch.setattr(compute, "load_config", lambda path=None: config)
+    assert compute.remote_cancel_main("early") == 0
+    marker = config.openpi.docker_data / "console_run" / "step-early.cancel"
+    assert marker.exists()
+    ran = []
+    monkeypatch.setattr(compute, "_step", lambda kind: (lambda params, log: ran.append(kind) or {}))
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("{}"))
+    assert compute.remote_step_main("train", "early") == 1
+    assert ran == [] and not marker.exists()
+    assert capsys.readouterr().out.splitlines()[-1] == "@@cancelled"
+    assert not (config.openpi.docker_data / "console_run" / "step-early.pid").exists()
+
+
+def test_cancel_with_a_pid_sends_sigterm(monkeypatch, config):
+    import signal
+
+    monkeypatch.setattr(compute, "load_config", lambda path=None: config)
+    pid_file = config.openpi.docker_data / "console_run" / "step-live.pid"
+    pid_file.parent.mkdir(parents=True)
+    pid_file.write_text("4242", encoding="utf-8")
+    killed = []
+    monkeypatch.setattr(compute.os, "kill", lambda pid, sig: killed.append((pid, sig)))
+    assert compute.remote_cancel_main("live") == 0
+    assert killed == [(4242, signal.SIGTERM)]
+    assert not (config.openpi.docker_data / "console_run" / "step-live.cancel").exists()
+
+
+def _ticking_clock():
+    now = [0.0]
+
+    def clock():
+        now[0] += 100.0
+        return now[0]
+
+    return clock
+
+
+def test_periodic_mirror_sync_runs_in_the_background_one_at_a_time(config):
+    import threading
+
+    release, order = threading.Event(), []
+    periodic_started = []
+
+    def rsync(argv, input):
+        if not periodic_started:
+            periodic_started.append(argv)
+            order.append("sync waiting")
+            assert release.wait(5), "the stream never finished while the periodic sync was held"
+            order.append("sync done")
+
+    progress = ['@@progress {"done": %d, "total": 5}' % i for i in range(1, 6)]
+    runner = FakeRunner().on("rsync", action=rsync).on(
+        "_remote-step", lines=[*progress, '@@result {"ok": 1}'])
+    inner_stream = runner.stream
+
+    def stream(argv, on_line, **kwargs):
+        code = inner_stream(argv, on_line, **kwargs)
+        order.append("stream done")
+        release.set()
+        return code
+
+    runner.stream = stream
+    result = compute.run_remote("norm", {}, RecordingLog(), runner=runner, clock=_ticking_clock(),
+                                load=lambda _: config)
+    assert result == {"ok": 1}
+    # the stream finished while the periodic sync was still held, and the final sync waited for it
+    assert "sync waiting" in order and order.index("stream done") < order.index("sync done")
+    # one periodic sync (4 rsyncs) despite 5 due progress lines, then the final sync (4 rsyncs)
+    assert len(runner.commands("rsync")) == 8
+
+
+def test_mirror_rsyncs_have_an_io_timeout(config):
+    runner = FakeRunner()
+    compute.sync_mirror(config, runner, RecordingLog())
+    assert all("--timeout=120" in c for c in runner.commands("rsync")) and len(runner.commands("rsync")) == 4
+
+
+def test_malformed_progress_or_result_lines_do_not_abort_the_stream(config):
+    runner = FakeRunner().on("_remote-step", lines=["@@progress {oops", "after", "@@result {bad"])
+    log = RecordingLog()
+    with pytest.raises(StepFailed, match="without a result"):
+        compute.run_remote("view", {}, log, runner=runner, load=lambda _: config)
+    assert "@@progress {oops" in log.lines and "after" in log.lines and "@@result {bad" in log.lines
+
+
+def test_lost_connection_cancels_orphans_but_not_train(config):
+    lost = FakeRunner().on("_remote-step", returncode=255).on("_remote-cancel", returncode=1)
+    with pytest.raises(StepFailed, match="lost the connection"):
+        compute.run_remote("norm", {}, RecordingLog(), runner=lost, load=lambda _: config)
+    assert lost.commands("_remote-cancel")
+    train = FakeRunner().on("_remote-step", returncode=255)
+    with pytest.raises(StepFailed, match="attach"):
+        compute.run_remote("train", {}, RecordingLog(), runner=train, load=lambda _: config)
+    assert not train.commands("_remote-cancel")
+
+
+def test_failed_config_py_rsync_is_logged(config):
+    runner = FakeRunner().on("config.py", returncode=23, stdout="denied")
+    log = RecordingLog()
+    assert compute.sync_mirror(config, runner, log) is False
+    assert any("config.py" in line and "denied" in line for line in log.lines)

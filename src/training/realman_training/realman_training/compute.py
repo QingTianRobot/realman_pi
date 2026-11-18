@@ -17,6 +17,7 @@ import secrets
 import shlex
 import signal
 import sys
+import threading
 import time
 import traceback
 from pathlib import Path
@@ -34,6 +35,8 @@ PACKAGE = "src/training/realman_training"
 MIRROR_EXCLUDES = ("videos/", "*.mp4", "params/", "train_state/", "_console/", "*.partial/", f"{RUN_DIR_NAME}/")
 PROGRESS, RESULT, FAILED, CANCELLED = "@@progress ", "@@result ", "@@failed ", "@@cancelled"
 SSH_LOST = 255
+RSYNC_IO_TIMEOUT = "--timeout=120"  # a stalled mirror rsync gives up instead of hanging the step
+SYNC_JOIN_SEC = 300.0  # how long the final mirror refresh waits for a periodic one still running
 
 
 def enabled(config: ConsoleConfig) -> bool:
@@ -107,7 +110,7 @@ def from_wire(value, config: ConsoleConfig):
 
 
 def rsync_from(config: ConsoleConfig, remote: str, local: Path, excludes=MIRROR_EXCLUDES) -> list[str]:
-    return ["rsync", "-a", "--partial", "-e", shlex.join(ssh_base(config)), *[f"--exclude={e}" for e in excludes],
+    return ["rsync", "-a", "--partial", RSYNC_IO_TIMEOUT, "-e", shlex.join(ssh_base(config)), *[f"--exclude={e}" for e in excludes],
             f"{config.compute.ssh_host}:{remote.rstrip('/')}/", f"{local}/"]
 
 
@@ -129,8 +132,10 @@ def sync_mirror(config: ConsoleConfig, runner: Runner, log) -> bool:
     training = config.openpi.repo / "src" / "openpi" / "training"
     training.mkdir(parents=True, exist_ok=True)
     source = f"{config.compute.ssh_host}:{remote_path(config, REMOTE_OPENPI + '/src/openpi/training/config.py')}"
-    if runner.run(["rsync", "-a", "-e", shlex.join(ssh_base(config)), source, f"{training}/"]).returncode:
+    done = runner.run(["rsync", "-a", RSYNC_IO_TIMEOUT, "-e", shlex.join(ssh_base(config)), source, f"{training}/"])
+    if done.returncode:
         ok = False
+        log(f"mirror: {source} not refreshed ({(done.stderr or done.stdout).strip()[-200:]})")
     return ok
 
 
@@ -141,17 +146,33 @@ def run_remote(kind: str, params: dict, log, runner: Runner | None = None, clock
     host = config.compute.ssh_host
     token = secrets.token_hex(4)
     wire = to_wire({key: value for key, value in params.items() if key != "config"}, config)
-    state = {"result": None, "failed": None, "cancelled": False, "synced": clock()}
+    state = {"result": None, "failed": None, "cancelled": False, "synced": clock(), "sync": None}
+
+    def periodic_sync() -> None:
+        """Refresh the mirror off the ssh reader thread, never two at a time."""
+        running = state["sync"]
+        if running is not None and running.is_alive():
+            return
+        state["synced"] = clock()
+        state["sync"] = threading.Thread(target=sync_mirror, args=(config, runner, log), daemon=True,
+                                         name=f"mirror-{token}")
+        state["sync"].start()
 
     def on_line(line: str) -> None:
         if line.startswith(PROGRESS):
-            data = json.loads(line[len(PROGRESS):])
-            log.progress(data["done"], data.get("total"), data.get("text", ""))
+            try:
+                data = json.loads(line[len(PROGRESS):])
+                log.progress(data["done"], data.get("total"), data.get("text", ""))
+            except (json.JSONDecodeError, KeyError, TypeError):
+                log(line)
+                return
             if clock() - state["synced"] >= config.compute.mirror_sync_sec:
-                state["synced"] = clock()
-                sync_mirror(config, runner, log)
+                periodic_sync()
         elif line.startswith(RESULT):
-            state["result"] = json.loads(line[len(RESULT):])
+            try:
+                state["result"] = json.loads(line[len(RESULT):])
+            except json.JSONDecodeError:
+                log(line)
         elif line.startswith(FAILED):
             state["failed"] = line[len(FAILED):]
         elif line == CANCELLED:
@@ -159,16 +180,21 @@ def run_remote(kind: str, params: dict, log, runner: Runner | None = None, clock
         else:
             log(line)
 
+    def stop_remote() -> None:
+        stop = runner.run(ssh_argv(config, remote_python(config, ["_remote-cancel", token])))
+        if stop.returncode:
+            log(f"could not stop it on {host}: {(stop.stderr or stop.stdout).strip()[-300:]}")
+
     log(f"{kind} runs on {host}")
     try:
         code = runner.stream(ssh_argv(config, remote_python(config, ["_remote-step", kind, token])), on_line,
                              input=json.dumps(wire))
     except JobCancelled:
         log(f"cancelled: stopping {kind} on {host}")
-        stop = runner.run(ssh_argv(config, remote_python(config, ["_remote-cancel", token])))
-        if stop.returncode:
-            log(f"could not stop it on {host}: {(stop.stderr or stop.stdout).strip()[-300:]}")
+        stop_remote()
         raise
+    if state["sync"] is not None:
+        state["sync"].join(SYNC_JOIN_SEC)
     sync_mirror(config, runner, log)
     if state["failed"] is not None:
         raise StepFailed(state["failed"])
@@ -176,6 +202,9 @@ def run_remote(kind: str, params: dict, log, runner: Runner | None = None, clock
         raise StepFailed(f"{kind} was cancelled on {host}")
     if state["result"] is None:
         if code == SSH_LOST:
+            if kind != "train":  # training must survive a dropped link; any other step is stopped, best effort
+                log(f"lost the connection: stopping {kind} on {host}")
+                stop_remote()
             hint = "; training goes on there: start train again with attach" if kind == "train" else ""
             raise StepFailed(f"lost the connection to {host}{hint}")
         raise StepFailed(f"{kind} on {host} exited {code} without a result")
@@ -191,6 +220,11 @@ def _pid_file(config: ConsoleConfig, token: str) -> Path:
     return config.openpi.docker_data / RUN_DIR_NAME / f"step-{token}.pid"
 
 
+def _cancel_file(config: ConsoleConfig, token: str) -> Path:
+    """Written by a cancel that arrived before the step wrote its pid file; the step honours it at start."""
+    return _pid_file(config, token).with_suffix(".cancel")
+
+
 def remote_step_main(kind: str, token: str) -> int:
     """On the compute host: params (wire JSON) on stdin, the step's log on stdout, last line the outcome."""
     if kind not in REMOTE_KINDS:
@@ -198,7 +232,7 @@ def remote_step_main(kind: str, token: str) -> int:
         return 2
     config = load_config()
     params = from_wire(json.loads(sys.stdin.read() or "{}"), config)
-    pid_file = _pid_file(config, token)
+    pid_file, cancel_file = _pid_file(config, token), _cancel_file(config, token)
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
 
@@ -222,6 +256,9 @@ def remote_step_main(kind: str, token: str) -> int:
         emit(PROGRESS + json.dumps({"done": done, "total": total, "text": text}, ensure_ascii=False))
 
     try:
+        if cancel_file.exists():
+            cancel_file.unlink(missing_ok=True)
+            raise JobCancelled()
         result = _step(kind)(params, StepLog(emit, progress))
         emit(RESULT + json.dumps(to_wire(result, config), ensure_ascii=False))
         return 0
@@ -238,15 +275,34 @@ def remote_step_main(kind: str, token: str) -> int:
         return 1
     finally:
         pid_file.unlink(missing_ok=True)
+        cancel_file.unlink(missing_ok=True)
         for sig, handler in previous.items():
             signal.signal(sig, handler)
 
 
 def remote_cancel_main(token: str) -> int:
-    pid_file = _pid_file(load_config(), token)
-    try:
-        os.kill(int(pid_file.read_text(encoding="utf-8")), signal.SIGTERM)
-    except (OSError, ValueError) as error:
-        print(f"no running step {token}: {error}", file=sys.stderr)
-        return 1
+    config = load_config()
+    pid_file, cancel_file = _pid_file(config, token), _cancel_file(config, token)
+
+    def kill() -> bool:
+        try:
+            pid = int(pid_file.read_text(encoding="utf-8"))
+        except (OSError, ValueError):
+            return False
+        try:
+            os.kill(pid, signal.SIGTERM)
+        except OSError as error:
+            print(f"could not stop step {token} (pid {pid}): {error}", file=sys.stderr)
+        return True
+
+    if kill():
+        return 0
+    # The step has not written its pid yet: leave a marker it checks at start, then look once more in case the pid
+    # file appeared in between (the step may already be past its marker check).
+    cancel_file.parent.mkdir(parents=True, exist_ok=True)
+    cancel_file.write_text("", encoding="utf-8")
+    if kill():
+        cancel_file.unlink(missing_ok=True)
+        return 0
+    print(f"step {token} not started yet: cancel recorded", file=sys.stderr)
     return 0

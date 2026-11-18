@@ -83,8 +83,8 @@ Non-goals:
 
   Validation: empty, or an `http://` URL whose host is 127.0.0.1, localhost or ::1.
   The helper is only reached through the loopback tunnel.
-- New module `realman_recording/pika_helper_client.py`. It is a stdlib `urllib`
-  client with the same shape as `realman_web_control/pika_helper_client.py`
+- New module `realman_recording/pika_recalibrate.py` (the guard plus a stdlib `urllib`
+  client) with the same shape as `realman_web_control/pika_helper_client.py`
   (`call_helper(base_url, action, timeout)` returning `(ok, payload)`), with the
   actions `status` (GET) and `recalibrate` (POST). It is copied rather than
   imported, so the recording package gains no dependency on web_control.
@@ -105,7 +105,7 @@ Non-goals:
 - `/api/layout` (manifest) gains `pika_recalibrate: true|false`, so the frontend
   knows whether to render the button.
 
-### 3. :8770 frontend (`web/src/pika-view.ts`, `styles.css`)
+### 3. :8770 frontend (`web/src/pika-recalibrate.ts`, `index.html`, `styles.css`)
 
 - A **重标定** button in the Pika panel header, rendered only when the manifest
   says `pika_recalibrate: true`.
@@ -136,7 +136,7 @@ Non-goals:
 | Stop leaves processes | helper exit 1; calibration NOT renamed; stack NOT started |
 | Calibration file missing | still restarts; `backup: null`, note in output |
 | Rename fails | exit 1; stack left stopped (the operator can use the :8765 switch or press again) |
-| Start fails | exit 1 with output tail; calibration already moved (backup path in result) |
+| Start fails | exit 1 with output tail; calibration already moved (backup path in the output tail and in `/status` `last.backup`) |
 | Not localized in 60 s | page shows the re-plug message with the sides that are not live |
 
 ## Testing

@@ -22,6 +22,10 @@ from realman_pika_session.episode_machine import Action, EpisodeMachine, Machine
 
 SERVICE_TIMEOUT_SEC = 10.0
 RESULT_MARGIN_SEC = 5.0
+# The driver can still own the arm a few ms after /<arm>/cartesian_velocity/state reports the session
+# inactive, and then rejects the homing MoveJ ("arm is busy"). A rejected goal is resent for this long.
+HOME_REJECT_RETRY_SEC = 2.0
+HOME_REJECT_RETRY_INTERVAL_SEC = 0.2
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 BEST_EFFORT = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 MODE_TOPIC = "/realman_bt_executor/input_mode_state"
@@ -65,6 +69,9 @@ class TriggerNode(Node):
         # arm -> (home episode, deadline); the episode token drops late results from an older homing.
         self._home_episode = 0
         self._home_deadlines: dict[str, tuple[int, float]] = {}
+        # arm -> (home episode, first send time, resend time) for a rejected homing goal.
+        self._home_retries: dict[str, tuple[int, float, float]] = {}
+        self._home_retry_sec = HOME_REJECT_RETRY_SEC
         self._state_pub = self.create_publisher(String, "/pika_episode/state", LATCHED)
         self._last_published: dict | None = None
         self._last_publish_time = 0.0
@@ -146,6 +153,11 @@ class TriggerNode(Node):
         for arm, (episode, deadline) in list(self._home_deadlines.items()):
             if now > deadline:
                 self._finish_home(arm, episode, False, "no MoveJ result in time")
+        for arm, (episode, first_sent, resend_at) in list(self._home_retries.items()):
+            if now >= resend_at:
+                del self._home_retries[arm]
+                if self._home_deadlines.get(arm, (None,))[0] == episode:
+                    self._send_home(arm, episode, first_sent)
         self._check_mode_publisher()
         self._apply(self._machine.tick(now))  # _apply always publishes (on change or once a second)
 
@@ -157,6 +169,7 @@ class TriggerNode(Node):
             elif action.kind == "home":
                 self._home_episode += 1
                 self._home_deadlines.clear()  # older episodes' results are ignored anyway; no stale timeouts
+                self._home_retries.clear()
                 for arm in action.arms:
                     self._open_gripper(arm)
                     self._send_home(arm, self._home_episode)
@@ -265,9 +278,10 @@ class TriggerNode(Node):
             response.success, f"gripper of /{arm} {'opened' if response.success else 'open failed'}: {response.message}",
             "warning")
 
-    def _send_home(self, arm: str, episode: int) -> None:
+    def _send_home(self, arm: str, episode: int, first_sent: float | None = None) -> None:
         client = self._movej[arm]
         now = time.monotonic()
+        first_sent = now if first_sent is None else first_sent
         if not client.server_is_ready():
             self._apply(self._machine.on_home_result(arm, False, f"/{arm}/execute_motion is not available", now))
             return
@@ -280,14 +294,25 @@ class TriggerNode(Node):
         goal.blend_radius_percent = 0
         goal.connect = False
         goal.timeout_sec = float(self._config.home_timeout_sec)
-        self.get_logger().info(f"homing /{arm} to pika_default_pose {list(self._home_pose[arm])}")
+        if first_sent == now:
+            self.get_logger().info(f"homing /{arm} to pika_default_pose {list(self._home_pose[arm])}")
+        else:
+            self.get_logger().info(f"homing /{arm}: resending MoveJ ({now - first_sent:.1f} s after the first)")
         self._home_deadlines[arm] = (episode, now + self._config.home_timeout_sec + RESULT_MARGIN_SEC)
         client.send_goal_async(goal).add_done_callback(
-            lambda done, arm=arm, episode=episode: self._on_goal_response(arm, episode, done))
+            lambda done, arm=arm, episode=episode, first_sent=first_sent:
+                self._on_goal_response(arm, episode, first_sent, done))
 
-    def _on_goal_response(self, arm: str, episode: int, future) -> None:
+    def _on_goal_response(self, arm: str, episode: int, first_sent: float, future) -> None:
         goal_handle = future.result() if future.exception() is None else None
         if goal_handle is None or not goal_handle.accepted:
+            now = time.monotonic()
+            current = self._home_deadlines.get(arm, (None,))[0] == episode
+            if current and goal_handle is not None and now - first_sent < self._home_retry_sec:
+                # Most likely the velocity session has not released the arm yet; try again shortly.
+                self.get_logger().warning(f"homing /{arm}: MoveJ goal rejected, retrying")
+                self._home_retries[arm] = (episode, first_sent, now + HOME_REJECT_RETRY_INTERVAL_SEC)
+                return
             self._finish_home(arm, episode, False, "MoveJ goal rejected")
             return
         goal_handle.get_result_async().add_done_callback(

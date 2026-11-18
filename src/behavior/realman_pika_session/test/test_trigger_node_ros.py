@@ -360,6 +360,102 @@ def test_late_movej_result_from_an_older_episode_is_ignored(lone_node):
     assert machine.snapshot()["state"] == "idle"
 
 
+class StubGoalHandle:
+    def __init__(self, accepted):
+        self.accepted = accepted
+        self.result_future = Future()
+
+    def get_result_async(self):
+        return self.result_future
+
+
+def answer_goal(client, index, accepted):
+    """Deliver the goal response of the `index`-th goal sent to `client`; returns the goal handle."""
+    handle = StubGoalHandle(accepted)
+    client.futures[index].set_result(handle)
+    return handle
+
+
+class AnsweringMoveJClient(StubMoveJClient):
+    def __init__(self):
+        super().__init__()
+        self.futures = []
+
+    def send_goal_async(self, goal):
+        self.goals.append(goal)
+        future = Future()
+        self.futures.append(future)
+        return future
+
+
+def homing_node(node):
+    """Put `node` into HOMING with answerable MoveJ stubs; returns the stubs."""
+    clients = {arm: AnsweringMoveJClient() for arm in HOME}
+    node._movej = clients
+    machine = node._machine
+    machine.on_mode("pikavelocity", 0.0)
+    machine.on_keyboard(False, 0.0)
+    machine.on_keyboard(True, 1.0)
+    machine.on_start_result(True, "sess-5", "", 1.0)
+    machine.on_keyboard(False, 2.0)
+    node._apply(machine.on_stop_result(True, "", 2.0))
+    assert machine.snapshot()["state"] == "homing"
+    return clients
+
+
+def finish_ok(handle):
+    response = ExecuteMotion.Impl.GetResultService.Response()
+    response.result.success = True
+    response.result.message = "motion completed"
+    handle.result_future.set_result(response)
+
+
+def test_home_goal_rejected_while_velocity_session_releases_is_retried(lone_node):
+    """The driver can still hold the arm a few ms after /<arm>/cartesian_velocity/state says inactive."""
+    node = lone_node
+    clients = homing_node(node)
+    answer_goal(clients["r"], 0, accepted=False)  # "arm r is busy"
+    assert node._machine.snapshot()["state"] == "homing"  # not failed yet
+    assert len(clients["r"].goals) == 1
+    time.sleep(0.25)
+    node._on_timer()
+    assert len(clients["r"].goals) == 2  # resent after the retry interval
+    assert list(clients["r"].goals[1].joint_degrees) == list(HOME["r"])
+    finish_ok(answer_goal(clients["r"], 1, accepted=True))
+    finish_ok(answer_goal(clients["l"], 0, accepted=True))
+    assert node._machine.snapshot()["state"] == "idle"
+    assert len(clients["l"].goals) == 1  # an accepted arm is never resent
+
+
+def test_home_goal_rejected_past_the_retry_window_fails(lone_node):
+    node = lone_node
+    node._home_retry_sec = 0.3
+    clients = homing_node(node)
+    answer_goal(clients["r"], 0, accepted=False)
+    deadline = time.monotonic() + 2.0
+    while node._machine.snapshot()["state"] == "homing" and time.monotonic() < deadline:
+        time.sleep(0.05)
+        node._on_timer()
+        latest = clients["r"].futures[-1]
+        if not latest.done():  # every resend is rejected too
+            answer_goal(clients["r"], len(clients["r"].futures) - 1, accepted=False)
+    snapshot = node._machine.snapshot()
+    assert snapshot["state"] == "failed"
+    assert "MoveJ goal rejected" in snapshot["detail"]
+    assert 2 <= len(clients["r"].goals) <= 4  # retried, then gave up
+
+
+def test_home_retry_of_an_older_episode_is_dropped(lone_node):
+    node = lone_node
+    clients = homing_node(node)
+    answer_goal(clients["r"], 0, accepted=False)  # episode 1 schedules a retry
+    node._apply([Action("home", ("l", "r"))])  # episode 2 resends both arms
+    assert len(clients["r"].goals) == 2
+    time.sleep(0.25)
+    node._on_timer()
+    assert len(clients["r"].goals) == 2  # episode 1's retry is not sent on top of episode 2
+
+
 def test_late_start_orphan_not_stopped_when_another_session_is_active(lone_node):
     node = lone_node
     stub = StubRecordingClient()

@@ -115,6 +115,10 @@ const DEV_LINKS = {
       { id: "gripper_left", short: "L", label: "左夹爪", tone: "ok", reason: "", badge: "", details: [["连接", "已连接"], ["串口", "/dev/realman/gripper_left → ttyUSB0"], ["Modbus", "从站 2 @ 115200"], ["轮询", "19.8 / 20 Hz"], ["报警", "无"], ["USB", "USB 1.1 · 12 Mb/s"], ["USB 端口", "5-1.2（bus 5）"], ["控制器", "0000:06:00.0"], ["适配器", "USB Serial 1a86:7523"]] },
       { id: "gripper_right", short: "R", label: "右夹爪", tone: "warn", reason: "报警位 32（0x20）", badge: "", details: [["连接", "已连接"], ["串口", "/dev/realman/gripper_right → ttyUSB1"], ["Modbus", "从站 3 @ 115200"], ["轮询", "20.0 / 20 Hz"], ["报警", "32"], ["USB", "USB 1.1 · 12 Mb/s"], ["USB 端口", "5-1.4（bus 5）"], ["控制器", "0000:06:00.0"], ["适配器", "USB Serial 1a86:7523"]] },
     ] },
+    { kind: "pika", title: "Pika", items: [
+      { id: "l", short: "L", label: "左 Pika", tone: "ok", reason: "正在遥操作：速度指令 19.8 Hz", badge: "▶", details: [["位姿", "19.6 Hz · 41 ms 前"], ["位姿话题", "/pika_web/pose_l"], ["速度指令", "19.8 Hz（遥操作中）"], ["Pika 栈", "运行中"], ["速度控制开关", "开启"], ["键盘启停", "已开始 · 30 ms 前"], ["采集", "recording · pick_and_place"]] },
+      { id: "r", short: "R", label: "右 Pika", tone: "off", reason: "Pika 未启动（:8765 的 Pika 速度控制开关可启动）", badge: "", details: [["位姿", "—"], ["位姿话题", "/pika_web/pose_r"], ["速度指令", "未发送（未按 W/A/S/D 开始）"], ["Pika 栈", "未运行"], ["速度控制开关", "关闭"], ["键盘启停", "—"]] },
+    ] },
   ],
 };
 

@@ -11,6 +11,7 @@ from realman_web_control.link_status import (
     build_snapshot,
     camera_specs,
     match_camera_usb,
+    pika_specs,
     scan_usb,
     usb_speed_label,
     usb_speed_short,
@@ -165,3 +166,55 @@ def test_arm_specs_read_driver_yaml(tmp_path):
     [left, middle] = arm_specs(path, ["l", "m"])
     assert (left.ip, left.port, left.expected_hz) == ("10.0.0.1", 8080, 30.0)
     assert middle.ip == ""
+
+
+RECORDING_YAML = """
+/recording_recorder:
+  ros__parameters: {}
+/recording_web_bridge:
+  ros__parameters:
+    pika_sides: [l, r]
+    pika_pose_topics: [/pika_web/pose_l, /pika_web/pose_r]
+    pika_command_velocity_topics: [/pika/l/cartesian_velocity, /pika/r/cartesian_velocity]
+"""
+
+
+def _pika_snapshot(state, pikas, switch, now):
+    return {
+        item["id"]: item
+        for group in build_snapshot(
+            state=state, settings=LinkSettings(), arms=[], cameras=[], grippers={}, gripper_bus={},
+            usb_devices=[], now=now, pikas=pikas, pika_switch=switch,
+        )["groups"] if group["kind"] == "pika"
+        for item in group["items"]
+    }
+
+
+
+def test_pika_specs_follow_recording_web_bridge(tmp_path):
+    path = tmp_path / "recording.yaml"
+    path.write_text(RECORDING_YAML, encoding="utf-8")
+    [left, right] = pika_specs(path)
+    assert (left.side, left.pose_topic) == ("l", "/pika_web/pose_l")
+    assert right.velocity_topic == "/pika/r/cartesian_velocity"
+
+
+def test_pika_tones_off_down_ok_and_teleop_badge(tmp_path):
+    path = tmp_path / "recording.yaml"
+    path.write_text(RECORDING_YAML, encoding="utf-8")
+    pikas = pika_specs(path)
+    clock = FakeClock()
+    state = LinkState(rates=RateTracker(2.0, clock=clock))
+    # Stack stopped and no poses: grey "off", not red.
+    items = _pika_snapshot(state, pikas, {"phase": "off", "stack_running": False, "helper_reachable": True}, clock.now)
+    assert items["l"]["tone"] == "off" and items["r"]["tone"] == "off"
+    # Stack running, left streams poses + velocity at 20 Hz, right silent.
+    for _ in range(40):
+        state.rates.record("pika_pose/l")
+        state.rates.record("pika_velocity/l")
+        clock.now += 0.05
+    state.set_value("pika/keyboard_enabled", True, now=clock.now)
+    items = _pika_snapshot(state, pikas, {"phase": "on", "stack_running": True, "helper_reachable": True}, clock.now)
+    assert items["l"]["tone"] == "ok" and items["l"]["badge"] == "▶"
+    assert items["r"]["tone"] == "down"
+    assert ["速度控制开关", "开启"] in items["l"]["details"]

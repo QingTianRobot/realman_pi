@@ -7,7 +7,7 @@ type LinkItem = {
   id: string;
   short: string;
   label: string;
-  tone: "ok" | "warn" | "down";
+  tone: "ok" | "warn" | "down" | "off";
   reason: string;
   badge: string;
   details: [string, string][];
@@ -16,11 +16,12 @@ type LinkGroup = { kind: string; title: string; items: LinkItem[] };
 type LinkSnapshot = { groups: LinkGroup[]; error?: string };
 
 const POLL_MS = 2000;
-const TONE_TEXT = { ok: "正常", warn: "注意", down: "断开" } as const;
+const TONE_TEXT = { ok: "正常", warn: "注意", down: "断开", off: "未启动" } as const;
 const ICONS: Record<string, string> = {
   arms: '<path d="M5 20h8"/><path d="M9 20v-5l6-6"/><circle cx="9" cy="15" r="2"/><circle cx="15" cy="9" r="2"/><path d="M15 9l4-4"/><path d="M17 3l4 4"/>',
   cameras: '<path d="M4 8h3l2-3h6l2 3h3a1 1 0 0 1 1 1v9a1 1 0 0 1-1 1H4a1 1 0 0 1-1-1V9a1 1 0 0 1 1-1z"/><circle cx="12" cy="13" r="3.5"/>',
   grippers: '<path d="M8 3v7l-3 4v7"/><path d="M16 3v7l3 4v7"/><path d="M8 10h8"/>',
+  pika: '<rect x="8" y="2" width="8" height="6" rx="2"/><path d="M10 8v5l-3 3v6"/><path d="M14 8v5l3 3v6"/><path d="M10 13h4"/>',
 };
 
 const escapeHtml = (text: string) =>

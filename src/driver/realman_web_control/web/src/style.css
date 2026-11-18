@@ -13,6 +13,7 @@
 .link-dot.ok { background: var(--ok-bg); color: var(--ok); }
 .link-dot.warn { background: var(--warn-bg); color: var(--warn); }
 .link-dot.down { background: var(--danger-bg); color: var(--danger); }
+.link-dot.off { background: var(--btn-bg); color: var(--text-3); }
 .link-dot:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
 .link-tip { position: fixed; z-index: 60; width: max-content; max-width: min(360px, calc(100vw - 16px)); padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--card-bg); color: var(--text); box-shadow: var(--shadow-card-hover); font-size: 12px; pointer-events: none; }
 .link-tip-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
@@ -21,6 +22,7 @@
 .link-tone.ok { background: var(--ok-bg); color: var(--ok); }
 .link-tone.warn { background: var(--warn-bg); color: var(--warn); }
 .link-tone.down { background: var(--danger-bg); color: var(--danger); }
+.link-tone.off { background: var(--btn-bg); color: var(--text-3); }
 .link-tip-reason { margin: 0 0 6px; color: var(--text-2); }
 .link-tip dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; }
 .link-tip dt { color: var(--text-3); white-space: nowrap; }

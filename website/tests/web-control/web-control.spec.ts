@@ -2052,7 +2052,9 @@ test("Pika switch row shows refusals, helper reachability and the server freshne
 test("topbar link strip shows one dot per device and a hover card with USB details", async ({ page }) => {
   await page.goto("/");
   const strip = page.locator("#link-strip");
-  await expect(strip.locator(".link-dot")).toHaveCount(8);
+  await expect(strip.locator(".link-dot")).toHaveCount(10);
+  await expect(strip.locator('[data-key="pika/l"]')).toContainText("▶");
+  await expect(strip.locator('[data-key="pika/r"]')).toHaveClass(/off/);
   const right = strip.locator('[data-key="cameras/camera_right"]');
   await expect(right).toHaveClass(/warn/);
   await expect(right).toContainText("2.0");

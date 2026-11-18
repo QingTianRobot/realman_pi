@@ -317,3 +317,33 @@ def test_pull_and_push_refreshes_the_mirror_and_returns_the_compute_path(config,
     result = compute.pull_and_push({"target": str(target)}, RecordingLog(), FakeRunner())
     assert result["compute_path"] == "/w/data/realman/raw_x" and result["episodes"] == 3
     assert synced == [config] and not (target / "ds" / "videos").exists()
+
+
+def test_gpu_query_asks_the_compute_host(config):
+    answer = {"available": True, "busy_mib": 2000, "gpus": [{"index": 0}]}
+    runner = FakeRunner().on("_gpus", stdout=json.dumps(answer) + "\n")
+    assert compute.gpu_query(config, runner) == answer
+
+
+def test_gpu_query_failure_is_reported_not_raised(config):
+    runner = FakeRunner().on("_gpus", returncode=255, stdout="timeout")
+    data = compute.gpu_query(config, runner)
+    assert data["available"] is False and "EI" in data["error"]
+
+
+def test_sync_code_sends_the_package_and_the_training_config(config):
+    runner = FakeRunner()
+    compute.sync_code(config, runner, RecordingLog())
+    sent = runner.commands("rsync")
+    assert any(c[-1] == "EI:/w/src/realman_pi/src/training/realman_training/" for c in sent)
+    assert any(c[-1] == "EI:/w/src/realman_pi/config/training/" for c in sent)
+    assert all("--exclude=test/" in c for c in sent if "realman_training/" in c[-1])
+    assert all(compute.RSYNC_IO_TIMEOUT in c for c in sent)  # the link to the compute host is slow and lossy
+
+
+def test_setup_host_streams_the_script_over_ssh(config):
+    runner = FakeRunner().on("bash -s", lines=["ok"])
+    compute.setup_host(config, runner, RecordingLog(), openpi_ref="abc123")
+    call = runner.commands("bash -s")[0]
+    assert call[-1] == "bash -s -- /w abc123"
+    assert runner.inputs[-1].startswith("#!/usr/bin/env bash")  # the script itself goes over stdin

@@ -8,5 +8,5 @@ setup(
     python_requires=">=3.10",
     install_requires=["aiohttp>=3.9", "numpy", "pyarrow", "pyyaml"],
     entry_points={"console_scripts": ["realman-train = realman_training.cli:main"]},
-    package_data={"realman_training": ["openpi_scripts/*.py", "remote_scripts/*.py", "static/*", "static/assets/*"]},
+    package_data={"realman_training": ["openpi_scripts/*.py", "remote_scripts/*.py", "remote_scripts/*.sh", "static/*", "static/assets/*"]},
 )

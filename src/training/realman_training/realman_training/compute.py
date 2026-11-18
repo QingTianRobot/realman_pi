@@ -360,3 +360,38 @@ def route(kind: str, target: str, step, params: dict):
     if not enabled(load_config(params.get("config"))):
         return step
     return pull_and_push if kind == "pull" else functools.partial(run_remote, kind)
+
+
+SETUP_SCRIPT = Path(__file__).resolve().parent / "remote_scripts" / "setup_uv_host.sh"
+
+
+def gpu_query(config: ConsoleConfig, runner: Runner) -> dict:
+    """The compute host's GPUs for the web panel (same shape as gpus.query, run there by `_gpus`)."""
+    done = runner.run(ssh_argv(config, remote_python(config, ["_gpus"])), timeout=30)
+    if done.returncode:
+        message = (done.stderr or done.stdout).strip()[-300:] or f"exit {done.returncode}"
+        return {"available": False, "busy_mib": config.openpi.gpu_busy_mib, "gpus": [],
+                "error": f"{config.compute.ssh_host}: {message}"}
+    return json.loads(done.stdout.strip().splitlines()[-1])
+
+
+def sync_code(config: ConsoleConfig, runner: Runner, log) -> None:
+    """This package and config/training to <workdir>/src/realman_pi (the remote side of _remote-step)."""
+    ssh = shlex.join(ssh_base(config))
+    host = config.compute.ssh_host
+    base = remote_path(config, REMOTE_REPO)
+    dirs = shlex.join([f"{base}/{PACKAGE}", f"{base}/config/training"])
+    runner.check(ssh_argv(config, f"mkdir -p {dirs}"))
+    runner.check(["rsync", "-a", "--delete", RSYNC_IO_TIMEOUT, "-e", ssh, "--exclude=test/", "--exclude=web/",
+                  "--exclude=__pycache__/", "--exclude=static/", f"{REPO_ROOT / PACKAGE}/", f"{host}:{base}/{PACKAGE}/"])
+    runner.check(["rsync", "-a", RSYNC_IO_TIMEOUT, "-e", ssh, f"{REPO_ROOT / 'config' / 'training'}/",
+                  f"{host}:{base}/config/training/"])
+    log(f"code synced to {host}:{base}")
+
+
+def setup_host(config: ConsoleConfig, runner: Runner, log, openpi_ref: str = "main") -> None:
+    """Run remote_scripts/setup_uv_host.sh on the compute host (streamed over ssh stdin; idempotent there)."""
+    argv = ssh_argv(config, shlex.join(["bash", "-s", "--", config.compute.workdir, openpi_ref]))
+    code = runner.stream(argv, log, input=SETUP_SCRIPT.read_text(encoding="utf-8"))
+    if code:
+        raise StepFailed(f"setup on {config.compute.ssh_host} exited {code}")

@@ -103,11 +103,17 @@ class Console:
         runner = runner or Runner()
         self.runner = runner
         self._serve_status = serve_status or (lambda: serving.status(config, runner))
+        from . import compute
+
+        if gpu_query is None and compute.enabled(config):
+            gpu_query = lambda: compute.gpu_query(config, runner)  # noqa: E731
         self._gpu_query = gpu_query or (lambda: gpu_mod.query(runner, busy_mib=config.openpi.gpu_busy_mib,
                                                               passwd=Path(config.web.passwd_file)))
         self.summaries = SummaryCache(config.quality)
         self.serve_cache = TtlCache(config.web.serve_status_ttl_sec, clock)
-        self.gpu_cache = TtlCache(config.web.gpu_ttl_sec, clock)
+        # Over ssh a query takes ~1 s and holds a connection: not every 3 s.
+        ttl = max(config.web.gpu_ttl_sec, 15.0) if compute.enabled(config) else config.web.gpu_ttl_sec
+        self.gpu_cache = TtlCache(ttl, clock)
         self._clock = clock
         self._serve_datasets: dict[tuple[str, int | None], tuple[float, dict]] = {}
         self.static_root = Path(static_root).resolve()

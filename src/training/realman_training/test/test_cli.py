@@ -361,3 +361,12 @@ def test_inspect_handmade_tags_show_hand_made(setup, capsys):
     assert main(["--config", str(config_path), "inspect", str(raw), "--no-quality"]) == 0
     out = capsys.readouterr().out
     assert "hand-made" in out
+
+
+def test_compute_refuses_without_a_host(tmp_path, capsys):
+    from realman_training.cli import main
+
+    path = tmp_path / "c.yaml"
+    path.write_text(f"training_console:\n  data_root: {tmp_path}\n", encoding="utf-8")
+    assert main(["--config", str(path), "compute", "sync"]) == 2
+    assert "compute.ssh_host" in capsys.readouterr().err

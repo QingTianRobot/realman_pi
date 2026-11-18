@@ -391,7 +391,8 @@ services:
         PIP_INDEX_URL: ${TRAINING_PIP_INDEX_URL:-https://pypi.org/simple}
         APT_MIRROR: ${TRAINING_APT_MIRROR:-}
     image: realman-training-console:local
-    runtime: nvidia
+    # nvidia for the GPU panel on a GPU host; runc where docker has no nvidia runtime and the panel reads a compute host.
+    runtime: ${TRAINING_RUNTIME:-nvidia}
     pid: host
     restart: unless-stopped
     user: "${TRAINING_UID:-1000}:${TRAINING_GID:-1000}"
@@ -423,6 +424,8 @@ services:
       - /etc/localtime:/etc/localtime:ro  # job and history times in the host's time zone
       - ${TRAINING_HOME:-/home/server5090}/.ssh:${TRAINING_HOME:-/home/server5090}/.ssh:ro
       - ${TRAINING_HOME:-/home/server5090}/data/realman:${TRAINING_HOME:-/home/server5090}/data/realman
-      - ${TRAINING_HOME:-/home/server5090}/organization/openpi:${TRAINING_HOME:-/home/server5090}/organization/openpi:ro
+      # ro on server5090 (the real openpi checkout); rw on a console with a compute host, where it is the mirror the
+      # console writes (training configs). TRAINING_OPENPI_MOUNT=rw in that env file.
+      - ${TRAINING_HOME:-/home/server5090}/organization/openpi:${TRAINING_HOME:-/home/server5090}/organization/openpi:${TRAINING_OPENPI_MOUNT:-ro}
       - ${TRAINING_HOME:-/home/server5090}/organization/openpi-docker-data:${TRAINING_HOME:-/home/server5090}/organization/openpi-docker-data
       - ${TRAINING_REPO:-/home/server5090/organization/realman_pi}:${TRAINING_REPO:-/home/server5090/organization/realman_pi}:ro

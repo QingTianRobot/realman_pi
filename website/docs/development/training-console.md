@@ -135,9 +135,22 @@ REALMAN_COMPUTE_WORKDIR=<absolute workdir on the compute host>
 REALMAN_RECORDING_SSH_HOST=
 TRAINING_HOME=/home/<user>
 TRAINING_REPO=<repo checkout on SJD>
+TRAINING_RUNTIME=runc
+TRAINING_OPENPI_MOUNT=rw
 ```
 
 `REALMAN_RECORDING_SSH_HOST=` 必须写成空值：compose 和 yaml 对它用 `${VAR-默认}`，只有未设置时才回落到 `realman_local`。路径类的键（`data_root`、`openpi.repo`、`openpi.docker_data`、`openpi.weights`）用 `${VAR:-默认}`，空值也回落到默认值，不会变成空路径。
+
+- `TRAINING_RUNTIME=runc`：SJDrealman 的 docker 没有 nvidia 运行时；控制平台本身不用 GPU，GPU 面板读的是计算主机。有 nvidia 运行时的机器不写这一行（默认 `nvidia`）。
+- `TRAINING_OPENPI_MOUNT=rw`：有计算主机时，`organization/openpi` 是控制平台自己写的镜像（训练配置列表），必须可写；server5090 上它是真正的 openpi 检出，保持默认的只读。
+- 计算主机的 ssh 配置和私钥不进仓库，也不复制到别处：如果 `REALMAN_COMPUTE_SSH_CONFIG` 指向 `TRAINING_REPO` 以外的目录，用一个不入库的 compose 覆盖文件把那个目录按原路径只读挂进容器，例如：
+
+```text
+services:
+  realman_training:
+    volumes:
+      - <directory holding the ssh config and key>:<same path>:ro
+```
 
 ### 第一次使用
 

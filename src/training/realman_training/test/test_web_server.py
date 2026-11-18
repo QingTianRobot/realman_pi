@@ -543,3 +543,32 @@ def test_tag_jobs_are_validated(world):
     assert refresh["job"]["params"]["path"].endswith(RAW)
     assert where_only["job"]["params"]["where"] == ["lighting_level=2"] and where_only["job"]["params"]["drop"] == []
     assert "unknown tag" in unknown["error"] and "nothing to drop" in nothing["error"]
+
+
+def test_gpus_carry_a_short_history_of_fresh_samples(world):
+    console = world["make"]()
+
+    async def scenario(client):
+        answers = []
+        for _ in range(3):
+            answers.append(await get_json(client, "/api/gpus"))
+            answers.append(await get_json(client, "/api/gpus"))  # cached: no new sample
+            world["clock"].t += 20
+        return answers
+
+    answers = call(console, scenario)
+    assert [len(a["history"]) for a in answers] == [1, 1, 2, 2, 3, 3]
+    sample = answers[-1]["history"][-1]
+    assert sample["gpu_used_mib"] == [g["used_mib"] for g in GPUS["gpus"]]
+    assert "at" in sample and "mem_used_mib" in sample and "disk_avail_kib" in sample
+
+
+def test_gpu_history_keeps_the_last_forty_samples(world):
+    console = world["make"]()
+
+    async def scenario(client):
+        for _ in range(45):
+            await get_json(client, "/api/gpus?refresh=1")
+        return await get_json(client, "/api/gpus")
+
+    assert len(call(console, scenario)["history"]) == 40

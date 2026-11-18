@@ -149,9 +149,9 @@ tr.selected td { background: var(--btn-bg); }
 .bar { height: 8px; overflow: hidden; border: 1px solid var(--line); border-radius: 4px; background: var(--card-sub); }
 .bar i { display: block; height: 100%; background: var(--primary); }
 .bar.busy i { background: var(--warn); }
-.gpu-row { display: grid; gap: 4px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 11.5px; }
+.gpu-row, .host-row { display: grid; gap: 4px; padding: 7px 0; border-bottom: 1px solid var(--line); font-size: 11.5px; }
 .gpu-row:last-child { border-bottom: 0; }
-.gpu-row header { display: flex; justify-content: space-between; gap: 8px; }
+.gpu-row header, .host-row header { display: flex; justify-content: space-between; gap: 8px; }
 .gpu-users { color: var(--text-3); overflow-wrap: anywhere; }
 .task-bars { display: grid; gap: 8px; }
 .task-bar { display: grid; grid-template-columns: minmax(0, 1fr) auto; gap: 4px 8px; font-size: 12px; }
@@ -162,6 +162,14 @@ tr.selected td { background: var(--btn-bg); }
 .chart .axis { stroke: var(--line-strong); }
 .chart text { fill: var(--text-3); font-size: 11px; }
 .spark { display: block; width: 120px; height: 26px; }
+.trend { display: flex; align-items: center; justify-content: space-between; gap: 8px; }
+.trend .delta { font-variant-numeric: tabular-nums; color: var(--text-3); }
+.trend .delta.up { color: var(--warn); }
+.trend .delta.down { color: var(--ok); }
+.bar.warn i { background: var(--warn); }
+.bar.bad i { background: var(--danger); }
+#card-gpus .host-resources { margin-bottom: 6px; border-bottom: 1px solid var(--line); }
+#card-gpus .host-resources .host-row:last-child { border-bottom: 0; }
 .spark polyline { fill: none; stroke: var(--primary); stroke-width: 1.4; }
 .spark line { stroke: var(--line-strong); stroke-dasharray: 2 2; }
 .error { margin: 0; padding: 8px 10px; border-radius: 8px; background: var(--danger-bg); color: var(--danger); font-size: 12px; overflow-wrap: anywhere; }

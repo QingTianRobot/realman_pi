@@ -114,6 +114,14 @@ PYTHONPATH=. python -m realman_training linkcheck [--only pika,link,inference,br
 
 网页读的是 SJD 本地的元数据镜像：每步结束后用 rsync 把计算主机的 `data_root` 和 openpi 数据目录同步回来，但不含 `videos/`、`params/`、`train_state/`（视频和权重只在计算主机上）。长步骤（训练、评估）运行期间按 `compute.mirror_sync_sec` 定期刷新镜像，网页上的进度和 `metrics.csv` 随之更新。镜像里的 JSON（`console_train.json`、`model_card.json`、`contract.json`、清洗清单）写的是计算主机上的绝对路径（`<workdir>/data/realman/…`、`<workdir>/src/openpi/…`），控制平台读取时换算成本地的 `data_root` 和 openpi 数据目录，文件本身不改。
 
+所有到计算主机的连接都遵守它的使用规则：ssh 前去掉本机的 `TMPDIR`/`TEMP`/`TMP`（不把本机临时目录转发过去），只接受已核验的主机身份（`StrictHostKeyChecking=yes`），每条远程命令都以 `cd <workdir> &&` 开头、进不去就停；rsync 用 `--rsync-path` 让远端的 rsync 也先进入工作目录。
+
+### 计算主机资源面板
+
+总览页的 GPU 卡片在有计算主机时变成「计算主机 · <别名>」：每张 GPU 的显存和利用率，再加上整机内存、工作目录所在磁盘（剩余低于 10% 标黄、低于 5% 标红）和 1 分钟负载。每项都显示与上一次刷新相比的变化（Δ）和最近约 10 分钟的迷你趋势线；卡片每 15 秒自动刷新。
+
+数据来自一条普通的 shell 查询（`nvidia-smi`、`free`、`df`、`/proc/loadavg`、`nproc`），不需要计算主机上已经装好环境或本包，所以新主机刚接入、还没 `compute setup` 时就能看。查询不列出其他用户的 GPU 进程。最近 40 次采样只保存在控制平台进程的内存里，重启后从头开始。
+
 ### 环境变量
 
 计算主机的值和控制平台的其他主机值一样，放在仓库外的 env 文件里（`./rm65_server` 用 `docker compose --env-file` 传入，见[部署](./training-console-web.md#部署-server5090)），不写进仓库。compose 服务 `realman_training` 把这几个变量传进容器：

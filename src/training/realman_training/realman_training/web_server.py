@@ -12,6 +12,7 @@ and GET /api/dataset/tags-status (live tag freshness check against realman_ts).
 from __future__ import annotations
 
 import asyncio
+import collections
 import contextlib
 import hmac
 import json
@@ -31,6 +32,7 @@ from .summary_cache import SummaryCache
 
 STATIC_ROOT = Path(__file__).resolve().parent / "static"
 TOKEN_ENV = "REALMAN_TRAINING_TOKEN"
+RESOURCE_HISTORY = 40  # samples kept for the resource panel: ~10 minutes at the 15 s refresh
 TOKEN_HEADER = "X-Training-Token"
 TAGS_STATUS_TIMEOUT_SEC = 15
 _LOG_START_BYTES = 256 * 1024  # a WebSocket starts at most this far from the end of a long log
@@ -107,8 +109,10 @@ class Console:
 
         if gpu_query is None and compute.enabled(config):
             gpu_query = lambda: compute.gpu_query(config, runner)  # noqa: E731
-        self._gpu_query = gpu_query or (lambda: gpu_mod.query(runner, busy_mib=config.openpi.gpu_busy_mib,
-                                                              passwd=Path(config.web.passwd_file)))
+        query = gpu_query or (lambda: gpu_mod.query(runner, busy_mib=config.openpi.gpu_busy_mib,
+                                                    passwd=Path(config.web.passwd_file)))
+        self._resource_history: collections.deque[dict] = collections.deque(maxlen=RESOURCE_HISTORY)
+        self._gpu_query = lambda: self._sampled(query())
         self.summaries = SummaryCache(config.quality)
         self.serve_cache = TtlCache(config.web.serve_status_ttl_sec, clock)
         # Over ssh a query takes ~1 s and holds a connection: not every 3 s.
@@ -243,6 +247,19 @@ class Console:
 
     async def gpus(self, request):
         return _json(await self.gpu_cache.get(self._gpu_query, force=request.query.get("refresh") == "1"))
+
+    def _sampled(self, data: dict) -> dict:
+        """Keep each fresh resource answer as a small sample, so the page can show what changed and a short trend."""
+        host = data.get("host") or {}
+        self._resource_history.append({
+            "at": data.get("at") or now(),
+            "gpu_used_mib": [gpu.get("used_mib") for gpu in data.get("gpus", [])],
+            "gpu_util_pct": [gpu.get("util_pct") for gpu in data.get("gpus", [])],
+            "mem_used_mib": host.get("mem_used_mib"),
+            "disk_avail_kib": host.get("disk_avail_kib"),
+            "load1": host.get("load1"),
+        })
+        return {**data, "history": list(self._resource_history)}
 
     def _safe_serve_status(self) -> dict:
         try:

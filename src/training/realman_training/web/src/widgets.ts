@@ -1,4 +1,5 @@
-import type { Check, Gpus, JobRow, Pace } from "./api";
+import type { Check, Gpus, HostResources, JobRow, Pace, ResourceSample } from "./api";
+import { sparkline } from "./charts";
 import { fmtMae, fmtMiB, fmtRate, fmtRemaining, fmtTime, h, KIND_LABEL, STATE_LABEL, stateClass, type Child } from "./dom";
 
 export function panel(title: string | null, ...children: (Child | Child[])[]): HTMLElement {
@@ -70,6 +71,7 @@ export function gpuList(gpus: Gpus | null, only?: number[]): HTMLElement {
       h("header", {}, h("strong", {}, `GPU ${gpu.index}`), h("span", {}, `${fmtMiB(gpu.used_mib)} / ${fmtMiB(gpu.total_mib)}`,
         gpu.util_pct === null ? "" : ` · ${gpu.util_pct}%`)),
       h("div", { class: `bar${gpu.busy ? " busy" : ""}` }, h("i", { style: `width:${share.toFixed(1)}%` })),
+      trendRow(gpus.history, (sample) => sample.gpu_used_mib[gpus.gpus.indexOf(gpu)] ?? null, gpu.total_mib, fmtDeltaMiB),
       h("div", { class: "gpu-users" }, users));
   }));
 }
@@ -131,4 +133,62 @@ export function paceLine(pace: Pace | null | undefined): string {
   const rate = pace.rate >= 1 ? `${pace.rate.toFixed(2)} 步/s` : `${(1 / pace.rate).toFixed(1)} s/步`;
   if (pace.remaining_sec === null) return rate;
   return `${rate} · 剩 ${fmtRemaining(pace.remaining_sec)}${pace.eta ? ` · ${fmtTime(pace.eta).slice(-5)} 完成` : ""}${pace.stale ? " · 日志停了" : ""}`;
+}
+
+/** "+1.2 GiB" / "−300 MiB" / "±0": the change since the previous sample. */
+function fmtDeltaMiB(delta: number): string {
+  if (Math.abs(delta) < 1) return "±0";
+  const sign = delta > 0 ? "+" : "−";
+  const size = Math.abs(delta);
+  return size >= 1024 ? `${sign}${(size / 1024).toFixed(1)} GiB` : `${sign}${Math.round(size)} MiB`;
+}
+
+function fmtDeltaLoad(delta: number): string {
+  return Math.abs(delta) < 0.05 ? "±0" : `${delta > 0 ? "+" : "−"}${Math.abs(delta).toFixed(2)}`;
+}
+
+/** The change since the previous sample and a sparkline of the kept history (scaled to `full`, or to its own max). */
+function trendRow(history: ResourceSample[] | undefined, pick: (sample: ResourceSample) => number | null,
+  full: number | null | undefined, fmt: (delta: number) => string): HTMLElement | null {
+  const values = (history ?? []).map(pick).filter((v): v is number => v !== null && v !== undefined);
+  if (values.length < 2) return null;
+  const delta = values[values.length - 1] - values[values.length - 2];
+  const top = full || Math.max(...values) || 1;
+  const tone = Math.abs(delta) < 1e-9 ? "" : delta > 0 ? " up" : " down";
+  return h("div", { class: "trend" }, h("span", { class: `delta${tone}`, title: "与上一次刷新相比" }, fmt(delta)),
+    sparkline(values.map((v) => Math.max(0, Math.min(1, v / top)))));
+}
+
+/** Memory, the work dir's disk and load of the compute host, each with its change and a short trend. */
+export function hostResources(gpus: Gpus | null): HTMLElement | null {
+  const host: HostResources | null | undefined = gpus?.host;
+  if (!gpus || !host) return null;
+  const rows: HTMLElement[] = [];
+  if (host.mem_total_mib) {
+    const used = host.mem_used_mib ?? 0;
+    rows.push(resourceRow("内存", `${fmtMiB(used)} / ${fmtMiB(host.mem_total_mib)}（可用 ${fmtMiB(host.mem_available_mib)}）`,
+      used / host.mem_total_mib, "",
+      trendRow(gpus.history, (s) => s.mem_used_mib, host.mem_total_mib, fmtDeltaMiB)));
+  }
+  if (host.disk_total_kib) {
+    const avail = host.disk_avail_kib ?? 0;
+    const freePct = (100 * avail) / host.disk_total_kib;
+    const tone = freePct < 5 ? "bad" : freePct < 10 ? "warn" : "";
+    rows.push(resourceRow("磁盘（工作目录）", `剩 ${fmtMiB(avail / 1024)}（${freePct.toFixed(1)}%）/ ${fmtMiB(host.disk_total_kib / 1024)}`,
+      1 - avail / host.disk_total_kib, tone,
+      trendRow(gpus.history, (s) => (s.disk_avail_kib === null ? null : s.disk_avail_kib / 1024), host.disk_total_kib / 1024, fmtDeltaMiB)));
+  }
+  if (host.load1 !== null && host.load1 !== undefined && host.cores) {
+    rows.push(resourceRow("负载（1 分钟）", `${host.load1.toFixed(2)} / ${host.cores} 核`, host.load1 / host.cores, "",
+      trendRow(gpus.history, (s) => s.load1, null, fmtDeltaLoad)));
+  }
+  return rows.length ? h("div", { class: "host-resources" }, rows) : null;
+}
+
+function resourceRow(label: string, value: string, share: number, tone: "" | "warn" | "bad", trend: HTMLElement | null): HTMLElement {
+  const width = Math.max(0, Math.min(100, 100 * share));
+  return h("div", { class: "host-row", "data-resource": label },
+    h("header", {}, h("strong", {}, label), h("span", {}, value)),
+    h("div", { class: `bar${tone ? ` ${tone}` : ""}` }, h("i", { style: `width:${width.toFixed(1)}%` })),
+    trend);
 }

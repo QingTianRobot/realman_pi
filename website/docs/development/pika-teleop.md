@@ -210,7 +210,7 @@ enine 上的外接 W/A/S/D 小键盘由 `pika_foot_pedal` 节点读取（节点�
 
 1. 在 `:8765` 进入 `pikavelocity`（l、r 先 MoveJ 到 `pika_default_pose`）。用“Pika 速度控制”开关时可以直接进行第 2 步：开关要等按键后 Pika 发出速度才切模式，这次按键先挂起，模式到达时键盘仍为“开”就开始录制（入场 MoveJ 期间的不到 1 s 不在录制内）。
 2. 按一次 W/A/S/D：左右遥操作开始，同时 `/recording/manage` START，任务标签取自配置。
-3. 再按一次：遥操作停止，录制 STOP；等 l、r 的速度会话结束（最多 `release_timeout_sec`），再把 l、r MoveJ 回 `pika_default_pose`。`skip: true` 的臂不动。
+3. 再按一次：遥操作停止，录制 STOP；等 l、r 的速度会话结束（最多 `release_timeout_sec`），再把 l、r MoveJ 回 `pika_default_pose`，同时松开这两臂的夹爪（`home_open_grippers`）。`skip: true` 的臂不动，夹爪也不动。
 4. 录制结束后按录制平台的 `auto_export_on_stop` 自动导出；不要的 episode 在 `:8770` 回放页隐藏或 DISCARD。
 
 节点运行在机器人主机的 bringup 里（domain 65），只消费桥过来的键盘启停状态 `/foot_pedal/enabled`（`std_msgs/Bool`）。enine 的 `pika_domain_bridge.yaml` 必须多转这个话题：
@@ -222,7 +222,7 @@ enine 上的外接 W/A/S/D 小键盘由 `pika_foot_pedal` 节点读取（节点�
 
 改完重启 enine 的 `realman-pika-bridge` 用户单元。
 
-配置在 `config/ros/pika_episode.yaml`，仓库默认 `enabled: false`；机器人主机在自己的配置里打开并填 `task`，换任务或材料时改 `task` 后重启 bringup。归位位姿不单独配置，就是 `pika_config.yaml` 的 `pika_default_pose`。
+配置在 `config/ros/pika_episode.yaml`，仓库默认 `enabled: false`；机器人主机在自己的配置里打开并填 `task`，换任务或材料时改 `task` 后重启 bringup。归位位姿不单独配置，就是 `pika_config.yaml` 的 `pika_default_pose`；归位时松开的夹爪由 `home_open_grippers`（臂 `l`/`m`/`r` → 夹爪名）指定，这个键必须写。
 
 `system.launch.py` 的 launch 参数 `start_pika_episode`（默认 `true`）会包含 `pika_episode.launch.py`，但节点仍只在 `pika_episode.yaml` 里 `enabled: true` 时才启动。该 launch 从环境变量 `REALMAN_CONFIG_ROOT` 读取配置根目录（为空或未设置时用包内安装的配置），没有对应的 launch 参数。
 
@@ -246,7 +246,7 @@ enine 上的外接 W/A/S/D 小键盘由 `pika_foot_pedal` 节点读取（节点�
 
 如果录制端在节点的 10 s 超时之后才回复 START 且结果为成功，节点记录一条错误日志，并 STOP 这个无人认领的 session；但 `/recording/status` 显示别的 session 正在录时只记日志、不发 STOP。
 
-归位时不动夹爪：enine 的 Pika 夹爪流一直在发，机器人侧的夹爪命令会被立即覆盖。
+归位时同时松开夹爪：节点对每条要归位的臂调用 `home_open_grippers` 里对应夹爪的 `/<夹爪名>/open`（`std_srvs/Trigger`，打到配置的开位），和 MoveJ 一起发出、互不等待。仓库默认 `l: gripper_left`、`r: gripper_right`，写 `{}` 则不动夹爪。夹爪服务不在或返回失败（例如总线离线 `Not connected to gripper`）只记一条警告，不影响归位，也不会让这一条进入 FAILED。不会被 Pika 覆盖：enine 的 mapper 只在键盘为“开”时随速度一起发 `/pika/<臂>/gripper_percentage`（约 4 Hz），松键后不再发；下一次按键开始遥操作时夹爪重新跟随 Pika。
 
 观察状态（reliable + transient_local，JSON 含 `state`、`session_id`、`task`、`detail`、`stamp_ns`）：
 

@@ -26,6 +26,7 @@ def test_repo_episode_config_defaults_to_disabled():
         release_timeout_sec=8.0,
         home_velocity_percent=30,
         home_timeout_sec=120.0,
+        home_open_grippers={"l": "gripper_left", "r": "gripper_right"},
     )
 
 
@@ -40,6 +41,22 @@ def test_episode_config_rejects_bad_values(tmp_path):
     bad = _write(tmp_path, "e3.yaml", base.replace("enabled: false", "enabled: maybe"))
     with pytest.raises(ValueError, match="enabled"):
         load_episode_config(bad)
+
+
+def test_home_open_grippers_is_validated(tmp_path):
+    base = (REPO_CONFIG / "pika_episode.yaml").read_text(encoding="utf-8")
+    head = base.split("home_open_grippers:")[0]
+    none = _write(tmp_path, "g0.yaml", head + "home_open_grippers: {}\n")
+    assert load_episode_config(none).home_open_grippers == {}
+    missing = _write(tmp_path, "g1.yaml", head)
+    with pytest.raises(ValueError, match="home_open_grippers"):
+        load_episode_config(missing)
+    bad_arm = _write(tmp_path, "g2.yaml", head + "home_open_grippers:\n  left: gripper_left\n")
+    with pytest.raises(ValueError, match="arm must be one of"):
+        load_episode_config(bad_arm)
+    bad_name = _write(tmp_path, "g3.yaml", head + "home_open_grippers:\n  l: ''\n")
+    with pytest.raises(ValueError, match="non-empty gripper name"):
+        load_episode_config(bad_name)
 
 
 def test_repo_home_pose_has_three_arms():

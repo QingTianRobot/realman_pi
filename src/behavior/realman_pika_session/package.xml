@@ -9,6 +9,7 @@
   <buildtool_depend>ament_python</buildtool_depend>
   <depend>rclpy</depend>
   <depend>std_msgs</depend>
+  <depend>std_srvs</depend>
   <depend>realman_msgs</depend>
   <depend>realman_recording_msgs</depend>
   <exec_depend>launch</exec_depend>

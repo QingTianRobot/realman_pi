@@ -14,6 +14,7 @@ from rclpy.node import Node  # noqa: E402
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy  # noqa: E402
 from rclpy.task import Future  # noqa: E402
 from std_msgs.msg import Bool, String  # noqa: E402
+from std_srvs.srv import Trigger  # noqa: E402
 
 from realman_msgs.action import ExecuteMotion  # noqa: E402
 from realman_msgs.msg import InputModeState  # noqa: E402
@@ -29,6 +30,8 @@ CONFIG = EpisodeConfig(
     enabled=True, task="pick cable", profile="teleop_v1", record_cameras=True,
     keyboard_topic="/foot_pedal/enabled", required_mode="pikavelocity",
     keyboard_stale_sec=3.0, release_timeout_sec=0.5, home_velocity_percent=30, home_timeout_sec=5.0,
+    # gripper_right answers failure (an offline bus) and m is not homed: neither may block the homing.
+    home_open_grippers={"l": "gripper_left", "r": "gripper_right", "m": "gripper_middle"},
 )
 HOME = {"l": (1.0, 2.0, 3.0, 4.0, 5.0, 6.0), "r": (6.0, 5.0, 4.0, 3.0, 2.0, 1.0)}
 # The previous test's world can linger in the next test's graph for a moment after rclpy.shutdown(), so
@@ -48,7 +51,10 @@ class FakeWorld(Node):
         self.requests = []
         self.goals = {}
         self.states = []
+        self.gripper_opens = []
         self.create_service(ManageRecording, "/recording/manage", self._manage)
+        for name, ok in (("gripper_left", True), ("gripper_right", False), ("gripper_middle", True)):
+            self.create_service(Trigger, f"/{name}/open", self._make_open(name, ok))
         for arm in ("l", "r", "m"):
             ActionServer(self, ExecuteMotion, f"/{arm}/execute_motion", self._make_execute(arm))
         self.keyboard = self.create_publisher(Bool, "/foot_pedal/enabled", 10)
@@ -62,6 +68,14 @@ class FakeWorld(Node):
         response.session_id = "sess-1"
         response.state = "RECORDING" if request.command == ManageRecording.Request.START else "READY"
         return response
+
+    def _make_open(self, name, ok):
+        def handle(request, response):
+            self.gripper_opens.append(name)
+            response.success = ok
+            response.message = "open: reached" if ok else "Not connected to gripper"
+            return response
+        return handle
 
     def _make_execute(self, arm):
         def execute(goal_handle):
@@ -110,6 +124,7 @@ def world_discovered(node, world_name):
     try:
         servers = {name for name, _ in get_action_server_names_and_types_by_node(node, world_name, "/")}
         services = {name for name, _ in node.get_service_names_and_types_by_node(world_name, "/")}
+        grippers = {"/gripper_left/open", "/gripper_right/open"}
         publishers = {name for name, _ in node.get_publisher_names_and_types_by_node(world_name, "/")}
     except Exception:  # noqa: BLE001 - the world node itself is not discovered yet
         return False
@@ -117,7 +132,8 @@ def world_discovered(node, world_name):
     # server_is_ready() also needs each action's feedback and status publishers, so wait for this world's.
     topics = {f"{action}/_action/{topic}" for action in actions for topic in ("feedback", "status")}
     return (set(actions) <= servers and "/recording/manage" in services and topics <= publishers
-            and node.interfaces_ready())
+            and grippers <= services and node.interfaces_ready()
+            and all(client.service_is_ready() for client in node._gripper_open.values()))
 
 
 def spin_until(executor, predicate, timeout=10.0):
@@ -181,6 +197,10 @@ def test_one_key_episode_records_and_homes(graph):
     assert list(goal.joint_degrees) == list(HOME["l"])
     assert goal.velocity_percent == 30
     assert goal.connect is False
+    # Homing also releases the grippers of the homed arms; m is not homed, so its gripper is left alone.
+    assert spin_until(executor, lambda: len(world.gripper_opens) == 2)
+    assert sorted(world.gripper_opens) == ["gripper_left", "gripper_right"]
+    assert last_state(world) == "idle"  # gripper_right's failure does not fail the episode
 
 
 def test_keys_do_nothing_outside_pikavelocity(graph):

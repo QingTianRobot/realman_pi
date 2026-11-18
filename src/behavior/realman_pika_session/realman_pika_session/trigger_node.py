@@ -10,6 +10,7 @@ from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
+from std_srvs.srv import Trigger
 
 from realman_msgs.action import ExecuteMotion
 from realman_msgs.msg import CartesianVelocityState, InputModeState
@@ -53,6 +54,11 @@ class TriggerNode(Node):
         ))
         self._recording = self.create_client(ManageRecording, "/recording/manage")
         self._movej = {arm: ActionClient(self, ExecuteMotion, f"/{arm}/execute_motion") for arm in arms}
+        # Homing also releases the grippers (gripper_ros2 /<name>/open); arms that are not homed keep theirs.
+        self._gripper_open = {
+            arm: self.create_client(Trigger, f"/{name}/open")
+            for arm, name in episode_config.home_open_grippers.items() if arm in home_pose
+        }
         self._pending_call = None  # (kind, future, deadline)
         # START calls that timed out: a late success means the recorder did start, so that session is stopped.
         self._orphan_start_futures: set = set()
@@ -80,7 +86,8 @@ class TriggerNode(Node):
         self.create_timer(0.1, self._on_timer)
         self.get_logger().info(
             f"pika episode trigger ready: keyboard={episode_config.keyboard_topic} "
-            f"mode={episode_config.required_mode} home_arms={','.join(arms)} task='{episode_config.task}'"
+            f"mode={episode_config.required_mode} home_arms={','.join(arms)} "
+            f"open_grippers={','.join(sorted(self._gripper_open)) or 'none'} task='{episode_config.task}'"
         )
         self._publish_state(force=True)
 
@@ -151,6 +158,7 @@ class TriggerNode(Node):
                 self._home_episode += 1
                 self._home_deadlines.clear()  # older episodes' results are ignored anyway; no stale timeouts
                 for arm in action.arms:
+                    self._open_gripper(arm)
                     self._send_home(arm, self._home_episode)
         self._publish_state()
 
@@ -235,6 +243,27 @@ class TriggerNode(Node):
             self._apply(self._machine.on_start_result(success, session_id, message, now))
         else:
             self._apply(self._machine.on_stop_result(success, message, now))
+
+    def _open_gripper(self, arm: str) -> None:
+        """Release the gripper while the arm homes; a failure is logged and never blocks the homing."""
+        client = self._gripper_open.get(arm)
+        if client is None:
+            return
+        if not client.service_is_ready():
+            self.get_logger().warning(f"not opening gripper of /{arm}: {client.srv_name} is not available")
+            return
+        self.get_logger().info(f"opening gripper of /{arm} ({client.srv_name})")
+        client.call_async(Trigger.Request()).add_done_callback(
+            lambda done, arm=arm: self._on_gripper_open_done(arm, done))
+
+    def _on_gripper_open_done(self, arm: str, future) -> None:
+        if future.cancelled() or future.exception() is not None:
+            self.get_logger().warning(f"opening gripper of /{arm} failed: {future.exception()}")
+            return
+        response = future.result()
+        self._log_outcome(
+            response.success, f"gripper of /{arm} {'opened' if response.success else 'open failed'}: {response.message}",
+            "warning")
 
     def _send_home(self, arm: str, episode: int) -> None:
         client = self._movej[arm]

@@ -137,3 +137,25 @@ def test_snapshot_carries_camera_stats(monkeypatch):
     assert payload["camera_stats"]["orbbec-left"]["state"] == "no_data"
     assert payload["camera_stats"]["orbbec-left"]["topic"] == "/camera_left/color/image_raw"
     assert payload["preview_cameras"] == {"orbbec-left": 0}
+
+
+def test_pika_recalibrate_passes_recorder_state_and_snapshot(monkeypatch):
+    __import__("pytest").importorskip("rclpy")
+    from realman_recording import web_bridge_node
+    from realman_recording.pika_motion import PikaMotionCache
+    from realman_recording.web_bridge_node import RecordingWebBridgeNode
+
+    seen = {}
+
+    def fake_recalibrate(url, timeout, state, snapshot):
+        seen.update(url=url, timeout=timeout, state=state, sides=sorted(snapshot["sides"]))
+        return 200, {"ok": True}
+
+    monkeypatch.setattr(web_bridge_node, "recalibrate", fake_recalibrate)
+    node = object.__new__(RecordingWebBridgeNode)
+    node._pika_helper_url = "http://127.0.0.1:8783"
+    node._pika_helper_timeout_sec = 90.0
+    node._recording_status = {"state": 2}
+    node._pika = PikaMotionCache(["l", "r"], ["/pika_pose_l", "/pika_pose_r"], [])
+    assert node._pika_recalibrate() == (200, {"ok": True})
+    assert seen == {"url": "http://127.0.0.1:8783", "timeout": 90.0, "state": 2, "sides": ["l", "r"]}

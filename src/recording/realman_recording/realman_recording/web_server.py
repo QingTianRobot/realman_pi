@@ -98,6 +98,8 @@ class RecordingWebServer:
         logger: Any,
         export_all: Callable[[], dict[str, Any]] | None = None,
         quality_reasons: tuple[QualityReason, ...] = (),
+        pika_recalibrate: Callable[[], tuple[int, dict[str, Any]]] | None = None,
+        pika_helper_status: Callable[[], tuple[int, dict[str, Any]]] | None = None,
     ) -> None:
         self._bind_host = bind_host
         self._port = port
@@ -110,6 +112,8 @@ class RecordingWebServer:
         self._tags = EpisodeTagStore(recording_root)
         self._export_all = export_all
         self._quality_reasons = tuple(quality_reasons)
+        self._pika_recalibrate = pika_recalibrate
+        self._pika_helper_status = pika_helper_status
         self._logger = logger
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
@@ -256,6 +260,8 @@ class RecordingWebServer:
         app.router.add_post("/api/lerobot/{session_id}/task", self._lerobot_task)
         app.router.add_get("/api/lerobot/{session_id}/subtasks", self._lerobot_subtasks)
         app.router.add_post("/api/lerobot/{session_id}/subtasks", self._lerobot_subtasks_update)
+        app.router.add_post("/api/pika/recalibrate", self._pika_recalibrate_route)
+        app.router.add_get("/api/pika/helper", self._pika_helper_route)
         app.router.add_get("/models/{path:.*}", self._model_asset)
         app.router.add_get("/{path:.*}", self._static_asset)
         self._runner = web.AppRunner(app, access_log=None)
@@ -596,6 +602,23 @@ class RecordingWebServer:
             raise web.HTTPConflict(text=message)
         result.update(await self._meta_sync())
         return web.json_response(result)
+
+    async def _pika_recalibrate_route(self, _request: Any) -> Any:
+        """Stop Pika, move the libsurvive calibration aside, start again (host helper)."""
+        from aiohttp import web
+        if self._pika_recalibrate is None:
+            return web.json_response({"ok": False, "error": "Pika 重标定未配置"}, status=404)
+        status, payload = await asyncio.to_thread(self._pika_recalibrate)
+        if status != 200:
+            self._logger.warning(f"Pika recalibrate refused/failed ({status}): {payload.get('error')}")
+        return web.json_response(payload, status=status)
+
+    async def _pika_helper_route(self, _request: Any) -> Any:
+        from aiohttp import web
+        if self._pika_helper_status is None:
+            return web.json_response({"configured": False})
+        status, payload = await asyncio.to_thread(self._pika_helper_status)
+        return web.json_response({"configured": True, "reachable": status == 200, **payload})
 
     async def _lerobot_reindex(self, _request: Any) -> Any:
         """Re-index episode_index across the dataset (removes orphans, makes contiguous)."""

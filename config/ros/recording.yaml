@@ -165,3 +165,8 @@
     pika_sides: [l, r]
     pika_pose_topics: [/pika_pose_l, /pika_pose_r]
     pika_command_velocity_topics: [/pika/l/cartesian_velocity, /pika/r/cartesian_velocity]
+    # :8770 Pika 重标定 button: the host pika_process_helper (scripts/pika_process_helper.py)
+    # over a loopback URL, e.g. http://127.0.0.1:8783 through the Pika-host tunnel.
+    # "" hides the button. The timeout covers a worst-case stop + start on the helper.
+    pika_helper_url: ""
+    pika_helper_timeout_sec: 90.0

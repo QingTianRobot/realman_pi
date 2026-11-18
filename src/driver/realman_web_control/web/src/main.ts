@@ -8,6 +8,7 @@ import { AXIS_COLORS, VelocityTrace } from "./velocity_trace";
 import { JOINT_COLORS, JointCurrentTrace } from "./joint_current_trace";
 import { activeRouterBranch, ancestors, buildBtTree, findInputRouter, renderBreadcrumb, renderBtNode, type BtRuntime } from "./bt_tree";
 import { initQualityStrip, type QualityReason, type RecordingView } from "./quality_strip";
+import { initLinkStrip } from "./link_strip";
 
 type ArmId = "l" | "m" | "r";
 type KeyboardArmId = "l" | "r";
@@ -142,7 +143,7 @@ type CartesianVelocityTelemetry = {
 const app = document.querySelector<HTMLDivElement>("#app")!;
 app.innerHTML = `
   <header class="topbar">
-    <div class="brand"><span class="brand-mark">${ARM_ICON_SVG}</span><div><strong>RealMan Web Control</strong><small>ROS 2 action console</small></div></div>
+    <div class="brand"><span class="brand-mark">${ARM_ICON_SVG}</span><div><strong>RealMan Web Control</strong><div id="link-strip" class="link-strip" aria-label="连接状态"></div></div></div>
     <label class="arm-picker">ARM <select id="arm-select"><option value="l">LEFT / 123</option><option value="m">MIDDLE / 125</option><option value="r">RIGHT / 124</option></select></label>
     <span id="connection" class="status-pill offline">OFFLINE</span>
     <span id="mode" class="status-pill ready">CONTROL READY</span>
@@ -2838,6 +2839,7 @@ async function pollBehaviorTreeLibrary() {
   renderBehaviorTree();
 }
 window.setInterval(pollBehaviorTreeLibrary, 2000);
+initLinkStrip(document.querySelector<HTMLElement>("#link-strip")!);
 pollBehaviorTreeLibrary();
 // "重启 Docker": the host restart helper restarts realman_bringup_remote (drivers, grippers,
 // bt_launcher). This page lives in realman_web_control, so it stays up and shows the result.

@@ -1,6 +1,30 @@
 /* Control page layout; colors and shared primitives come from theme.css. */
 .topbar { position: sticky; top: 0; z-index: 20; min-height: 64px; margin: 0 auto; padding: 10px clamp(16px, 3vw, 42px); display: flex; align-items: center; gap: 10px; border-bottom: 1px solid var(--line); background: oklch(1 0 0 / 0.86); backdrop-filter: blur(12px); }
 .brand { margin-right: auto; }
+/* Topbar link strip under the title: one icon + one dot per device for arms, cameras and grippers; hover card with link details. */
+.link-strip { display: flex; flex-wrap: nowrap; align-items: center; gap: 10px; margin-top: 3px; }
+.link-group { display: inline-flex; align-items: center; gap: 2px; color: var(--text-3); font-size: 11px; }
+.link-group.warn { color: var(--warn); }
+.link-group.down { color: var(--danger); }
+.link-group > svg { width: 13px; height: 13px; flex: none; margin-right: 2px; }
+.link-group > b { font-size: 10px; letter-spacing: .08em; }
+.link-dot { display: inline-flex; align-items: baseline; gap: 1px; min-width: 18px; height: 18px; padding: 0 4px; border: 0; border-radius: 5px; font: 800 10px/18px system-ui, -apple-system, "PingFang SC", sans-serif; letter-spacing: .02em; cursor: default; justify-content: center; }
+.link-dot small { font-size: 8.5px; font-weight: 700; opacity: .8; }
+.link-dot.ok { background: var(--ok-bg); color: var(--ok); }
+.link-dot.warn { background: var(--warn-bg); color: var(--warn); }
+.link-dot.down { background: var(--danger-bg); color: var(--danger); }
+.link-dot:focus-visible { outline: 2px solid var(--focus-ring); outline-offset: 1px; }
+.link-tip { position: fixed; z-index: 60; width: max-content; max-width: min(360px, calc(100vw - 16px)); padding: 10px 12px; border: 1px solid var(--line-strong); border-radius: 10px; background: var(--card-bg); color: var(--text); box-shadow: var(--shadow-card-hover); font-size: 12px; pointer-events: none; }
+.link-tip-head { display: flex; align-items: center; justify-content: space-between; gap: 12px; margin-bottom: 6px; }
+.link-tip-head strong { font-size: 13px; }
+.link-tone { padding: 2px 8px; border-radius: 999px; font-size: 10px; font-weight: 700; letter-spacing: .06em; }
+.link-tone.ok { background: var(--ok-bg); color: var(--ok); }
+.link-tone.warn { background: var(--warn-bg); color: var(--warn); }
+.link-tone.down { background: var(--danger-bg); color: var(--danger); }
+.link-tip-reason { margin: 0 0 6px; color: var(--text-2); }
+.link-tip dl { display: grid; grid-template-columns: auto 1fr; gap: 3px 12px; margin: 0; }
+.link-tip dt { color: var(--text-3); white-space: nowrap; }
+.link-tip dd { margin: 0; font-variant-numeric: tabular-nums; overflow-wrap: anywhere; }
 .brand strong, .brand small { display: block; }
 .brand strong { font-size: 15px; letter-spacing: .01em; }
 .brand small { color: var(--text-3); font-size: 10px; margin-top: 2px; }

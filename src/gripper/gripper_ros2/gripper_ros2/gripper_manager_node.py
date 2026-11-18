@@ -2,6 +2,7 @@
 
 from __future__ import annotations
 
+import json
 import math
 from pathlib import Path
 
@@ -13,6 +14,7 @@ from gripper_ros2_msgs.srv import GripperPercentage, MoveGripperRaw, SetGripperL
 
 from .gripper_config import load_gripper_config, percentage_to_position
 from .gripper_driver import GripperManager
+from .usb_link import serial_port_link
 from .gripper_limits import (
     LimitsStore,
     apply_overrides,
@@ -55,6 +57,9 @@ class GripperManagerNode:
                 node.get_logger().warning(f"Changingtek bus {port}: offline; reconnect enabled")
         self.manager.start_all()
         self._timer = node.create_timer(0.05, self._publish_feedback)
+        # /<name>/link: which port and USB adapter the bus uses, for the :8765 link strip.
+        # sysfs is re-read every second because a replugged adapter can come back elsewhere.
+        self._link_timer = node.create_timer(1.0, self._publish_links)
 
     def _create_device_interfaces(self, name: str):
         prefix = f"/{name}"
@@ -88,6 +93,7 @@ class GripperManagerNode:
                 "connected": std_msgs.msg.Bool,
             }.items()
         }
+        self._publishers[name]["link"] = self.node.create_publisher(std_msgs.msg.String, f"{prefix}/link", 10)
         self._limits_publishers[name] = self.node.create_publisher(
             GripperLimits,
             f"{prefix}/limits",
@@ -269,6 +275,34 @@ class GripperManagerNode:
             publishers["torque_reached"].publish(std_msgs.msg.Bool(data=bool(feedback["torque_reached"])))
             publishers["alarm"].publish(std_msgs.msg.Int32(data=int(feedback["alarm"])))
             publishers["connected"].publish(std_msgs.msg.Bool(data=bool(device.bus.connected)))
+
+    def link_state(self, name: str, sys_root: str = "/sys") -> dict:
+        """JSON-ready link of one gripper: port, tty, USB adapter, bus rate and last error."""
+        device = self.manager.get(name)
+        bus = device.bus
+        link = serial_port_link(bus.port, sys_root)
+        return {
+            "type": "gripper_link",
+            "name": name,
+            "port": bus.port,
+            "tty": link["tty"],
+            "usb": link["usb"],
+            "usb_error": link["error"],
+            "baudrate": bus.baudrate,
+            "slave_id": device.slave_id,
+            "connected": bool(bus.connected),
+            "poll_hz": round(float(bus._hz), 1),
+            "configured_poll_hz": bus.poll_hz,
+            "bus_error": bus._last_error or "",
+        }
+
+    def _publish_links(self):
+        for name in self.manager.device_names:
+            try:
+                payload = self.link_state(name)
+            except Exception as error:  # never let a sysfs surprise stop the feedback timer
+                payload = {"type": "gripper_link", "name": name, "usb_error": str(error)}
+            self._publishers[name]["link"].publish(std_msgs.msg.String(data=json.dumps(payload)))
 
     def destroy(self):
         self.manager.stop_all()

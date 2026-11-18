@@ -68,6 +68,7 @@ Web `percentage` 的范围是 `0.0..1.0`：`0` 映射到 `close_position`，`1` 
 | `/<name>/set_limits` | `gripper_ros2_msgs/srv/SetGripperLimits` | 校验、保存并立即应用开位和闭位 |
 | `/<name>/move_raw` | `gripper_ros2_msgs/srv/MoveGripperRaw` | 把夹爪点动到 `min..max` 内的原始位置，越界直接拒绝 |
 | `/<name>/limits` | `gripper_ros2_msgs/msg/GripperLimits` | 当前生效的开位、闭位和 `min/max`；可靠、`transient_local`、深度 1 |
+| `/<name>/link` | `std_msgs/msg/String`（JSON） | 每秒一次：串口、实际 tty、USB 适配器（端口路径、协商速度、控制器 PCI 地址）、波特率、从站号、实际轮询频率和最近错误；供 :8765 顶栏连接状态使用 |
 | `/<name>/position` | `std_msgs/msg/Float64` | 反馈位置 |
 | `/<name>/speed`、`current`、`alarm` | `std_msgs/msg/Int32` | 反馈速度、电流和报警码 |
 | `/<name>/torque_reached`、`connected` | `std_msgs/msg/Bool` | 力矩到达和通信健康状态 |

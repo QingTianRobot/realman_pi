@@ -25,7 +25,7 @@ from rclpy.clock import Clock, ClockType
 from rclpy.duration import Duration
 from rclpy.executors import MultiThreadedExecutor
 from rclpy.node import Node
-from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
+from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy, qos_profile_sensor_data
 from rclpy.time import Time
 from realman_msgs.action import CartesianVelocity, ExecuteMotion, ExecuteTrajectory
 from realman_msgs.msg import CartesianVelocityState, InputModeState, MotionWaypoint
@@ -40,7 +40,7 @@ from realman_msgs.srv import (
     SolveCalibration,
     SolveIk,
 )
-from sensor_msgs.msg import JointState
+from sensor_msgs.msg import CameraInfo, JointState
 from std_msgs.msg import Bool, Float64, Int32, String
 from std_srvs.srv import SetBool, Trigger
 from gripper_ros2_msgs.msg import GripperLimits
@@ -52,6 +52,7 @@ from .input_mode_bridge import InputModeBridge, InputModeEffect, InputModeOption
 from .joint_records import JointRecordStore
 from .keyboard_control import KeyboardArmCommand, load_keyboard_control_config
 from .keyboard_control_bridge import KeyboardControlBridge
+from .link_status import LinkSettings, LinkState, RateTracker, arm_specs, build_snapshot, camera_specs
 from .model_manifest import build_manifest
 from .param_readback import ParameterReadback
 from .param_tuning import CatalogError, ParamStore
@@ -130,6 +131,15 @@ class WebControlNode(Node):
         self.declare_parameter(
             "gripper_config_file",
             str(config_root / "ros" / "gripper.yaml"),
+        )
+        # Read by the topbar link strip (GET /api/links): camera identities and arm addresses.
+        self.declare_parameter(
+            "cameras_config_file",
+            str(config_root / "ros" / "cameras_ros2.yaml"),
+        )
+        self.declare_parameter(
+            "driver_config_file",
+            str(config_root / "ros" / "realman_driver.yaml"),
         )
         self.declare_parameter(
             "calibration_config_file",
@@ -227,12 +237,22 @@ class WebControlNode(Node):
         self._grippers = {}
         self._gripper_clients = {}
         self._gripper_states = {}
+        self._gripper_bus: dict[str, dict[str, Any]] = {}
+        link_raw = {}
+        try:
+            link_raw = (yaml.safe_load(Path(web_config_file).read_text(encoding="utf-8")) or {}).get("link_status") or {}
+        except Exception as error:
+            self.get_logger().warning(f"link_status config unreadable, using defaults: {error}")
+        self._link_settings = LinkSettings.from_dict(link_raw)
+        self._link_state = LinkState(rates=RateTracker(self._link_settings.rate_window_sec))
+        self._link_state.gripper_states = self._gripper_states
         try:
             gripper_cfg = yaml.safe_load(Path(gripper_config_file).read_text(encoding="utf-8")) or {}
             for bus in gripper_cfg.get("buses", []):
                 for item in bus.get("grippers", []):
                     name = str(item["name"])
                     self._grippers[name] = dict(item)
+                    self._gripper_bus[name] = {"port": str(bus.get("port", "")), "baudrate": bus.get("baudrate", "")}
                     self._gripper_clients[name] = {
                         "open": self.create_client(Trigger, f"/{name}/open", callback_group=self._callback_group),
                         "close": self.create_client(Trigger, f"/{name}/close", callback_group=self._callback_group),
@@ -251,6 +271,7 @@ class WebControlNode(Node):
                         self.create_subscription(Int32, f"/{name}/current", lambda msg, n=name: self._gripper_state(n, "current", int(msg.data)), 10, callback_group=self._callback_group),
                         self.create_subscription(Bool, f"/{name}/torque_reached", lambda msg, n=name: self._gripper_state(n, "torque_reached", bool(msg.data)), 10, callback_group=self._callback_group),
                         self.create_subscription(Int32, f"/{name}/alarm", lambda msg, n=name: self._gripper_state(n, "alarm", int(msg.data)), 10, callback_group=self._callback_group),
+                        self.create_subscription(String, f"/{name}/link", lambda msg, n=name: self._gripper_link(n, msg), 10, callback_group=self._callback_group),
                         self.create_subscription(
                             GripperLimits,
                             f"/{name}/limits",
@@ -265,6 +286,8 @@ class WebControlNode(Node):
                     ])
         except Exception as error:
             self.get_logger().warning(f"Gripper control disabled: {error}")
+
+        self._setup_link_status()
 
         self._motion_clients = {
             arm: ActionClient(
@@ -464,6 +487,7 @@ class WebControlNode(Node):
             param_store=param_store,
             param_store_error=param_store_error,
             param_reader=param_reader,
+            link_reader=self._link_snapshot,
         )
         self._server.start()
         self._mode_discovery_timer = self.create_timer(
@@ -967,6 +991,48 @@ class WebControlNode(Node):
         state[field] = value
         event = {"type": "gripper_state", **state}
         self._server.send_event(event)
+
+    def _setup_link_status(self) -> None:
+        """Subscriptions behind the topbar link strip: camera_info rates and driver /connected."""
+        try:
+            self._link_cameras = camera_specs(self._parameter("cameras_config_file"))
+        except Exception as error:
+            self.get_logger().warning(f"link strip: no camera list ({error})")
+            self._link_cameras = []
+        self._link_arms = arm_specs(self._parameter("driver_config_file"), self._link_settings.arms)
+        rates = self._link_state.rates
+        for camera in self._link_cameras:
+            # camera_info rides with every frame and is tiny, so the rate costs no image copies.
+            self._web_subscriptions.append(self.create_subscription(
+                CameraInfo, camera.info_topic,
+                lambda _msg, key=f"camera/{camera.camera_id}": rates.record(key),
+                qos_profile_sensor_data, callback_group=self._callback_group,
+            ))
+        for arm in self._link_settings.arms:
+            self._web_subscriptions.append(self.create_subscription(
+                Bool, f"/{arm}/connected",
+                lambda msg, selected=arm: self._link_state.set_arm_connected(selected, bool(msg.data)),
+                10, callback_group=self._callback_group,
+            ))
+
+    def _gripper_link(self, name: str, message: String) -> None:
+        try:
+            payload = json.loads(message.data)
+        except json.JSONDecodeError:
+            return
+        if isinstance(payload, dict):
+            self._link_state.set_gripper_link(name, payload)
+
+    def _link_snapshot(self) -> dict[str, Any]:
+        """GET /api/links (aiohttp thread): every arm, camera and gripper link, read now."""
+        return build_snapshot(
+            state=self._link_state,
+            settings=self._link_settings,
+            arms=self._link_arms,
+            cameras=self._link_cameras,
+            grippers=self._grippers,
+            gripper_bus=self._gripper_bus,
+        )
 
     def _gripper_limits(self, name: str, message: GripperLimits) -> None:
         item = self._grippers.get(name)
@@ -2237,6 +2303,7 @@ class WebControlNode(Node):
             )
 
     def _joint_state(self, arm: str, message: JointState) -> None:
+        self._link_state.rates.record(f"joint_states/{arm}")
         positions = dict(zip(message.name, message.position))
         names = [f"joint_{index}" for index in range(1, 7)]
         if not all(name in positions for name in names):

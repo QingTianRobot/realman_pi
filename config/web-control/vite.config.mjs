@@ -98,6 +98,26 @@ async function devManifest() {
   };
 }
 
+const DEV_LINKS = {
+  type: "link_status",
+  groups: [
+    { kind: "arms", title: "机械臂", items: [
+      { id: "l", short: "L", label: "左臂", tone: "ok", reason: "", badge: "", details: [["控制器", "192.0.2.123:8080"], ["驱动连接", "已连接"], ["joint_states", "30.0 Hz"], ["期望频率", "30 Hz"], ["最近一条", "12 ms 前"]] },
+      { id: "m", short: "M", label: "中臂", tone: "down", reason: "驱动报告控制器未连接", badge: "", details: [["控制器", "192.0.2.125:8080"], ["驱动连接", "未连接"], ["joint_states", "—"], ["期望频率", "30 Hz"], ["最近一条", "—"]] },
+      { id: "r", short: "R", label: "右臂", tone: "ok", reason: "", badge: "", details: [["控制器", "192.0.2.124:8080"], ["驱动连接", "已连接"], ["joint_states", "29.9 Hz"], ["期望频率", "30 Hz"], ["最近一条", "20 ms 前"]] },
+    ] },
+    { kind: "cameras", title: "相机", items: [
+      { id: "camera_left", short: "L", label: "左腕相机", tone: "ok", reason: "", badge: "3.0", details: [["帧率", "30.0 / 30 fps"], ["最近一帧", "18 ms 前"], ["话题", "/camera_left/color/image_raw"], ["USB", "USB 3.0 · 5000 Mb/s"], ["USB 端口", "2-3（bus 2）"], ["控制器", "0000:00:14.0"], ["设备", "Orbbec Gemini 305"], ["USB 序列号", "CV2T66100096"]] },
+      { id: "camera_right", short: "R", label: "右腕相机", tone: "warn", reason: "协商为 USB 2.0（480 Mb/s），未跑在 USB 3", badge: "2.0", details: [["帧率", "30.0 / 30 fps"], ["最近一帧", "25 ms 前"], ["话题", "/camera_right/color/image_raw"], ["USB", "USB 2.0 · 480 Mb/s"], ["USB 端口", "1-4（bus 1）"], ["控制器", "0000:00:14.0"], ["设备", "Orbbec Gemini 305"], ["USB 序列号", "CV2T66100035"]] },
+      { id: "camera_global/d435", short: "G", label: "全局相机 D435", tone: "down", reason: "已 4.2 s 没有新消息", badge: "3.0", details: [["帧率", "0.0 / 30 fps"], ["最近一帧", "4200 ms 前"], ["话题", "/camera_global/d435/color/image_raw"], ["USB", "USB 3.0 · 5000 Mb/s"], ["USB 端口", "2-2（bus 2）"], ["控制器", "0000:00:14.0"], ["设备", "Intel(R) RealSense(TM) Depth Camera 435"], ["USB 序列号", "343223027232"]] },
+    ] },
+    { kind: "grippers", title: "夹爪", items: [
+      { id: "gripper_left", short: "L", label: "左夹爪", tone: "ok", reason: "", badge: "", details: [["连接", "已连接"], ["串口", "/dev/realman/gripper_left → ttyUSB0"], ["Modbus", "从站 2 @ 115200"], ["轮询", "19.8 / 20 Hz"], ["报警", "无"], ["USB", "USB 1.1 · 12 Mb/s"], ["USB 端口", "5-1.2（bus 5）"], ["控制器", "0000:06:00.0"], ["适配器", "USB Serial 1a86:7523"]] },
+      { id: "gripper_right", short: "R", label: "右夹爪", tone: "warn", reason: "报警位 32（0x20）", badge: "", details: [["连接", "已连接"], ["串口", "/dev/realman/gripper_right → ttyUSB1"], ["Modbus", "从站 3 @ 115200"], ["轮询", "20.0 / 20 Hz"], ["报警", "32"], ["USB", "USB 1.1 · 12 Mb/s"], ["USB 端口", "5-1.4（bus 5）"], ["控制器", "0000:06:00.0"], ["适配器", "USB Serial 1a86:7523"]] },
+    ] },
+  ],
+};
+
 function devApiPlugin() {
   return {
     name: "realman-web-control-dev-api",
@@ -114,6 +134,13 @@ function devApiPlugin() {
             // No bt_launcher locally: the start menu stays hidden in dev.
             response.setHeader("Content-Type", "application/json");
             response.end(JSON.stringify({ available: false }));
+            return;
+          }
+          if (url === "/api/links") {
+            // Sample topbar link strip (same shape as link_status.build_snapshot): one USB 2.0
+            // camera, one silent camera and a gripper alarm so every tone shows in dev.
+            response.setHeader("Content-Type", "application/json");
+            response.end(JSON.stringify(DEV_LINKS));
             return;
           }
           if (url === "/api/docker/restart" && request.method === "GET") {

@@ -220,6 +220,7 @@ class WebControlServer:
         param_store: Any = None,
         param_store_error: str = "",
         param_reader: Callable[[dict[str, list[str]]], dict[str, Any]] | None = None,
+        link_reader: Callable[[], dict[str, Any]] | None = None,
     ) -> None:
         self.config = config
         self.manifest = manifest
@@ -234,6 +235,8 @@ class WebControlServer:
         self.param_store = param_store
         self.param_store_error = param_store_error
         self.param_reader = param_reader
+        # Topbar link strip (GET /api/links); None answers "unavailable".
+        self.link_reader = link_reader
         self._loop: asyncio.AbstractEventLoop | None = None
         self._thread: threading.Thread | None = None
         self._ready = threading.Event()
@@ -308,6 +311,7 @@ class WebControlServer:
         app = web.Application(client_max_size=self.config.max_message_bytes)
         app.router.add_get("/healthz", self._health)
         app.router.add_get("/api/layout", self._layout)
+        app.router.add_get("/api/links", self._links)
         app.router.add_get("/api/bt/runtime", self._bt_runtime)
         app.router.add_get("/api/bt/trees", self._bt_trees)
         app.router.add_post("/api/bt/favorites", self._bt_favorite)
@@ -366,6 +370,20 @@ class WebControlServer:
         from aiohttp import web
 
         return web.json_response(self.manifest)
+
+    async def _links(self, _request: Any) -> Any:
+        """Arm / camera / gripper connection snapshot for the topbar; reads sysfs off the loop."""
+        from aiohttp import web
+
+        headers = {"Cache-Control": "no-store"}
+        if self.link_reader is None:
+            return web.json_response({"type": "link_status", "groups": [], "error": "unavailable"}, headers=headers)
+        try:
+            snapshot = await asyncio.to_thread(self.link_reader)
+        except Exception as error:  # a broken snapshot must not take the page down
+            self.logger.warning(f"link status failed: {error}")
+            return web.json_response({"type": "link_status", "groups": [], "error": str(error)}, headers=headers)
+        return web.json_response(snapshot, headers=headers)
 
     async def _bt_runtime(self, _request: Any) -> Any:
         """One-shot read of the tree view; the page itself gets ``bt_runtime`` pushes over /ws."""

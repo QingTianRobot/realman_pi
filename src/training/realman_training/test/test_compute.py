@@ -218,3 +218,44 @@ def test_failed_config_py_rsync_is_logged(config):
     log = RecordingLog()
     assert compute.sync_mirror(config, runner, log) is False
     assert any("config.py" in line and "denied" in line for line in log.lines)
+
+
+from realman_training.jobs import STEPS
+
+
+def test_route_keeps_local_steps_and_fakes(config, monkeypatch):
+    monkeypatch.setattr(compute, "load_config", lambda path=None: config)
+    real = object()
+    assert compute.route("serve", STEPS["serve"], real, {}) is real          # not a remote kind
+    assert compute.route("train", "tests.fake:run", real, {}) is real        # a fake target is never rerouted
+    routed = compute.route("train", STEPS["train"], real, {})
+    assert routed.func is compute.run_remote and routed.args == ("train",)
+    assert compute.route("pull", STEPS["pull"], real, {}) is compute.pull_and_push
+
+
+def test_route_is_a_no_op_without_a_compute_host(tmp_path, monkeypatch):
+    path = tmp_path / "c.yaml"
+    path.write_text(f"training_console:\n  data_root: {tmp_path}\n", encoding="utf-8")
+    monkeypatch.setattr(compute, "load_config", lambda p=None: load_config(path))
+    real = object()
+    assert compute.route("train", STEPS["train"], real, {}) is real
+
+
+def test_push_dataset_copies_then_drops_local_videos(config):
+    target = config.data_root / "raw_x"
+    (target / "ds" / "videos").mkdir(parents=True)
+    (target / "ds" / "meta").mkdir()
+    runner = FakeRunner().on("test ! -e", returncode=0)
+    remote = compute.push_dataset(config, runner, RecordingLog(), target)
+    assert remote == "/w/data/realman/raw_x"
+    rsync = runner.commands("rsync")[0]
+    assert rsync[-2] == f"{target}/" and rsync[-1] == "EI:/w/data/realman/raw_x.partial/"
+    assert runner.commands("mv /w/data/realman/raw_x.partial /w/data/realman/raw_x")
+    assert not (target / "ds" / "videos").exists() and (target / "ds" / "meta").exists()
+
+
+def test_push_dataset_refuses_an_existing_remote(config):
+    target = config.data_root / "raw_x"
+    target.mkdir(parents=True)
+    with pytest.raises(StepFailed, match="exists on EI"):
+        compute.push_dataset(config, FakeRunner().on("test ! -e", returncode=1), RecordingLog(), target)

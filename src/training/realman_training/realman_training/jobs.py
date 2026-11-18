@@ -324,6 +324,9 @@ def run_job(folder: str | Path) -> int:
             raise JobCancelled()
         module, function = spec["target"].split(":")
         step = getattr(importlib.import_module(module), function)
+        from . import compute  # imports jobs: import here to avoid a cycle
+
+        step = compute.route(spec["kind"], spec["target"], step, spec["params"])
         result = step(spec["params"], StepLog(line, progress))
         # Ignore signals the moment the step is done so finalisation always runs.
         signal.signal(signal.SIGTERM, signal.SIG_IGN)

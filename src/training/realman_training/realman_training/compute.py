@@ -10,11 +10,13 @@ a metadata mirror that the web pages read as before.
 
 from __future__ import annotations
 
+import functools
 import importlib
 import json
 import os
 import secrets
 import shlex
+import shutil
 import signal
 import sys
 import threading
@@ -306,3 +308,43 @@ def remote_cancel_main(token: str) -> int:
         return 0
     print(f"step {token} not started yet: cancel recorded", file=sys.stderr)
     return 0
+
+
+def push_dataset(config: ConsoleConfig, runner: Runner, log, target: Path) -> str:
+    """Copy a pulled dataset to the compute host (rsync to <name>.partial, then rename), then drop the local videos:
+    the console keeps meta and parquet only, like the rest of its mirror."""
+    rel = Path(target).relative_to(config.data_root).as_posix()
+    remote = remote_path(config, f"{REMOTE_DATA_ROOT}/{rel}")
+    host = config.compute.ssh_host
+    q = shlex.quote
+    if runner.run(ssh_argv(config, f"test ! -e {q(remote)}")).returncode:
+        raise StepFailed(f"{remote} exists on {host}: pick another name (nothing is overwritten)")
+    log(f"copying {target.name} to {host}")
+    runner.check(["rsync", "-a", "--partial", "-e", shlex.join(ssh_base(config)), f"{target}/",
+                  f"{host}:{remote}.partial/"])
+    runner.check(ssh_argv(config, f"mv {q(remote + '.partial')} {q(remote)}"))
+    for videos in Path(target).glob("*/videos"):
+        shutil.rmtree(videos)
+    log(f"on {host}: {remote}")
+    return remote
+
+
+def pull_and_push(params: dict, log, runner: Runner | None = None) -> dict:
+    from .steps import pull
+
+    runner = runner or Runner()
+    config = load_config(params.get("config"))
+    result = pull.run(params, log, runner)
+    remote = push_dataset(config, runner, log, Path(result["target"]))
+    sync_mirror(config, runner, log)
+    return {**result, "compute_path": remote}
+
+
+def route(kind: str, target: str, step, params: dict):
+    """The callable run_job runs: the step itself, or its remote form when this console has a compute host.
+    Only the real step targets are rerouted (tests and fakes pass their own)."""
+    if target != STEPS.get(kind) or (kind not in REMOTE_KINDS and kind != "pull"):
+        return step
+    if not enabled(load_config(params.get("config"))):
+        return step
+    return pull_and_push if kind == "pull" else functools.partial(run_remote, kind)

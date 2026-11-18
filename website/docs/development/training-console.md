@@ -133,6 +133,7 @@ PYTHONPATH=. python -m realman_training linkcheck [--only pika,link,inference,br
 | `REALMAN_COMPUTE_WORKDIR` | 计算主机上的工作目录（绝对路径），`compute setup` 在下面建 `env.sh`、openpi、数据目录 |
 | `REALMAN_RECORDING_SSH_HOST` | 录制容器所在主机的 ssh 别名；显式设为空 = 录制容器就在本机（SJD） |
 | `REALMAN_TRAINING_DATA_ROOT` | 控制平台的 `data_root`；未设或为空都用默认值 |
+| `REALMAN_TRAINING_ARM` | 质检按哪条手臂判（`l`/`m`/`r`，即 `quality.arm`）；未设或为空 = `r`。SJDrealman 的 Pika 数据是左臂，设 `l`；建视图时任务参数 `arm` 不填也用它。质检的起始姿态 `start_pose_deg` 是右臂的，判左臂时这条警告不准，只看不剔 |
 
 示例（只有占位符，按实际填写）：
 
@@ -141,6 +142,7 @@ REALMAN_COMPUTE_SSH_HOST=<compute-alias>
 REALMAN_COMPUTE_SSH_CONFIG=Traning_area/.ssh/config
 REALMAN_COMPUTE_WORKDIR=<absolute workdir on the compute host>
 REALMAN_RECORDING_SSH_HOST=
+REALMAN_TRAINING_ARM=l
 TRAINING_HOME=/home/<user>
 TRAINING_REPO=<repo checkout on SJD>
 TRAINING_RUNTIME=runc

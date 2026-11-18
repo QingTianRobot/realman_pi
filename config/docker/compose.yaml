@@ -412,6 +412,7 @@ services:
       REALMAN_COMPUTE_WORKDIR: ${REALMAN_COMPUTE_WORKDIR-}
       REALMAN_RECORDING_SSH_HOST: ${REALMAN_RECORDING_SSH_HOST-realman_local}
       REALMAN_TRAINING_DATA_ROOT: ${REALMAN_TRAINING_DATA_ROOT-}
+      REALMAN_TRAINING_ARM: ${REALMAN_TRAINING_ARM:-}
     extra_hosts: ["host.docker.internal:host-gateway"]
     ports:
       - "${TRAINING_BIND:-0.0.0.0}:8780:8780"

@@ -506,6 +506,14 @@ def main(argv: list[str] | None = None) -> int:
             print("usage: realman-train _job-run <job-dir>", file=sys.stderr)
             return 2
         return run_job(argv[1])
+    if argv[:1] == ["_remote-step"]:
+        from .compute import remote_step_main
+
+        return remote_step_main(argv[1], argv[2]) if len(argv) == 3 else 2
+    if argv[:1] == ["_remote-cancel"]:
+        from .compute import remote_cancel_main
+
+        return remote_cancel_main(argv[1]) if len(argv) == 2 else 2
     args = make_parser().parse_args(argv)
     try:
         config = load_config(args.config)

@@ -11,6 +11,7 @@ recorder can relay it to the web dashboard without importing any visualization s
 from __future__ import annotations
 
 import json
+from contextlib import closing
 from hashlib import sha256
 from bisect import bisect_left
 from dataclasses import dataclass
@@ -23,8 +24,14 @@ from .lerobot_align import AlignmentPolicy, TimedSample, align_streams
 from .canonical_features import materialize_canonical_frames, validate_command_frame
 from .joint_state import ordered_joint_position
 from .kinematics import UrdfKinematics
-from .lerobot_schema import LeRobotV3Schema, schema_from_parameters
+from .lerobot_schema import LeRobotV3Schema, schema_from_parameters, session_velocity_topics
 from .lerobot_dataset_store import dataset_lock
+from .lerobot_image_pipeline import (
+    iter_decoded_frames,
+    managed_image_writer,
+    verify_episode_images,
+    wait_for_writer_capacity,
+)
 from .json_io import atomic_json_write
 from .provenance import verify_optional_snapshot
 from .synthetic_arms import JOINT_COUNT, fill_synthetic_streams
@@ -46,6 +53,10 @@ class ExportRequest:
     # When true, the export requires full-frame subtask coverage (no frame maps to
     # -1) and non-empty labels; partial or empty annotation fails the export.
     include_subtasks: bool = False
+    # Threads that decode archived JPEGs ahead of the writer and, through LeRobot's
+    # AsyncImageWriter, write the temporary PNG frames in parallel.  0 restores the
+    # fully serial path.  Video encoding is already one process per camera.
+    image_workers: int = 4
 
 
 def _split_ee_pose(pose: Sequence[float], arm_count: int) -> tuple[tuple[float, ...], tuple[float, ...]]:
@@ -197,33 +208,12 @@ class LeRobotExporter:
                 task = str(manifest.get("metadata", {}).get("task") or "recording")
                 raw_session_number = manifest.get("metadata", {}).get("session_number")
                 session_number = raw_session_number if isinstance(raw_session_number, int) else 0
-                for index, frame in enumerate(canonical):
-                    ee_position, ee_rotation = _split_ee_pose(frame.ee_pose_base, schema.arm_count)
-                    ee_linear, ee_angular = _split_ee_velocity(frame.ee_velocity_base, schema.arm_count)
-                    payload = {
-                        "observation.joint_position": np.asarray(frame.joint_position, dtype=np.float32),
-                        "observation.joint_velocity": np.asarray(frame.joint_velocity, dtype=np.float32),
-                        "observation.ee_position": np.asarray(ee_position, dtype=np.float32),
-                        "observation.ee_rotation": np.asarray(ee_rotation, dtype=np.float32),
-                        "observation.ee_linear_velocity": np.asarray(ee_linear, dtype=np.float32),
-                        "observation.ee_angular_velocity": np.asarray(ee_angular, dtype=np.float32),
-                        "observation.gripper_position": np.asarray(frame.gripper_position, dtype=np.float32),
-                        "action.command_action": np.asarray(frame.command_cartesian_velocity, dtype=np.float32),
-                        "action.executed_action": np.asarray(frame.ee_velocity_base, dtype=np.float32),
-                        "quality.valid": np.asarray([frame.valid], dtype=np.bool_),
-                        "quality.sync_error_ns": np.asarray(frame.sync_error_ns, dtype=np.int64),
-                        "task": task,
-                    }
-                    if annotate_subtasks:
-                        payload["subtask_index"] = np.asarray([subtask_index[index]], dtype=np.int64)
-                    if annotate_session_number:
-                        payload["session_number"] = np.asarray([session_number], dtype=np.int64)
-                    if frame.command_gripper is not None:
-                        payload["action.command.gripper"] = np.asarray(frame.command_gripper, dtype=np.float32)
-                    for camera_id, selected in images.items():
-                        payload[f"observation.images.{camera_id}"] = self._load_rgb(selected[index][1])
-                    dataset.add_frame(payload)
-                    self._report(request, index + 1, len(aligned))
+                self._add_v3_frames(
+                    dataset, request, schema, canonical, images, task,
+                    subtask_index if annotate_subtasks else None,
+                    session_number if annotate_session_number else None,
+                    len(aligned),
+                )
                 episode_index = self._dataset_episode_count(dataset)
                 if subtasks and annotate_subtasks:
                     # A second annotated episode would overwrite the shared
@@ -262,6 +252,66 @@ class LeRobotExporter:
         )
         self._report(request, 100, 100)
         return dataset_root
+
+    def _add_v3_frames(
+        self,
+        dataset: Any,
+        request: ExportRequest,
+        schema: LeRobotV3Schema,
+        canonical: Sequence[Any],
+        images: dict[str, list[tuple[int, Path]]],
+        task: str,
+        subtask_index: Sequence[int] | None,
+        session_number: int | None,
+        progress_total: int,
+    ) -> None:
+        """Stage every canonical frame into the SDK's pending episode buffer.
+
+        JPEG decode and PNG staging run on ``request.image_workers`` threads; frame
+        order, payload contents and the serialized dataset append are unchanged.
+        """
+        workers = request.image_workers
+        if workers < 0:
+            raise ValueError("image_workers must be zero or positive")
+        # Each queued item is one camera image (~1 MB at 640x480); keep a few rounds
+        # in flight so the writer threads never starve, but never the whole episode.
+        max_pending = 4 * max(1, workers) * max(1, len(images))
+        decoded = iter_decoded_frames(
+            {camera: [path for _, path in selected] for camera, selected in images.items()},
+            len(canonical), self._load_rgb, workers=workers,
+        )
+        with managed_image_writer(dataset, workers=workers), closing(decoded):
+            for index, (frame, pixels) in enumerate(zip(canonical, decoded)):
+                ee_position, ee_rotation = _split_ee_pose(frame.ee_pose_base, schema.arm_count)
+                ee_linear, ee_angular = _split_ee_velocity(frame.ee_velocity_base, schema.arm_count)
+                payload = {
+                    "observation.joint_position": np.asarray(frame.joint_position, dtype=np.float32),
+                    "observation.joint_velocity": np.asarray(frame.joint_velocity, dtype=np.float32),
+                    "observation.ee_position": np.asarray(ee_position, dtype=np.float32),
+                    "observation.ee_rotation": np.asarray(ee_rotation, dtype=np.float32),
+                    "observation.ee_linear_velocity": np.asarray(ee_linear, dtype=np.float32),
+                    "observation.ee_angular_velocity": np.asarray(ee_angular, dtype=np.float32),
+                    "observation.gripper_position": np.asarray(frame.gripper_position, dtype=np.float32),
+                    "action.command_action": np.asarray(frame.command_cartesian_velocity, dtype=np.float32),
+                    "action.executed_action": np.asarray(frame.ee_velocity_base, dtype=np.float32),
+                    "quality.valid": np.asarray([frame.valid], dtype=np.bool_),
+                    "quality.sync_error_ns": np.asarray(frame.sync_error_ns, dtype=np.int64),
+                    "task": task,
+                }
+                if subtask_index is not None:
+                    payload["subtask_index"] = np.asarray([subtask_index[index]], dtype=np.int64)
+                if session_number is not None:
+                    payload["session_number"] = np.asarray([session_number], dtype=np.int64)
+                if frame.command_gripper is not None:
+                    payload["action.command.gripper"] = np.asarray(frame.command_gripper, dtype=np.float32)
+                for camera_id, rgb in pixels.items():
+                    payload[f"observation.images.{camera_id}"] = rgb
+                wait_for_writer_capacity(dataset, max_pending=max_pending)
+                dataset.add_frame(payload)
+                self._report(request, index + 1, progress_total)
+            # The SDK's PNG writer only prints on failure; a missing frame would be
+            # silently dropped by the encoder, so refuse to save a short episode.
+            verify_episode_images(dataset, [f"observation.images.{camera}" for camera in images])
 
     @staticmethod
     def _dataset_root(output_dir: Path, schema: LeRobotV3Schema) -> Path:
@@ -663,6 +713,10 @@ def main(args: list[str] | None = None) -> int:
     parser.add_argument("--output-dir", type=Path, default=None)
     parser.add_argument("--target-fps", type=float, default=10.0)
     parser.add_argument("--max-gap-sec", type=float, default=2.0)
+    parser.add_argument(
+        "--image-workers", type=int, default=4,
+        help="threads for JPEG decode + PNG staging (0 = serial)",
+    )
     parsed = parser.parse_args(args)
 
     session_dir = parsed.session_dir.expanduser().resolve()
@@ -675,7 +729,7 @@ def main(args: list[str] | None = None) -> int:
         repo_id=str(config.get("repo_id", "realman/pi05-three-arm")), fps=parsed.target_fps,
         arms=config.get("arms", ["l", "m", "r"]),
         arm_action_topics=config.get("arm_action_topics", []),
-        arm_velocity_topics=config.get("arm_velocity_topics", []),
+        arm_velocity_topics=session_velocity_topics(manifest, ()),
         gripper_position_topics=config.get("gripper_position_topics", []),
         gripper_action_topics=config.get("gripper_action_topics", []),
         camera_ids=config.get("camera_ids", []),
@@ -696,6 +750,7 @@ def main(args: list[str] | None = None) -> int:
             target_fps=parsed.target_fps,
             max_gap_sec=parsed.max_gap_sec,
             schema=schema,
+            image_workers=parsed.image_workers,
         )
     )
     return 0

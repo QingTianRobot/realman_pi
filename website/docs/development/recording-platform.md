@@ -9,7 +9,7 @@ description: RealMan 驱动输出的隔离录制、预检、低清展示与 LeRo
 
 `realman_recording` 是一个**订阅式数据录制与回放** ROS 2 节点组：它只订阅已有的驱动与夹爪输出，不创建 `Robotic_Arm`/RealMan SDK 客户端，也不发布机械臂运动命令。`./rm65 up` 通过 `realman_recording` 容器随生产 ROS 图一起启动它（默认开启）；正常实时展示继续由 `realman_web_control` 提供。recording 自带网页仅用于录制与已导出 episode 的只读回放，不发起任何录制控制；上游系统通过 `/recording/manage` Service 控制录制生命周期，不能复用或代理 `realman_web_control` 的运动面板。
 
-录制和数据集转换是两个阶段：停止时只原子收尾原始 MCAP/JPEG 帧 session；转换由独立的 LeRobot worker 完成。`config/ros/recording.yaml` 的 `auto_export_on_stop`（默认 `true`）让**干净收尾**的 session 在 STOP 后自动采用并入队导出，由单个串行 worker 一次只转换一个；有 MCAP 或相机写错误的 `FAILED` session 永远不会自动导出。设为 `false` 恢复手动 `ADOPT`。转换占用的 CPU、GPU、图像解码或失败均不得减慢下一次 ROS 数据录制。
+录制和数据集转换是两个阶段：停止时只原子收尾原始 MCAP/JPEG 帧 session；转换由独立的 LeRobot worker 完成。`config/ros/recording.yaml` 的 `auto_export_on_stop`（默认 `true`）让**干净收尾**的 session 在 STOP 后自动采用并入队导出（并行与加速见下文 [LeRobot 转换并行](#lerobot-转换并行)）；有 MCAP 或相机写错误的 `FAILED` session 永远不会自动导出。设为 `false` 恢复手动 `ADOPT`。转换占用的 CPU、GPU、图像解码或失败均不得减慢下一次 ROS 数据录制。
 
 MCAP 状态写入、ROS `Image` 有界 JPEG 录制、低清 JPEG 预览、夹爪/相机健康状态、Three.js/URDF 三臂展示、预检和预约控制已经接入。`ADOPT` 会在 ROS executor 外把完成 session 异步转换为 `lerobot==0.4.4` 的 canonical v3 episode；失败会持久化为 `FAILED`，不会伪造成功的数据集。
 MCAP 的 `accepted_samples` 仅在序列化并成功交给 writer 后递增；`enqueued_samples`
@@ -217,6 +217,22 @@ docker compose up realman_recording
 
 独立 launch 会创建 `logs/YYYYMMDD_HHMMSS/` 并设置 ROS 2 官方节点日志目录；使用 rcutils 彩色输出，不应添加自定义日志重定向。
 
+## LeRobot 转换并行
+
+一个 episode 的转换时间几乎都花在图像上：每帧每路相机先解码一张归档 JPEG，再由 SDK 的 `add_frame` 重编码成临时 PNG，最后才交给视频编码器。串行跑时三路 640×480 约 30 ms/帧。并行分三层，参数都在 `config/ros/recording.yaml`：
+
+| 层 | 参数 | 作用 |
+| --- | --- | --- |
+| session 之间 | `export_workers`（3） | 多个 session 同时做 MCAP 读取、对齐和 FK；同一数据集的追加（帧写入、`save_episode`、`finalize`）仍由数据集旁的 `fcntl` 锁串行，不同 `repo_id` 的数据集互不阻塞。 |
+| episode 内图像 | `export_image_workers`（8） | `lerobot_image_pipeline.py`：线程池按帧序预解码 JPEG（最多领先 2×workers 帧），同时开启 LeRobot 自带的线程版 `AsyncImageWriter` 并行写 PNG。Pillow 编解码时释放 GIL，因此线程比进程快（进程要 pickle 每帧约 1 MB 的数组）。`0` 恢复原来的完全串行。 |
+| 视频编码 | 无（SDK 内置） | `save_episode(parallel_encoding=True)` 已经是每路相机一个进程。 |
+
+两处保护：SDK 的 PNG 队列没有上限，导出器在队列超过 `4 × workers × 相机数` 张时等待，内存不随 episode 长度增长；SDK 的 `write_image` 写失败只打印不抛错，所以 `save_episode` 前会检查每一张暂存 PNG 都存在且非空，缺帧直接让导出 `FAILED`，而不是让编码器悄悄少一帧。
+
+本地实测（Apple M 系列 10 核，LeRobot 0.4.4，3 路 640×480、1200 帧，走真实 `_add_v3_frames` + `save_episode`）：串行 57.1 s（图像暂存 34.8 s + AV1 编码 22.4 s），`export_image_workers: 8` 为 27.9 s（暂存 7.0 s + 编码 20.8 s）；两种方式的 PNG 像素、parquet 表和每路视频帧数（1200）完全一致。剩下的大头是 AV1 编码，已经按相机并行。
+
+不使用 SDK 的 `streaming_encoding`（边加帧边编码、跳过 PNG）：同一基准里它更快（15 s），但其中一路相机的视频只有 1199 帧，训练数据不能接受丢帧。
+
 ## 实现状态与后续清单
 
 下列核心边界已经实现；剩余条目是必须在 Humble、LeRobot SDK 和真实设备
@@ -225,7 +241,7 @@ docker compose up realman_recording
 1. `state_archive.py`（已接入）：用 `rosbag2_py` 的 `SequentialWriter` 以 `storage_id="mcap"` 建 topic、序列化消息并在收尾时关闭 writer；bag 记录时间取 receipt wall-clock 纳秒。session manifest 的成对 wall/monotonic 起始锚点供导出换算媒体时间轴；没有 `header.stamp` 的话题只可使用 receipt 时间。
 2. `camera_workers.py`（已接入）：每路 ROS `Image` 回调只把原始消息放入独立有界队列，JPEG 编码和落盘均在 archive worker 中执行；STOP 时按每帧 receipt 及每路 `accepted/dropped/errors` 统计写入 `media-index.json`。低清预览使用另一个限 FPS、限分辨率、只保留最新 JPEG 的 worker。录制平台不支持 RTSP/ffmpeg 输入。
 3. `web_server.py` 与 `static/index.html`（已接入）：预览使用独立 endpoint；只读 Three.js/URDF 三臂 viewer 已实现（参考 web_control 的 urdf-loader 方案，把 `/l|m|r/joint_states` 实时套到 URDF 模型）。回放页只读取已完成的 LeRobot v3，前端源在 `web/`，经 `npm run build:recording`（Vite，`config/recording/vite.config.mjs`）构建到 `static/`。
-4. `lerobot_exporter.py`：ADOPT 后在 ROS executor 外读取 MCAP/JPEG，以配置的 SYSTEM_TIME 网格对齐，使用 `lerobot==0.4.4` 追加 canonical v3 episode。它保存关节位置/派生速度、URDF FK EE pose/velocity、夹爪位置、真实 Cartesian command 和 quality；不会把 π0.5 的 state/action 向量当作原始事实。某一臂的 `arm_action_topics` 流在整段 episode 内没有样本（从未被下发指令）时，导出器按「指令速度恒为零」补齐该臂 6D 动作，而不是拒绝导出：手动录制三臂皆空、双主臂遥操作时非遥操作臂皆空都据此通过；关节/夹爪/实测速度等状态流仍是硬性必需，缺失依旧报错。集合导出目录会按 `repo_id` 选择稳定子目录，已初始化的 `meta/info.json` 则原地续写。训练读取图像时应显式选择 `video_backend=\"pyav\"`；当前容器已验证 SDK reload 和 π0.5 adapter smoke，OpenPI one-batch 仍待训练环境。
+4. `lerobot_exporter.py`：ADOPT 后在 ROS executor 外读取 MCAP/JPEG，以配置的 SYSTEM_TIME 网格对齐，使用 `lerobot==0.4.4` 追加 canonical v3 episode。它保存关节位置/派生速度、URDF FK EE pose/velocity、夹爪位置、真实 Cartesian command 和 quality；EE 速度优先用驱动实测的 `/<arm>/cartesian_velocity/state`：话题列表取自该 session 录制时写进 manifest 的 `canonical_config.arm_velocity_topics`（空列表就是空，不会被今天的配置补上；只有没有这个键的旧 manifest 才退回 `recording.yaml`），没有实测流时才用 FK 最短弧差分估计，回执 `generator_versions.ee_velocity` 分别记为 `driver_measured_v1` / `quaternion_shortest_arc_v1`。2026-11-18 之前 recorder 的 ADOPT 导出漏传了这些话题，所以此前的 episode 都是 FK 估计；同一数据集里两种来源会并存，按回执区分。不会把 π0.5 的 state/action 向量当作原始事实。某一臂的 `arm_action_topics` 流在整段 episode 内没有样本（从未被下发指令）时，导出器按「指令速度恒为零」补齐该臂 6D 动作，而不是拒绝导出：手动录制三臂皆空、双主臂遥操作时非遥操作臂皆空都据此通过；关节/夹爪/实测速度等状态流仍是硬性必需，缺失依旧报错。集合导出目录会按 `repo_id` 选择稳定子目录，已初始化的 `meta/info.json` 则原地续写。训练读取图像时应显式选择 `video_backend=\"pyav\"`；当前容器已验证 SDK reload 和 π0.5 adapter smoke，OpenPI one-batch 仍待训练环境。
 5. `lerobot_web_replay.py`：提供只读 LeRobot episode catalog 和按需图像解码；默认最多缓存 4 个空闲 dataset 句柄，按 LRU 淘汰；同一 episode 的 SDK 读取经独立锁串行化，正在使用的句柄固定到读取结束。高并发时活跃句柄可令缓存暂时超过 4 个，读操作结束后重新收敛。Web handler 将 SDK 读取和 JPEG 解码移到工作线程，避免慢回放请求阻塞实时快照；`replay.py`（已并入 `realman_recording` 包）仍是后续 Rerun 回放实验骨架，当前不作为验收路径。
 6. 已在工控机临时 recording 容器完成 colcon、recorder/Web bridge 启动、`/healthz`、空数据集 `/api/lerobot`、失败 PREPARE 边界和 Domain 65 下 3 秒 state-only MCAP 录制（819 条消息、无 drop/write error）；另有隔离 ROS graph 的合成 Service→MCAP→DISCARD 集成测试、SIGKILL 活跃 recorder 后由新 recorder ROS 节点恢复 manifest 的进程级测试，以及用 LeRobot SDK fixture 完成 HTTP list/summary/frame/JPEG 回读。WebSocket 慢客户端自动回归使用独立 asyncio loop 和阻塞 client，验证 producer 非阻塞、快照合并及超时清理。待真机验收包括四路相机成功录制和真实 episode ADOPT/导出/回放；待故障注入包括真实磁盘耗尽（当前仅有 writer `OSError` 注入）。
 

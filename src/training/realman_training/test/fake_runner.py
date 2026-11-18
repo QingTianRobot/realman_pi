@@ -15,7 +15,8 @@ class FakeRunner(Runner):
 
     def on(self, match: str, *, stdout: str = "", returncode: int = 0, lines=(), action=None) -> FakeRunner:
         """First rule whose `match` is a substring of the joined argv answers; action(argv, input) runs first.
-        stdout may be a callable (argv, input) -> str for answers that change between calls."""
+        stdout may be a callable (argv, input) -> str and returncode one (argv, input) -> int, for answers that change
+        between calls."""
         self._rules.append((match, stdout, returncode, tuple(lines), action))
         return self
 
@@ -31,6 +32,8 @@ class FakeRunner(Runner):
                     action(argv, input)
                 if callable(stdout):
                     stdout = stdout(argv, input)
+                if callable(returncode):
+                    returncode = returncode(argv, input)
                 return stdout, returncode, lines
         return "", 0, ()
 

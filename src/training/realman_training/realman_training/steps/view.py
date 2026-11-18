@@ -40,6 +40,10 @@ def view_command(
         "--src", str(src), "--dst", str(dst), "--arm", arm, *thresholds,
         "--task-prompt", *[f"{t}={p}" for t, p in prompts.items()],
     ]
+    if openpi.backend == "uv":
+        source = f"source {shlex.quote(openpi.env_file)} && " if openpi.env_file else ""
+        return ["bash", "-c", f"{source}cd {shlex.quote(str(openpi.repo))} && "
+                              "uv run --no-sync scripts/make_realman_view.py " + shlex.join(args)]
     return [
         "docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",
         "-e", "HOME=/tmp", "-e", "UV_PROJECT_ENVIRONMENT=/.venv",

@@ -10,11 +10,11 @@ from pathlib import Path
 from ..config import load_config
 from ..jobs import JobCancelled, StepFailed, write_json
 from ..openpi import (
-    Compose,
     busy_gpus,
     check_holdout,
     check_name,
     config_info,
+    make_backend,
     parse_gpus,
     require_view,
     short_gpus,
@@ -54,10 +54,13 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
         if step not in available:
             raise StepFailed(f"checkpoint {step} not in {folder} (have {available})")
     summary = require_view(view)
-    compose = Compose(oc, view, gpus)
+    compose = make_backend(oc, view, gpus)
     info = config_info(runner, compose, name)
     check_holdout(info, summary)
-    if params.get("share_gpus"):
+    share = params.get("share_gpus")
+    if share is None:
+        share = oc.default_share_gpus
+    if share:
         short = short_gpus(runner, gpus, oc.eval_need_mib)
         if short:
             free = " ".join(f"gpu{g}={mib}MiB free" for g, mib in sorted(short.items()))
@@ -77,7 +80,7 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     if not params.get("dry_run"):
         (folder / "eval").mkdir(exist_ok=True)
     def _run_container(cname: str, argv: list[str], on_line, **kwargs) -> tuple[int, list[str]]:
-        exists = runner.run(["docker", "container", "inspect", cname]).returncode == 0
+        exists = compose.exists(runner, cname)
         if exists:
             raise StepFailed(f"container {cname} already exists; remove it by hand or wait for it to finish")
         last: list[str] = []
@@ -90,10 +93,12 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
             code = runner.stream(argv, capture, **kwargs)
         except JobCancelled:
             log(f"cancelled: stopping {cname}")
-            result = runner.run(["docker", "stop", "-t", "30", cname])
+            result = compose.stop(runner, cname, 30)
             if result.returncode:
                 log(f"could not stop {cname}: {result.stderr}")
             raise
+        if oc.backend == "uv":  # docker runs it with --rm
+            compose.remove(runner, cname)
         return code, last
 
     commands, results = [], {}

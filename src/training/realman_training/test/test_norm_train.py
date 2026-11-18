@@ -358,3 +358,67 @@ def test_attach_normalises_docker_nanosecond_z_timestamp(env):
     started = _dt.datetime.fromisoformat(record["started"])
     assert started.utcoffset() is not None  # has timezone
     assert result["last_step"] == 200
+
+
+def uv_env(env, tmp_path, share="false"):
+    repo = env["docker_data"]
+    config = tmp_path / "uv.yaml"
+    config.write_text(
+        "training_console:\n"
+        f"  data_root: {env['view'].parent}\n"
+        f"  openpi:\n    backend: uv\n    env_file: /w/env.sh\n    repo: {repo}\n    docker_data: {repo}\n"
+        f"    default_share_gpus: {share}\n"
+    )
+    return str(config)
+
+
+def test_train_on_uv_starts_a_setsid_group_and_follows_it(env, tmp_path):
+    stats = env["docker_data"] / "assets/pi05_x/local/v/norm_stats.json"
+    stats.parent.mkdir(parents=True)
+    stats.write_text("{}")
+    alive = iter([0, 1])  # `kill -0` on the process group: running once, then gone
+    # Rule order matters: FakeRunner answers with the first substring match, and the `kill -0` script also
+    # contains "cat ", so its rule comes before the `cat <exit file>` rule.
+    runner = (FakeRunner().on("python -", stdout=json.dumps(INFO))
+              .on("test -e", returncode=1)
+              .on("nvidia-smi", stdout="1, 9000, 49140\n")
+              .on("opic-train", stdout="")
+              .on("kill -0", returncode=lambda argv, input: next(alive, 1))
+              .on("cat ", stdout="0\n")
+              .on("git -C", stdout="abc\n"))
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1",
+              "config": uv_env(env, tmp_path, share="true"), "poll_sec": 0}
+    result = train.run(params, RecordingLog(), runner=runner, sleep=lambda s: None)
+    # Every uv command defines the opic-* helpers, so match the call, not the helper name.
+    start = runner.commands("opic-train pi05_x")[0]
+    assert start[:4] == ["env", "XLA_PYTHON_CLIENT_PREALLOCATE=false", "bash", "-c"]
+    assert "setsid bash -c" in start[4]
+    assert runner.envs[runner.calls.index(start)]["CUDA_VISIBLE_DEVICES"] == "1"
+    assert result["exit_code"] == 0
+    assert runner.calls[-1][:2] == ["rm", "-f"]  # pid/exit files removed, like `docker rm`
+    assert not runner.commands("docker ")
+
+
+def test_train_on_a_shared_host_checks_free_memory_not_busy(env, tmp_path):
+    runner = (FakeRunner().on("python -", stdout=json.dumps(INFO)).on("test -e", returncode=1)
+              .on("nvidia-smi", stdout="1, 40000, 49140\n"))
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1",
+              "config": uv_env(env, tmp_path, share="true")}
+    with pytest.raises(StepFailed, match="not enough free memory"):
+        train.run(params, RecordingLog(), runner=runner)
+
+
+def test_norm_on_uv_runs_cpu_only(env, tmp_path):
+    stats = env["docker_data"] / "assets/pi05_x/local/v/norm_stats.json"
+
+    def write_stats(argv, input):
+        stats.parent.mkdir(parents=True)
+        stats.write_text("{}")
+
+    runner = (FakeRunner().on("python -", stdout=json.dumps(INFO)).on("test -e", returncode=1)
+              .on("opic-norm", action=write_stats, lines=["ok"]))
+    out = norm.run({"config_name": "pi05_x", "view": str(env["view"]), "config": uv_env(env, tmp_path)},
+                   RecordingLog(), runner=runner)
+    assert out["computed"] is True
+    call = runner.commands("opic-norm --config-name")[0]
+    assert call[:3] == ["env", "JAX_PLATFORMS=cpu", "setsid"]

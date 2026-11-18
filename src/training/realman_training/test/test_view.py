@@ -178,3 +178,18 @@ def test_stale_source_tags_are_skipped_with_a_note(clean, tmp_path):
     log, dst = RecordingLog(), tmp_path / "data" / "v2"
     view.run({"src": str(clean), "dst": str(dst)}, log, runner=fake_make_view([GOOD_PLACE, GOOD_PICK]))
     assert not episode_tags.tags_path(dst).exists() and any("tags not copied" in line for line in log.lines)
+
+
+import dataclasses
+
+from realman_training.config import OpenpiConfig, QualityConfig
+from realman_training.steps.view import view_command
+
+
+def test_view_command_on_uv_runs_the_script_from_the_repo(tmp_path):
+    openpi = dataclasses.replace(OpenpiConfig(), backend="uv", repo=tmp_path / "openpi", env_file="/w/env.sh")
+    argv = view_command(openpi, tmp_path / "src", tmp_path / "dst", "r", {"a": "do a"}, QualityConfig())
+    assert argv[:2] == ["bash", "-c"]
+    assert argv[2].startswith(f"source /w/env.sh && cd {tmp_path / 'openpi'} && ")
+    assert "uv run --no-sync scripts/make_realman_view.py --src" in argv[2]
+    assert "docker" not in " ".join(argv)

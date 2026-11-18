@@ -155,6 +155,10 @@ h4 { margin: 0; }
 .pika-empty b { color: var(--warn); font-size: 13px; }
 .pika-empty code { color: var(--text); font-family: var(--mono); }
 .pika-cards { display: grid; grid-template-columns: repeat(auto-fit, minmax(150px, 1fr)); gap: 8px; padding: 10px 12px 0; }
+.pika-recal { margin: 8px 12px 0; padding: 6px 10px; border-radius: 6px; background: var(--card-sub); color: var(--text-2); font-size: 12px; line-height: 1.5; overflow-wrap: anywhere; }
+.pika-recal[hidden] { display: none; }
+.pika-recal[data-tone="ok"] { color: var(--ok); }
+.pika-recal[data-tone="warn"] { color: var(--warn); }
 .pika-card { display: flex; flex-direction: column; gap: 2px; min-width: 0; padding: 8px 10px; border: 1px solid var(--line); border-left: 3px solid var(--pika-color); border-radius: 10px; background: var(--card-sub); color: var(--text-3); font: 11px/1.45 var(--mono); }
 .pika-card h4 { display: flex; justify-content: space-between; margin: 0 0 3px; color: var(--text); font: 600 12px Inter, system-ui, sans-serif; }
 .pika-card h4 span { color: var(--text-3); font: 700 10px var(--mono); }

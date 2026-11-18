@@ -16,6 +16,7 @@ import { initCharts, renderHealth } from "./replay/charts";
 import { initAnnotation } from "./replay/annotation";
 import { initQuality } from "./replay/quality";
 import { initPikaView, type PikaSnapshot } from "./pika-view";
+import { initPikaRecalibrate } from "./pika-recalibrate";
 
 type ArmId = "l" | "m" | "r";
 // Arm identity colors shared with :8765 (realman_web_control main.ts ARM_COLORS).
@@ -27,7 +28,7 @@ type Robot = {
   urdf_url: string;
   package_root_url: string;
 };
-type Manifest = { version: number; default_joint_position_rad: number; robots: Robot[] };
+type Manifest = { version: number; default_joint_position_rad: number; robots: Robot[]; pika_recalibrate?: boolean };
 type CartesianVelocity = {
   commanded_linear_velocity_mps?: number[];
   commanded_angular_velocity_radps?: number[];
@@ -555,6 +556,7 @@ function render(payload: Snapshot) {
   $("#status-pulse").style.background = recording.state === 2 ? "var(--green)" : recording.state === 7 ? "var(--red)" : "var(--amber)";
 
   pikaView.render(payload.pika);
+  pikaRecalibrate.observe(payload.pika);
 
   // In replay mode the 3D viewer, arm grid and gripper grid show the selected frame,
   // not the live subscription.
@@ -868,6 +870,7 @@ function connect() {
 const pikaView = initPikaView(
   $("#pika-viewer"), $("#pika-cards"), $("#pika-status"), $("#pika-empty"), $<HTMLButtonElement>("#pika-recenter"),
 );
+const pikaRecalibrate = initPikaRecalibrate($<HTMLButtonElement>("#pika-recalibrate"), $("#pika-recal-line"));
 
 for (const [initialize, status] of [[initScene, viewerState], [initMotionScene, motion3dStatus]] as const) {
   try { initialize(); }
@@ -877,6 +880,7 @@ fetch("/api/layout")
   .then((response) => response.json())
   .then((next) => {
     manifest = next as Manifest;
+    pikaRecalibrate.enable(Boolean(manifest.pika_recalibrate));
     return loadFleet();
   })
   .catch((error) => {

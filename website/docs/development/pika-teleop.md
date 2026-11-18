@@ -307,6 +307,27 @@ driver 侧契约见 [ingress 与坐标桥接](./realman-action-development#pika-
 
 以下是 2026-10-08 至 10-10 在生产机上排查 Pika 速度控制时的**现场记录**（实测数据，不是契约）。
 
+### 基站重标定（:8770 一键）
+
+**何时用**：Pika 一直在基站视野内，但 :8770 Pika 卡片显示 STALE / NO DATA，且 Pika 主机上
+`pika_localization_status_<side>` 为 false、追踪器 USB 仍在发数据（`/sys/bus/usb/devices/<port>/urbnum`
+持续增长）。这通常是 libsurvive 把基站位置解错了：`~/.config/libsurvive/config.json` 中某个
+`lighthouseN.pose` 与以前相比位置跳了几十厘米而朝向几乎不变，locator 日志里 `Global solve ... error of`
+比正常大一到两个数量级。2026-11-18 左 Pika 断流即此原因。
+
+**按钮做什么**：:8770「Pika 运动 3D」面板的 **重标定** 调 `POST /api/pika/recalibrate`，经回环隧道转到
+Pika 主机上的 `pika_process_helper` `POST /recalibrate`，在同一把锁里：干净停栈（含残留进程组清理）→
+把 `config.json` 改名为 `config.json.bak-YYYYMMDD-HHMMSS` → 启动。libsurvive 随后从头求解基站。页面
+等待左右两侧位姿都回到 LIVE，最多 60 s。
+
+- 录制进行中（倒计时 / 录制 / 收尾）或任一侧 Pika 速度指令在发时拒绝（409），不会打断采集或遥操作。
+- 停栈不干净时不改名、不启动；改名失败不启动。
+- 60 s 内未重新定位：先 **重新插拔两个 Pika**，再点一次。重启偶尔会让追踪器卡住（见下方运行时陷阱）。
+- 启用条件：helper 配置 `libsurvive_config`（`config/docker/pika_helper.json`），且 `config/ros/recording.yaml`
+  的 `/recording_web_bridge` 设置 `pika_helper_url`（仓库默认空 = 隐藏按钮）。
+
+**恢复旧标定**：在 Pika 主机上先停栈，再把某个 `config.json.bak-*` 改回 `config.json`，然后启动。
+
 ### 输入链路是 Wi‑Fi，入站会丢包
 
 Pika 主机和生产机之间**没有共同的有线网段**，唯一共用的是 Wi‑Fi，所以 20 Hz 的 `/pika/*` DDS 流走无线。生产机的无线网卡是 USB 网卡。

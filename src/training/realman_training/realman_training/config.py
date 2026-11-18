@@ -4,7 +4,9 @@ from __future__ import annotations
 
 import dataclasses
 import os
+import re
 from pathlib import Path
+from typing import Mapping
 
 import yaml
 
@@ -55,6 +57,20 @@ class RemoteConfig:
 
 
 @dataclasses.dataclass(frozen=True)
+class ComputeConfig:
+    """The GPU host that runs clean/view/norm/train/eval/register for this console (ssh only); "" = run them here.
+
+    workdir is the remote root laid out by remote_scripts/setup_uv_host.sh: env.sh, src/openpi (+ .venv),
+    src/realman_pi (this package), data/realman. Host values come from the environment (.env), never the repo."""
+
+    ssh_host: str = ""
+    ssh_config: str = ""  # "" = ssh's default; relative = to the repo root
+    workdir: str = ""
+    connect_timeout_sec: int = 10
+    mirror_sync_sec: float = 120.0  # refresh the metadata mirror at most this often while a step reports progress
+
+
+@dataclasses.dataclass(frozen=True)
 class OpenpiConfig:
     """The openpi checkout and its docker data on server5090."""
 
@@ -69,6 +85,9 @@ class OpenpiConfig:
     train_need_mib: int = 18000  # free memory a shared GPU needs for one action-only training process (peak ~17.3 GiB)
     num_workers: int = 6
     eval_stride: int = 10
+    backend: str = "docker"  # docker = `docker compose run` on the openpi repo; uv = the repo's .venv on this host
+    env_file: str = ""  # uv backend: sourced before every openpi command (uv cache, jemalloc fix, data home)
+    default_share_gpus: bool = False  # True on a shared GPU host: check free memory instead of refusing busy GPUs
 
 
 @dataclasses.dataclass(frozen=True)
@@ -136,6 +155,7 @@ class ConsoleConfig:
     state_dir: Path | None = None
     quality: QualityConfig = dataclasses.field(default_factory=QualityConfig)
     remote: RemoteConfig = dataclasses.field(default_factory=RemoteConfig)
+    compute: ComputeConfig = dataclasses.field(default_factory=ComputeConfig)
     openpi: OpenpiConfig = dataclasses.field(default_factory=OpenpiConfig)
     serving: ServingConfig = dataclasses.field(default_factory=ServingConfig)
     linkcheck: LinkcheckConfig = dataclasses.field(default_factory=LinkcheckConfig)
@@ -164,7 +184,37 @@ def _path(value: object) -> Path:
     return Path(str(value)).expanduser()
 
 
-_ALLOWED_TOP_KEYS = {"data_root", "state_dir", "quality", "remote", "openpi", "serving", "linkcheck", "web", "prompts"}
+_ALLOWED_TOP_KEYS = {"data_root", "state_dir", "quality", "remote", "compute", "openpi", "serving", "linkcheck", "web", "prompts"}
+
+
+_ENV_REF = re.compile(r"\$\{([A-Za-z_][A-Za-z0-9_]*)(?:(:?-)([^}]*))?\}")
+
+
+def expand_env(text: str, environ: Mapping[str, str] | None = None) -> str:
+    """${VAR}, ${VAR-default} (default when unset) and ${VAR:-default} (default when unset or empty).
+    An unset ${VAR} without a default stays as written, so validation can name it."""
+    env = os.environ if environ is None else environ
+
+    def replace(match: re.Match) -> str:
+        name, op, default = match.group(1), match.group(2), match.group(3)
+        value = env.get(name)
+        if op == ":-":
+            return value if value else default
+        if op == "-":
+            return default if value is None else value
+        return match.group(0) if value is None else value
+
+    return _ENV_REF.sub(replace, text)
+
+
+def _expand_tree(value):
+    if isinstance(value, str):
+        return expand_env(value)
+    if isinstance(value, dict):
+        return {k: _expand_tree(v) for k, v in value.items()}
+    if isinstance(value, list):
+        return [_expand_tree(v) for v in value]
+    return value
 
 
 def load_config(path: str | Path | None = None) -> ConsoleConfig:
@@ -173,6 +223,7 @@ def load_config(path: str | Path | None = None) -> ConsoleConfig:
     section = document.get("training_console") if isinstance(document, dict) else None
     if not isinstance(section, dict):
         raise ValueError(f"{source}: missing the training_console section")
+    section = _expand_tree(section)
     unknown = sorted(set(section) - _ALLOWED_TOP_KEYS)
     if unknown:
         raise ValueError(f"{source}: unknown training_console keys {unknown}; allowed: {sorted(_ALLOWED_TOP_KEYS)}")
@@ -182,6 +233,8 @@ def load_config(path: str | Path | None = None) -> ConsoleConfig:
     openpi = _parse(OpenpiConfig, section.get("openpi") or {}, source, "openpi")
     overlay = openpi.compose_overlay or Path("openpi-console.compose.yaml")
     openpi = dataclasses.replace(openpi, compose_overlay=overlay if overlay.is_absolute() else source.parent / overlay)
+    compute = _parse(ComputeConfig, section.get("compute") or {}, source, "compute")
+    _validate_compute(compute, openpi, source)
     serving = _parse(ServingConfig, section.get("serving") or {}, source, "serving")
     linkcheck = _parse(LinkcheckConfig, section.get("linkcheck") or {}, source, "linkcheck")
     _validate_serving(serving, linkcheck, source)
@@ -199,6 +252,7 @@ def load_config(path: str | Path | None = None) -> ConsoleConfig:
         state_dir=_path(state_dir) if state_dir is not None else None,
         quality=quality,
         remote=remote,
+        compute=compute,
         openpi=openpi,
         serving=serving,
         linkcheck=linkcheck,
@@ -229,7 +283,7 @@ def _parse(cls, raw: object, source: Path, section: str):
             elif isinstance(default, Path) or name == "compose_overlay":
                 values[name] = _path(value)
             elif isinstance(default, bool):
-                values[name] = bool(value)
+                values[name] = value.strip().lower() in ("1", "true", "yes", "on") if isinstance(value, str) else bool(value)
             elif isinstance(default, int):
                 values[name] = int(value)
             elif isinstance(default, float):
@@ -262,6 +316,23 @@ def _validate(q: QualityConfig, source: Path) -> None:
             fail(key, "must be positive")
     if len(q.start_pose_deg) not in (0, 6):
         fail("start_pose_deg", "must list six joint angles or be empty")
+
+
+def _validate_compute(c: ComputeConfig, o: OpenpiConfig, source: Path) -> None:
+    def fail(key: str, why: str) -> None:
+        raise ValueError(f"{source}: {key} {why}")
+
+    for key, value in (("compute.ssh_host", c.ssh_host), ("compute.ssh_config", c.ssh_config),
+                       ("compute.workdir", c.workdir), ("openpi.env_file", o.env_file)):
+        unset = _ENV_REF.search(value)
+        if unset:
+            fail(key, f"uses ${{{unset.group(1)}}}, which is not set (put it in the env file)")
+    if c.ssh_host and not c.workdir.startswith("/"):
+        fail("compute.workdir", "must be an absolute path on the compute host")
+    if c.connect_timeout_sec < 1 or c.mirror_sync_sec <= 0:
+        fail("compute.connect_timeout_sec/mirror_sync_sec", "must be positive")
+    if o.backend not in ("docker", "uv"):
+        fail("openpi.backend", "must be docker or uv")
 
 
 def _validate_serving(s: ServingConfig, lc: LinkcheckConfig, source: Path) -> None:

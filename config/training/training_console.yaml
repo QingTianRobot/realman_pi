@@ -2,7 +2,8 @@
 # Every key is optional; a missing key keeps the default in realman_training/config.py.
 training_console:
   # Where the pulled recordings, cleaned sets and training views live on server5090.
-  data_root: ~/data/realman
+  # Host values come from the environment (the untracked env file); unset = the server5090 layout below.
+  data_root: ${REALMAN_TRAINING_DATA_ROOT-~/data/realman}
 
   # Per-episode quality rules. The numbers reproduce the 2026-10-13 and 2026-10-16 manual cleanings.
   quality:
@@ -42,7 +43,7 @@ training_console:
   # The recording on realman_ts, pulled from server5090 (files are root 600 on the host, so through the
   # recording container). Hosts by ssh alias only.
   remote:
-    ssh_host: realman_local
+    ssh_host: ${REALMAN_RECORDING_SSH_HOST-realman_local}   # "" = the recording container runs on this host (SJD)
     recording_container: realman_pi-realman_recording-1
     recording_root: /data/realman-recordings/lerobot   # path inside the container
     dataset: realman__pi05-three-arm
@@ -51,14 +52,27 @@ training_console:
     # The recording platform's tag index (episode_meta.json) and its lock; recording_root must lie under it.
     tags_root: /data/realman-recordings
 
+  # The GPU host that runs clean/view/norm/train/eval/register (ssh only). "" = run them here (server5090).
+  # On SJDrealman the env file sets these to the campus server; its rules (work dir only, no sudo, never all GPUs)
+  # are in Traning_area/SSH连接说明.md on SJD.
+  compute:
+    ssh_host: ${REALMAN_COMPUTE_SSH_HOST-}
+    ssh_config: ${REALMAN_COMPUTE_SSH_CONFIG-}     # relative = to the repo root
+    workdir: ${REALMAN_COMPUTE_WORKDIR-}           # absolute, on the compute host
+    connect_timeout_sec: 10
+    mirror_sync_sec: 120
+
   # The openpi checkout and its docker data on server5090.
   openpi:
-    repo: ~/organization/openpi
-    docker_data: ~/organization/openpi-docker-data
+    backend: ${REALMAN_OPENPI_BACKEND-docker}      # uv on a host without docker (EI)
+    env_file: ${REALMAN_OPENPI_ENV_FILE-}
+    default_share_gpus: ${REALMAN_OPENPI_SHARE_GPUS-false}
+    repo: ${REALMAN_OPENPI_REPO-~/organization/openpi}
+    docker_data: ${REALMAN_OPENPI_DATA-~/organization/openpi-docker-data}
     image: openpi:dev
     compose_project: openpi-console
     compose_overlay: openpi-console.compose.yaml   # relative = next to this file
-    weights: /home/openpi/.cache/openpi/openpi-assets/checkpoints/pi05_base_from_mac/params
+    weights: ${REALMAN_OPENPI_WEIGHTS-/home/openpi/.cache/openpi/openpi-assets/checkpoints/pi05_base_from_mac/params}
     gpu_busy_mib: 2000              # more than this used on a GPU = someone else holds it
     num_workers: 6
     eval_stride: 10

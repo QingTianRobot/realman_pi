@@ -250,6 +250,7 @@ def test_push_dataset_copies_then_drops_local_videos(config):
     assert remote == "/w/data/realman/raw_x"
     rsync = runner.commands("rsync")[0]
     assert rsync[-2] == f"{target}/" and rsync[-1] == "EI:/w/data/realman/raw_x.partial/"
+    assert compute.RSYNC_IO_TIMEOUT in rsync
     assert runner.commands("mv /w/data/realman/raw_x.partial /w/data/realman/raw_x")
     assert not (target / "ds" / "videos").exists() and (target / "ds" / "meta").exists()
 
@@ -259,3 +260,60 @@ def test_push_dataset_refuses_an_existing_remote(config):
     target.mkdir(parents=True)
     with pytest.raises(StepFailed, match="exists on EI"):
         compute.push_dataset(config, FakeRunner().on("test ! -e", returncode=1), RecordingLog(), target)
+
+
+def _index(runner, needle):
+    return next(i for i, call in enumerate(runner.calls) if needle in " ".join(call))
+
+
+def test_push_dataset_clears_a_stale_partial_before_the_rsync(config):
+    target = config.data_root / "raw_x"
+    target.mkdir(parents=True)
+    runner = FakeRunner()
+    compute.push_dataset(config, runner, RecordingLog(), target)
+    rm = _index(runner, "rm -rf /w/data/realman/raw_x.partial")
+    assert rm < _index(runner, "rsync") < _index(runner, "mv /w/data/realman/raw_x.partial")
+
+
+def _fake_pull(monkeypatch, config, calls):
+    from realman_training.steps import pull
+
+    def run(params, log, runner=None):
+        calls.append("pull")
+        target = Path(params["target"])
+        (target / "ds" / "videos").mkdir(parents=True)
+        return {"target": str(target), "episodes": 3}
+
+    monkeypatch.setattr(compute, "load_config", lambda path=None: config)
+    monkeypatch.setattr(pull, "run", run)
+
+
+@pytest.mark.parametrize("fail", ["rsync", "mv /w"])
+def test_pull_and_push_removes_the_local_copy_when_the_push_fails(config, monkeypatch, fail):
+    calls = []
+    _fake_pull(monkeypatch, config, calls)
+    target = config.data_root / "raw_x"
+    runner = FakeRunner().on(fail, returncode=12, stdout="boom")
+    with pytest.raises(StepFailed, match="pulled 3 episodes but the copy to EI failed: .*run the pull again"):
+        compute.pull_and_push({"target": str(target)}, RecordingLog(), runner)
+    assert calls == ["pull"] and not target.exists()
+
+
+def test_pull_and_push_refuses_a_target_outside_data_root(config, monkeypatch, tmp_path):
+    calls = []
+    _fake_pull(monkeypatch, config, calls)
+    runner = FakeRunner()
+    with pytest.raises(StepFailed, match="data_root"):
+        compute.pull_and_push({"target": str(tmp_path / "elsewhere")}, RecordingLog(), runner)
+    assert calls == [] and runner.calls == []
+
+
+def test_pull_and_push_refreshes_the_mirror_and_returns_the_compute_path(config, monkeypatch):
+    calls = []
+    _fake_pull(monkeypatch, config, calls)
+    synced = []
+    monkeypatch.setattr(compute, "sync_mirror", lambda c, r, log: synced.append(c) or True)
+    target = config.data_root / "raw_x"
+    result = compute.pull_and_push({"target": str(target)}, RecordingLog(), FakeRunner())
+    assert result["compute_path"] == "/w/data/realman/raw_x" and result["episodes"] == 3
+    assert synced == [config] and not (target / "ds" / "videos").exists()

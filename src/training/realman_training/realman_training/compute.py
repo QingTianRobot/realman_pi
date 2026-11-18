@@ -27,7 +27,7 @@ from pathlib import Path
 from .config import REPO_ROOT, ConsoleConfig, load_config
 from .jobs import STEPS, JobCancelled, StepFailed, StepLog
 from .openpi import RUN_DIR_NAME
-from .runner import Runner
+from .runner import CommandFailed, Runner
 
 REMOTE_KINDS = ("clean", "view", "norm", "train", "eval", "register")
 REMOTE_DATA_ROOT = "data/realman"
@@ -320,7 +320,9 @@ def push_dataset(config: ConsoleConfig, runner: Runner, log, target: Path) -> st
     if runner.run(ssh_argv(config, f"test ! -e {q(remote)}")).returncode:
         raise StepFailed(f"{remote} exists on {host}: pick another name (nothing is overwritten)")
     log(f"copying {target.name} to {host}")
-    runner.check(["rsync", "-a", "--partial", "-e", shlex.join(ssh_base(config)), f"{target}/",
+    # a .partial left by an earlier failed copy (only ever under our workdir's data/realman) is stale: start clean
+    runner.check(ssh_argv(config, f"rm -rf {q(remote + '.partial')}"))
+    runner.check(["rsync", "-a", "--partial", RSYNC_IO_TIMEOUT, "-e", shlex.join(ssh_base(config)), f"{target}/",
                   f"{host}:{remote}.partial/"])
     runner.check(ssh_argv(config, f"mv {q(remote + '.partial')} {q(remote)}"))
     for videos in Path(target).glob("*/videos"):
@@ -334,8 +336,18 @@ def pull_and_push(params: dict, log, runner: Runner | None = None) -> dict:
 
     runner = runner or Runner()
     config = load_config(params.get("config"))
+    root = Path(config.data_root).expanduser().absolute()
+    if not Path(params["target"]).expanduser().absolute().is_relative_to(root):
+        raise StepFailed(f"{params['target']} is outside data_root {root}: the compute host mirrors data_root only")
     result = pull.run(params, log, runner)
-    remote = push_dataset(config, runner, log, Path(result["target"]))
+    target = Path(result["target"])
+    try:
+        remote = push_dataset(config, runner, log, target)
+    except (CommandFailed, StepFailed, OSError) as error:
+        # never leave a half state: a retry simply pulls again from the recorder
+        shutil.rmtree(target, ignore_errors=True)
+        raise StepFailed(f"pulled {result.get('episodes', '?')} episodes but the copy to {config.compute.ssh_host} "
+                         f"failed: {error}; the local copy was removed — run the pull again") from None
     sync_mirror(config, runner, log)
     return {**result, "compute_path": remote}
 

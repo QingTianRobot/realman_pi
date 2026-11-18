@@ -1,4 +1,4 @@
-"""ROS shell around EpisodeMachine: keyboard edges -> recording START/STOP -> MoveJ home."""
+"""ROS shell around EpisodeMachine: keyboard edges -> recording START/STOP -> Pika branch restart (home)."""
 from __future__ import annotations
 
 import json
@@ -6,25 +6,27 @@ import time
 from pathlib import Path
 
 import rclpy
-from rclpy.action import ActionClient
 from rclpy.node import Node
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy
 from std_msgs.msg import Bool, String
 from std_srvs.srv import Trigger
 
-from realman_msgs.action import ExecuteMotion
-from realman_msgs.msg import CartesianVelocityState, InputModeState
+from realman_msgs.msg import InputModeState
+from realman_msgs.srv import SelectInputMode
 from realman_recording_msgs.msg import RecordingStatus
 from realman_recording_msgs.srv import ManageRecording
 
+from realman_pika_session.branch_restart import BranchRestart, Effect, ModeView
 from realman_pika_session.config_loader import EpisodeConfig, load_episode_config, load_home_pose
 from realman_pika_session.episode_machine import Action, EpisodeMachine, MachineConfig
 
 SERVICE_TIMEOUT_SEC = 10.0
-RESULT_MARGIN_SEC = 5.0
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 BEST_EFFORT = QoSProfile(depth=10, reliability=ReliabilityPolicy.BEST_EFFORT)
 MODE_TOPIC = "/realman_bt_executor/input_mode_state"
+SELECT_MODE_SERVICE = "/realman_bt_executor/select_input_mode"
+REQUESTER_ID = "pika_episode"
+PHASES = {InputModeState.ACTIVE: "ACTIVE", InputModeState.SWITCHING: "SWITCHING", InputModeState.FAILED: "FAILED"}
 # The recorder holds or is about to hold a session: a key press must not open a second one.
 RECORDER_BUSY = (
     RecordingStatus.SCHEDULED, RecordingStatus.ARMED, RecordingStatus.COUNTDOWN,
@@ -49,11 +51,14 @@ class TriggerNode(Node):
         self._machine = EpisodeMachine(MachineConfig(
             required_mode=episode_config.required_mode,
             keyboard_stale_sec=episode_config.keyboard_stale_sec,
-            release_timeout_sec=episode_config.release_timeout_sec,
             home_arms=arms,
         ))
         self._recording = self.create_client(ManageRecording, "/recording/manage")
-        self._movej = {arm: ActionClient(self, ExecuteMotion, f"/{arm}/execute_motion") for arm in arms}
+        self._select_mode = self.create_client(SelectInputMode, SELECT_MODE_SERVICE)
+        self._restart = BranchRestart(
+            episode_config.required_mode, episode_config.restart_off_mode,
+            episode_config.restart_off_timeout_sec, episode_config.restart_timeout_sec,
+        )
         # Homing also releases the grippers (gripper_ros2 /<name>/open); arms that are not homed keep theirs.
         self._gripper_open = {
             arm: self.create_client(Trigger, f"/{name}/open")
@@ -62,9 +67,6 @@ class TriggerNode(Node):
         self._pending_call = None  # (kind, future, deadline)
         # START calls that timed out: a late success means the recorder did start, so that session is stopped.
         self._orphan_start_futures: set = set()
-        # arm -> (home episode, deadline); the episode token drops late results from an older homing.
-        self._home_episode = 0
-        self._home_deadlines: dict[str, tuple[int, float]] = {}
         self._state_pub = self.create_publisher(String, "/pika_episode/state", LATCHED)
         self._last_published: dict | None = None
         self._last_publish_time = 0.0
@@ -77,12 +79,6 @@ class TriggerNode(Node):
         self.create_subscription(Bool, episode_config.keyboard_topic, self._on_keyboard, BEST_EFFORT)
         self.create_subscription(InputModeState, MODE_TOPIC, self._on_mode, LATCHED)
         self.create_subscription(RecordingStatus, "/recording/status", self._on_recording_status, 10)
-        for arm in arms:
-            self.create_subscription(
-                CartesianVelocityState, f"/{arm}/cartesian_velocity/state",
-                lambda msg, arm=arm: self._apply(self._machine.on_velocity_session(arm, msg.session_active, time.monotonic())),
-                BEST_EFFORT,
-            )
         self.create_timer(0.1, self._on_timer)
         self.get_logger().info(
             f"pika episode trigger ready: keyboard={episode_config.keyboard_topic} "
@@ -92,8 +88,8 @@ class TriggerNode(Node):
         self._publish_state(force=True)
 
     def interfaces_ready(self) -> bool:
-        """True once the recorder service and every home arm's MoveJ server are discovered."""
-        return self._recording.service_is_ready() and all(c.server_is_ready() for c in self._movej.values())
+        """True once the recorder service and the executor's mode selection service are discovered."""
+        return self._recording.service_is_ready() and self._select_mode.service_is_ready()
 
     # ---- subscriptions ------------------------------------------------
     def _on_keyboard(self, message: Bool) -> None:
@@ -102,6 +98,11 @@ class TriggerNode(Node):
     def _on_mode(self, message: InputModeState) -> None:
         mode = message.active_mode if message.phase == InputModeState.ACTIVE else ""
         self._feed_mode(mode)
+        view = ModeView(
+            requested_mode=message.requested_mode, active_mode=message.active_mode,
+            phase=PHASES.get(message.phase, "UNKNOWN"), request_id=int(message.request_id), detail=message.detail,
+        )
+        self._run_restart(self._restart.on_mode_state(view, time.monotonic()))
 
     def _feed_mode(self, mode: str) -> None:
         self._fed_mode = mode
@@ -143,9 +144,7 @@ class TriggerNode(Node):
             else:
                 future.cancel()
             self._service_result(kind, False, "", "recording service timed out")
-        for arm, (episode, deadline) in list(self._home_deadlines.items()):
-            if now > deadline:
-                self._finish_home(arm, episode, False, "no MoveJ result in time")
+        self._run_restart(self._restart.tick(now))
         self._check_mode_publisher()
         self._apply(self._machine.tick(now))  # _apply always publishes (on change or once a second)
 
@@ -154,12 +153,13 @@ class TriggerNode(Node):
         for action in actions:
             if action.kind in ("start", "stop"):
                 self._call_recording(action.kind)
-            elif action.kind == "home":
-                self._home_episode += 1
-                self._home_deadlines.clear()  # older episodes' results are ignored anyway; no stale timeouts
+            elif action.kind == "restart":
                 for arm in action.arms:
                     self._open_gripper(arm)
-                    self._send_home(arm, self._home_episode)
+                self.get_logger().info(
+                    f"restarting {self._config.required_mode}: {self._config.restart_off_mode} first, "
+                    "then its entry MoveJ homes the arms")
+                self._run_restart(self._restart.start(time.monotonic()))
         self._publish_state()
 
     def _call_recording(self, kind: str) -> None:
@@ -265,47 +265,33 @@ class TriggerNode(Node):
             response.success, f"gripper of /{arm} {'opened' if response.success else 'open failed'}: {response.message}",
             "warning")
 
-    def _send_home(self, arm: str, episode: int) -> None:
-        client = self._movej[arm]
+    def _run_restart(self, effects: list[Effect]) -> None:
+        for effect in effects:
+            if effect.kind == "select":
+                self._request_mode(effect.mode_id)
+            else:
+                self._log_outcome(effect.success, f"branch restart {'done' if effect.success else 'failed'}: {effect.message}")
+                self._apply(self._machine.on_restart_result(effect.success, effect.message, time.monotonic()))
+
+    def _request_mode(self, mode_id: str) -> None:
+        if not self._select_mode.service_is_ready():
+            self._run_restart(self._restart.on_select_response(
+                mode_id, False, 0, f"{SELECT_MODE_SERVICE} is not available", time.monotonic()))
+            return
+        self.get_logger().info(f"selecting input mode {mode_id}")
+        request = SelectInputMode.Request(mode_id=mode_id, requester_id=REQUESTER_ID)
+        self._select_mode.call_async(request).add_done_callback(
+            lambda done, mode_id=mode_id: self._on_select_done(mode_id, done))
+
+    def _on_select_done(self, mode_id: str, future) -> None:
         now = time.monotonic()
-        if not client.server_is_ready():
-            self._apply(self._machine.on_home_result(arm, False, f"/{arm}/execute_motion is not available", now))
-            return
-        goal = ExecuteMotion.Goal()
-        goal.command = ExecuteMotion.Goal.MOVEJ
-        goal.reference_type = ExecuteMotion.Goal.BASE
-        goal.reference_name = "base"  # the driver rejects an empty name, like the BT MoveJ nodes
-        goal.joint_degrees = list(self._home_pose[arm])
-        goal.velocity_percent = self._config.home_velocity_percent
-        goal.blend_radius_percent = 0
-        goal.connect = False
-        goal.timeout_sec = float(self._config.home_timeout_sec)
-        self.get_logger().info(f"homing /{arm} to pika_default_pose {list(self._home_pose[arm])}")
-        self._home_deadlines[arm] = (episode, now + self._config.home_timeout_sec + RESULT_MARGIN_SEC)
-        client.send_goal_async(goal).add_done_callback(
-            lambda done, arm=arm, episode=episode: self._on_goal_response(arm, episode, done))
-
-    def _on_goal_response(self, arm: str, episode: int, future) -> None:
-        goal_handle = future.result() if future.exception() is None else None
-        if goal_handle is None or not goal_handle.accepted:
-            self._finish_home(arm, episode, False, "MoveJ goal rejected")
-            return
-        goal_handle.get_result_async().add_done_callback(
-            lambda done, arm=arm, episode=episode: self._on_home_done(arm, episode, done))
-
-    def _on_home_done(self, arm: str, episode: int, future) -> None:
-        if future.exception() is not None:
-            self._finish_home(arm, episode, False, f"MoveJ result failed: {future.exception()}")
-            return
-        result = future.result().result
-        self._finish_home(arm, episode, result.success, result.message)
-
-    def _finish_home(self, arm: str, episode: int, success: bool, message: str) -> None:
-        if self._home_deadlines.get(arm, (None,))[0] != episode:
-            return  # timed out already, or a late result from an older homing
-        del self._home_deadlines[arm]
-        self._log_outcome(success, f"homing /{arm} {'done' if success else 'failed'}: {message}")
-        self._apply(self._machine.on_home_result(arm, success, message, time.monotonic()))
+        if future.cancelled() or future.exception() is not None:
+            effects = self._restart.on_select_response(mode_id, False, 0, f"call failed: {future.exception()}", now)
+        else:
+            response = future.result()
+            effects = self._restart.on_select_response(
+                mode_id, response.accepted, int(response.request_id), response.message, now)
+        self._run_restart(effects)
 
     def _log_outcome(self, success: bool, text: str, failure_level: str = "error") -> None:
         # rclpy rejects one call site logging at two severities ("Logger severity cannot be changed

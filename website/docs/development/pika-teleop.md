@@ -319,7 +319,7 @@ Pika 主机上的 `pika_process_helper` `POST /recalibrate`，在同一把锁里
 
 - 录制进行中（倒计时 / 录制 / 收尾）或任一侧 Pika 速度指令在发时拒绝（409），不会打断采集或遥操作。
 - 停栈不干净时不改名、不启动；改名失败不启动。
-- 60 s 内未重新定位：先 **重新插拔两个 Pika**，再点一次。重启偶尔会让追踪器卡住（见下方「运行时的陷阱」）。
+- 60 s 内未重新定位：先在 :8765「Pika 速度控制」点 **关闭 Pika** 把栈完全停掉，再 **重新插拔两个 Pika**，然后再点一次重标定（栈已停时它只启动一次）。不要在栈运行时插拔：插拔后重启偶尔会让追踪器卡住（见下方「运行时的陷阱」）。
 - 启用条件：helper 配置 `libsurvive_config`（`config/docker/pika_helper.json`），且 `config/ros/recording.yaml`
   的 `/recording_web_bridge` 设置 `pika_helper_url`（仓库默认空 = 隐藏按钮）。
 

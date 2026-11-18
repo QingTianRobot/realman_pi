@@ -43,7 +43,10 @@ Non-goals:
    等待定位. It waits until both sides' existing pose `state` is `live`
    (`snapshot.pika.sides.<side>.state`).
 5. If both sides are live within 60 s, it shows 已重新定位. If not, it names the
-   sides that are not live and says "未重新定位：请重新插拔两个 Pika 后再点一次重标定".
+   sides that are not live and says "未重新定位：先在 :8765「Pika 速度控制」点关闭 Pika
+   停栈，再重新插拔两个 Pika，然后再点一次重标定". Re-plugging must happen with the stack
+   stopped: re-plugging while it runs and then restarting leaves the trackers stuck. With the
+   stack already stopped, 重标定 only starts it once (the helper's stop is a no-op).
 
 ## Components
 

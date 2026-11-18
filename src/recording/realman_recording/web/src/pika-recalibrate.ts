@@ -66,7 +66,7 @@ export function initPikaRecalibrate(button: HTMLButtonElement, line: HTMLElement
     } else if (Date.now() > watchUntil) {
       watchUntil = 0;
       const which = notLive.map((side) => SIDE_NAMES[side] ?? side).join("、") || "无快照";
-      show(`未重新定位（${which}）：请重新插拔两个 Pika 后再点一次重标定`, "warn");
+      show(`未重新定位（${which}）：先在 :8765「Pika 速度控制」点关闭 Pika 停栈，再重新插拔两个 Pika，然后再点一次重标定`, "warn");
     }
   }
 

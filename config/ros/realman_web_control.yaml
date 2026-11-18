@@ -64,3 +64,15 @@ pika_switch:
 param_tuning:
   catalog_file: web-control/param_catalog.yaml  # The /params.html page; empty string disables it. Writes need ./config/ros mounted read-write.
   readback_timeout_sec: 0.5  # Per-node GetParameters wait for the 运行值 column.
+
+# Topbar link strip on :8765 (GET /api/links): one dot per arm, camera and gripper, hover for
+# details. Cameras come from cameras_ros2.yaml (+ cameras_ros2.local.yaml), arm addresses from
+# realman_driver.yaml, gripper ports from gripper.yaml plus each gripper's /<name>/link topic.
+link_status:
+  arms: [l, m, r]  # Arms shown; drop one that is normally powered off on this station.
+  rate_window_sec: 2.0  # joint_states / camera_info rate is counted over this window.
+  stale_after_sec: 1.0  # No message for this long -> down (red).
+  low_rate_ratio: 0.7  # Below this share of the expected rate -> warn (amber).
+  prefer_usb3: true  # A camera that negotiated USB 2.0 or slower shows amber.
+  usb_devices_root: /sys/bus/usb/devices  # Host USB tree; sysfs is visible inside the container.
+  gripper_link_stale_sec: 5.0  # /<name>/link older than this is ignored (gripper_manager gone).

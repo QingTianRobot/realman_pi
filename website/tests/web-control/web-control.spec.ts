@@ -2048,3 +2048,24 @@ test("Pika switch row shows refusals, helper reachability and the server freshne
   });
   await expect(row).toBeHidden();
 });
+
+test("topbar link strip shows one dot per device and a hover card with USB details", async ({ page }) => {
+  await page.goto("/");
+  const strip = page.locator("#link-strip");
+  await expect(strip.locator(".link-dot")).toHaveCount(8);
+  const right = strip.locator('[data-key="cameras/camera_right"]');
+  await expect(right).toHaveClass(/warn/);
+  await expect(right).toContainText("2.0");
+  await expect(strip.locator('[data-key="arms/m"]')).toHaveClass(/down/);
+  await right.hover();
+  const tip = page.locator(".link-tip");
+  await expect(tip).toBeVisible();
+  await expect(tip).toContainText("右腕相机");
+  await expect(tip).toContainText("USB 2.0 · 480 Mb/s");
+  await expect(tip).toContainText("1-4（bus 1）");
+  // The card survives the 2 s re-poll (buttons are updated in place, not replaced).
+  await page.waitForTimeout(2300);
+  await expect(tip).toBeVisible();
+  await page.mouse.move(700, 600);
+  await expect(tip).toBeHidden();
+});

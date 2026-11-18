@@ -264,7 +264,8 @@ class RateTracker:
             # Count only what fits the window; a stream that started less than a window ago is
             # divided by its own lifetime so the first seconds do not read low.
             span = min(self.window_sec, max(now - self._first[key], 1e-3))
-            return len(stamps) / span, now - self._last[key]
+            # A message stamped on another thread just after ``now`` was read would give a negative age.
+            return len(stamps) / span, max(0.0, now - self._last[key])
 
 
 @dataclass
@@ -523,7 +524,7 @@ def _pika_items(
             ["速度指令", f"{cmd_rate:.1f} Hz（遥操作中）" if active else ("未发送（未按 W/A/S/D 开始）" if cmd_age is None else f"已停 {cmd_age:.1f} s")],
             ["Pika 栈", ("运行中" if stack_running else "未运行") + ("" if switch.get("helper_reachable", False) else " · helper 不可达")],
             ["速度控制开关", PIKA_PHASE_TEXT.get(phase, phase) + (f"（{switch['detail']}）" if switch.get("detail") else "")],
-            ["键盘启停", "—" if pedal is None else ("已开始" if pedal[1] else "未开始") + f" · {(now - pedal[0]) * 1000:.0f} ms 前"],
+            ["键盘启停", "—" if pedal is None else ("已开始" if pedal[1] else "未开始") + f" · {max(0.0, now - pedal[0]) * 1000:.0f} ms 前"],
         ]
         if isinstance(episode_state, dict) and episode_state.get("state"):
             details.append(["采集", f"{episode_state['state']}" + (f" · {episode_state.get('task')}" if episode_state.get("task") else "")])

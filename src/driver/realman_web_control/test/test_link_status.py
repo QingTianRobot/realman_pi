@@ -218,3 +218,18 @@ def test_pika_tones_off_down_ok_and_teleop_badge(tmp_path):
     assert items["l"]["tone"] == "ok" and items["l"]["badge"] == "▶"
     assert items["r"]["tone"] == "down"
     assert ["速度控制开关", "开启"] in items["l"]["details"]
+
+
+def test_ages_never_negative_when_a_value_lands_after_now(tmp_path):
+    path = tmp_path / "recording.yaml"
+    path.write_text(RECORDING_YAML, encoding="utf-8")
+    clock = FakeClock()
+    state = LinkState(rates=RateTracker(2.0, clock=clock))
+    state.set_value("pika/keyboard_enabled", False, now=clock.now + 0.004)
+    items = _pika_snapshot(state, pika_specs(path), {"phase": "on", "stack_running": True}, clock.now)
+    assert ["键盘启停", "未开始 · 0 ms 前"] in items["l"]["details"]
+    rates = RateTracker(2.0, clock=clock)
+    clock.now += 0.004
+    rates.record("x")
+    clock.now -= 0.004
+    assert rates.read("x")[1] == 0.0

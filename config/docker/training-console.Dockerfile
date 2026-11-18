@@ -8,7 +8,7 @@ ARG PIP_INDEX_URL=https://pypi.org/simple
 ARG APT_MIRROR=
 RUN if [ -n "$APT_MIRROR" ]; then sed -i "s|deb.debian.org|$APT_MIRROR|g" /etc/apt/sources.list.d/debian.sources; fi \
  && apt-get update \
- && apt-get install -y --no-install-recommends openssh-client git ca-certificates \
+ && apt-get install -y --no-install-recommends openssh-client rsync git ca-certificates \
  && rm -rf /var/lib/apt/lists/*
 RUN pip install --no-cache-dir --index-url "$PIP_INDEX_URL" "aiohttp>=3.9" numpy pyarrow pyyaml
 

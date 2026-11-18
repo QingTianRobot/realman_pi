@@ -103,6 +103,63 @@ PYTHONPATH=. python -m realman_training linkcheck [--only pika,link,inference,br
 
 每次检测写一份 `<data_root>/_console/linkcheck/<时间>.json`；某项无法执行（如 realman_ts 不可达）时该项判失败并给出原因，其余项照常执行。
 
+## 计算主机（训练在另一台机器上）
+
+控制平台可以跑在 SJDrealman 上，训练放到另一台 GPU 主机（计算主机，没有 docker，用 uv 环境跑 openpi）。配置 `compute.ssh_host` 为空时一切照旧（server5090 布局：步骤都在本机）；设了它之后：
+
+| 在哪里跑 | 什么 |
+|---|---|
+| SJDrealman（控制平台容器） | 网页、命令行、后台任务记录；`pull`（从录制容器拉到本地，再推到计算主机） |
+| 计算主机（经 ssh） | `clean`、`view`、`norm`、`train`、`eval`、`register`：每一步在那边以 `python -m realman_training _remote-step <种类> <token>` 运行，用同一份步骤代码和那边自己的配置（同一个 yaml，环境变量来自 `<workdir>/env.sh`） |
+
+网页读的是 SJD 本地的元数据镜像：每步结束后用 rsync 把计算主机的 `data_root` 和 openpi 数据目录同步回来，但不含 `videos/`、`params/`、`train_state/`（视频和权重只在计算主机上）。长步骤（训练、评估）运行期间按 `compute.mirror_sync_sec` 定期刷新镜像，网页上的进度和 `metrics.csv` 随之更新。
+
+### 环境变量
+
+计算主机的值和控制平台的其他主机值一样，放在仓库外的 env 文件里（`./rm65_server` 用 `docker compose --env-file` 传入，见[部署](./training-console-web.md#部署-server5090)），不写进仓库。compose 服务 `realman_training` 把这几个变量传进容器：
+
+| 变量 | 含义 |
+|---|---|
+| `REALMAN_COMPUTE_SSH_HOST` | 计算主机的 ssh 别名；空 = 不用计算主机 |
+| `REALMAN_COMPUTE_SSH_CONFIG` | ssh 配置文件，相对路径相对于仓库根目录 |
+| `REALMAN_COMPUTE_WORKDIR` | 计算主机上的工作目录（绝对路径），`compute setup` 在下面建 `env.sh`、openpi、数据目录 |
+| `REALMAN_RECORDING_SSH_HOST` | 录制容器所在主机的 ssh 别名；显式设为空 = 录制容器就在本机（SJD） |
+| `REALMAN_TRAINING_DATA_ROOT` | 控制平台的 `data_root`；未设或为空都用默认值 |
+
+示例（只有占位符，按实际填写）：
+
+```text
+REALMAN_COMPUTE_SSH_HOST=<compute-alias>
+REALMAN_COMPUTE_SSH_CONFIG=Traning_area/.ssh/config
+REALMAN_COMPUTE_WORKDIR=<absolute workdir on the compute host>
+REALMAN_RECORDING_SSH_HOST=
+TRAINING_HOME=/home/<user>
+TRAINING_REPO=<repo checkout on SJD>
+```
+
+`REALMAN_RECORDING_SSH_HOST=` 必须写成空值：compose 和 yaml 对它用 `${VAR-默认}`，只有未设置时才回落到 `realman_local`。路径类的键（`data_root`、`openpi.repo`、`openpi.docker_data`、`openpi.weights`）用 `${VAR:-默认}`，空值也回落到默认值，不会变成空路径。
+
+### 第一次使用
+
+```bash
+./rm65_server exec python -m realman_training compute setup   # 在计算主机上建 env.sh 和 openpi 的 uv 环境（可重复执行，不删东西）
+./rm65_server exec python -m realman_training compute sync    # 把本包和 config/training 同步到计算主机
+```
+
+`compute setup` 可加 `--openpi-ref <分支或提交>`（默认 `main`）。改了本包或 `config/training` 后要再执行一次 `compute sync`。pi05_base 权重不自动下载：`compute setup` 最后会打印它是否存在，缺的话在计算主机上手动下载到 `<workdir>/data/openpi/openpi-assets/checkpoints/pi05_base/params`（那条链路上要几个小时）。
+
+### 断线与取消
+
+- 训练期间 ssh 断了：任务失败，但训练在计算主机上继续跑；用同样的参数再启动一次 `train` 并加 `--attach` 重新跟随（`./rm65_server exec python -m realman_training train <配置名> <视图目录> --exp <实验名> --gpus <卡号> --attach`）。
+- 取消任务会停掉计算主机上的那一步；取消来得太早、那边的步骤还没开始时，会留一个取消标记，步骤一启动就看到它并退出。
+
+### 限制
+
+- `tags refresh` 只作用于 SJD 上的镜像，不改计算主机上的数据。
+- `pull` 先拉到本地再推到计算主机：推完之前 SJD 上要有和这份录制一样大的空闲磁盘。推完后删掉本地视频，只留元数据；推送失败时本地这份也删掉，需要重新 `pull`。
+- 计算主机是共用的：训练和评估按剩余显存检查（`openpi.default_share_gpus`，相当于默认加 `--share-gpus`），用哪几张卡要人在网页的 GPU 面板（显示的是计算主机的 GPU）上看过再选。
+- 在计算主机上删掉的数据集仍留在镜像里（同步不带 `--delete`），需要时在 SJD 上手动删镜像里的对应目录。
+
 ## 安全规则
 
 - 拉取、清洗、视图都写新目录，目标已存在就拒绝；只会删除本任务自己没写完的 `<目标>.partial`。

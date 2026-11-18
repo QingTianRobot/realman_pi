@@ -3,7 +3,7 @@
 training_console:
   # Where the pulled recordings, cleaned sets and training views live on server5090.
   # Host values come from the environment (the untracked env file); unset = the server5090 layout below.
-  data_root: ${REALMAN_TRAINING_DATA_ROOT-~/data/realman}
+  data_root: ${REALMAN_TRAINING_DATA_ROOT:-~/data/realman}
 
   # Per-episode quality rules. The numbers reproduce the 2026-10-13 and 2026-10-16 manual cleanings.
   quality:
@@ -67,12 +67,12 @@ training_console:
     backend: ${REALMAN_OPENPI_BACKEND-docker}      # uv on a host without docker (EI)
     env_file: ${REALMAN_OPENPI_ENV_FILE-}
     default_share_gpus: ${REALMAN_OPENPI_SHARE_GPUS-false}
-    repo: ${REALMAN_OPENPI_REPO-~/organization/openpi}
-    docker_data: ${REALMAN_OPENPI_DATA-~/organization/openpi-docker-data}
+    repo: ${REALMAN_OPENPI_REPO:-~/organization/openpi}
+    docker_data: ${REALMAN_OPENPI_DATA:-~/organization/openpi-docker-data}
     image: openpi:dev
     compose_project: openpi-console
     compose_overlay: openpi-console.compose.yaml   # relative = next to this file
-    weights: ${REALMAN_OPENPI_WEIGHTS-/home/openpi/.cache/openpi/openpi-assets/checkpoints/pi05_base_from_mac/params}
+    weights: ${REALMAN_OPENPI_WEIGHTS:-/home/openpi/.cache/openpi/openpi-assets/checkpoints/pi05_base_from_mac/params}
     gpu_busy_mib: 2000              # more than this used on a GPU = someone else holds it
     num_workers: 6
     eval_stride: 10

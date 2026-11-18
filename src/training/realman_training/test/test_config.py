@@ -240,3 +240,16 @@ def test_unexpanded_variable_is_refused(tmp_path, monkeypatch):
 def test_unknown_backend_is_refused(tmp_path):
     with pytest.raises(ValueError, match="openpi.backend"):
         load_config(write(tmp_path, "  openpi:\n    backend: podman\n"))
+
+
+def test_compose_passes_empty_values_paths_keep_their_defaults(monkeypatch):
+    """compose sets every REALMAN_* var, empty when unset; path keys use ':-' so empty never means ''."""
+    for var in ("REALMAN_TRAINING_DATA_ROOT", "REALMAN_OPENPI_REPO", "REALMAN_OPENPI_DATA", "REALMAN_OPENPI_WEIGHTS",
+                "REALMAN_RECORDING_SSH_HOST"):
+        monkeypatch.setenv(var, "")
+    config = load_config(DEFAULT_CONFIG)
+    assert config.data_root == Path("~/data/realman").expanduser()
+    assert config.openpi.repo == OpenpiConfig().repo
+    assert config.openpi.docker_data == OpenpiConfig().docker_data
+    assert config.openpi.weights == OpenpiConfig().weights
+    assert config.remote.ssh_host == ""  # '-': an explicit empty value = the recorder runs on this host

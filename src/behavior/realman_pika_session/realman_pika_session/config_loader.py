@@ -2,7 +2,7 @@
 from __future__ import annotations
 
 import math
-from dataclasses import dataclass
+from dataclasses import dataclass, field
 from pathlib import Path
 
 import yaml
@@ -22,6 +22,8 @@ class EpisodeConfig:
     release_timeout_sec: float
     home_velocity_percent: int
     home_timeout_sec: float
+    # arm namespace -> gripper device name; homing opens these grippers (an empty mapping opens none).
+    home_open_grippers: dict[str, str] = field(default_factory=dict)
 
 
 def _read(path: Path) -> dict:
@@ -57,6 +59,22 @@ def _positive(path: Path, doc: dict, key: str) -> float:
     return float(value)
 
 
+def _grippers(path: Path, doc: dict) -> dict[str, str]:
+    key = "home_open_grippers"
+    value = doc.get(key)
+    if value is None and key in doc:
+        return {}
+    if not isinstance(value, dict):
+        raise ValueError(f"{path}: {key} must be a mapping of arm (l/m/r) to gripper name")
+    namespaces = set(ARM_NAMESPACES.values())
+    for arm, name in value.items():
+        if arm not in namespaces:
+            raise ValueError(f"{path}: {key}.{arm}: arm must be one of l, m, r")
+        if not isinstance(name, str) or not name:
+            raise ValueError(f"{path}: {key}.{arm} must be a non-empty gripper name")
+    return dict(value)
+
+
 def load_episode_config(path: Path) -> EpisodeConfig:
     doc = _read(path)
     velocity = doc.get("home_velocity_percent")
@@ -73,6 +91,7 @@ def load_episode_config(path: Path) -> EpisodeConfig:
         release_timeout_sec=_positive(path, doc, "release_timeout_sec"),
         home_velocity_percent=velocity,
         home_timeout_sec=_positive(path, doc, "home_timeout_sec"),
+        home_open_grippers=_grippers(path, doc),
     )
 
 

@@ -76,7 +76,7 @@ Non-goals:
 
 - New parameters on `/recording_web_bridge`:
   - `pika_helper_url` (string, default `""` = feature off, button hidden);
-  - `pika_helper_timeout_sec` (default 60.0).
+  - `pika_helper_timeout_sec` (default 90.0; a worst-case recalibrate is stop ≈ 32 s + start ≈ 37 s).
 
   Validation: empty, or an `http://` URL whose host is 127.0.0.1, localhost or ::1.
   The helper is only reached through the loopback tunnel.

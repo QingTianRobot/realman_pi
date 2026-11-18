@@ -46,12 +46,21 @@ def enabled(config: ConsoleConfig) -> bool:
     return bool(config.compute.ssh_host)
 
 
+def checkout_root(config: ConsoleConfig) -> Path:
+    """The repo checkout that holds the loaded config file (<repo>/config/training/<file>), else this package's repo.
+    In the console image the package lives at /opt/realman_pi while the checkout is bind-mounted at TRAINING_REPO."""
+    source = config.source
+    if source is not None and source.parent.name == "training" and source.parent.parent.name == "config":
+        return source.parents[2]
+    return REPO_ROOT
+
+
 def ssh_base(config: ConsoleConfig) -> list[str]:
     c = config.compute
     argv = ["ssh"]
     if c.ssh_config:
         path = Path(c.ssh_config).expanduser()
-        argv += ["-F", str(path if path.is_absolute() else REPO_ROOT / path)]
+        argv += ["-F", str(path if path.is_absolute() else checkout_root(config) / path)]
     return argv + ["-o", "BatchMode=yes", "-o", f"ConnectTimeout={c.connect_timeout_sec}",
                    "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"]
 
@@ -385,7 +394,8 @@ def gpu_query(config: ConsoleConfig, runner: Runner) -> dict:
 
 
 def sync_code(config: ConsoleConfig, runner: Runner, log) -> None:
-    """This package and config/training to <workdir>/src/realman_pi (the remote side of _remote-step)."""
+    """This package (the code actually running) and the config checkout's config/training to <workdir>/src/realman_pi
+    (the remote side of _remote-step)."""
     ssh = shlex.join(ssh_base(config))
     host = config.compute.ssh_host
     base = remote_path(config, REMOTE_REPO)
@@ -393,7 +403,7 @@ def sync_code(config: ConsoleConfig, runner: Runner, log) -> None:
     runner.check(ssh_argv(config, f"mkdir -p {dirs}"))
     runner.check(["rsync", "-a", "--delete", RSYNC_IO_TIMEOUT, "-e", ssh, "--exclude=/test/", "--exclude=/web/",
                   "--exclude=__pycache__/", "--exclude=/realman_training/static/", f"{REPO_ROOT / PACKAGE}/", f"{host}:{base}/{PACKAGE}/"])
-    runner.check(["rsync", "-a", RSYNC_IO_TIMEOUT, "-e", ssh, f"{REPO_ROOT / 'config' / 'training'}/",
+    runner.check(["rsync", "-a", RSYNC_IO_TIMEOUT, "-e", ssh, f"{checkout_root(config) / 'config' / 'training'}/",
                   f"{host}:{base}/config/training/"])
     log(f"code synced to {host}:{base}")
 

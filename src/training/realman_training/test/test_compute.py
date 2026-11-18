@@ -366,3 +366,41 @@ def test_gpu_query_empty_answer_is_reported_not_raised(config):
     assert data["available"] is False and "EI" in data["error"]
     data = compute.gpu_query(config, FakeRunner().on("_gpus", stdout="not json\n"))
     assert data["available"] is False and "EI" in data["error"]
+
+
+@pytest.fixture()
+def checkout_config(tmp_path):
+    """A config loaded from a repo checkout other than this package's (the container's bind-mounted TRAINING_REPO)."""
+    repo = tmp_path / "checkout"
+    path = repo / "config" / "training" / "training_console.yaml"
+    path.parent.mkdir(parents=True)
+    path.write_text(
+        "training_console:\n"
+        f"  data_root: {tmp_path / 'data'}\n"
+        "  compute:\n    ssh_host: EI\n    ssh_config: Traning_area/.ssh/config\n    workdir: /w\n",
+        encoding="utf-8",
+    )
+    return repo.resolve(), load_config(path)
+
+
+def test_checkout_root_is_the_repo_that_holds_the_config(checkout_config, config):
+    repo, cfg = checkout_config
+    assert compute.checkout_root(cfg) == repo
+    assert compute.checkout_root(config) == compute.REPO_ROOT  # not under config/training: this package's repo
+
+
+def test_a_relative_ssh_config_resolves_under_the_config_checkout(checkout_config):
+    repo, cfg = checkout_config
+    argv = compute.ssh_argv(cfg, "true")
+    assert argv[1:3] == ["-F", str(repo / "Traning_area/.ssh/config")]
+
+
+def test_sync_code_sends_the_config_checkout_training_dir_and_this_package(checkout_config):
+    repo, cfg = checkout_config
+    runner = FakeRunner()
+    compute.sync_code(cfg, runner, RecordingLog())
+    sent = runner.commands("rsync")
+    config_rsync = [c for c in sent if c[-1] == "EI:/w/src/realman_pi/config/training/"]
+    assert config_rsync and config_rsync[0][-2] == f"{repo / 'config' / 'training'}/"
+    package = [c for c in sent if c[-1] == "EI:/w/src/realman_pi/src/training/realman_training/"]
+    assert package and package[0][-2] == f"{compute.REPO_ROOT / compute.PACKAGE}/"  # the code actually running

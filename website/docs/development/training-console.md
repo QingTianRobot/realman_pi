@@ -121,7 +121,7 @@ PYTHONPATH=. python -m realman_training linkcheck [--only pika,link,inference,br
 | 变量 | 含义 |
 |---|---|
 | `REALMAN_COMPUTE_SSH_HOST` | 计算主机的 ssh 别名；空 = 不用计算主机 |
-| `REALMAN_COMPUTE_SSH_CONFIG` | ssh 配置文件，相对路径相对于仓库根目录 |
+| `REALMAN_COMPUTE_SSH_CONFIG` | ssh 配置文件；相对路径相对于存放所加载配置文件的仓库检出目录（容器里是 `TRAINING_REPO`） |
 | `REALMAN_COMPUTE_WORKDIR` | 计算主机上的工作目录（绝对路径），`compute setup` 在下面建 `env.sh`、openpi、数据目录 |
 | `REALMAN_RECORDING_SSH_HOST` | 录制容器所在主机的 ssh 别名；显式设为空 = 录制容器就在本机（SJD） |
 | `REALMAN_TRAINING_DATA_ROOT` | 控制平台的 `data_root`；未设或为空都用默认值 |
@@ -145,6 +145,8 @@ TRAINING_REPO=<repo checkout on SJD>
 ./rm65_server exec python -m realman_training compute setup   # 在计算主机上建 env.sh 和 openpi 的 uv 环境（可重复执行，不删东西）
 ./rm65_server exec python -m realman_training compute sync    # 把本包和 config/training 同步到计算主机
 ```
+
+第一次 `./rm65_server up` 之前，先在 `TRAINING_HOME` 下自己建好 compose 挂载的数据目录 `data/realman`、`organization/openpi`、`organization/openpi-docker-data`，否则 docker 会以 root 身份创建它们，容器里的主机用户写不进去。
 
 `compute setup` 可加 `--openpi-ref <分支或提交>`（默认 `main`）。改了本包或 `config/training` 后要再执行一次 `compute sync`。pi05_base 权重不自动下载：`compute setup` 最后会打印它是否存在，缺的话在计算主机上手动下载到 `<workdir>/data/openpi/openpi-assets/checkpoints/pi05_base/params`（那条链路上要几个小时）。
 

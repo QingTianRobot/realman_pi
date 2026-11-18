@@ -85,7 +85,7 @@ Non-goals:
   The helper is only reached through the loopback tunnel.
 - New module `realman_recording/pika_recalibrate.py` (the guard plus a stdlib `urllib`
   client) with the same shape as `realman_web_control/pika_helper_client.py`
-  (`call_helper(base_url, action, timeout)` returning `(ok, payload)`), with the
+  (`call_helper(base_url, action, timeout)` returning `(http_status, payload)`, 0 = unreachable), with the
   actions `status` (GET) and `recalibrate` (POST). It is copied rather than
   imported, so the recording package gains no dependency on web_control.
 - The bridge node passes a `pika_recalibrate: Callable[[], tuple[int, dict]] | None`

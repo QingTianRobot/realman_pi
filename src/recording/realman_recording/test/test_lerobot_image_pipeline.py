@@ -231,7 +231,10 @@ def test_exporter_parallel_frames_match_serial(tmp_path, workers):
     for mode in (0, workers):
         dataset = _RecordingDataset()
         progress = []
-        request = SimpleNamespace(image_workers=mode, progress_callback=lambda done, total: progress.append(done))
+        request = SimpleNamespace(
+            image_workers=mode,
+            progress_callback=lambda done, total, sink=progress: sink.append(done),
+        )
         LeRobotExporter()._add_v3_frames(dataset, request, schema, canonical, images, "pick", [0] * 12, 3, 12)
         results[mode] = dataset.frames
         assert progress == list(range(1, 13))

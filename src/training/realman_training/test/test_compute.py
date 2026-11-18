@@ -581,3 +581,29 @@ def test_cancelling_the_push_removes_the_local_copy_and_stays_a_cancel(config, m
     with pytest.raises(JobCancelled):
         compute.pull_and_push({"target": str(target)}, RecordingLog(), runner)
     assert calls == ["pull"] and not target.exists()
+
+
+def test_mirror_reports_a_directory_it_cannot_create_instead_of_raising(config, tmp_path):
+    import dataclasses
+
+    blocker = tmp_path / "not_a_dir"
+    blocker.write_text("x")
+    broken = dataclasses.replace(config, openpi=dataclasses.replace(config.openpi, repo=blocker / "openpi"))
+    log = RecordingLog()
+    assert compute.sync_mirror(broken, FakeRunner(), log) is False
+    assert any("mirror:" in line and "openpi" in line for line in log.lines)
+
+
+def test_a_remote_failure_names_this_consoles_paths(config):
+    lines = ["@@failed view written to /w/data/realman/v_view, but 3 episode(s) are bad; log /w/src/openpi/wandb/e.log"]
+    runner = FakeRunner().on("_remote-step", lines=lines, returncode=1)
+    with pytest.raises(StepFailed) as failure:
+        compute.run_remote("view", {}, RecordingLog(), runner=runner, load=lambda _: config)
+    message = str(failure.value)
+    assert f"{config.data_root}/v_view," in message and f"{config.openpi.docker_data}/wandb/e.log" in message
+    assert "/w/" not in message
+
+
+def test_local_text_leaves_other_paths_alone(config):
+    assert compute.local_text(config, "/w/data/realmanX and /etc/w/data/realman") == "/w/data/realmanX and /etc/w/data/realman"
+    assert compute.local_text(config, "at /w/data/realman") == f"at {config.data_root}"

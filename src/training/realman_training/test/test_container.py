@@ -20,7 +20,8 @@ def _service() -> dict:
 def test_the_service_is_opt_in_and_uses_the_nvidia_runtime():
     service = _service()
     assert service["profiles"] == ["training"]
-    assert service["runtime"] == "nvidia" and "gpus" not in service and "deploy" not in service
+    # nvidia unless the host has no nvidia runtime (SJDrealman: the GPU panel reads the compute host instead)
+    assert service["runtime"] == "${TRAINING_RUNTIME:-nvidia}" and "gpus" not in service and "deploy" not in service
     assert service["pid"] == "host"
     assert service["environment"]["NVIDIA_DRIVER_CAPABILITIES"] == "utility"
     assert service["build"]["dockerfile"] == "config/docker/training-console.Dockerfile"
@@ -64,3 +65,9 @@ def test_the_image_has_rsync_for_the_compute_host():
     dockerfile_text = DOCKERFILE.read_text(encoding="utf-8")
     assert "rsync" in dockerfile_text
     assert "openssh-client rsync git" in dockerfile_text  # on the apt install line
+
+
+def test_the_openpi_checkout_is_read_only_unless_the_console_mirrors_a_compute_host():
+    volumes = _service()["volumes"]
+    mount = [v for v in volumes if "organization/openpi:" in v and "docker-data" not in v]
+    assert len(mount) == 1 and mount[0].endswith(":${TRAINING_OPENPI_MOUNT:-ro}"), mount

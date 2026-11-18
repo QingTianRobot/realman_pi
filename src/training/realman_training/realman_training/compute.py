@@ -13,6 +13,7 @@ from __future__ import annotations
 import functools
 import importlib
 import json
+import re
 import os
 import secrets
 import shlex
@@ -98,6 +99,19 @@ def local_path(config: ConsoleConfig, text: str) -> str:
     return text
 
 
+def local_text(config: ConsoleConfig, text: str) -> str:
+    """local_path for every compute-host path inside a message (a remote step's failure), so the operator reads
+    this console's paths. Matches whole path components only."""
+    if not enabled(config):
+        return text
+    pairs = sorted([(remote_path(config, REMOTE_DATA_ROOT), str(config.data_root)),
+                    (remote_path(config, REMOTE_OPENPI), str(config.openpi.docker_data))],
+                   key=lambda pair: -len(pair[0]))
+    for remote, local in pairs:
+        text = re.sub(r"(?<![\w./-])" + re.escape(remote) + r"(?![\w.-])", lambda _m, local=local: local, text)
+    return text
+
+
 def _roots(config: ConsoleConfig) -> list[tuple[str, str]]:
     roots = [("@data_root", str(config.data_root)), ("@docker_data", str(config.openpi.docker_data))]
     return sorted(roots, key=lambda pair: -len(pair[1]))  # a root nested in the other is matched first
@@ -142,6 +156,16 @@ def rsync_from(config: ConsoleConfig, remote: str, local: Path, excludes=MIRROR_
             f"{config.compute.ssh_host}:{remote.rstrip('/')}/", f"{local}/"]
 
 
+def _mirror_dir(path: Path, log) -> bool:
+    """Create a mirror directory; a failure (read-only mount, a file in the way) is logged, not raised."""
+    try:
+        path.mkdir(parents=True, exist_ok=True)
+        return True
+    except OSError as error:
+        log(f"mirror: cannot create {path} ({error})")
+        return False
+
+
 def sync_mirror(config: ConsoleConfig, runner: Runner, log) -> bool:
     """Refresh data_root and docker_data/{checkpoints,wandb} from the compute host, metadata only."""
     pairs = [
@@ -151,14 +175,17 @@ def sync_mirror(config: ConsoleConfig, runner: Runner, log) -> bool:
     ]
     ok = True
     for remote, local in pairs:
-        local.mkdir(parents=True, exist_ok=True)
+        if not _mirror_dir(local, log):
+            ok = False
+            continue
         done = runner.run(rsync_from(config, remote, local))
         if done.returncode:
             ok = False
             log(f"mirror: {remote} not refreshed ({(done.stderr or done.stdout).strip()[-200:]})")
     # The web lists the RealMan configs found in the openpi checkout (catalog.openpi_configs).
     training = config.openpi.repo / "src" / "openpi" / "training"
-    training.mkdir(parents=True, exist_ok=True)
+    if not _mirror_dir(training, log):
+        return False
     source = f"{config.compute.ssh_host}:{remote_path(config, REMOTE_OPENPI + '/src/openpi/training/config.py')}"
     done = runner.run(["rsync", "-a", RSYNC_IO_TIMEOUT, "-e", shlex.join(ssh_base(config)), source, f"{training}/"])
     if done.returncode:
@@ -225,7 +252,7 @@ def run_remote(kind: str, params: dict, log, runner: Runner | None = None, clock
         state["sync"].join(SYNC_JOIN_SEC)
     sync_mirror(config, runner, log)
     if state["failed"] is not None:
-        raise StepFailed(state["failed"])
+        raise StepFailed(local_text(config, state["failed"]))
     if state["cancelled"]:
         raise StepFailed(f"{kind} was cancelled on {host}")
     if state["result"] is None:

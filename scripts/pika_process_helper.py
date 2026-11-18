@@ -6,6 +6,9 @@ stack is a native install that needs the user's tmux server, USB serial ports
 and DISPLAY. Listens on localhost only; realman_web_control (network_mode: host)
 calls it. Every command is a fixed argv from config/docker/pika_helper.json; the
 HTTP request never carries a command. Only one action runs at a time.
+`POST /recalibrate` (only when `libsurvive_config` is set) stops the stack,
+renames the libsurvive calibration to `<name>.bak-<timestamp>` and starts again,
+so libsurvive re-solves the base stations (the :8770 重标定 button).
 
 Leftover processes: the Pika stack runs the official launch in its own process
 group (pika_teleop's official_stack_supervisor), outside the tmux session. If
@@ -56,6 +59,10 @@ class Busy(Exception):
     pass
 
 
+class NotConfigured(Exception):
+    pass
+
+
 class ActionFailed(Exception):
     def __init__(self, message: str, output_tail: list[str]) -> None:
         super().__init__(message)
@@ -91,6 +98,11 @@ def validate_config(document: Any) -> dict[str, Any]:
     names = document.get("leftover_processes", [])
     if not isinstance(names, list) or not all(isinstance(name, str) and name and "/" not in name for name in names):
         raise ValueError("leftover_processes must be a list of process names (no paths)")
+    if "libsurvive_config" in document:
+        path = document["libsurvive_config"]
+        if (not isinstance(path, str) or not (path.startswith("/") or path.startswith("~/"))
+                or not path.endswith(".json")):
+            raise ValueError("libsurvive_config must be an absolute or ~/ path to a .json file")
     return document
 
 
@@ -167,7 +179,7 @@ class PikaProcess:
     def __init__(self, config: dict[str, Any], runner: Runner = run_command,
                  sleep: Callable[[float], None] = time.sleep, home: str | None = None,
                  scan: Scanner = scan_processes, kill_group: GroupSignal = signal_group,
-                 own_pgid: int | None = None) -> None:
+                 own_pgid: int | None = None, now: Callable[[], float] = time.time) -> None:
         home = home if home is not None else os.path.expanduser("~")
         # Only a leading "~/" is expanded; nothing else in the argv is interpreted.
         self.commands = {
@@ -184,6 +196,11 @@ class PikaProcess:
         self._scan = scan
         self._kill_group = kill_group
         self._own_pgid = own_pgid if own_pgid is not None else os.getpgid(0)
+        self._now = now
+        calibration = config.get("libsurvive_config")
+        self.calibration_path = (
+            Path(home + calibration[1:] if calibration.startswith("~/") else calibration) if calibration else None
+        )
         self._lock = threading.Lock()
         self._busy: str | None = None
         self._last: dict[str, Any] = {}
@@ -252,23 +269,49 @@ class PikaProcess:
             raise ActionFailed(f"{result['action']} failed with exit {exit_code}", result["output_tail"])
         return {"ok": True, **result}
 
-    def start(self) -> dict[str, Any]:
-        self._begin("start")
-        try:
+    def _start_locked(self) -> tuple[int, str]:
+        if self._session():
+            return 0, "already running"
+        # Leftovers of an earlier stack hold the trackers; a second locator would crash-loop on them.
+        note = ""
+        groups = self._leftover_groups()
+        if groups:
+            note = self._stop_leftovers(groups) + "\n"
+            if self._leftover_groups():
+                return 1, note + "not started"
+        exit_code, output = self._run("start")
+        # Judge by the end state: a lost race ("duplicate session") still leaves Pika running.
+        if exit_code != 0 and self._session():
+            exit_code = 0
+        return exit_code, note + output
+
+    def _stop_locked(self) -> tuple[int, str]:
+        if not self._running():
+            return 0, "not running"
+        exit_code, output = 0, ""
+        if self._session():
+            exit_code, output = self._run("stop")
+            # Give the session time to stop the official group itself (its supervisor needs
+            # SIGINT + SIGTERM timeouts), so leftovers are only the fallback.
+            waited = 0.0
+            while self._running() and waited < self.stop_grace_sec:
+                self._sleep(STOP_POLL_SEC)
+                waited += STOP_POLL_SEC
             if self._session():
-                return self._finish(0, "already running")
-            # Leftovers of an earlier stack hold the trackers; a second locator would crash-loop on them.
-            note = ""
-            groups = self._leftover_groups()
-            if groups:
-                note = self._stop_leftovers(groups) + "\n"
-                if self._leftover_groups():
-                    return self._finish(1, note + "not started")
-            exit_code, output = self._run("start")
-            # Judge by the end state: a lost race ("duplicate session") still leaves Pika running.
-            if exit_code != 0 and self._session():
-                exit_code = 0
-            output = note + output
+                exit_code, output = self._run("kill")
+                output = f"{output}\nkilled after {self.stop_grace_sec:g} s"
+            if self._session():
+                return exit_code or 1, f"{output}\npika session still running after kill"
+        groups = self._leftover_groups()
+        if groups:
+            output = f"{output}\n{self._stop_leftovers(groups)}"
+        # Judge by the end state, not by the last command's exit code.
+        return ((exit_code or 1) if self._leftover_groups() else 0), output
+
+    def _guarded(self, action: str, body: Callable[[], tuple[int, str]]) -> dict[str, Any]:
+        self._begin(action)
+        try:
+            exit_code, output = body()
         except StatusError as error:
             return self._finish(error.exit_code, f"{error.output}\n{error}")
         except BaseException:
@@ -276,39 +319,46 @@ class PikaProcess:
             raise
         return self._finish(exit_code, output)
 
+    def start(self) -> dict[str, Any]:
+        return self._guarded("start", self._start_locked)
+
     def stop(self) -> dict[str, Any]:
-        self._begin("stop")
+        return self._guarded("stop", self._stop_locked)
+
+    def _move_calibration(self) -> str | None:
+        path = self.calibration_path
+        assert path is not None
+        if not path.exists():
+            return None
+        stamp = time.strftime("%Y%m%d-%H%M%S", time.localtime(self._now()))
+        backup = path.with_name(f"{path.name}.bak-{stamp}")
+        suffix = 0
+        while backup.exists():
+            suffix += 1
+            backup = path.with_name(f"{path.name}.bak-{stamp}-{suffix}")
+        os.replace(path, backup)
+        return str(backup)
+
+    def _recalibrate_locked(self) -> tuple[int, str]:
+        exit_code, output = self._stop_locked()
+        if exit_code != 0 or self._running():
+            return exit_code or 1, f"{output}\nnot recalibrated: Pika stack still running"
         try:
-            if not self._running():
-                return self._finish(0, "not running")
-            exit_code, output = 0, ""
-            if self._session():
-                exit_code, output = self._run("stop")
-                # Give the session time to stop the official group itself (its supervisor needs
-                # SIGINT + SIGTERM timeouts), so leftovers are only the fallback.
-                waited = 0.0
-                while self._running() and waited < self.stop_grace_sec:
-                    self._sleep(STOP_POLL_SEC)
-                    waited += STOP_POLL_SEC
-                if self._session():
-                    exit_code, output = self._run("kill")
-                    output = f"{output}\nkilled after {self.stop_grace_sec:g} s"
-                if self._session():
-                    return self._finish(exit_code or 1, f"{output}\npika session still running after kill")
-            groups = self._leftover_groups()
-            if groups:
-                output = f"{output}\n{self._stop_leftovers(groups)}"
-            # Judge by the end state, not by the last command's exit code.
-            if self._leftover_groups():
-                exit_code = exit_code or 1
-            else:
-                exit_code = 0
-        except StatusError as error:
-            return self._finish(error.exit_code, f"{error.output}\n{error}")
-        except BaseException:
-            self._finish_quietly()
-            raise
-        return self._finish(exit_code, output)
+            backup = self._move_calibration()
+        except OSError as error:
+            return 1, f"{output}\nnot recalibrated: cannot move {self.calibration_path}: {error}"
+        with self._lock:
+            self._last["backup"] = backup
+        note = (f"calibration moved to {backup}" if backup
+                else f"no calibration at {self.calibration_path}; restarting only")
+        start_exit, start_output = self._start_locked()
+        return start_exit, f"{output}\n{note}\n{start_output}"
+
+    def recalibrate(self) -> dict[str, Any]:
+        """Stop, move the libsurvive calibration aside, start: libsurvive re-solves the base stations."""
+        if self.calibration_path is None:
+            raise NotConfigured("recalibrate not configured")
+        return self._guarded("recalibrate", self._recalibrate_locked)
 
     def _finish_quietly(self) -> None:
         with self._lock:
@@ -349,7 +399,7 @@ def make_handler(process: PikaProcess) -> type[BaseHTTPRequestHandler]:
                 self._reply(404, {"ok": False, "error": "not found"})
 
         def do_POST(self) -> None:  # noqa: N802 - http.server API
-            actions = {"/start": process.start, "/stop": process.stop}
+            actions = {"/start": process.start, "/stop": process.stop, "/recalibrate": process.recalibrate}
             action = actions.get(self.path)
             if action is None:
                 self._reply(404, {"ok": False, "error": "not found"})
@@ -358,6 +408,8 @@ def make_handler(process: PikaProcess) -> type[BaseHTTPRequestHandler]:
             self.rfile.read(min(int(self.headers.get("Content-Length", "0") or 0), 4096))
             try:
                 self._reply(200, action())
+            except NotConfigured as error:
+                self._reply(404, {"ok": False, "error": str(error)})
             except Busy as error:
                 self._reply(409, {"ok": False, "error": str(error)})
             except ActionFailed as error:

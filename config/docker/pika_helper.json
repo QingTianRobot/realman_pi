@@ -15,5 +15,6 @@
     "pika_double_locator_node",
     "serial_gripper_imu"
   ],
-  "leftover_grace_sec": 5
+  "leftover_grace_sec": 5,
+  "libsurvive_config": "~/.config/libsurvive/config.json"
 }

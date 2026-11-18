@@ -337,7 +337,9 @@ def test_sync_code_sends_the_package_and_the_training_config(config):
     sent = runner.commands("rsync")
     assert any(c[-1] == "EI:/w/src/realman_pi/src/training/realman_training/" for c in sent)
     assert any(c[-1] == "EI:/w/src/realman_pi/config/training/" for c in sent)
-    assert all("--exclude=test/" in c for c in sent if "realman_training/" in c[-1])
+    package = [c for c in sent if c[-1].endswith("realman_training/")]
+    assert package and all({"--exclude=/test/", "--exclude=/web/", "--exclude=/realman_training/static/",
+                            "--exclude=__pycache__/"} <= set(c) for c in package)
     assert all(compute.RSYNC_IO_TIMEOUT in c for c in sent)  # the link to the compute host is slow and lossy
 
 
@@ -347,3 +349,20 @@ def test_setup_host_streams_the_script_over_ssh(config):
     call = runner.commands("bash -s")[0]
     assert call[-1] == "bash -s -- /w abc123"
     assert runner.inputs[-1].startswith("#!/usr/bin/env bash")  # the script itself goes over stdin
+
+
+def test_gpu_query_timeout_is_reported_not_raised(config):
+    import subprocess
+
+    def hang(argv, input):
+        raise subprocess.TimeoutExpired(argv, 30)
+
+    data = compute.gpu_query(config, FakeRunner().on("_gpus", action=hang))
+    assert data["available"] is False and "EI" in data["error"] and data["gpus"] == []
+
+
+def test_gpu_query_empty_answer_is_reported_not_raised(config):
+    data = compute.gpu_query(config, FakeRunner().on("_gpus", stdout=""))
+    assert data["available"] is False and "EI" in data["error"]
+    data = compute.gpu_query(config, FakeRunner().on("_gpus", stdout="not json\n"))
+    assert data["available"] is False and "EI" in data["error"]

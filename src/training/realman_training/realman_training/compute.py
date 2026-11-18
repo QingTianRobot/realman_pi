@@ -18,6 +18,7 @@ import secrets
 import shlex
 import shutil
 import signal
+import subprocess
 import sys
 import threading
 import time
@@ -366,13 +367,21 @@ SETUP_SCRIPT = Path(__file__).resolve().parent / "remote_scripts" / "setup_uv_ho
 
 
 def gpu_query(config: ConsoleConfig, runner: Runner) -> dict:
-    """The compute host's GPUs for the web panel (same shape as gpus.query, run there by `_gpus`)."""
-    done = runner.run(ssh_argv(config, remote_python(config, ["_gpus"])), timeout=30)
-    if done.returncode:
-        message = (done.stderr or done.stdout).strip()[-300:] or f"exit {done.returncode}"
+    """The compute host's GPUs for the web panel (same shape as gpus.query, run there by `_gpus`). Never raises."""
+    def unavailable(message: str) -> dict:
         return {"available": False, "busy_mib": config.openpi.gpu_busy_mib, "gpus": [],
                 "error": f"{config.compute.ssh_host}: {message}"}
-    return json.loads(done.stdout.strip().splitlines()[-1])
+
+    try:
+        done = runner.run(ssh_argv(config, remote_python(config, ["_gpus"])), timeout=30)
+    except (OSError, subprocess.TimeoutExpired) as error:
+        return unavailable(str(error)[-300:] or type(error).__name__)
+    if done.returncode:
+        return unavailable((done.stderr or done.stdout).strip()[-300:] or f"exit {done.returncode}")
+    try:
+        return json.loads(done.stdout.strip().splitlines()[-1])
+    except (ValueError, IndexError):
+        return unavailable(f"no GPU answer: {done.stdout.strip()[-300:]!r}")
 
 
 def sync_code(config: ConsoleConfig, runner: Runner, log) -> None:
@@ -382,8 +391,8 @@ def sync_code(config: ConsoleConfig, runner: Runner, log) -> None:
     base = remote_path(config, REMOTE_REPO)
     dirs = shlex.join([f"{base}/{PACKAGE}", f"{base}/config/training"])
     runner.check(ssh_argv(config, f"mkdir -p {dirs}"))
-    runner.check(["rsync", "-a", "--delete", RSYNC_IO_TIMEOUT, "-e", ssh, "--exclude=test/", "--exclude=web/",
-                  "--exclude=__pycache__/", "--exclude=static/", f"{REPO_ROOT / PACKAGE}/", f"{host}:{base}/{PACKAGE}/"])
+    runner.check(["rsync", "-a", "--delete", RSYNC_IO_TIMEOUT, "-e", ssh, "--exclude=/test/", "--exclude=/web/",
+                  "--exclude=__pycache__/", "--exclude=/realman_training/static/", f"{REPO_ROOT / PACKAGE}/", f"{host}:{base}/{PACKAGE}/"])
     runner.check(["rsync", "-a", RSYNC_IO_TIMEOUT, "-e", ssh, f"{REPO_ROOT / 'config' / 'training'}/",
                   f"{host}:{base}/config/training/"])
     log(f"code synced to {host}:{base}")

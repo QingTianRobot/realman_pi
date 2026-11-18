@@ -16,7 +16,7 @@ from .datasets import DatasetSummary, discover, summarize
 from .jobs import JobConflict, JobStore, StepFailed
 from .lerobot_io import NotALeRobotDataset
 from .quality import QualityUnavailable, inspect_dataset, suggested_drops
-from .runner import Runner
+from .runner import CommandFailed, Runner
 from .steps import clean as clean_step
 from .steps import pull as pull_step
 from .steps import tags as tags_step
@@ -563,6 +563,7 @@ def main(argv: list[str] | None = None) -> int:
         if args.command in STEP_COMMANDS:
             return _run_step(args, config)
         return _cmd_jobs(args, config)
-    except (NotALeRobotDataset, FileNotFoundError, OSError, ValueError, KeyError, yaml.YAMLError, StepFailed) as error:
+    except (NotALeRobotDataset, FileNotFoundError, OSError, ValueError, KeyError, yaml.YAMLError, StepFailed,
+            CommandFailed) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

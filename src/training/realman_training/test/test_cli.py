@@ -370,3 +370,18 @@ def test_compute_refuses_without_a_host(tmp_path, capsys):
     path.write_text(f"training_console:\n  data_root: {tmp_path}\n", encoding="utf-8")
     assert main(["--config", str(path), "compute", "sync"]) == 2
     assert "compute.ssh_host" in capsys.readouterr().err
+
+
+def test_compute_sync_failure_is_an_error_line_not_a_traceback(tmp_path, monkeypatch, capsys):
+    from realman_training.cli import main
+    from realman_training.runner import CommandFailed
+
+    def failing(config, runner, log):
+        raise CommandFailed(["rsync"], 12, "connection unexpectedly closed")
+
+    monkeypatch.setattr("realman_training.compute.sync_code", failing)
+    path = tmp_path / "c.yaml"
+    path.write_text(f"training_console:\n  data_root: {tmp_path}\n  compute:\n    ssh_host: EI\n    workdir: /w\n",
+                    encoding="utf-8")
+    assert main(["--config", str(path), "compute", "sync"]) == 2
+    assert "error:" in capsys.readouterr().err

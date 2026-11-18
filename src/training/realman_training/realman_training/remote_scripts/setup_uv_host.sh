@@ -39,20 +39,26 @@ if [ ! -d "$W/src/openpi/.git" ]; then
   git clone "$OPENPI_URL" "$W/src/openpi"
 fi
 cd "$W/src/openpi"
-git fetch origin "$REF" && git checkout --detach FETCH_HEAD
+git fetch origin "$REF" || { echo "fetch $REF failed" >&2; exit 1; }
+git checkout --detach FETCH_HEAD
 mkdir -p checkpoints assets wandb console_run
 
 for try in 1 2 3; do
   uv sync --frozen --no-install-package lerobot && break
-  echo "uv sync failed (try $try)"; sleep 10
+  echo "uv sync failed (try $try)"
   [ "$try" = 3 ] && exit 1
+  sleep 10
 done
-REV=$(grep -o 'github.com/huggingface/lerobot[^"]*#[0-9a-f]\{40\}' uv.lock | head -1 | sed 's/.*#//')
+REV=$(grep -o 'github.com/huggingface/lerobot[^"]*#[0-9a-f]\{40\}' uv.lock | head -1 | sed 's/.*#//') || REV=
 [ -n "$REV" ] || { echo "no pinned lerobot revision in uv.lock" >&2; exit 1; }
 L="$W/src/lerobot-$REV"
 if [ ! -d "$L" ]; then
   curl -fsSL --retry 5 -o "$W/cache/lerobot-$REV.tar.gz" "https://codeload.github.com/huggingface/lerobot/tar.gz/$REV"
-  tar -C "$W/src" -xzf "$W/cache/lerobot-$REV.tar.gz"
+  # extract next to it and move into place: an interrupted extract never looks like a finished one
+  T=$(mktemp -d "$W/src/.lerobot-extract.XXXXXX")
+  tar -C "$T" -xzf "$W/cache/lerobot-$REV.tar.gz"
+  mv "$T/lerobot-$REV" "$L"
+  rmdir "$T"
 fi
 uv pip install --no-deps "$L"
 .venv/bin/python -c "import openpi, lerobot, pyarrow; print('openpi env ok')"

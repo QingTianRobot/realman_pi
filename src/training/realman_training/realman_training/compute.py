@@ -10,6 +10,7 @@ a metadata mirror that the web pages read as before.
 
 from __future__ import annotations
 
+import datetime
 import functools
 import importlib
 import json
@@ -59,16 +60,29 @@ def checkout_root(config: ConsoleConfig) -> Path:
 
 def ssh_base(config: ConsoleConfig) -> list[str]:
     c = config.compute
-    argv = ["ssh"]
+    # The compute host's rules: never forward this host's temp dirs (its ssh config has SendEnv TMPDIR TEMP TMP),
+    # accept known host keys only.
+    argv = ["env", "-u", "TMPDIR", "-u", "TEMP", "-u", "TMP", "ssh"]
     if c.ssh_config:
         path = Path(c.ssh_config).expanduser()
         argv += ["-F", str(path if path.is_absolute() else checkout_root(config) / path)]
-    return argv + ["-o", "BatchMode=yes", "-o", f"ConnectTimeout={c.connect_timeout_sec}",
+    return argv + ["-o", "BatchMode=yes", "-o", "StrictHostKeyChecking=yes", "-o", f"ConnectTimeout={c.connect_timeout_sec}",
                    "-o", "ServerAliveInterval=30", "-o", "ServerAliveCountMax=4"]
 
 
+def in_workdir(config: ConsoleConfig, command: str) -> str:
+    """Every remote command starts by entering the work dir and stops if that fails (the compute host's rule)."""
+    workdir = config.compute.workdir
+    return f"cd {shlex.quote(workdir)} && {command}" if workdir else command
+
+
 def ssh_argv(config: ConsoleConfig, command: str) -> list[str]:
-    return [*ssh_base(config), config.compute.ssh_host, command]
+    return [*ssh_base(config), config.compute.ssh_host, in_workdir(config, command)]
+
+
+def rsync_ssh(config: ConsoleConfig) -> list[str]:
+    """rsync's transport options: the same ssh, and its remote rsync started behind the work-dir guard."""
+    return ["-e", shlex.join(ssh_base(config)), f"--rsync-path={in_workdir(config, 'rsync')}"]
 
 
 def remote_path(config: ConsoleConfig, sub: str) -> str:
@@ -152,7 +166,7 @@ def from_wire(value, config: ConsoleConfig):
 
 
 def rsync_from(config: ConsoleConfig, remote: str, local: Path, excludes=MIRROR_EXCLUDES) -> list[str]:
-    return ["rsync", "-a", "--partial", RSYNC_IO_TIMEOUT, "-e", shlex.join(ssh_base(config)), *[f"--exclude={e}" for e in excludes],
+    return ["rsync", "-a", "--partial", RSYNC_IO_TIMEOUT, *rsync_ssh(config), *[f"--exclude={e}" for e in excludes],
             f"{config.compute.ssh_host}:{remote.rstrip('/')}/", f"{local}/"]
 
 
@@ -187,7 +201,7 @@ def sync_mirror(config: ConsoleConfig, runner: Runner, log) -> bool:
     if not _mirror_dir(training, log):
         return False
     source = f"{config.compute.ssh_host}:{remote_path(config, REMOTE_OPENPI + '/src/openpi/training/config.py')}"
-    done = runner.run(["rsync", "-a", RSYNC_IO_TIMEOUT, "-e", shlex.join(ssh_base(config)), source, f"{training}/"])
+    done = runner.run(["rsync", "-a", RSYNC_IO_TIMEOUT, *rsync_ssh(config), source, f"{training}/"])
     if done.returncode:
         ok = False
         log(f"mirror: {source} not refreshed ({(done.stderr or done.stdout).strip()[-200:]})")
@@ -407,7 +421,7 @@ def push_dataset(config: ConsoleConfig, runner: Runner, log, target: Path) -> st
     log(f"copying {target.name} to {host}")
     # a .partial left by an earlier failed copy (only ever under our workdir's data/realman) is stale: start clean
     runner.check(ssh_argv(config, f"rm -rf {q(remote + '.partial')}"))
-    runner.check(["rsync", "-a", "--partial", RSYNC_IO_TIMEOUT, "-e", shlex.join(ssh_base(config)), f"{target}/",
+    runner.check(["rsync", "-a", "--partial", RSYNC_IO_TIMEOUT, *rsync_ssh(config), f"{target}/",
                   f"{host}:{remote}.partial/"])
     runner.check(ssh_argv(config, f"mv {q(remote + '.partial')} {q(remote)}"))
     for videos in Path(target).glob("*/videos"):
@@ -461,7 +475,7 @@ def refresh_tags_and_push(step, params: dict, log, runner: Runner | None = None)
     if there.returncode:
         raise StepFailed(f"tags written here, but could not check {host}:{remote_dir} "
                          f"({(there.stderr or there.stdout).strip()[-300:] or f'exit {there.returncode}'}); refresh again")
-    done = runner.run(["rsync", "-a", RSYNC_IO_TIMEOUT, "-e", shlex.join(ssh_base(config)), str(root / TAGS_FILE),
+    done = runner.run(["rsync", "-a", RSYNC_IO_TIMEOUT, *rsync_ssh(config), str(root / TAGS_FILE),
                        f"{host}:{remote}"])
     if done.returncode:
         raise StepFailed(f"tags written here but not copied to {host}:{remote} "
@@ -486,35 +500,94 @@ def route(kind: str, target: str, step, params: dict):
 SETUP_SCRIPT = Path(__file__).resolve().parent / "remote_scripts" / "setup_uv_host.sh"
 
 
-def gpu_query(config: ConsoleConfig, runner: Runner) -> dict:
-    """The compute host's GPUs for the web panel (same shape as gpus.query, run there by `_gpus`). Never raises."""
-    def unavailable(message: str) -> dict:
-        return {"available": False, "busy_mib": config.openpi.gpu_busy_mib, "gpus": [],
-                "error": f"{config.compute.ssh_host}: {message}"}
+# One plain shell query (no remote package or venv needed): GPUs, memory, the work dir's disk, load and cores.
+# Other users' GPU processes are not listed (the compute host's rules: read nothing unrelated).
+HOST_QUERY = ("{ nvidia-smi --query-gpu=index,uuid,name,memory.used,memory.total,utilization.gpu "
+              "--format=csv,noheader,nounits 2>&1 || echo @@gpu-error; }; echo @@mem; free -m; echo @@disk; df -Pk .; "
+              "echo @@load; cat /proc/loadavg; nproc")
 
+
+def _int(text: str) -> int | None:
     try:
-        done = runner.run(ssh_argv(config, remote_python(config, ["_gpus"])), timeout=30)
+        return int(float(text.strip()))
+    except (ValueError, AttributeError):
+        return None
+
+
+def parse_host_resources(text: str, busy_mib: int) -> tuple[list[dict], dict | None, str | None]:
+    sections: dict[str, list[str]] = {"gpu": []}
+    current = "gpu"
+    for line in text.splitlines():
+        if line.startswith("@@") and line[2:] in ("gpu-error", "mem", "disk", "load"):
+            current = line[2:]
+            sections.setdefault(current, [])
+            continue
+        sections.setdefault(current, []).append(line)
+    gpus, error = [], None
+    if "gpu-error" in sections or not sections["gpu"]:
+        error = "nvidia-smi: " + (" ".join(sections["gpu"]).strip()[-200:] or "no answer")
+    else:
+        for line in sections["gpu"]:
+            parts = [p.strip() for p in line.split(",")]
+            if len(parts) < 6 or _int(parts[0]) is None:
+                continue
+            used = _int(parts[3])
+            gpus.append({"index": _int(parts[0]), "name": parts[2], "used_mib": used, "total_mib": _int(parts[4]),
+                         "util_pct": _int(parts[5]), "busy": (used or 0) > busy_mib, "users": []})
+    host: dict = {}
+    for line in sections.get("mem", []):
+        fields = line.split()
+        if fields[:1] == ["Mem:"] and len(fields) >= 7:
+            host.update(mem_total_mib=_int(fields[1]), mem_used_mib=_int(fields[2]), mem_available_mib=_int(fields[6]))
+    disk = [line.split() for line in sections.get("disk", []) if line.strip()]
+    if len(disk) >= 2 and len(disk[-1]) >= 4:
+        host.update(disk_total_kib=_int(disk[-1][1]), disk_used_kib=_int(disk[-1][2]), disk_avail_kib=_int(disk[-1][3]))
+    load = [line.split() for line in sections.get("load", []) if line.strip()]
+    if load:
+        try:
+            host["load1"] = float(load[0][0])
+        except (ValueError, IndexError):
+            pass
+        if len(load) > 1:
+            host["cores"] = _int(load[1][0])
+    return gpus, (host or None), error
+
+
+def host_resources(config: ConsoleConfig, runner: Runner) -> dict:
+    """The compute host's GPUs and machine resources for the web panel (gpus.query's shape plus host, host_name,
+    at). Never raises."""
+    name = config.compute.ssh_host
+    base = {"available": False, "busy_mib": config.openpi.gpu_busy_mib, "gpus": [], "host": None, "host_name": name,
+            "at": datetime.datetime.now().astimezone().isoformat(timespec="seconds")}
+    try:
+        done = runner.run(ssh_argv(config, HOST_QUERY), timeout=30)
     except (OSError, subprocess.TimeoutExpired) as error:
-        return unavailable(str(error)[-300:] or type(error).__name__)
+        return {**base, "error": f"{name}: {str(error)[-300:] or type(error).__name__}"}
     if done.returncode:
-        return unavailable((done.stderr or done.stdout).strip()[-300:] or f"exit {done.returncode}")
-    try:
-        return json.loads(done.stdout.strip().splitlines()[-1])
-    except (ValueError, IndexError):
-        return unavailable(f"no GPU answer: {done.stdout.strip()[-300:]!r}")
+        return {**base, "error": f"{name}: {(done.stderr or done.stdout).strip()[-300:] or f'exit {done.returncode}'}"}
+    gpus, host, error = parse_host_resources(done.stdout, config.openpi.gpu_busy_mib)
+    result = {**base, "available": bool(gpus), "gpus": gpus, "host": host}
+    if error or host is None:
+        result["error"] = f"{name}: {error or 'no answer'}"
+    return result
+
+
+def gpu_query(config: ConsoleConfig, runner: Runner) -> dict:
+    """The web GPU panel on a console with a compute host: host_resources (no remote package needed)."""
+    return host_resources(config, runner)
 
 
 def sync_code(config: ConsoleConfig, runner: Runner, log) -> None:
     """This package (the code actually running) and the config checkout's config/training to <workdir>/src/realman_pi
     (the remote side of _remote-step), then a smoke run of the package there."""
-    ssh = shlex.join(ssh_base(config))
+    ssh = rsync_ssh(config)
     host = config.compute.ssh_host
     base = remote_path(config, REMOTE_REPO)
     dirs = shlex.join([f"{base}/{PACKAGE}", f"{base}/config/training"])
     runner.check(ssh_argv(config, f"mkdir -p {dirs}"))
-    runner.check(["rsync", "-a", "--delete", RSYNC_IO_TIMEOUT, "-e", ssh, "--exclude=/test/", "--exclude=/web/",
+    runner.check(["rsync", "-a", "--delete", RSYNC_IO_TIMEOUT, *ssh, "--exclude=/test/", "--exclude=/web/",
                   "--exclude=__pycache__/", "--exclude=/realman_training/static/", f"{REPO_ROOT / PACKAGE}/", f"{host}:{base}/{PACKAGE}/"])
-    runner.check(["rsync", "-a", RSYNC_IO_TIMEOUT, "-e", ssh, f"{checkout_root(config) / 'config' / 'training'}/",
+    runner.check(["rsync", "-a", RSYNC_IO_TIMEOUT, *ssh, f"{checkout_root(config) / 'config' / 'training'}/",
                   f"{host}:{base}/config/training/"])
     log(f"code synced to {host}:{base}")
     # The package must import and load its config in the compute host's venv (yaml, numpy, a broken file...).

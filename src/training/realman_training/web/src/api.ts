@@ -65,7 +65,20 @@ export interface ModelRow {
 }
 export interface GpuUser { pid: number; who: string; container: string | null; user: string | null; command: string | null; used_mib: number | null }
 export interface Gpu { index: number; name: string; used_mib: number | null; total_mib: number | null; util_pct: number | null; busy: boolean; users: GpuUser[] }
-export interface Gpus { available: boolean; busy_mib: number; gpus: Gpu[]; error?: string; at?: string }
+export interface HostResources {
+  mem_total_mib?: number | null; mem_used_mib?: number | null; mem_available_mib?: number | null;
+  disk_total_kib?: number | null; disk_used_kib?: number | null; disk_avail_kib?: number | null;
+  load1?: number | null; cores?: number | null;
+}
+/** One fresh resource answer as the web server keeps it (the last ~10 minutes). */
+export interface ResourceSample {
+  at: string; gpu_used_mib: (number | null)[]; gpu_util_pct: (number | null)[];
+  mem_used_mib: number | null; disk_avail_kib: number | null; load1: number | null;
+}
+export interface Gpus {
+  available: boolean; busy_mib: number; gpus: Gpu[]; error?: string; at?: string;
+  host?: HostResources | null; host_name?: string; history?: ResourceSample[];
+}
 export interface ServeStatus {
   serve?: Record<string, any>; gpu?: Record<string, any>; bridge?: Record<string, any>; bt_mode?: Record<string, any> | null;
   record?: Record<string, any>; error?: string; at: string; job: JobRow | null;

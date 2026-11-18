@@ -1,7 +1,7 @@
 import { api, type DatasetRow, type Gpus, type JobRow, type LinkcheckPayload, type ModelRow, type RunRow, type ServeStatus } from "../api";
 import type { Ctx } from "../ctx";
 import { DATASET_KIND, errorText, fmtCount, fmtMae, fmtTime, h, isActive } from "../dom";
-import { checkList, chip, gpuList, jobChip, jobLabel, kv, modelName, pageHead, paceRows, panel } from "../widgets";
+import { checkList, chip, gpuList, hostResources, jobChip, jobLabel, kv, modelName, pageHead, paceRows, panel } from "../widgets";
 
 function settled<T>(result: PromiseSettledResult<T>): T | null {
   return result.status === "fulfilled" ? result.value : null;
@@ -131,15 +131,32 @@ function recentJobs(jobs: JobRow[] | null, ctx: Ctx): HTMLElement {
     h("thead", {}, h("tr", {}, ["任务", "状态", "创建", "进度 / 说明"].map((t) => h("th", {}, t)))), body)));
 }
 
+/** The GPUs (and, with a compute host, its memory, disk and load) with the change since the last refresh and a short
+ * trend; refreshes itself every 15 s while it is on the page. */
+function resourceCard(gpuData: Gpus | null): HTMLElement {
+  const free = gpuData?.available ? gpuData.gpus.filter((g) => !g.busy && !g.users.length).map((g) => g.index) : null;
+  const title = gpuData?.host_name ? `计算主机 · ${gpuData.host_name}` : "GPU";
+  const el = card("card-gpus", title, hostResources(gpuData), gpuList(gpuData),
+    free ? h("p", { class: "muted foot" }, free.length ? `空闲：GPU ${free.join(", ")}（可用于训练或评估）` : "没有空闲的 GPU") : null,
+    gpuData?.at ? h("p", { class: "muted foot" }, `采样 ${fmtTime(gpuData.at)} · 每 15 秒刷新，Δ 为与上一次相比`) : null);
+  const timer = window.setInterval(async () => {
+    if (!el.isConnected) { window.clearInterval(timer); return; }
+    try {
+      el.replaceWith(resourceCard(await api.gpus()));
+      window.clearInterval(timer);
+    } catch { /* keep the last answer on screen */ }
+  }, RESOURCE_REFRESH_MS);
+  return el;
+}
+
+const RESOURCE_REFRESH_MS = 15000;
+
 export async function renderOverview(root: HTMLElement, ctx: Ctx): Promise<void> {
   const results = await Promise.allSettled([
     api.serve(), api.linkcheck(), api.gpus(), api.jobs(8), api.jobs(5, "train"), api.datasets(), api.models(), api.runs(),
   ]);
   const [serve, link, gpus, jobs, trainJobs, datasets, models, runs] = results;
-  const gpuData = settled(gpus) as Gpus | null;
-  const free = gpuData?.available ? gpuData.gpus.filter((g) => !g.busy && !g.users.length).map((g) => g.index) : null;
-  const gpuCard = card("card-gpus", "GPU", gpuList(gpuData),
-    free ? h("p", { class: "muted foot" }, free.length ? `空闲：GPU ${free.join(", ")}（可用于训练或评估）` : "没有空闲的 GPU") : null);
+  const gpuCard = resourceCard(settled(gpus) as Gpus | null);
   root.replaceChildren(
     pageHead("总览", "推理链路、GPU、当前训练，以及最近的数据、模型和任务。"),
     ...results.map(failure).filter((e): e is HTMLElement => e !== null),

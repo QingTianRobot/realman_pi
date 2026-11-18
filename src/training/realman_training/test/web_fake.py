@@ -38,7 +38,8 @@ GPUS = {"available": True, "busy_mib": 2000, "gpus": [
      "users": [{"pid": 5151, "who": "openpi-serve-openpi-1", "container": "openpi-serve-openpi-1", "user": "server5090",
                 "command": "python3", "used_mib": 8820}]},
     {"index": 3, "name": "NVIDIA GeForce RTX 5090", "used_mib": 5, "total_mib": 32607, "util_pct": 0, "busy": False, "users": []},
-]}
+], "host": {"mem_total_mib": 257652, "mem_used_mib": 19450, "mem_available_mib": 225000, "disk_total_kib": 3750000000,
+            "disk_used_kib": 3700716928, "disk_avail_kib": 49283072, "load1": 3.79, "cores": 112}}
 
 
 def main() -> None:

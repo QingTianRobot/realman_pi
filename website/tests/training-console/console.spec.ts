@@ -58,6 +58,9 @@ test("overview: three status cards and the recent lists @mobile", async ({ page 
   await expect(page.locator("#card-link")).toContainText("bulk_throughput");
   await expect(page.locator("#card-gpus .gpu-row")).toHaveCount(4);
   await expect(page.locator("#card-gpus")).toContainText("openpi-serve-openpi-1");
+  await expect(page.locator("#card-gpus .host-row")).toHaveCount(3);
+  await expect(page.locator('#card-gpus .host-row[data-resource="磁盘（工作目录）"] .bar')).toHaveClass(/bad/);
+  await expect(page.locator("#card-gpus")).toContainText("3.79 / 112 核");
   await expect(page.locator("#card-train")).toContainText("a_new_run");
   await expect(page.locator("#card-train")).toContainText("1.30 步/s");
   await expect(page.locator("#card-train")).toContainText("46 min");

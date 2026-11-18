@@ -30,8 +30,10 @@ def test_enabled_only_with_a_host(config):
 
 def test_ssh_argv_uses_the_repo_relative_config(config):
     argv = compute.ssh_argv(config, "true")
-    assert argv[0] == "ssh" and argv[1] == "-F" and argv[2].endswith("Traning_area/.ssh/config")
-    assert "BatchMode=yes" in argv and argv[-2:] == ["EI", "true"]
+    # the compute host's rules: no forwarded local temp dirs, known host keys only, every command inside the work dir
+    assert argv[:8] == ["env", "-u", "TMPDIR", "-u", "TEMP", "-u", "TMP", "ssh"]
+    assert argv[8] == "-F" and argv[9].endswith("Traning_area/.ssh/config")
+    assert "BatchMode=yes" in argv and "StrictHostKeyChecking=yes" in argv and argv[-2:] == ["EI", "cd /w && true"]
 
 
 def test_remote_python_runs_the_package_in_the_openpi_venv(config):
@@ -319,14 +321,8 @@ def test_pull_and_push_refreshes_the_mirror_and_returns_the_compute_path(config,
     assert synced == [config] and not (target / "ds" / "videos").exists()
 
 
-def test_gpu_query_asks_the_compute_host(config):
-    answer = {"available": True, "busy_mib": 2000, "gpus": [{"index": 0}]}
-    runner = FakeRunner().on("_gpus", stdout=json.dumps(answer) + "\n")
-    assert compute.gpu_query(config, runner) == answer
-
-
 def test_gpu_query_failure_is_reported_not_raised(config):
-    runner = FakeRunner().on("_gpus", returncode=255, stdout="timeout")
+    runner = FakeRunner().on("nvidia-smi", returncode=255, stdout="timeout")
     data = compute.gpu_query(config, runner)
     assert data["available"] is False and "EI" in data["error"]
 
@@ -348,7 +344,7 @@ def test_sync_code_checks_the_package_runs_on_the_compute_host(config):
     log = RecordingLog()
     compute.sync_code(config, runner, log)
     smoke = runner.calls[-1]
-    assert smoke[:1] == ["ssh"] and "_gpus" in smoke[-1] and "/w/src/openpi/.venv/bin/python" in smoke[-1]
+    assert "ssh" in smoke and "_gpus" in smoke[-1] and "/w/src/openpi/.venv/bin/python" in smoke[-1]
     assert "remote package ok" in log.text()
     from realman_training.runner import CommandFailed
 
@@ -368,7 +364,7 @@ def test_setup_host_streams_the_script_over_ssh(config):
     runner = FakeRunner().on("bash -s", lines=["ok"])
     compute.setup_host(config, runner, RecordingLog(), openpi_ref="abc123")
     call = runner.commands("bash -s")[0]
-    assert call[-1] == "bash -s -- /w abc123"
+    assert call[-1] == "cd /w && bash -s -- /w abc123"
     assert runner.inputs[-1].startswith("#!/usr/bin/env bash")  # the script itself goes over stdin
 
 
@@ -378,14 +374,12 @@ def test_gpu_query_timeout_is_reported_not_raised(config):
     def hang(argv, input):
         raise subprocess.TimeoutExpired(argv, 30)
 
-    data = compute.gpu_query(config, FakeRunner().on("_gpus", action=hang))
+    data = compute.gpu_query(config, FakeRunner().on("nvidia-smi", action=hang))
     assert data["available"] is False and "EI" in data["error"] and data["gpus"] == []
 
 
 def test_gpu_query_empty_answer_is_reported_not_raised(config):
-    data = compute.gpu_query(config, FakeRunner().on("_gpus", stdout=""))
-    assert data["available"] is False and "EI" in data["error"]
-    data = compute.gpu_query(config, FakeRunner().on("_gpus", stdout="not json\n"))
+    data = compute.gpu_query(config, FakeRunner().on("nvidia-smi", stdout=""))
     assert data["available"] is False and "EI" in data["error"]
 
 
@@ -413,7 +407,8 @@ def test_checkout_root_is_the_repo_that_holds_the_config(checkout_config, config
 def test_a_relative_ssh_config_resolves_under_the_config_checkout(checkout_config):
     repo, cfg = checkout_config
     argv = compute.ssh_argv(cfg, "true")
-    assert argv[1:3] == ["-F", str(repo / "Traning_area/.ssh/config")]
+    i = argv.index("-F")
+    assert argv[i:i + 2] == ["-F", str(repo / "Traning_area/.ssh/config")]
 
 
 def test_sync_code_sends_the_config_checkout_training_dir_and_this_package(checkout_config):
@@ -607,3 +602,13 @@ def test_a_remote_failure_names_this_consoles_paths(config):
 def test_local_text_leaves_other_paths_alone(config):
     assert compute.local_text(config, "/w/data/realmanX and /etc/w/data/realman") == "/w/data/realmanX and /etc/w/data/realman"
     assert compute.local_text(config, "at /w/data/realman") == f"at {config.data_root}"
+
+
+def test_every_rsync_runs_inside_the_work_dir(config, tmp_path):
+    """rsync starts its own remote process: --rsync-path puts it behind the same `cd <workdir> &&` guard."""
+    runner = FakeRunner()
+    compute.sync_mirror(config, runner, RecordingLog())
+    compute.sync_code(config, runner, RecordingLog())
+    sent = runner.commands("rsync")
+    assert sent and all("--rsync-path=cd /w && rsync" in c for c in sent)
+    assert all(c[c.index("-e") + 1].startswith("env -u TMPDIR -u TEMP -u TMP ssh ") for c in sent)

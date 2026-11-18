@@ -466,7 +466,7 @@ def test_uv_norm_cancel_stops_and_forgets_the_run_so_it_can_run_again(env, tmp_p
 def test_uv_norm_refuses_a_recorded_run_and_says_how_to_clear_it(env, tmp_path):
     runner = FakeRunner().on("python -", stdout=json.dumps(INFO)).on("test -e", returncode=0)
     params = {"config_name": "pi05_x", "view": str(env["view"]), "config": uv_env(env, tmp_path)}
-    with pytest.raises(StepFailed, match="recorded on the compute host; attach to follow it, or cancel/stop it from"):
+    with pytest.raises(StepFailed, match="recorded on the compute host; attach to it \\(train\\), or see 断线与取消"):
         norm.run(params, RecordingLog(), runner=runner)
 
 

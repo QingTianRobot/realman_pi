@@ -228,8 +228,8 @@ Backend = Compose | UvOpenpi
 
 def recorded_run(name: str) -> str:
     """Why a uv run cannot start: its pid file is still there (running, or not yet cleaned up)."""
-    return (f"a run named {name} is recorded on the compute host; attach to follow it, or cancel/stop it from the "
-            "console")
+    return (f"a run named {name} is recorded on the compute host; attach to it (train), or see 断线与取消 in the "
+            "training-console docs to clear it")
 
 
 def make_backend(config: OpenpiConfig, dataset_dir: Path, gpus: tuple[int, ...] = ()) -> Backend:

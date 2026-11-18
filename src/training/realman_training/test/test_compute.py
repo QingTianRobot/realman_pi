@@ -427,33 +427,75 @@ def test_sync_code_sends_the_config_checkout_training_dir_and_this_package(check
     assert package and package[0][-2] == f"{compute.REPO_ROOT / compute.PACKAGE}/"  # the code actually running
 
 
-def test_a_train_follower_whose_ssh_is_gone_leaves_at_once(monkeypatch, config):
-    """A later `train --attach` follows the run again; an orphaned follower must not race it on exit_code/remove."""
+def _orphan_env(monkeypatch, config, step, grace=None):
+    """_remote-step train whose ssh pipe is broken: every print raises; os._exit is recorded (raises SystemExit only
+    on the main thread, where the step would see it)."""
     monkeypatch.setattr(compute, "load_config", lambda path=None: config)
     monkeypatch.setattr("sys.stdin", __import__("io").StringIO("{}"))
+    monkeypatch.setattr(compute, "_step", lambda kind: step)
+    monkeypatch.setattr(compute, "print", lambda *a, **k: (_ for _ in ()).throw(BrokenPipeError()), raising=False)
+    if grace is not None:
+        monkeypatch.setattr(compute, "orphan_grace_sec", lambda config: grace)
+    exits = []
     pid_file = config.openpi.docker_data / "console_run" / "step-gone.pid"
+    monkeypatch.setattr(compute.os, "_exit", lambda code: exits.append((code, pid_file.exists())))
+    return exits, pid_file
+
+
+def test_a_cancel_after_the_pipe_broke_still_stops_the_training(monkeypatch, config):
+    """JobStore.cancel kills the local ssh client first: the pipe breaks, then _remote-cancel SIGTERMs the step."""
+    reached = []
+
+    def step(params, log):
+        log("following")                      # the pipe is already broken
+        try:
+            signal_handler = __import__("signal").getsignal(__import__("signal").SIGTERM)
+            signal_handler(15, None)          # _remote-cancel's SIGTERM
+        except JobCancelled:
+            log("cancelled: stopping the run")  # train logs before compose.stop
+            reached.append("stop")
+            log.progress(1, 2, "late")
+            raise
+
+    exits, pid_file = _orphan_env(monkeypatch, config, step)
+    assert compute.remote_step_main("train", "gone") == 1
+    assert reached == ["stop"] and exits == [] and not pid_file.exists()
+
+
+def test_an_orphaned_train_follower_leaves_after_the_grace(monkeypatch, config):
+    import time
+
     after = []
 
     def step(params, log):
         log("following")
-        after.append("step went on")
+        time.sleep(0.3)  # the follower would poll on; the timer fires meanwhile
+        after.append("still here")
         return {}
 
-    def broken(*args, **kwargs):
-        raise BrokenPipeError()
+    exits, pid_file = _orphan_env(monkeypatch, config, step, grace=0.05)
+    compute.remote_step_main("train", "gone")
+    assert exits == [(0, False)]
 
-    exits = []
 
-    def fake_exit(code):
-        exits.append((code, pid_file.exists()))
-        raise SystemExit(code)
+def test_a_cancel_during_the_grace_keeps_the_follower_for_its_cleanup(monkeypatch, config):
+    import signal
+    import time
 
-    monkeypatch.setattr(compute, "_step", lambda kind: step)
-    monkeypatch.setattr(compute, "print", broken, raising=False)
-    monkeypatch.setattr(compute.os, "_exit", fake_exit)
-    with pytest.raises(SystemExit):
-        compute.remote_step_main("train", "gone")
-    assert exits == [(0, False)] and after == []
+    reached = []
+
+    def step(params, log):
+        log("following")  # orphaned: the timer starts
+        try:
+            signal.getsignal(signal.SIGTERM)(15, None)
+        except JobCancelled:
+            time.sleep(0.3)  # stop + remove take a while; the timer fires meanwhile
+            reached.append("stopped")
+            raise
+
+    exits, pid_file = _orphan_env(monkeypatch, config, step, grace=0.05)
+    assert compute.remote_step_main("train", "gone") == 1
+    assert reached == ["stopped"] and exits == [] and not pid_file.exists()
 
 
 def test_other_steps_keep_going_when_their_ssh_is_gone(monkeypatch, config):
@@ -484,6 +526,29 @@ def test_tags_refresh_also_updates_the_compute_host(config, monkeypatch):
     assert len(push) == 1 and compute.RSYNC_IO_TIMEOUT in push[0]
     assert push[0][-2] == str(dataset.resolve() / "episode_tags.json")
     assert push[0][-1] == "EI:/w/data/realman/raw_x/ds/episode_tags.json"
+    assert runner.commands("test -d /w/data/realman/raw_x/ds")
+
+
+def test_tags_of_a_dataset_not_on_the_compute_host_stay_here(config, monkeypatch):
+    monkeypatch.setattr(compute, "load_config", lambda path=None: config)
+    dataset = config.data_root / "local_only"
+    dataset.mkdir(parents=True)
+    routed = compute.route("tags_refresh", STEPS["tags_refresh"],
+                           lambda params, log, runner=None: {"path": str(dataset.resolve())}, {})
+    runner = FakeRunner().on("test -d", returncode=1)
+    log = RecordingLog()
+    assert routed({"path": str(dataset)}, log, runner=runner) == {"path": str(dataset.resolve())}
+    assert not runner.commands("rsync") and "local_only is not on EI; tags kept here only" in log.text()
+
+
+def test_tags_push_fails_when_the_compute_host_cannot_be_asked(config, monkeypatch):
+    monkeypatch.setattr(compute, "load_config", lambda path=None: config)
+    dataset = config.data_root / "raw_x"
+    dataset.mkdir(parents=True)
+    routed = compute.route("tags_refresh", STEPS["tags_refresh"],
+                           lambda params, log, runner=None: {"path": str(dataset.resolve())}, {})
+    with pytest.raises(StepFailed, match="EI"):
+        routed({"path": str(dataset)}, RecordingLog(), runner=FakeRunner().on("test -d", returncode=255))
 
 
 def test_tags_refresh_fails_when_the_compute_host_is_not_updated(config, monkeypatch):

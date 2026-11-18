@@ -239,6 +239,12 @@ def run_remote(kind: str, params: dict, log, runner: Runner | None = None, clock
     return from_wire(state["result"], config)
 
 
+def orphan_grace_sec(config: ConsoleConfig) -> float:
+    """How long a train follower whose ssh link broke stays cancellable before it leaves: long enough for the
+    console's _remote-cancel (one ssh connect, retried once) to reach it."""
+    return 2 * config.compute.connect_timeout_sec + 30
+
+
 def _step(kind: str):
     module, function = STEPS[kind].split(":")
     return getattr(importlib.import_module(module), function)
@@ -264,19 +270,36 @@ def remote_step_main(kind: str, token: str) -> int:
     pid_file.parent.mkdir(parents=True, exist_ok=True)
     pid_file.write_text(str(os.getpid()), encoding="utf-8")
 
+    state = {"cancelling": False, "orphaned": False, "timer": None}
+
+    def leave() -> None:
+        """The orphaned train follower goes away (the training's own setsid group keeps running and `train --attach`
+        follows it again) unless a cancel arrived meanwhile: then the cancel path stops and removes the run."""
+        if state["cancelling"]:
+            return
+        pid_file.unlink(missing_ok=True)
+        cancel_file.unlink(missing_ok=True)
+        os._exit(0)
+
     def emit(text: str) -> None:
+        if state["orphaned"]:
+            return
         try:
             print(text, flush=True)
         except OSError:
-            if kind == "train":
-                # The ssh session is gone. The training runs on in its own setsid group and `train --attach` follows
-                # it again; this follower must not race that one on exit_code/remove, so it leaves now.
-                pid_file.unlink(missing_ok=True)
-                cancel_file.unlink(missing_ok=True)
-                os._exit(0)
-            # any other step finishes its work; the console stops it, best effort
+            if kind != "train":
+                return  # any other step finishes its work; the console stops it, best effort
+            # The ssh session is gone, maybe because the job is being cancelled (JobStore.cancel kills the local ssh
+            # client before _remote-cancel arrives). Stay cancellable (pid file kept) for a grace period, then leave
+            # so a later attach is the only follower of the run.
+            state["orphaned"] = True
+            timer = threading.Timer(orphan_grace_sec(config), leave)
+            timer.daemon = True
+            state["timer"] = timer
+            timer.start()
 
     def on_signal(signum, frame):
+        state["cancelling"] = True
         signal.signal(signal.SIGTERM, signal.SIG_IGN)
         signal.signal(signal.SIGINT, signal.SIG_IGN)
         raise JobCancelled()
@@ -297,6 +320,7 @@ def remote_step_main(kind: str, token: str) -> int:
         emit(RESULT + json.dumps(to_wire(result, config), ensure_ascii=False))
         return 0
     except JobCancelled:
+        state["cancelling"] = True
         emit(CANCELLED)
         return 1
     except StepFailed as error:
@@ -308,6 +332,8 @@ def remote_step_main(kind: str, token: str) -> int:
         emit(FAILED + f"{type(error).__name__}: {error}")
         return 1
     finally:
+        if state["timer"] is not None:
+            state["timer"].cancel()
         pid_file.unlink(missing_ok=True)
         cancel_file.unlink(missing_ok=True)
         for sig, handler in previous.items():
@@ -399,7 +425,15 @@ def refresh_tags_and_push(step, params: dict, log, runner: Runner | None = None)
     if not root.is_relative_to(data_root):
         log(f"{root} is outside data_root {data_root}: not copied to {host}")
         return result
-    remote = remote_path(config, f"{REMOTE_DATA_ROOT}/{root.relative_to(data_root).as_posix()}/{TAGS_FILE}")
+    remote_dir = remote_path(config, f"{REMOTE_DATA_ROOT}/{root.relative_to(data_root).as_posix()}")
+    remote = f"{remote_dir}/{TAGS_FILE}"
+    there = runner.run(ssh_argv(config, f"test -d {shlex.quote(remote_dir)}"))
+    if there.returncode == 1:  # `test` says no; any other code is ssh failing
+        log(f"{root.name} is not on {host}; tags kept here only")
+        return result
+    if there.returncode:
+        raise StepFailed(f"tags written here, but could not check {host}:{remote_dir} "
+                         f"({(there.stderr or there.stdout).strip()[-300:] or f'exit {there.returncode}'}); refresh again")
     done = runner.run(["rsync", "-a", RSYNC_IO_TIMEOUT, "-e", shlex.join(ssh_base(config)), str(root / TAGS_FILE),
                        f"{host}:{remote}"])
     if done.returncode:

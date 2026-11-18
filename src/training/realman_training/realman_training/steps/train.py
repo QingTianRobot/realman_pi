@@ -9,7 +9,6 @@ first when missing. Cancelling the job stops the container. `attach` follows a c
 from __future__ import annotations
 
 import csv
-import datetime
 import re
 import shlex
 import time
@@ -25,6 +24,7 @@ from ..openpi import (
     config_info,
     init_weights,
     norm_stats_path,
+    normalize_docker_time,
     parse_gpus,
     repo_commit,
     require_view,
@@ -36,23 +36,7 @@ from ..runner import Runner, compact
 from . import norm
 
 STEP_LINE = re.compile(r"Step (\d+): (.*?)(?: \(\d+:train\.py:\d+\))?$")
-
-
-def _normalize_docker_time(raw: str) -> str:
-    """Convert Docker's nanosecond Z timestamp (2026-10-20T08:12:34.123456789Z) to a local isoformat string.
-
-    Python 3.10 fromisoformat cannot parse nanoseconds or a bare 'Z' suffix, so we strip them first.
-    Falls back to the raw string on any parse error.
-    """
-    try:
-        s = raw.rstrip("Z")
-        # Drop the sub-second part if present
-        if "." in s:
-            s = s[:s.index(".")]
-        parsed = datetime.datetime.fromisoformat(s).replace(tzinfo=datetime.timezone.utc)
-        return parsed.astimezone().isoformat(timespec="seconds")
-    except (ValueError, OverflowError):
-        return raw
+_normalize_docker_time = normalize_docker_time  # old name (robot.py imports it from here)
 
 
 def container_name(project: str, exp: str) -> str:

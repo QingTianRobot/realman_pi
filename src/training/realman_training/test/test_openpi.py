@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 from pathlib import Path
 
@@ -14,11 +15,14 @@ from realman_training.openpi import (
     MULTI_GPU_ENV,
     Compose,
     ConfigInfo,
+    UvOpenpi,
     busy_gpus,
     check_holdout,
     check_name,
     config_info,
+    make_backend,
     norm_stats_path,
+    normalize_docker_time,
     parse_gpus,
     repo_commit,
     require_view,
@@ -125,3 +129,86 @@ def test_check_name_rejects_trailing_newline():
         check_name("label", "")
     with pytest.raises(StepFailed):
         check_name("label", "has space")
+
+
+def uv_config(tmp_path) -> OpenpiConfig:
+    repo = tmp_path / "openpi"
+    return dataclasses.replace(OpenpiConfig(), backend="uv", repo=repo, docker_data=repo, env_file="/w/env.sh")
+
+
+def test_make_backend_picks_by_config(tmp_path):
+    assert isinstance(make_backend(OpenpiConfig(), tmp_path), Compose)
+    assert isinstance(make_backend(uv_config(tmp_path), tmp_path), UvOpenpi)
+
+
+def test_uv_env_points_openpi_at_the_view_and_the_gpus(tmp_path):
+    backend = UvOpenpi(uv_config(tmp_path), tmp_path / "v_view", (2, 5))
+    assert backend.env() == {"OPENPI_REALMAN_DATASET_DIR": str(tmp_path / "v_view"), "CUDA_VISIBLE_DEVICES": "2,5"}
+    cpu = UvOpenpi(uv_config(tmp_path), tmp_path / "v_view")
+    assert cpu.env()["CUDA_VISIBLE_DEVICES"] == "" and cpu.env()["JAX_PLATFORMS"] == "cpu"
+
+
+def test_uv_run_without_name_is_a_plain_bash(tmp_path):
+    config = uv_config(tmp_path)
+    argv = UvOpenpi(config, tmp_path).run("uv run --no-sync python - x", env={"A": "1"})
+    assert argv[:3] == ["env", "A=1", "bash"] and argv[3] == "-c"
+    assert argv[4].startswith(f"source /w/env.sh && cd {config.repo} && ")
+    assert argv[4].endswith("uv run --no-sync python - x")
+
+
+def test_uv_run_maps_workspace_and_records_pid_and_exit(tmp_path):
+    config = uv_config(tmp_path)
+    argv = UvOpenpi(config, tmp_path).run("opic-train c >> /workspace/wandb/e.log 2>&1", name="t-e", detach=True)
+    assert argv[:4] == ["env", "setsid", "-f", "bash"]
+    script = argv[-1]
+    run = config.docker_data / "console_run"
+    assert f"echo $$ > {run}/t-e.pid" in script
+    assert f">> {config.repo}/wandb/e.log" in script and "/workspace" not in script
+    assert "exec </dev/null >/dev/null 2>&1" in script
+    assert f"echo $c > {run}/t-e.exit" in script
+    assert "opic-train() {" in script
+
+
+def test_uv_run_attached_waits(tmp_path):
+    argv = UvOpenpi(uv_config(tmp_path), tmp_path).run("opic-norm --config-name c", name="n-c")
+    assert argv[1:4] == ["setsid", "-w", "bash"] and "exec </dev/null" not in argv[-1]
+
+
+def test_uv_detached_needs_a_name(tmp_path):
+    with pytest.raises(ValueError):
+        UvOpenpi(uv_config(tmp_path), tmp_path).run("x", detach=True)
+
+
+def test_uv_lifecycle_commands(tmp_path):
+    config = uv_config(tmp_path)
+    backend = UvOpenpi(config, tmp_path)
+    pid = config.docker_data / "console_run" / "t.pid"
+    runner = FakeRunner().on("test -e", returncode=0).on("kill -0", returncode=1).on("cat", stdout="3\n")
+    assert backend.exists(runner, "t") is True
+    assert runner.calls[-1] == ["test", "-e", str(pid)]
+    assert backend.running(runner, "t") is False
+    assert backend.exit_code(runner, "t") == 3
+    backend.stop(runner, "t", 60)
+    assert "kill -TERM -- -$p" in runner.calls[-1][-1] and "seq 60" in runner.calls[-1][-1]
+    backend.remove(runner, "t")
+    assert runner.calls[-1][:2] == ["rm", "-f"]
+
+
+def test_uv_missing_exit_file_is_a_failure(tmp_path):
+    runner = FakeRunner().on("cat", returncode=1)
+    with pytest.raises(StepFailed, match="without writing"):
+        UvOpenpi(uv_config(tmp_path), tmp_path).exit_code(runner, "t")
+
+
+def test_compose_lifecycle_keeps_the_docker_commands(tmp_path):
+    compose = Compose(OpenpiConfig(), tmp_path)
+    runner = (FakeRunner().on("container inspect", returncode=1).on("{{.State.Running}}", stdout="true\n")
+              .on("{{.State.ExitCode}}", stdout="0\n").on("{{.State.StartedAt}}", stdout="2026-10-20T08:12:34.5Z\n"))
+    assert compose.exists(runner, "c") is False
+    assert compose.running(runner, "c") is True
+    assert compose.exit_code(runner, "c") == 0
+    compose.stop(runner, "c", 30)
+    assert runner.calls[-1] == ["docker", "stop", "-t", "30", "c"]
+    compose.remove(runner, "c")
+    assert runner.calls[-1] == ["docker", "rm", "c"]
+    assert compose.started_at(runner, "c") == normalize_docker_time("2026-10-20T08:12:34.5Z")

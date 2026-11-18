@@ -13,8 +13,8 @@ import shlex
 import shutil
 from pathlib import Path
 
-from .. import episode_tags
-from ..config import OpenpiConfig, QualityConfig, load_config
+from .. import compute, episode_tags
+from ..config import ConsoleConfig, OpenpiConfig, QualityConfig, load_config
 from ..datasets import summarize
 from ..jobs import StepFailed, now
 from ..lerobot_io import read_columns, read_episodes
@@ -54,16 +54,18 @@ def view_command(
     ]
 
 
-def episode_tasks(view: str | Path) -> dict[int, tuple[str, str]]:
+def episode_tasks(view: str | Path, config: ConsoleConfig | None = None) -> dict[int, tuple[str, str]]:
     """Episode index -> (task, prompt) of a training view. The view keeps only prompts, so tasks that share one
     (pick_only and pick_only_light-weak_1021) are told apart by the task names of the source it was made from;
-    the view keeps the source's episode numbering."""
+    the view keeps the source's episode numbering. With a config, a source the compute host wrote is read in the
+    console's mirror."""
     view = Path(view)
     contract = json.loads((view / "contract.json").read_text(encoding="utf-8"))
     task_of_prompt = {prompt: task for task, prompt in (contract.get("prompts") or {}).items()}
     episodes = read_episodes(view)
     source_task: dict[int, str] = {}
-    source = Path(str(contract.get("source") or ""))
+    source = str(contract.get("source") or "")
+    source = Path(compute.local_path(config, source) if config is not None else source)
     if source.name and (source / "meta" / "info.json").is_file():
         rows = read_episodes(source)
         if len(rows) == len(episodes):

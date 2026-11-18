@@ -82,6 +82,21 @@ def remote_python(config: ConsoleConfig, args: list[str]) -> str:
     return shlex.join(["bash", "-c", script])
 
 
+def local_path(config: ConsoleConfig, text: str) -> str:
+    """A path the compute host wrote into a mirrored JSON file (<workdir>/data/realman/…, <workdir>/src/openpi/…) as
+    the same file in this console's mirror (data_root/…, docker_data/…). Whole path components only; unchanged
+    without a compute host or when no compute root prefixes it."""
+    if not isinstance(text, str) or not enabled(config):
+        return text
+    pairs = sorted([(remote_path(config, REMOTE_DATA_ROOT), str(config.data_root)),
+                    (remote_path(config, REMOTE_OPENPI), str(config.openpi.docker_data))],
+                   key=lambda pair: -len(pair[0]))
+    for remote, local in pairs:
+        if text == remote or text.startswith(remote + "/"):
+            return local + text[len(remote):]
+    return text
+
+
 def _roots(config: ConsoleConfig) -> list[tuple[str, str]]:
     roots = [("@data_root", str(config.data_root)), ("@docker_data", str(config.openpi.docker_data))]
     return sorted(roots, key=lambda pair: -len(pair[1]))  # a root nested in the other is matched first

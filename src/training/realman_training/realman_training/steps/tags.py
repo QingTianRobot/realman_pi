@@ -19,7 +19,7 @@ import tempfile
 import time
 from pathlib import Path, PurePosixPath
 
-from .. import episode_tags
+from .. import compute, episode_tags
 from ..config import ConsoleConfig, RemoteConfig, load_config
 from ..datasets import clean_manifest_path, read_clean_manifest
 from ..jobs import StepFailed
@@ -109,19 +109,23 @@ def remote_doc(config: RemoteConfig, root: Path, runner: Runner, *, remote_episo
         raise StepFailed(str(error)) from None
 
 
-def kind_of(root: Path) -> tuple[str, Path | None, dict | None]:
+def kind_of(root: Path, config: ConsoleConfig | None = None) -> tuple[str, Path | None, dict | None]:
+    """With a config, a source the compute host wrote (its own absolute path) is read as the mirror's copy."""
+    def local(text: str) -> Path:
+        return Path(compute.local_path(config, text) if config is not None else text)
+
     contract = Path(root) / "contract.json"
     if contract.is_file():
         source = json.loads(contract.read_text(encoding="utf-8")).get("source")
-        return "view", Path(source) if source else None, None
+        return "view", local(source) if source else None, None
     manifest = read_clean_manifest(Path(root))
     if manifest is not None:
-        return "clean", Path(manifest["source"]) if manifest.get("source") else None, manifest
+        return "clean", local(manifest["source"]) if manifest.get("source") else None, manifest
     return "raw", None, None
 
 
-def derived_doc(root: Path) -> dict:
-    kind, source, manifest = kind_of(root)
+def derived_doc(root: Path, config: ConsoleConfig | None = None) -> dict:
+    kind, source, manifest = kind_of(root, config)
     # Get the raw source string to check for robot-path sources
     if kind == "view":
         raw_source_str = json.loads((Path(root) / "contract.json").read_text(encoding="utf-8")).get("source")
@@ -172,7 +176,7 @@ def refresh(params: dict, log, runner: Runner | None = None) -> dict:
     runner = runner or Runner()
     config = load_config(params.get("config"))
     root = Path(params["path"]).expanduser().resolve()
-    kind, source, _ = kind_of(root)
+    kind, source, _ = kind_of(root, config)
     try:
         old = episode_tags.load(root)
     except episode_tags.TagsMismatch as error:
@@ -185,7 +189,7 @@ def refresh(params: dict, log, runner: Runner | None = None) -> dict:
         doc = remote_doc(config.remote, root, runner)
     else:
         log(f"{root.name}: deriving the tags of this {kind} set from {source}")
-        doc = derived_doc(root)  # raises StepFailed for robot-path sources
+        doc = derived_doc(root, config)  # raises StepFailed for robot-path sources
     path = episode_tags.write(root, doc)
     changed = episode_tags.changes(old, doc)
     log(f"wrote {path}: {len(doc['episodes'])} episodes, snapshot {doc['snapshot_at']}"
@@ -197,11 +201,11 @@ def refresh(params: dict, log, runner: Runner | None = None) -> dict:
             "changed": changed, "previous": old is not None}
 
 
-def raw_root(root: Path) -> Path:
+def raw_root(root: Path, config: ConsoleConfig | None = None) -> Path:
     seen: set[Path] = set()
     root = Path(root).resolve()
     while True:
-        kind, source, manifest = kind_of(root)
+        kind, source, manifest = kind_of(root, config)
         if kind == "raw":
             return root
         # Get raw source string for validation
@@ -223,7 +227,7 @@ def raw_root(root: Path) -> Path:
 def status(config: ConsoleConfig, root, runner: Runner, *, timeout: float | None = None) -> dict:
     """Read-only: have the recording's tags changed since the snapshot of root's raw ancestor?"""
     try:
-        raw = raw_root(Path(root).expanduser())
+        raw = raw_root(Path(root).expanduser(), config)
         local = episode_tags.load(raw)
     except (StepFailed, episode_tags.TagsMismatch) as error:
         return {"state": "error", "error": str(error)}

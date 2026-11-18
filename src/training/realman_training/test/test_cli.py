@@ -161,12 +161,15 @@ def test_build_params_for_each_step(setup, tmp_path):
     assert params["dst"].endswith("realman__pi05-three-arm_view")
     kind, params = build_params(cli_args(["train", "pi05_x", str(view), "--exp", "e1", "--gpus", "1,2", "--batch", "16", "--yes"]), config)
     assert (kind, params["gpus"], params["batch"], params["exp"]) == ("train", "1,2", 16, "e1")
-    assert params["init_from"] is None and params["share_gpus"] is False
+    assert params["init_from"] is None and params["share_gpus"] is None  # omitted: the config default decides
     _, params = build_params(cli_args(["train", "pi05_x", str(view), "--exp", "e1", "--gpus", "2", "--yes",
                                        "--init-from", "pi05_old/e0/29999", "--share-gpus"]), config)
     assert (params["init_from"], params["share_gpus"]) == ("pi05_old/e0/29999", True)
     kind, params = build_params(cli_args(["eval", "pi05_x", "e1", "--view", str(view), "--gpu", "2", "--checkpoints", "1000,2000", "--no-prompt-swap"]), config)
     assert params["checkpoints"] == [1000, 2000] and params["prompt_swap"] is False
+    assert params["share_gpus"] is None
+    _, params = build_params(cli_args(["eval", "pi05_x", "e1", "--view", str(view), "--gpu", "2", "--share-gpus"]), config)
+    assert params["share_gpus"] is True
     kind, params = build_params(cli_args(["register", "pi05_x", "e1", "--status", "已部署"]), config)
     assert (kind, params["status"]) == ("register", "已部署")
 
@@ -358,3 +361,27 @@ def test_inspect_handmade_tags_show_hand_made(setup, capsys):
     assert main(["--config", str(config_path), "inspect", str(raw), "--no-quality"]) == 0
     out = capsys.readouterr().out
     assert "hand-made" in out
+
+
+def test_compute_refuses_without_a_host(tmp_path, capsys):
+    from realman_training.cli import main
+
+    path = tmp_path / "c.yaml"
+    path.write_text(f"training_console:\n  data_root: {tmp_path}\n", encoding="utf-8")
+    assert main(["--config", str(path), "compute", "sync"]) == 2
+    assert "compute.ssh_host" in capsys.readouterr().err
+
+
+def test_compute_sync_failure_is_an_error_line_not_a_traceback(tmp_path, monkeypatch, capsys):
+    from realman_training.cli import main
+    from realman_training.runner import CommandFailed
+
+    def failing(config, runner, log):
+        raise CommandFailed(["rsync"], 12, "connection unexpectedly closed")
+
+    monkeypatch.setattr("realman_training.compute.sync_code", failing)
+    path = tmp_path / "c.yaml"
+    path.write_text(f"training_console:\n  data_root: {tmp_path}\n  compute:\n    ssh_host: EI\n    workdir: /w\n",
+                    encoding="utf-8")
+    assert main(["--config", str(path), "compute", "sync"]) == 2
+    assert "error:" in capsys.readouterr().err

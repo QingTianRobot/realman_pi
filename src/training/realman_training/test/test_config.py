@@ -5,7 +5,7 @@ from pathlib import Path
 
 import pytest
 
-from realman_training.config import DEFAULT_CONFIG, ENV_CONFIG, LinkcheckConfig, OpenpiConfig, QualityConfig, RemoteConfig, ServingConfig, WebConfig, default_config_path, load_config
+from realman_training.config import DEFAULT_CONFIG, ENV_CONFIG, ComputeConfig, LinkcheckConfig, OpenpiConfig, QualityConfig, RemoteConfig, ServingConfig, WebConfig, default_config_path, expand_env, load_config
 
 
 def _write(tmp_path: Path, body: str) -> Path:
@@ -182,3 +182,74 @@ def test_the_web_section_is_validated(tmp_path):
         load_config(_write(tmp_path, "training_console:\n  web:\n    gpu_ttl_sec: 0\n"))
     with pytest.raises(ValueError, match="unknown web keys"):
         load_config(_write(tmp_path, "training_console:\n  web:\n    colour: blue\n"))
+
+
+def test_expand_env_forms():
+    env = {"A": "x", "E": ""}
+    assert expand_env("${A}/y", env) == "x/y"
+    assert expand_env("${B-d}", env) == "d"
+    assert expand_env("${E-d}", env) == ""          # set but empty: keep empty
+    assert expand_env("${E:-d}", env) == "d"        # set but empty: default
+    assert expand_env("${B}", env) == "${B}"        # unset, no default: left as is (validation names it)
+    assert expand_env("plain", env) == "plain"
+
+
+def write(tmp_path, body: str):
+    path = tmp_path / "c.yaml"
+    path.write_text("training_console:\n" + body, encoding="utf-8")
+    return path
+
+
+def test_compute_defaults_to_local(tmp_path):
+    config = load_config(write(tmp_path, "  data_root: /d\n"))
+    assert config.compute == ComputeConfig()
+    assert config.openpi.backend == "docker" and config.openpi.default_share_gpus is False
+
+
+def test_values_come_from_the_environment(tmp_path, monkeypatch):
+    monkeypatch.setenv("RT_HOST", "EI")
+    monkeypatch.setenv("RT_W", "/work/x")
+    monkeypatch.setenv("RT_SHARE", "true")
+    config = load_config(write(tmp_path, (
+        "  data_root: ${RT_W}/data/realman\n"
+        "  compute:\n    ssh_host: ${RT_HOST-}\n    workdir: ${RT_W-}\n"
+        "  openpi:\n    backend: uv\n    repo: ${RT_W}/src/openpi\n    default_share_gpus: ${RT_SHARE-false}\n"
+    )))
+    assert str(config.data_root) == "/work/x/data/realman"
+    assert config.compute.ssh_host == "EI" and config.compute.workdir == "/work/x"
+    assert config.openpi.backend == "uv" and str(config.openpi.repo) == "/work/x/src/openpi"
+    assert config.openpi.default_share_gpus is True
+
+
+def test_bool_strings(tmp_path):
+    config = load_config(write(tmp_path, "  openpi:\n    default_share_gpus: 'false'\n"))
+    assert config.openpi.default_share_gpus is False
+
+
+def test_compute_needs_an_absolute_workdir(tmp_path):
+    with pytest.raises(ValueError, match="compute.workdir"):
+        load_config(write(tmp_path, "  compute:\n    ssh_host: EI\n    workdir: relative\n"))
+
+
+def test_unexpanded_variable_is_refused(tmp_path, monkeypatch):
+    monkeypatch.delenv("RT_NOPE", raising=False)
+    with pytest.raises(ValueError, match=r"RT_NOPE"):
+        load_config(write(tmp_path, "  compute:\n    ssh_host: ${RT_NOPE}\n    workdir: /w\n"))
+
+
+def test_unknown_backend_is_refused(tmp_path):
+    with pytest.raises(ValueError, match="openpi.backend"):
+        load_config(write(tmp_path, "  openpi:\n    backend: podman\n"))
+
+
+def test_compose_passes_empty_values_paths_keep_their_defaults(monkeypatch):
+    """compose sets every REALMAN_* var, empty when unset; path keys use ':-' so empty never means ''."""
+    for var in ("REALMAN_TRAINING_DATA_ROOT", "REALMAN_OPENPI_REPO", "REALMAN_OPENPI_DATA", "REALMAN_OPENPI_WEIGHTS",
+                "REALMAN_RECORDING_SSH_HOST"):
+        monkeypatch.setenv(var, "")
+    config = load_config(DEFAULT_CONFIG)
+    assert config.data_root == Path("~/data/realman").expanduser()
+    assert config.openpi.repo == OpenpiConfig().repo
+    assert config.openpi.docker_data == OpenpiConfig().docker_data
+    assert config.openpi.weights == OpenpiConfig().weights
+    assert config.remote.ssh_host == ""  # '-': an explicit empty value = the recorder runs on this host

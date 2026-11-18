@@ -9,7 +9,6 @@ first when missing. Cancelling the job stops the container. `attach` follows a c
 from __future__ import annotations
 
 import csv
-import datetime
 import re
 import shlex
 import time
@@ -18,14 +17,16 @@ from pathlib import Path
 from ..config import load_config
 from ..jobs import JobCancelled, StepFailed, now, write_json
 from ..openpi import (
-    Compose,
     busy_gpus,
     check_holdout,
     check_name,
     config_info,
     init_weights,
+    make_backend,
     norm_stats_path,
+    normalize_docker_time,
     parse_gpus,
+    recorded_run,
     repo_commit,
     require_view,
     run_dir,
@@ -36,23 +37,7 @@ from ..runner import Runner, compact
 from . import norm
 
 STEP_LINE = re.compile(r"Step (\d+): (.*?)(?: \(\d+:train\.py:\d+\))?$")
-
-
-def _normalize_docker_time(raw: str) -> str:
-    """Convert Docker's nanosecond Z timestamp (2026-10-20T08:12:34.123456789Z) to a local isoformat string.
-
-    Python 3.10 fromisoformat cannot parse nanoseconds or a bare 'Z' suffix, so we strip them first.
-    Falls back to the raw string on any parse error.
-    """
-    try:
-        s = raw.rstrip("Z")
-        # Drop the sub-second part if present
-        if "." in s:
-            s = s[:s.index(".")]
-        parsed = datetime.datetime.fromisoformat(s).replace(tzinfo=datetime.timezone.utc)
-        return parsed.astimezone().isoformat(timespec="seconds")
-    except (ValueError, OverflowError):
-        return raw
+_normalize_docker_time = normalize_docker_time  # old name (robot.py imports it from here)
 
 
 def container_name(project: str, exp: str) -> str:
@@ -78,10 +63,10 @@ def parse_metrics(text: str) -> list[dict]:
     return rows
 
 
-def _follow(runner: Runner, container: str, log_path: Path, total: int, log, poll: float, sleep, offset: int = 0) -> int | None:
+def _follow(running, log_path: Path, total: int, log, poll: float, sleep, offset: int = 0) -> int | None:
     pending, last = "", None
     while True:
-        running = runner.check(["docker", "inspect", "-f", "{{.State.Running}}", container]).strip() == "true"
+        alive = running()
         if log_path.exists():
             with log_path.open("rb") as handle:
                 handle.seek(offset)
@@ -97,7 +82,7 @@ def _follow(runner: Runner, container: str, log_path: Path, total: int, log, pol
                     log.progress(last, total, match.group(2))
                 if match or "Traceback" in line or "Error" in line:
                     log(line)
-        if not running:
+        if not alive:
             return last
         sleep(poll)
 
@@ -111,7 +96,7 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
     view = Path(params["view"]).expanduser().resolve()
     gpus = parse_gpus(params["gpus"])
     container = container_name(oc.compose_project, exp)
-    compose = Compose(oc, view, gpus)
+    compose = make_backend(oc, view, gpus)
     summary = require_view(view)
     info = config_info(runner, compose, name)
     check_holdout(info, summary)
@@ -121,7 +106,7 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
     attach = bool(params.get("attach"))
     init_from = params.get("init_from")
     weights = init_weights(oc, str(init_from)) if init_from else oc.weights
-    exists = runner.run(["docker", "container", "inspect", container]).returncode == 0
+    exists = compose.exists(runner, container)
     record = {
         "config": name,
         "exp": exp,
@@ -144,16 +129,20 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
             raise StepFailed(f"no container {container} to attach to")
         log(f"attaching to {container}")
         try:
-            started_raw = runner.check(["docker", "inspect", "-f", "{{.State.StartedAt}}", container]).strip()
-            record["started"] = _normalize_docker_time(started_raw)
+            record["started"] = compose.started_at(runner, container)
         except Exception:  # noqa: BLE001
             pass  # keep record without "started" rather than failing
     else:
         if folder.exists() and not params.get("resume"):
             raise StepFailed(f"{folder} exists: pass resume to continue it, or pick another exp name")
         if exists:
+            if oc.backend == "uv":
+                raise StepFailed(recorded_run(container))
             raise StepFailed(f"container {container} exists (running or left over); attach, or remove it by hand")
-        if params.get("share_gpus"):
+        share = params.get("share_gpus")
+        if share is None:
+            share = oc.default_share_gpus
+        if share:
             short = short_gpus(runner, gpus, oc.train_need_mib)
             if short:
                 free = " ".join(f"gpu{g}={mib}MiB free" for g, mib in sorted(short.items()))
@@ -198,16 +187,18 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
         if argv is not None:
             runner.check(argv, env=compose.env())
             log(f"training started in {container}; log {host_log}")
-        last = _follow(runner, container, host_log, total, log, float(params.get("poll_sec", 15)), sleep, log_offset)
+        last = _follow(lambda: compose.running(runner, container), host_log, total, log, float(params.get("poll_sec", 15)), sleep, log_offset)
     except JobCancelled:
         log(f"cancelled: stopping {container}")
-        result = runner.run(["docker", "stop", "-t", "60", container])
+        result = compose.stop(runner, container, 60)
         if result.returncode:
             log(f"could not stop {container}: {result.stderr}; the GPUs may still be held")
+        if oc.backend == "uv":  # the stop recorded an exit code; forget the run so the name can start again
+            compose.remove(runner, container)
         raise
 
-    exit_code = int(runner.check(["docker", "inspect", "-f", "{{.State.ExitCode}}", container]).strip())
-    runner.run(["docker", "rm", container])
+    exit_code = compose.exit_code(runner, container)
+    compose.remove(runner, container)
     metrics = parse_metrics(host_log.read_text(encoding="utf-8", errors="replace")) if host_log.exists() else []
     folder.mkdir(parents=True, exist_ok=True)
     if metrics:
@@ -223,6 +214,8 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
             tail = host_log.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
             for line in tail:
                 log(compact(line))
+        if exit_code == -1 and oc.backend == "uv":
+            raise StepFailed(f"training {container} ended without an exit code (killed from outside?); see {host_log}")
         raise StepFailed(f"training exited {exit_code}; see {host_log}")
     log(f"training finished at step {last}: {folder}")
     return {"run_dir": str(folder), "container": container, "last_step": last, "exit_code": exit_code}

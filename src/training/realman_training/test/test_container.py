@@ -49,3 +49,18 @@ def test_the_image_keeps_the_repo_layout_for_config_lookup():
     text = DOCKERFILE.read_text(encoding="utf-8")
     assert "COPY src/training/realman_training /opt/realman_pi/src/training/realman_training" in text
     assert 'CMD ["python", "-m", "realman_training", "web"]' in text
+
+
+def test_the_compute_host_layout_comes_from_the_environment():
+    environment = _service()["environment"]
+    for key in ("REALMAN_COMPUTE_SSH_HOST", "REALMAN_COMPUTE_SSH_CONFIG", "REALMAN_COMPUTE_WORKDIR",
+                "REALMAN_RECORDING_SSH_HOST", "REALMAN_TRAINING_DATA_ROOT"):
+        assert key in environment
+    # "-" (not ":-") keeps an explicitly empty value: SJD sets REALMAN_RECORDING_SSH_HOST="" (recorder is local).
+    assert environment["REALMAN_RECORDING_SSH_HOST"] == "${REALMAN_RECORDING_SSH_HOST-realman_local}"
+
+
+def test_the_image_has_rsync_for_the_compute_host():
+    dockerfile_text = DOCKERFILE.read_text(encoding="utf-8")
+    assert "rsync" in dockerfile_text
+    assert "openssh-client rsync git" in dockerfile_text  # on the apt install line

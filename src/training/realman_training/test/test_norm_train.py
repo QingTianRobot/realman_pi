@@ -358,3 +358,165 @@ def test_attach_normalises_docker_nanosecond_z_timestamp(env):
     started = _dt.datetime.fromisoformat(record["started"])
     assert started.utcoffset() is not None  # has timezone
     assert result["last_step"] == 200
+
+
+def uv_env(env, tmp_path, share="false"):
+    repo = env["docker_data"]
+    config = tmp_path / "uv.yaml"
+    config.write_text(
+        "training_console:\n"
+        f"  data_root: {env['view'].parent}\n"
+        f"  openpi:\n    backend: uv\n    env_file: /w/env.sh\n    repo: {repo}\n    docker_data: {repo}\n"
+        f"    default_share_gpus: {share}\n"
+    )
+    return str(config)
+
+
+def test_train_on_uv_starts_a_setsid_group_and_follows_it(env, tmp_path):
+    stats = env["docker_data"] / "assets/pi05_x/local/v/norm_stats.json"
+    stats.parent.mkdir(parents=True)
+    stats.write_text("{}")
+    alive = iter([0, 1])  # `kill -0` on the process group: running once, then gone
+    # Rule order matters: FakeRunner answers with the first substring match, and the `kill -0` script also
+    # contains "cat ", so its rule comes before the `cat <exit file>` rule.
+    runner = (FakeRunner().on("python -", stdout=json.dumps(INFO))
+              .on("test -e", returncode=1)
+              .on("nvidia-smi", stdout="1, 9000, 49140\n")
+              .on("opic-train", stdout="")
+              .on("kill -0", returncode=lambda argv, input: next(alive, 1))
+              .on("cat ", stdout="0\n")
+              .on("git -C", stdout="abc\n"))
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1",
+              "config": uv_env(env, tmp_path, share="true"), "poll_sec": 0}
+    result = train.run(params, RecordingLog(), runner=runner, sleep=lambda s: None)
+    # Every uv command defines the opic-* helpers, so match the call, not the helper name.
+    start = runner.commands("opic-train pi05_x")[0]
+    assert start[:4] == ["env", "XLA_PYTHON_CLIENT_PREALLOCATE=false", "bash", "-c"]
+    assert "setsid bash -c" in start[4]
+    assert runner.envs[runner.calls.index(start)]["CUDA_VISIBLE_DEVICES"] == "1"
+    assert result["exit_code"] == 0
+    assert runner.calls[-1][:2] == ["rm", "-f"]  # pid/exit files removed, like `docker rm`
+    assert not runner.commands("docker ")
+
+
+def test_train_on_a_shared_host_checks_free_memory_not_busy(env, tmp_path):
+    runner = (FakeRunner().on("python -", stdout=json.dumps(INFO)).on("test -e", returncode=1)
+              .on("nvidia-smi", stdout="1, 40000, 49140\n"))
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1",
+              "config": uv_env(env, tmp_path, share="true")}
+    with pytest.raises(StepFailed, match="not enough free memory"):
+        train.run(params, RecordingLog(), runner=runner)
+
+
+def test_norm_on_uv_runs_cpu_only(env, tmp_path):
+    stats = env["docker_data"] / "assets/pi05_x/local/v/norm_stats.json"
+
+    def write_stats(argv, input):
+        stats.parent.mkdir(parents=True)
+        stats.write_text("{}")
+
+    runner = (FakeRunner().on("python -", stdout=json.dumps(INFO)).on("test -e", returncode=1)
+              .on("opic-norm", action=write_stats, lines=["ok"]))
+    out = norm.run({"config_name": "pi05_x", "view": str(env["view"]), "config": uv_env(env, tmp_path)},
+                   RecordingLog(), runner=runner)
+    assert out["computed"] is True
+    call = runner.commands("opic-norm --config-name")[0]
+    assert call[:3] == ["env", "JAX_PLATFORMS=cpu", "setsid"]
+
+
+def test_train_share_gpus_none_from_the_cli_means_the_config_default(env, tmp_path):
+    runner = (FakeRunner().on("python -", stdout=json.dumps(INFO)).on("test -e", returncode=1)
+              .on("nvidia-smi", stdout="1, 40000, 49140\n"))
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1", "share_gpus": None,
+              "config": uv_env(env, tmp_path, share="true")}
+    with pytest.raises(StepFailed, match="not enough free memory"):
+        train.run(params, RecordingLog(), runner=runner)
+
+
+def test_uv_norm_cancel_stops_and_forgets_the_run_so_it_can_run_again(env, tmp_path):
+    from fake_runner import UvRuns
+
+    runs = UvRuns()
+    cname = "openpi-console-norm-pi05_x"
+
+    def start_then_cancel(argv, input):
+        runs.start(cname)(argv, input)
+        raise JobCancelled()
+
+    runner = runs.on(FakeRunner().on("python -", stdout=json.dumps(INFO))
+                     .on("opic-norm --config-name", action=start_then_cancel))
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "config": uv_env(env, tmp_path)}
+    with pytest.raises(JobCancelled):
+        norm.run(params, RecordingLog(), runner=runner)
+    stop = next(i for i, c in enumerate(runner.calls) if "kill -TERM" in " ".join(c))
+    rm = next(i for i, c in enumerate(runner.calls) if c[:2] == ["rm", "-f"])
+    assert stop < rm and runs.names == set()
+
+    stats = stats_path(env)
+
+    def write_stats(argv, input):
+        stats.parent.mkdir(parents=True)
+        stats.write_text("{}")
+
+    again = runs.on(FakeRunner().on("python -", stdout=json.dumps(INFO))
+                    .on("opic-norm --config-name", action=write_stats))
+    assert norm.run(params, RecordingLog(), runner=again)["computed"] is True
+
+
+def test_uv_norm_refuses_a_recorded_run_and_says_how_to_clear_it(env, tmp_path):
+    runner = FakeRunner().on("python -", stdout=json.dumps(INFO)).on("test -e", returncode=0)
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "config": uv_env(env, tmp_path)}
+    with pytest.raises(StepFailed, match="recorded on the compute host; attach to it \\(train\\), or see 断线与取消"):
+        norm.run(params, RecordingLog(), runner=runner)
+
+
+def test_uv_train_refuses_a_recorded_run_and_says_how_to_clear_it(env, tmp_path):
+    runner = (FakeRunner().on("python -", stdout=json.dumps(INFO)).on("test -e", returncode=0)
+              .on("nvidia-smi", stdout="1, 9000, 49140\n"))
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1",
+              "config": uv_env(env, tmp_path, share="true")}
+    with pytest.raises(StepFailed, match="a run named openpi-console-train-e1 is recorded on the compute host"):
+        train.run(params, RecordingLog(), runner=runner)
+
+
+def _uv_train_runner(alive, exit_stdout, exit_code=0):
+    return (FakeRunner().on("python -", stdout=json.dumps(INFO))
+            .on("test -e", returncode=1)
+            .on("nvidia-smi", stdout="1, 9000, 49140\n")
+            .on("opic-train", stdout="")
+            .on("kill -TERM", stdout="")
+            .on("kill -0", returncode=lambda argv, input: next(alive, 1))
+            .on("cat ", stdout=exit_stdout, returncode=exit_code)
+            .on("git -C", stdout="abc\n"))
+
+
+def test_uv_train_without_an_exit_code_is_removed_then_fails(env, tmp_path):
+    stats = stats_path(env)
+    stats.parent.mkdir(parents=True)
+    stats.write_text("{}")
+    runner = _uv_train_runner(iter([0, 1]), "", exit_code=1)  # running once, then gone; no exit file
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1",
+              "config": uv_env(env, tmp_path, share="true"), "poll_sec": 0}
+    with pytest.raises(StepFailed, match=r"ended without an exit code \(killed from outside\?\)"):
+        train.run(params, RecordingLog(), runner=runner, sleep=lambda s: None)
+    assert [c for c in runner.calls if c[:2] == ["rm", "-f"]]
+    record = json.loads((env["docker_data"] / "checkpoints/pi05_x/e1/console_train.json").read_text())
+    assert record["exit_code"] == -1
+
+
+def test_uv_train_cancel_stops_and_forgets_the_run(env, tmp_path):
+    stats = stats_path(env)
+    stats.parent.mkdir(parents=True)
+    stats.write_text("{}")
+    runner = _uv_train_runner(iter([0, 0, 0]), "0\n")
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1",
+              "config": uv_env(env, tmp_path, share="true"), "poll_sec": 0}
+
+    def cancel(_seconds):
+        raise JobCancelled()
+
+    with pytest.raises(JobCancelled):
+        train.run(params, RecordingLog(), runner=runner, sleep=cancel)
+    stop = next(i for i, c in enumerate(runner.calls) if "kill -TERM" in " ".join(c))
+    rm = next(i for i, c in enumerate(runner.calls) if c[:2] == ["rm", "-f"])
+    assert stop < rm

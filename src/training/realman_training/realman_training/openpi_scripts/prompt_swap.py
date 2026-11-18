@@ -12,7 +12,8 @@ from openpi.policies import policy_config as _policy_config
 from openpi.training import config as _config
 from openpi.training import lerobot_v3_dataset as _v3
 
-_spec = importlib.util.spec_from_file_location("eval_open_loop", "/workspace/scripts/eval_open_loop.py")
+# Both runtimes start this script from the openpi repo (/workspace in the container, the checkout in a uv venv).
+_spec = importlib.util.spec_from_file_location("eval_open_loop", "scripts/eval_open_loop.py")
 eol = importlib.util.module_from_spec(_spec)
 _spec.loader.exec_module(eol)
 

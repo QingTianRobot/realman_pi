@@ -15,7 +15,8 @@ class FakeRunner(Runner):
 
     def on(self, match: str, *, stdout: str = "", returncode: int = 0, lines=(), action=None) -> FakeRunner:
         """First rule whose `match` is a substring of the joined argv answers; action(argv, input) runs first.
-        stdout may be a callable (argv, input) -> str for answers that change between calls."""
+        stdout may be a callable (argv, input) -> str and returncode one (argv, input) -> int, for answers that change
+        between calls."""
         self._rules.append((match, stdout, returncode, tuple(lines), action))
         return self
 
@@ -31,6 +32,8 @@ class FakeRunner(Runner):
                     action(argv, input)
                 if callable(stdout):
                     stdout = stdout(argv, input)
+                if callable(returncode):
+                    returncode = returncode(argv, input)
                 return stdout, returncode, lines
         return "", 0, ()
 
@@ -65,3 +68,32 @@ class RecordingLog:
 
     def text(self) -> str:
         return "\n".join(self.lines)
+
+
+class UvRuns:
+    """The compute host's console_run/<name>.pid files as a set, for FakeRunner rules on a uv backend: a start
+    records its name, `rm -f <pid> <exit>` forgets it, `test -e <pid>` answers from the set."""
+
+    def __init__(self):
+        self.names: set[str] = set()
+
+    @staticmethod
+    def _name(path: str) -> str:
+        return path.rsplit("/", 1)[-1].removesuffix(".pid")
+
+    def start(self, name: str):
+        def action(argv, input):
+            self.names.add(name)
+        return action
+
+    def exists(self, argv, input) -> int:
+        return 0 if self._name(argv[-1]) in self.names else 1
+
+    def remove(self, argv, input) -> None:
+        if argv[:2] == ["rm", "-f"]:
+            for path in argv[2:]:
+                self.names.discard(self._name(path))
+
+    def on(self, runner: FakeRunner) -> FakeRunner:
+        """The test -e and rm -f rules; add them after the start rules (a uv start command also holds `rm -f`)."""
+        return runner.on("test -e", returncode=self.exists).on("rm -f", action=self.remove)

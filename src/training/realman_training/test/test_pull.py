@@ -1,5 +1,6 @@
 from __future__ import annotations
 
+import dataclasses
 import json
 import shlex
 import subprocess
@@ -275,3 +276,11 @@ def test_pull_fails_when_the_tag_index_lacks_an_episode(recording, tmp_path):
     with pytest.raises(StepFailed, match="not in the tag index"):
         pull.run({"target": str(tmp_path / "t")}, RecordingLog(), runner=fake_remote(recording, meta=meta))
     assert not (tmp_path / "t").exists() and not (tmp_path / "t.partial").exists()
+
+
+def test_remote_runs_docker_exec_here_when_no_ssh_host():
+    from realman_training.steps.pull import remote
+
+    local = dataclasses.replace(RemoteConfig(), ssh_host="")
+    assert remote(local, ["du", "-sb", "/x"]) == ["docker", "exec", local.recording_container, "du", "-sb", "/x"]
+    assert remote(RemoteConfig(), ["true"])[0] == "ssh"

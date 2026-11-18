@@ -12,6 +12,7 @@ import re
 import statistics
 from pathlib import Path
 
+from . import compute
 from .catalog import BadRequest, NotFound, _checkpoints, _read_json, _run_folder, card_path, relative
 from .config import ConsoleConfig
 from .lerobot_io import is_dataset, read_episodes, read_info
@@ -76,7 +77,7 @@ def lineage(config: ConsoleConfig, view: Path, contract: dict) -> list[dict]:
     for _ in range(LINEAGE_DEPTH):
         if not source:
             break
-        path = Path(str(source))
+        path = Path(compute.local_path(config, str(source)))  # a compute host's path, in the mirror
         manifest = _manifest(path)
         if manifest is None:
             row = {"path": relative(config, path), "kind": "raw", "episodes": None, "frames": None, "created": None,
@@ -94,7 +95,7 @@ def lineage(config: ConsoleConfig, view: Path, contract: dict) -> list[dict]:
         rows.append({"path": relative(config, path), "kind": "clean", "episodes": manifest.get("kept_episodes"),
                      "frames": manifest.get("kept_frames"), "created": manifest.get("created"), "removed": len(removed),
                      "reasons": dict(sorted(reasons.items(), key=lambda kv: -kv[1])),
-                     "removed_tasks": _removed_tasks(manifest.get("source"), removed),
+                     "removed_tasks": _removed_tasks(compute.local_path(config, manifest.get("source")), removed),
                      "_source_episodes": manifest.get("source_episodes_at_copy"),
                      "_source_frames": manifest.get("source_frames_at_copy")})
         source = manifest.get("source")
@@ -176,7 +177,7 @@ def model_dataset(config: ConsoleConfig, model: str, step: int | None = None) ->
     folder = _run_folder(config, config_name, exp)
     card = _read_json(folder / "model_card.json") or {}
     record = _read_json(folder / "console_train.json") or {}
-    view_text = record.get("view") or card_path(card.get("dataset_dir"))
+    view_text = compute.local_path(config, record.get("view")) or card_path(card.get("dataset_dir"), config)
     if not view_text:
         raise NotFound(f"{model}: no training dataset recorded (console_train.json view / model_card dataset_dir)")
     view = Path(view_text)
@@ -196,7 +197,7 @@ def model_dataset(config: ConsoleConfig, model: str, step: int | None = None) ->
     info = read_info(view)
     fps = float(info.get("fps") or contract.get("fps") or 0) or None
     lengths = {e.index: e.length for e in read_episodes(view)}
-    tasks_of = episode_tasks(view)
+    tasks_of = episode_tasks(view, config)
     holdout = set(record.get("holdout") or card.get("holdout_episodes") or [])
     prompts = contract.get("prompts") or {}
 

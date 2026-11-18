@@ -172,3 +172,22 @@ def test_log_text_with_zero_tail_lines_returns_empty(store):
     job = store.start("pull", {"a": 1}, target="fake_steps:ok")
     store.wait(job.id, lambda line: None)
     assert job.log_text(0) == ""
+
+
+def test_run_job_routes_through_compute(tmp_path, monkeypatch):
+    from realman_training import compute, jobs
+
+    seen = {}
+
+    def fake_route(kind, target, step, params):
+        seen["args"] = (kind, target, params)
+        return lambda params, log: {"routed": True}
+
+    monkeypatch.setattr(compute, "route", fake_route)
+    folder = tmp_path / "job"
+    folder.mkdir()
+    jobs.write_json(folder / "params.json", {"kind": "clean", "target": jobs.STEPS["clean"], "params": {"a": 1}})
+    jobs.write_json(folder / "status.json", {"id": "job", "kind": "clean", "state": "starting"})
+    assert jobs.run_job(folder) == 0
+    assert seen["args"] == ("clean", jobs.STEPS["clean"], {"a": 1})
+    assert jobs._read_json(folder / "status.json")["result"] == {"routed": True}

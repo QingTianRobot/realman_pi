@@ -405,6 +405,12 @@ services:
       REALMAN_TRAINING_PROBE_HOST: host.docker.internal
       NVIDIA_VISIBLE_DEVICES: all
       NVIDIA_DRIVER_CAPABILITIES: utility
+      # Compute host (EI) and the console's own layout on SJDrealman; unset = the server5090 layout.
+      REALMAN_COMPUTE_SSH_HOST: ${REALMAN_COMPUTE_SSH_HOST-}
+      REALMAN_COMPUTE_SSH_CONFIG: ${REALMAN_COMPUTE_SSH_CONFIG-}
+      REALMAN_COMPUTE_WORKDIR: ${REALMAN_COMPUTE_WORKDIR-}
+      REALMAN_RECORDING_SSH_HOST: ${REALMAN_RECORDING_SSH_HOST-realman_local}
+      REALMAN_TRAINING_DATA_ROOT: ${REALMAN_TRAINING_DATA_ROOT-}
     extra_hosts: ["host.docker.internal:host-gateway"]
     ports:
       - "${TRAINING_BIND:-0.0.0.0}:8780:8780"

@@ -21,7 +21,7 @@ import socket
 import time
 from pathlib import Path
 
-from . import linkcheck, serving_state
+from . import compute, linkcheck, serving_state
 from .config import ConsoleConfig, ServingConfig, load_config
 from .jobs import StepFailed, now
 from .openpi import CONTAINER_PREFIX, busy_gpus, check_name, run_dir
@@ -43,8 +43,9 @@ class Model:
         return f"{self.config_name}/{self.exp}"
 
 
-def model_prompts(folder: Path) -> dict[str, str]:
-    """Task -> prompt of a run: its model_card.json, else the contract.json of the view it was trained on."""
+def model_prompts(folder: Path, config: ConsoleConfig | None = None) -> dict[str, str]:
+    """Task -> prompt of a run: its model_card.json, else the contract.json of the view it was trained on (with a
+    config, a view path the compute host wrote is read in the console's mirror)."""
     card = folder / "model_card.json"
     if card.is_file():
         data = json.loads(card.read_text(encoding="utf-8"))
@@ -55,7 +56,8 @@ def model_prompts(folder: Path) -> dict[str, str]:
             return {str(t): str(p) for t, p in data["prompts"].items()}
     record = folder / "console_train.json"
     if record.is_file():
-        view = Path(json.loads(record.read_text(encoding="utf-8")).get("view", ""))
+        view = str(json.loads(record.read_text(encoding="utf-8")).get("view", ""))
+        view = Path(compute.local_path(config, view) if config is not None else view)
         contract = view / "contract.json"
         if contract.is_file():
             prompts = json.loads(contract.read_text(encoding="utf-8")).get("prompts") or {}
@@ -81,7 +83,7 @@ def resolve_model(config: ConsoleConfig, model: str | None, checkpoint: str | in
     step = steps[-1] if wanted in (None, "") else int(wanted)
     if step not in steps:
         raise StepFailed(f"checkpoint {step} is not in {folder}: {', '.join(map(str, steps))}")
-    prompts = model_prompts(folder)
+    prompts = model_prompts(folder, config)
     if not prompts:
         raise StepFailed(f"no task prompts known for {name}: register it (model_card.json) or train it with the console")
     return Model(config_name, exp, step, folder, f"checkpoints/{config_name}/{exp}/{step}", prompts)

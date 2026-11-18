@@ -13,7 +13,7 @@ from pathlib import Path
 
 import pyarrow
 
-from . import episode_tags, serving_state
+from . import compute, episode_tags, serving_state
 from .config import ConsoleConfig
 from .datasets import discover
 from .jobs import Job, StepFailed, write_json
@@ -44,7 +44,7 @@ def _read_json(path: Path):
 
 
 def relative(config: ConsoleConfig, path: str | Path) -> str:
-    path, root = Path(path).resolve(), config.data_root.resolve()
+    path, root = Path(compute.local_path(config, str(path))).resolve(), config.data_root.resolve()
     return str(path.relative_to(root)) if path.is_relative_to(root) else str(path)
 
 
@@ -70,7 +70,9 @@ def list_datasets(config: ConsoleConfig, cache: SummaryCache) -> list[dict]:
             rows.append({"path": rel, "name": path.name, "kind": "error", "error": str(error)})
             continue
         summary = entry["summary"]
-        rows.append({"path": rel, **{k: summary[k] for k in _ROW_KEYS}, "quality_counts": entry["quality_counts"]})
+        row = {"path": rel, **{k: summary[k] for k in _ROW_KEYS}, "quality_counts": entry["quality_counts"]}
+        row["source"] = compute.local_path(config, row["source"])  # a compute host's path, in the mirror
+        rows.append(row)
     # Newest first: several pulls share the recording's name, so the latest one must not hide in the middle.
     rows.sort(key=lambda row: row["path"])
     rows.sort(key=lambda row: _instant(row.get("last_file_time")), reverse=True)
@@ -109,7 +111,10 @@ def dataset_detail(config: ConsoleConfig, cache: SummaryCache, rel: str) -> dict
         tags = episode_tags.payload(root)
     except (NotALeRobotDataset, OSError, ValueError, KeyError, TypeError, pyarrow.ArrowInvalid) as error:
         raise BadRequest(str(error)) from error
-    return {"path": rel, **{k: v for k, v in entry.items() if k not in ("fingerprint", "version")}, "tags": tags}
+    detail = {k: v for k, v in entry.items() if k not in ("fingerprint", "version")}
+    if isinstance(detail.get("summary"), dict):  # a copy: the cached entry stays as read
+        detail["summary"] = {**detail["summary"], "source": compute.local_path(config, detail["summary"].get("source"))}
+    return {"path": rel, **detail, "tags": tags}
 
 
 def select_preview(config: ConsoleConfig, rel: str, where: list[str]) -> dict:
@@ -174,22 +179,24 @@ def _checkpoints(folder: Path) -> list[int]:
     return sorted(int(p.name) for p in folder.iterdir() if p.is_dir() and p.name.isdigit())
 
 
-def card_path(text: str | None) -> str | None:
-    """A hand-written card's dataset_dir may read `server5090:~/data/...`: drop the host and expand ~."""
+def card_path(text: str | None, config: ConsoleConfig | None = None) -> str | None:
+    """A hand-written card's dataset_dir may read `server5090:~/data/...`: drop the host and expand ~. With a config,
+    a compute host's path (the card was written there) is read as the mirror's."""
     if not text:
         return None
     host, sep, rest = text.partition(":")
     if sep and "/" not in host and rest.startswith(("/", "~")):
         text = rest
-    return str(Path(text).expanduser())
+    text = str(Path(text).expanduser())
+    return compute.local_path(config, text) if config is not None else text
 
 
-def _record_from_card(card: dict | None) -> dict:
+def _record_from_card(card: dict | None, config: ConsoleConfig | None = None) -> dict:
     """What console_train.json would hold, for a run trained by hand (it has only a model card)."""
     if not card:
         return {}
     match = re.search(r"GPU ([0-9][0-9,]*)", str(card.get("gpus") or ""))
-    return {"view": card_path(card.get("dataset_dir")), "started": card.get("trained_start"),
+    return {"view": card_path(card.get("dataset_dir"), config), "started": card.get("trained_start"),
             "ended": card.get("trained_end"), "batch_size": card.get("batch_size"),
             "num_train_steps": card.get("num_train_steps"),
             "gpus": [int(g) for g in match.group(1).split(",") if g] if match else None}
@@ -255,7 +262,7 @@ def pace_of(record: dict, last_step: int | None, log: str | None, updated: float
 def _run_row(config: ConsoleConfig, folder: Path, metrics: list[dict],
              docker_data: Path | None = None) -> dict:
     card = _read_json(folder / "model_card.json")
-    record = _read_json(folder / "console_train.json") or _record_from_card(card)
+    record = _read_json(folder / "console_train.json") or _record_from_card(card, config)
     losses = [row["loss"] for row in metrics if "loss" in row]
     view = record.get("view")
     last_step = record.get("last_step") or (metrics[-1]["step"] if metrics else None)
@@ -373,7 +380,7 @@ def list_models(config: ConsoleConfig, serving_name: str | None | object = _FROM
         open_loop = None
         if steps:
             open_loop = {"step": steps[0], "tasks": loops[str(steps[0])], "zero_baseline": loops.get("zero_baseline") or {}}
-        dataset_dir = card_path(card.get("dataset_dir"))
+        dataset_dir = card_path(card.get("dataset_dir"), config)
         models.append({
             "name": name, "config": folder.parent.name, "exp": folder.name,
             "method": card.get("method"), "trained_start": card.get("trained_start"), "trained_end": card.get("trained_end"),
@@ -428,7 +435,7 @@ def serve_models(config: ConsoleConfig) -> list[dict]:
         if not (folder / "model_card.json").is_file():
             continue
         steps = _checkpoints(folder)
-        prompts = model_prompts(folder)
+        prompts = model_prompts(folder, config)
         if steps and prompts:
             models.append({"name": f"{folder.parent.name}/{folder.name}", "checkpoints": steps, "prompts": prompts})
     return models

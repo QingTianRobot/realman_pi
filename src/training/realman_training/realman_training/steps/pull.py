@@ -27,6 +27,8 @@ def default_target(data_root: str | Path) -> Path:
 
 
 def remote(config: RemoteConfig, argv: list[str]) -> list[str]:
+    if not config.ssh_host:  # the recording container runs on this host (the console on SJDrealman)
+        return ["docker", "exec", config.recording_container, *argv]
     return [
         "ssh",
         "-o", "BatchMode=yes",

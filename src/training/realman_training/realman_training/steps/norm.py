@@ -7,7 +7,15 @@ from pathlib import Path
 
 from ..config import load_config
 from ..jobs import JobCancelled, StepFailed
-from ..openpi import Compose, check_holdout, check_name, config_info, norm_stats_path, require_view
+from ..openpi import (
+    check_holdout,
+    check_name,
+    config_info,
+    make_backend,
+    norm_stats_path,
+    recorded_run,
+    require_view,
+)
 from ..runner import Runner, compact
 
 
@@ -21,7 +29,7 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     view = Path(params["view"]).expanduser().resolve()
     name = check_name("config_name", params["config_name"])
     summary = require_view(view)
-    compose = Compose(config.openpi, view)
+    compose = make_backend(config.openpi, view)
     info = config_info(runner, compose, name)
     check_holdout(info, summary)
     if not view.name.startswith(info.repo_id.split("/")[-1]):
@@ -36,18 +44,24 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     log("$ " + shlex.join(argv))
     if params.get("dry_run"):
         return {"norm_stats": str(path), "computed": False, "dry_run": True, "command": argv}
-    exists = runner.run(["docker", "container", "inspect", cname]).returncode == 0
+    exists = compose.exists(runner, cname)
     if exists:
+        if config.openpi.backend == "uv":
+            raise StepFailed(recorded_run(cname))
         raise StepFailed(f"container {cname} already exists; remove it by hand or wait for it to finish")
     last: list[str] = []
     try:
         code = runner.stream(argv, lambda line: last.append(compact(line)), env=compose.env())
     except JobCancelled:
         log(f"cancelled: stopping {cname}")
-        result = runner.run(["docker", "stop", "-t", "30", cname])
+        result = compose.stop(runner, cname, 30)
         if result.returncode:
             log(f"could not stop {cname}: {result.stderr}")
+        if config.openpi.backend == "uv":  # docker runs it with --rm
+            compose.remove(runner, cname)
         raise
+    if config.openpi.backend == "uv":  # docker runs it with --rm
+        compose.remove(runner, cname)
     if code:
         for line in last[-15:]:
             log(line)

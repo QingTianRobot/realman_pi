@@ -1,6 +1,9 @@
 from __future__ import annotations
 
+import dataclasses
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -14,11 +17,14 @@ from realman_training.openpi import (
     MULTI_GPU_ENV,
     Compose,
     ConfigInfo,
+    UvOpenpi,
     busy_gpus,
     check_holdout,
     check_name,
     config_info,
+    make_backend,
     norm_stats_path,
+    normalize_docker_time,
     parse_gpus,
     repo_commit,
     require_view,
@@ -125,3 +131,142 @@ def test_check_name_rejects_trailing_newline():
         check_name("label", "")
     with pytest.raises(StepFailed):
         check_name("label", "has space")
+
+
+def uv_config(tmp_path) -> OpenpiConfig:
+    repo = tmp_path / "openpi"
+    return dataclasses.replace(OpenpiConfig(), backend="uv", repo=repo, docker_data=repo, env_file="/w/env.sh")
+
+
+def test_make_backend_picks_by_config(tmp_path):
+    assert isinstance(make_backend(OpenpiConfig(), tmp_path), Compose)
+    assert isinstance(make_backend(uv_config(tmp_path), tmp_path), UvOpenpi)
+
+
+def test_uv_env_points_openpi_at_the_view_and_the_gpus(tmp_path):
+    backend = UvOpenpi(uv_config(tmp_path), tmp_path / "v_view", (2, 5))
+    assert backend.env() == {"OPENPI_REALMAN_DATASET_DIR": str(tmp_path / "v_view"), "CUDA_VISIBLE_DEVICES": "2,5"}
+    cpu = UvOpenpi(uv_config(tmp_path), tmp_path / "v_view")
+    assert cpu.env()["CUDA_VISIBLE_DEVICES"] == "" and cpu.env()["JAX_PLATFORMS"] == "cpu"
+
+
+def test_uv_run_without_name_is_a_plain_bash(tmp_path):
+    config = uv_config(tmp_path)
+    argv = UvOpenpi(config, tmp_path).run("uv run --no-sync python - x", env={"A": "1"})
+    assert argv[:3] == ["env", "A=1", "bash"] and argv[3] == "-c"
+    assert argv[4].startswith(f"{{ source /w/env.sh && cd {config.repo}; }} || exit 1; ")
+    assert argv[4].endswith("uv run --no-sync python - x")
+
+
+def test_uv_run_maps_workspace_and_records_pid_and_exit(tmp_path):
+    config = uv_config(tmp_path)
+    argv = UvOpenpi(config, tmp_path).run("opic-train c >> /workspace/wandb/e.log 2>&1", name="t-e", detach=True)
+    assert argv[:3] == ["env", "bash", "-c"]
+    script = argv[-1]
+    run = config.docker_data / "console_run"
+    assert f">> {config.repo}/wandb/e.log" in script and "/workspace" not in script
+    assert f"echo $c > {run}/t-e.exit" in script
+    assert "opic-train() {" in script
+
+
+def test_uv_detached_returns_only_after_the_pid_file_holds_the_group(tmp_path):
+    config = uv_config(tmp_path)
+    argv = UvOpenpi(config, tmp_path).run("opic-train c", env={"A": "1"}, name="t-e", detach=True)
+    assert argv[:4] == ["env", "A=1", "bash", "-c"] and len(argv) == 5
+    outer = argv[-1]
+    run = config.docker_data / "console_run"
+    assert outer.startswith(f"mkdir -p {run} && rm -f {run}/t-e.exit {run}/t-e.pid || exit 1; setsid bash -c '")
+    assert outer.endswith(f"' </dev/null >/dev/null 2>&1 & echo $! > {run}/t-e.pid")
+    assert "$$" not in outer and "setsid -f" not in outer
+
+
+def test_uv_setup_failures_stop_the_run(tmp_path):
+    config = uv_config(tmp_path)
+    backend = UvOpenpi(config, tmp_path)
+    plain = backend.run("true")[-1]
+    assert plain.startswith(f"{{ source /w/env.sh && cd {config.repo}; }} || exit 1; ")
+    attached = backend.run("true", name="n")[-1]
+    run = config.docker_data / "console_run"
+    assert attached.startswith(f"mkdir -p {run} && echo $$ > {run}/n.pid && rm -f {run}/n.exit || exit 1; ( ")
+    no_env = UvOpenpi(dataclasses.replace(config, env_file=""), tmp_path).run("true")[-1]
+    assert no_env.startswith(f"{{ cd {config.repo}; }} || exit 1; ")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+@pytest.mark.parametrize("env_file", ["", "/nonexistent/env.sh"])
+def test_uv_body_does_not_run_the_command_when_setup_fails(tmp_path, env_file):
+    marker = tmp_path / "ran"
+    config = dataclasses.replace(uv_config(tmp_path), repo=tmp_path / "missing", env_file=env_file)
+    argv = UvOpenpi(config, tmp_path).run(f"touch {marker}")
+    done = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert done.returncode != 0 and not marker.exists()
+
+
+def test_uv_garbage_exit_file_is_a_failure(tmp_path):
+    runner = FakeRunner().on("cat", stdout="oops\n")
+    with pytest.raises(StepFailed, match="t"):
+        UvOpenpi(uv_config(tmp_path), tmp_path).exit_code(runner, "t")
+
+
+def test_uv_run_attached_waits(tmp_path):
+    argv = UvOpenpi(uv_config(tmp_path), tmp_path).run("opic-norm --config-name c", name="n-c")
+    assert argv[1:4] == ["setsid", "-w", "bash"] and "exec </dev/null" not in argv[-1]
+
+
+def test_uv_detached_needs_a_name(tmp_path):
+    with pytest.raises(ValueError):
+        UvOpenpi(uv_config(tmp_path), tmp_path).run("x", detach=True)
+
+
+def test_uv_lifecycle_commands(tmp_path):
+    config = uv_config(tmp_path)
+    backend = UvOpenpi(config, tmp_path)
+    pid = config.docker_data / "console_run" / "t.pid"
+    runner = FakeRunner().on("test -e", returncode=0).on("kill -0", returncode=1).on("cat", stdout="3\n")
+    assert backend.exists(runner, "t") is True
+    assert runner.calls[-1] == ["test", "-e", str(pid)]
+    assert backend.running(runner, "t") is False
+    assert backend.exit_code(runner, "t") == 3
+    backend.stop(runner, "t", 60)
+    assert "kill -TERM -- -$p" in runner.calls[-1][-1] and "seq 60" in runner.calls[-1][-1]
+    backend.remove(runner, "t")
+    assert runner.calls[-1][:2] == ["rm", "-f"]
+
+
+def test_uv_missing_exit_file_of_a_gone_run_is_minus_one(tmp_path):
+    runner = FakeRunner().on("kill -0", returncode=1).on("cat", returncode=1)
+    assert UvOpenpi(uv_config(tmp_path), tmp_path).exit_code(runner, "t") == -1
+
+
+def test_uv_missing_exit_file_of_a_live_run_is_a_failure(tmp_path):
+    runner = FakeRunner().on("kill -0", returncode=0).on("cat", returncode=1)
+    with pytest.raises(StepFailed, match="without writing"):
+        UvOpenpi(uv_config(tmp_path), tmp_path).exit_code(runner, "t")
+
+
+def test_uv_stop_records_an_exit_code_for_a_run_that_is_already_gone(tmp_path):
+    from realman_training.runner import Runner
+
+    config = uv_config(tmp_path)
+    run = config.docker_data / "console_run"
+    run.mkdir(parents=True)
+    (run / "t.pid").write_text("999999\n")  # no such process group
+    UvOpenpi(config, tmp_path).stop(Runner(), "t", 2)
+    assert (run / "t.exit").read_text().strip() == "143"
+    (run / "t.exit").write_text("0\n")  # a run that wrote its own code keeps it
+    UvOpenpi(config, tmp_path).stop(Runner(), "t", 2)
+    assert (run / "t.exit").read_text().strip() == "0"
+
+
+def test_compose_lifecycle_keeps_the_docker_commands(tmp_path):
+    compose = Compose(OpenpiConfig(), tmp_path)
+    runner = (FakeRunner().on("container inspect", returncode=1).on("{{.State.Running}}", stdout="true\n")
+              .on("{{.State.ExitCode}}", stdout="0\n").on("{{.State.StartedAt}}", stdout="2026-10-20T08:12:34.5Z\n"))
+    assert compose.exists(runner, "c") is False
+    assert compose.running(runner, "c") is True
+    assert compose.exit_code(runner, "c") == 0
+    compose.stop(runner, "c", 30)
+    assert runner.calls[-1] == ["docker", "stop", "-t", "30", "c"]
+    compose.remove(runner, "c")
+    assert runner.calls[-1] == ["docker", "rm", "c"]
+    assert compose.started_at(runner, "c") == normalize_docker_time("2026-10-20T08:12:34.5Z")

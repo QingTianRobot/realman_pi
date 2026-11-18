@@ -55,3 +55,6 @@ config/ros/*.local.yaml
 
 # Legacy gripper SDK runtime logs are never source.
 src/gripper/**/backend/logs/
+
+# Credentials and host notes for the compute host: local to each machine, never committed.
+/Traning_area/

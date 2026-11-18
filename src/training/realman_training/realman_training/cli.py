@@ -16,7 +16,7 @@ from .datasets import DatasetSummary, discover, summarize
 from .jobs import JobConflict, JobStore, StepFailed
 from .lerobot_io import NotALeRobotDataset
 from .quality import QualityUnavailable, inspect_dataset, suggested_drops
-from .runner import Runner
+from .runner import CommandFailed, Runner
 from .steps import clean as clean_step
 from .steps import pull as pull_step
 from .steps import tags as tags_step
@@ -428,7 +428,7 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--resume", action="store_true")
     p.add_argument("--init-from", metavar="CONFIG/EXP/STEP",
                    help="start from an earlier run's checkpoint instead of openpi.weights (pi05_base)")
-    p.add_argument("--share-gpus", action="store_true",
+    p.add_argument("--share-gpus", action="store_true", default=None,  # omitted: openpi.default_share_gpus
                    help="train on GPUs that already hold memory when openpi.train_need_mib is still free")
     p.add_argument("--attach", action="store_true", help="follow an already running training container")
     p.add_argument("--dry-run", action="store_true")
@@ -441,7 +441,7 @@ def make_parser() -> argparse.ArgumentParser:
     p.add_argument("--checkpoints", help="e.g. 10000,29999 (default: the latest)")
     p.add_argument("--stride", type=int)
     p.add_argument("--no-prompt-swap", action="store_true")
-    p.add_argument("--share-gpus", action="store_true",
+    p.add_argument("--share-gpus", action="store_true", default=None,  # omitted: openpi.default_share_gpus
                    help="evaluate on a GPU that already holds memory when openpi.eval_need_mib is still free")
     p.add_argument("--dry-run", action="store_true")
     p = step("register", "write the model card and the registry row")
@@ -482,6 +482,11 @@ def make_parser() -> argparse.ArgumentParser:
     check = sub.add_parser("linkcheck", help="the four data-path checks (Pika/Wi-Fi, bulk + ping, inference, bridge)")
     check.add_argument("--only", help="comma list of pika, link, inference, bridge")
     check.add_argument("--json", action="store_true")
+    comp = sub.add_parser("compute", help="the compute host (compute.ssh_host): set it up, or send this code to it")
+    comp_sub = comp.add_subparsers(dest="compute_action", required=True)
+    p = comp_sub.add_parser("setup", help="env.sh + openpi uv venv under compute.workdir (idempotent)")
+    p.add_argument("--openpi-ref", default="main")
+    comp_sub.add_parser("sync", help="rsync this package and config/training to the compute host")
     web_cmd = sub.add_parser("web", help="the web console on web.host:web.port (writes need $REALMAN_TRAINING_TOKEN)")
     web_cmd.add_argument("--host")
     web_cmd.add_argument("--port", type=int)
@@ -506,6 +511,22 @@ def main(argv: list[str] | None = None) -> int:
             print("usage: realman-train _job-run <job-dir>", file=sys.stderr)
             return 2
         return run_job(argv[1])
+    if argv[:1] == ["_remote-step"]:
+        from .compute import remote_step_main
+
+        return remote_step_main(argv[1], argv[2]) if len(argv) == 3 else 2
+    if argv[:1] == ["_remote-cancel"]:
+        from .compute import remote_cancel_main
+
+        return remote_cancel_main(argv[1]) if len(argv) == 2 else 2
+    if argv[:1] == ["_gpus"]:
+        from . import gpus as gpu_mod
+        from .runner import Runner
+
+        config = load_config()
+        print(json.dumps(gpu_mod.query(Runner(), busy_mib=config.openpi.gpu_busy_mib,
+                                        passwd=Path(config.web.passwd_file))))
+        return 0
     args = make_parser().parse_args(argv)
     try:
         config = load_config(args.config)
@@ -527,9 +548,22 @@ def main(argv: list[str] | None = None) -> int:
             web_server.serve(config, args.host or config.web.host, args.port or config.web.port,
                              os.environ.get(web_server.TOKEN_ENV, ""))
             return 0
+        if args.command == "compute":
+            from . import compute
+            from .runner import Runner
+
+            if not compute.enabled(config):
+                print("error: compute.ssh_host is not set (REALMAN_COMPUTE_SSH_HOST)", file=sys.stderr)
+                return 2
+            if args.compute_action == "setup":
+                compute.setup_host(config, Runner(), print, args.openpi_ref)
+            else:
+                compute.sync_code(config, Runner(), print)
+            return 0
         if args.command in STEP_COMMANDS:
             return _run_step(args, config)
         return _cmd_jobs(args, config)
-    except (NotALeRobotDataset, FileNotFoundError, OSError, ValueError, KeyError, yaml.YAMLError, StepFailed) as error:
+    except (NotALeRobotDataset, FileNotFoundError, OSError, ValueError, KeyError, yaml.YAMLError, StepFailed,
+            CommandFailed) as error:
         print(f"error: {error}", file=sys.stderr)
         return 2

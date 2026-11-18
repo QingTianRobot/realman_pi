@@ -42,7 +42,8 @@ def view_command(
     ]
     if openpi.backend == "uv":
         source = f"source {shlex.quote(openpi.env_file)} && " if openpi.env_file else ""
-        return ["bash", "-c", f"{source}cd {shlex.quote(str(openpi.repo))} && "
+        # CPU only: the view build never touches the shared host's GPUs
+        return ["bash", "-c", f"{source}cd {shlex.quote(str(openpi.repo))} && JAX_PLATFORMS=cpu CUDA_VISIBLE_DEVICES= "
                               "uv run --no-sync scripts/make_realman_view.py " + shlex.join(args)]
     return [
         "docker", "run", "--rm", "--network", "none", "--user", f"{os.getuid()}:{os.getgid()}",

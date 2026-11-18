@@ -41,6 +41,9 @@ fi
 cd "$W/src/openpi"
 git fetch origin "$REF" || { echo "fetch $REF failed" >&2; exit 1; }
 git checkout --detach FETCH_HEAD
+# The console points openpi at its training view through this variable (QingTianRobot/openpi#6).
+grep -q OPENPI_REALMAN_DATASET_DIR src/openpi/training/config.py || {
+  echo "openpi $REF does not read OPENPI_REALMAN_DATASET_DIR: use a ref that has QingTianRobot/openpi#6" >&2; exit 1; }
 mkdir -p checkpoints assets wandb console_run
 
 for try in 1 2 3; do

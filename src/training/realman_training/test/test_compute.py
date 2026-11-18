@@ -343,6 +343,27 @@ def test_sync_code_sends_the_package_and_the_training_config(config):
     assert all(compute.RSYNC_IO_TIMEOUT in c for c in sent)  # the link to the compute host is slow and lossy
 
 
+def test_sync_code_checks_the_package_runs_on_the_compute_host(config):
+    runner = FakeRunner()
+    log = RecordingLog()
+    compute.sync_code(config, runner, log)
+    smoke = runner.calls[-1]
+    assert smoke[:1] == ["ssh"] and "_gpus" in smoke[-1] and "/w/src/openpi/.venv/bin/python" in smoke[-1]
+    assert "remote package ok" in log.text()
+    from realman_training.runner import CommandFailed
+
+    with pytest.raises(CommandFailed):
+        compute.sync_code(config, FakeRunner().on("_gpus", returncode=1, stdout="ModuleNotFoundError: yaml"),
+                          RecordingLog())
+
+
+def test_setup_checks_the_openpi_ref_reads_the_console_dataset_dir():
+    script = compute.SETUP_SCRIPT.read_text(encoding="utf-8")
+    check = script.index("grep -q OPENPI_REALMAN_DATASET_DIR src/openpi/training/config.py")
+    assert script.index("git checkout --detach FETCH_HEAD") < check < script.index("uv sync")
+    assert "QingTianRobot/openpi#6" in script[check:script.index("uv sync")]
+
+
 def test_setup_host_streams_the_script_over_ssh(config):
     runner = FakeRunner().on("bash -s", lines=["ok"])
     compute.setup_host(config, runner, RecordingLog(), openpi_ref="abc123")

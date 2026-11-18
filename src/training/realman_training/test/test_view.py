@@ -192,4 +192,6 @@ def test_view_command_on_uv_runs_the_script_from_the_repo(tmp_path):
     assert argv[:2] == ["bash", "-c"]
     assert argv[2].startswith(f"source /w/env.sh && cd {tmp_path / 'openpi'} && ")
     assert "uv run --no-sync scripts/make_realman_view.py --src" in argv[2]
+    # CPU only: the view build must never touch the shared host's GPUs
+    assert "&& JAX_PLATFORMS=cpu CUDA_VISIBLE_DEVICES= uv run --no-sync scripts/make_realman_view.py" in argv[2]
     assert "docker" not in " ".join(argv)

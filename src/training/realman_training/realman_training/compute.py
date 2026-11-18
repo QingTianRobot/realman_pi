@@ -445,7 +445,7 @@ def gpu_query(config: ConsoleConfig, runner: Runner) -> dict:
 
 def sync_code(config: ConsoleConfig, runner: Runner, log) -> None:
     """This package (the code actually running) and the config checkout's config/training to <workdir>/src/realman_pi
-    (the remote side of _remote-step)."""
+    (the remote side of _remote-step), then a smoke run of the package there."""
     ssh = shlex.join(ssh_base(config))
     host = config.compute.ssh_host
     base = remote_path(config, REMOTE_REPO)
@@ -456,6 +456,9 @@ def sync_code(config: ConsoleConfig, runner: Runner, log) -> None:
     runner.check(["rsync", "-a", RSYNC_IO_TIMEOUT, "-e", ssh, f"{checkout_root(config) / 'config' / 'training'}/",
                   f"{host}:{base}/config/training/"])
     log(f"code synced to {host}:{base}")
+    # The package must import and load its config in the compute host's venv (yaml, numpy, a broken file...).
+    runner.check(ssh_argv(config, remote_python(config, ["_gpus"])))
+    log("remote package ok")
 
 
 def setup_host(config: ConsoleConfig, runner: Runner, log, openpi_ref: str = "main") -> None:

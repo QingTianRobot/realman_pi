@@ -7,7 +7,15 @@ from pathlib import Path
 
 from ..config import load_config
 from ..jobs import JobCancelled, StepFailed
-from ..openpi import check_holdout, check_name, config_info, make_backend, norm_stats_path, require_view
+from ..openpi import (
+    check_holdout,
+    check_name,
+    config_info,
+    make_backend,
+    norm_stats_path,
+    recorded_run,
+    require_view,
+)
 from ..runner import Runner, compact
 
 
@@ -38,6 +46,8 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
         return {"norm_stats": str(path), "computed": False, "dry_run": True, "command": argv}
     exists = compose.exists(runner, cname)
     if exists:
+        if config.openpi.backend == "uv":
+            raise StepFailed(recorded_run(cname))
         raise StepFailed(f"container {cname} already exists; remove it by hand or wait for it to finish")
     last: list[str] = []
     try:
@@ -47,6 +57,8 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
         result = compose.stop(runner, cname, 30)
         if result.returncode:
             log(f"could not stop {cname}: {result.stderr}")
+        if config.openpi.backend == "uv":  # docker runs it with --rm
+            compose.remove(runner, cname)
         raise
     if config.openpi.backend == "uv":  # docker runs it with --rm
         compose.remove(runner, cname)

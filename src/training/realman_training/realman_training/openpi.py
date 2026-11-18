@@ -193,17 +193,23 @@ class UvOpenpi:
         return runner.run(["bash", "-c", f"kill -0 -- -$(cat {pid}) 2>/dev/null"]).returncode == 0
 
     def stop(self, runner: Runner, name: str, timeout_sec: int) -> Completed:
-        pid = shlex.quote(str(self._files(name)[0]))
+        """TERM the group, KILL it after timeout_sec; once it is gone, record 143 unless the run wrote its own code
+        (a run killed by a signal never reaches its `echo $c`)."""
+        pid, exit_file = (shlex.quote(str(p)) for p in self._files(name))
         return runner.run(["bash", "-c", (
-            f"p=$(cat {pid}) || exit 1; kill -TERM -- -$p 2>/dev/null || exit 0; "
-            f"for i in $(seq {int(timeout_sec)}); do kill -0 -- -$p 2>/dev/null || exit 0; sleep 1; done; "
-            f"kill -KILL -- -$p"
+            f"p=$(cat {pid}) || exit 1; if kill -TERM -- -$p 2>/dev/null; then "
+            f"for i in $(seq {int(timeout_sec)}); do kill -0 -- -$p 2>/dev/null || break; sleep 1; done; "
+            f"if kill -0 -- -$p 2>/dev/null; then kill -KILL -- -$p; fi; fi; "
+            f"[ -e {exit_file} ] || echo 143 > {exit_file}"
         )])
 
     def exit_code(self, runner: Runner, name: str) -> int:
+        """The run's exit code; -1 when it left none and its group is gone (killed from outside: the caller says so)."""
         exit_file = self._files(name)[1]
         done = runner.run(["cat", str(exit_file)])
         if done.returncode or not done.stdout.strip():
+            if not self.running(runner, name):
+                return -1
             raise StepFailed(f"{name} ended without writing {exit_file} (killed from outside?)")
         try:
             return int(done.stdout.strip())
@@ -218,6 +224,12 @@ class UvOpenpi:
 
 
 Backend = Compose | UvOpenpi
+
+
+def recorded_run(name: str) -> str:
+    """Why a uv run cannot start: its pid file is still there (running, or not yet cleaned up)."""
+    return (f"a run named {name} is recorded on the compute host; attach to follow it, or cancel/stop it from the "
+            "console")
 
 
 def make_backend(config: OpenpiConfig, dataset_dir: Path, gpus: tuple[int, ...] = ()) -> Backend:

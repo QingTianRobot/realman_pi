@@ -233,10 +233,29 @@ def test_uv_lifecycle_commands(tmp_path):
     assert runner.calls[-1][:2] == ["rm", "-f"]
 
 
-def test_uv_missing_exit_file_is_a_failure(tmp_path):
-    runner = FakeRunner().on("cat", returncode=1)
+def test_uv_missing_exit_file_of_a_gone_run_is_minus_one(tmp_path):
+    runner = FakeRunner().on("kill -0", returncode=1).on("cat", returncode=1)
+    assert UvOpenpi(uv_config(tmp_path), tmp_path).exit_code(runner, "t") == -1
+
+
+def test_uv_missing_exit_file_of_a_live_run_is_a_failure(tmp_path):
+    runner = FakeRunner().on("kill -0", returncode=0).on("cat", returncode=1)
     with pytest.raises(StepFailed, match="without writing"):
         UvOpenpi(uv_config(tmp_path), tmp_path).exit_code(runner, "t")
+
+
+def test_uv_stop_records_an_exit_code_for_a_run_that_is_already_gone(tmp_path):
+    from realman_training.runner import Runner
+
+    config = uv_config(tmp_path)
+    run = config.docker_data / "console_run"
+    run.mkdir(parents=True)
+    (run / "t.pid").write_text("999999\n")  # no such process group
+    UvOpenpi(config, tmp_path).stop(Runner(), "t", 2)
+    assert (run / "t.exit").read_text().strip() == "143"
+    (run / "t.exit").write_text("0\n")  # a run that wrote its own code keeps it
+    UvOpenpi(config, tmp_path).stop(Runner(), "t", 2)
+    assert (run / "t.exit").read_text().strip() == "0"
 
 
 def test_compose_lifecycle_keeps_the_docker_commands(tmp_path):

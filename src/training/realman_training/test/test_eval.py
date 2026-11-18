@@ -174,3 +174,54 @@ def test_eval_cancel_stops_the_container(env):
         eval_step.run(params, RecordingLog(), runner=runner)
     stops = runner.commands("docker stop")
     assert stops and "openpi-console-eval-e1" in " ".join(stops[0])
+
+
+def _uv_config(env, tmp_path) -> str:
+    docker_data = env["run"].parents[2]
+    config = tmp_path / "uv.yaml"
+    config.write_text("training_console:\n  openpi:\n    backend: uv\n    env_file: /w/env.sh\n"
+                      f"    repo: {docker_data}\n    docker_data: {docker_data}\n")
+    return str(config)
+
+
+def test_uv_eval_forgets_each_run_before_the_next_with_the_same_name(env, tmp_path):
+    from fake_runner import UvRuns
+
+    runs = UvRuns()
+    cname = "openpi-console-eval-e1-2000"
+    write_eval = fake_eval(env)._rules[1][4]
+
+    def start(argv, input):
+        assert cname not in runs.names, "started while the previous run of that name is still recorded"
+        runs.start(cname)(argv, input)
+        write_eval(argv, input)
+
+    runner = runs.on(FakeRunner().on("eval_open_loop.py", action=start)
+                     .on("python -", stdout=json.dumps(INFO)).on("nvidia-smi", stdout="2, 4\n"))
+    params = {"config_name": "pi05_x", "exp": "e1", "view": str(env["view"]), "gpu": 2, "checkpoints": [2000],
+              "prompt_swap": False, "config": _uv_config(env, tmp_path)}
+    result = eval_step.run(params, RecordingLog(), runner=runner)
+    assert set(result["results"]["2000"]) == {"pick_and_place", "pick_only"}
+    kinds = ["start" if "eval_open_loop.py" in " ".join(c) else "rm" for c in runner.calls
+             if "eval_open_loop.py" in " ".join(c) or c[:2] == ["rm", "-f"]]
+    assert kinds == ["start", "rm", "start", "rm"]
+
+
+def test_uv_eval_cancel_stops_and_forgets_the_run(env, tmp_path):
+    from fake_runner import UvRuns
+
+    from realman_training.jobs import JobCancelled
+
+    runs = UvRuns()
+
+    def start_then_cancel(argv, input):
+        runs.start("openpi-console-eval-e1-2000")(argv, input)
+        raise JobCancelled()
+
+    runner = runs.on(FakeRunner().on("eval_open_loop.py", action=start_then_cancel)
+                     .on("python -", stdout=json.dumps(INFO)).on("nvidia-smi", stdout="2, 4\n"))
+    params = {"config_name": "pi05_x", "exp": "e1", "view": str(env["view"]), "gpu": 2, "checkpoints": [2000],
+              "config": _uv_config(env, tmp_path)}
+    with pytest.raises(JobCancelled):
+        eval_step.run(params, RecordingLog(), runner=runner)
+    assert [c for c in runner.calls if "kill -TERM" in " ".join(c)] and runs.names == set()

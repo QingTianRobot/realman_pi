@@ -431,3 +431,92 @@ def test_train_share_gpus_none_from_the_cli_means_the_config_default(env, tmp_pa
               "config": uv_env(env, tmp_path, share="true")}
     with pytest.raises(StepFailed, match="not enough free memory"):
         train.run(params, RecordingLog(), runner=runner)
+
+
+def test_uv_norm_cancel_stops_and_forgets_the_run_so_it_can_run_again(env, tmp_path):
+    from fake_runner import UvRuns
+
+    runs = UvRuns()
+    cname = "openpi-console-norm-pi05_x"
+
+    def start_then_cancel(argv, input):
+        runs.start(cname)(argv, input)
+        raise JobCancelled()
+
+    runner = runs.on(FakeRunner().on("python -", stdout=json.dumps(INFO))
+                     .on("opic-norm --config-name", action=start_then_cancel))
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "config": uv_env(env, tmp_path)}
+    with pytest.raises(JobCancelled):
+        norm.run(params, RecordingLog(), runner=runner)
+    stop = next(i for i, c in enumerate(runner.calls) if "kill -TERM" in " ".join(c))
+    rm = next(i for i, c in enumerate(runner.calls) if c[:2] == ["rm", "-f"])
+    assert stop < rm and runs.names == set()
+
+    stats = stats_path(env)
+
+    def write_stats(argv, input):
+        stats.parent.mkdir(parents=True)
+        stats.write_text("{}")
+
+    again = runs.on(FakeRunner().on("python -", stdout=json.dumps(INFO))
+                    .on("opic-norm --config-name", action=write_stats))
+    assert norm.run(params, RecordingLog(), runner=again)["computed"] is True
+
+
+def test_uv_norm_refuses_a_recorded_run_and_says_how_to_clear_it(env, tmp_path):
+    runner = FakeRunner().on("python -", stdout=json.dumps(INFO)).on("test -e", returncode=0)
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "config": uv_env(env, tmp_path)}
+    with pytest.raises(StepFailed, match="recorded on the compute host; attach to follow it, or cancel/stop it from"):
+        norm.run(params, RecordingLog(), runner=runner)
+
+
+def test_uv_train_refuses_a_recorded_run_and_says_how_to_clear_it(env, tmp_path):
+    runner = (FakeRunner().on("python -", stdout=json.dumps(INFO)).on("test -e", returncode=0)
+              .on("nvidia-smi", stdout="1, 9000, 49140\n"))
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1",
+              "config": uv_env(env, tmp_path, share="true")}
+    with pytest.raises(StepFailed, match="a run named openpi-console-train-e1 is recorded on the compute host"):
+        train.run(params, RecordingLog(), runner=runner)
+
+
+def _uv_train_runner(alive, exit_stdout, exit_code=0):
+    return (FakeRunner().on("python -", stdout=json.dumps(INFO))
+            .on("test -e", returncode=1)
+            .on("nvidia-smi", stdout="1, 9000, 49140\n")
+            .on("opic-train", stdout="")
+            .on("kill -TERM", stdout="")
+            .on("kill -0", returncode=lambda argv, input: next(alive, 1))
+            .on("cat ", stdout=exit_stdout, returncode=exit_code)
+            .on("git -C", stdout="abc\n"))
+
+
+def test_uv_train_without_an_exit_code_is_removed_then_fails(env, tmp_path):
+    stats = stats_path(env)
+    stats.parent.mkdir(parents=True)
+    stats.write_text("{}")
+    runner = _uv_train_runner(iter([0, 1]), "", exit_code=1)  # running once, then gone; no exit file
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1",
+              "config": uv_env(env, tmp_path, share="true"), "poll_sec": 0}
+    with pytest.raises(StepFailed, match=r"ended without an exit code \(killed from outside\?\)"):
+        train.run(params, RecordingLog(), runner=runner, sleep=lambda s: None)
+    assert [c for c in runner.calls if c[:2] == ["rm", "-f"]]
+    record = json.loads((env["docker_data"] / "checkpoints/pi05_x/e1/console_train.json").read_text())
+    assert record["exit_code"] == -1
+
+
+def test_uv_train_cancel_stops_and_forgets_the_run(env, tmp_path):
+    stats = stats_path(env)
+    stats.parent.mkdir(parents=True)
+    stats.write_text("{}")
+    runner = _uv_train_runner(iter([0, 0, 0]), "0\n")
+    params = {"config_name": "pi05_x", "view": str(env["view"]), "exp": "e1", "gpus": "1",
+              "config": uv_env(env, tmp_path, share="true"), "poll_sec": 0}
+
+    def cancel(_seconds):
+        raise JobCancelled()
+
+    with pytest.raises(JobCancelled):
+        train.run(params, RecordingLog(), runner=runner, sleep=cancel)
+    stop = next(i for i, c in enumerate(runner.calls) if "kill -TERM" in " ".join(c))
+    rm = next(i for i, c in enumerate(runner.calls) if c[:2] == ["rm", "-f"])
+    assert stop < rm

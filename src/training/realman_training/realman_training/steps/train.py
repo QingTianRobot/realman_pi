@@ -26,6 +26,7 @@ from ..openpi import (
     norm_stats_path,
     normalize_docker_time,
     parse_gpus,
+    recorded_run,
     repo_commit,
     require_view,
     run_dir,
@@ -135,6 +136,8 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
         if folder.exists() and not params.get("resume"):
             raise StepFailed(f"{folder} exists: pass resume to continue it, or pick another exp name")
         if exists:
+            if oc.backend == "uv":
+                raise StepFailed(recorded_run(container))
             raise StepFailed(f"container {container} exists (running or left over); attach, or remove it by hand")
         share = params.get("share_gpus")
         if share is None:
@@ -190,6 +193,8 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
         result = compose.stop(runner, container, 60)
         if result.returncode:
             log(f"could not stop {container}: {result.stderr}; the GPUs may still be held")
+        if oc.backend == "uv":  # the stop recorded an exit code; forget the run so the name can start again
+            compose.remove(runner, container)
         raise
 
     exit_code = compose.exit_code(runner, container)
@@ -209,6 +214,8 @@ def run(params: dict, log, runner: Runner | None = None, sleep=time.sleep) -> di
             tail = host_log.read_text(encoding="utf-8", errors="replace").splitlines()[-15:]
             for line in tail:
                 log(compact(line))
+        if exit_code == -1 and oc.backend == "uv":
+            raise StepFailed(f"training {container} ended without an exit code (killed from outside?); see {host_log}")
         raise StepFailed(f"training exited {exit_code}; see {host_log}")
     log(f"training finished at step {last}: {folder}")
     return {"run_dir": str(folder), "container": container, "last_step": last, "exit_code": exit_code}

@@ -404,3 +404,41 @@ def test_sync_code_sends_the_config_checkout_training_dir_and_this_package(check
     assert config_rsync and config_rsync[0][-2] == f"{repo / 'config' / 'training'}/"
     package = [c for c in sent if c[-1] == "EI:/w/src/realman_pi/src/training/realman_training/"]
     assert package and package[0][-2] == f"{compute.REPO_ROOT / compute.PACKAGE}/"  # the code actually running
+
+
+def test_a_train_follower_whose_ssh_is_gone_leaves_at_once(monkeypatch, config):
+    """A later `train --attach` follows the run again; an orphaned follower must not race it on exit_code/remove."""
+    monkeypatch.setattr(compute, "load_config", lambda path=None: config)
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("{}"))
+    pid_file = config.openpi.docker_data / "console_run" / "step-gone.pid"
+    after = []
+
+    def step(params, log):
+        log("following")
+        after.append("step went on")
+        return {}
+
+    def broken(*args, **kwargs):
+        raise BrokenPipeError()
+
+    exits = []
+
+    def fake_exit(code):
+        exits.append((code, pid_file.exists()))
+        raise SystemExit(code)
+
+    monkeypatch.setattr(compute, "_step", lambda kind: step)
+    monkeypatch.setattr(compute, "print", broken, raising=False)
+    monkeypatch.setattr(compute.os, "_exit", fake_exit)
+    with pytest.raises(SystemExit):
+        compute.remote_step_main("train", "gone")
+    assert exits == [(0, False)] and after == []
+
+
+def test_other_steps_keep_going_when_their_ssh_is_gone(monkeypatch, config):
+    monkeypatch.setattr(compute, "load_config", lambda path=None: config)
+    monkeypatch.setattr("sys.stdin", __import__("io").StringIO("{}"))
+    monkeypatch.setattr(compute, "_step", lambda kind: (lambda params, log: (log("x"), {})[1]))
+    monkeypatch.setattr(compute, "print", lambda *a, **k: (_ for _ in ()).throw(BrokenPipeError()), raising=False)
+    monkeypatch.setattr(compute.os, "_exit", lambda code: pytest.fail("view must not leave"))
+    assert compute.remote_step_main("view", "v") == 0

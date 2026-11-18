@@ -16,6 +16,7 @@ from ..openpi import (
     config_info,
     make_backend,
     parse_gpus,
+    recorded_run,
     require_view,
     short_gpus,
     run_dir,
@@ -82,6 +83,8 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
     def _run_container(cname: str, argv: list[str], on_line, **kwargs) -> tuple[int, list[str]]:
         exists = compose.exists(runner, cname)
         if exists:
+            if oc.backend == "uv":
+                raise StepFailed(recorded_run(cname))
             raise StepFailed(f"container {cname} already exists; remove it by hand or wait for it to finish")
         last: list[str] = []
 
@@ -96,6 +99,8 @@ def run(params: dict, log, runner: Runner | None = None) -> dict:
             result = compose.stop(runner, cname, 30)
             if result.returncode:
                 log(f"could not stop {cname}: {result.stderr}")
+            if oc.backend == "uv":  # docker runs it with --rm
+                compose.remove(runner, cname)
             raise
         if oc.backend == "uv":  # docker runs it with --rm
             compose.remove(runner, cname)

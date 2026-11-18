@@ -267,7 +267,13 @@ def remote_step_main(kind: str, token: str) -> int:
         try:
             print(text, flush=True)
         except OSError:
-            pass  # the ssh session is gone: keep going (train keeps following its run)
+            if kind == "train":
+                # The ssh session is gone. The training runs on in its own setsid group and `train --attach` follows
+                # it again; this follower must not race that one on exit_code/remove, so it leaves now.
+                pid_file.unlink(missing_ok=True)
+                cancel_file.unlink(missing_ok=True)
+                os._exit(0)
+            # any other step finishes its work; the console stops it, best effort
 
     def on_signal(signum, frame):
         signal.signal(signal.SIGTERM, signal.SIG_IGN)

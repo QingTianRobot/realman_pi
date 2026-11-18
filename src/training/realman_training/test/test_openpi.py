@@ -2,6 +2,8 @@ from __future__ import annotations
 
 import dataclasses
 import json
+import shutil
+import subprocess
 from pathlib import Path
 
 import pytest
@@ -152,21 +154,58 @@ def test_uv_run_without_name_is_a_plain_bash(tmp_path):
     config = uv_config(tmp_path)
     argv = UvOpenpi(config, tmp_path).run("uv run --no-sync python - x", env={"A": "1"})
     assert argv[:3] == ["env", "A=1", "bash"] and argv[3] == "-c"
-    assert argv[4].startswith(f"source /w/env.sh && cd {config.repo} && ")
+    assert argv[4].startswith(f"{{ source /w/env.sh && cd {config.repo}; }} || exit 1; ")
     assert argv[4].endswith("uv run --no-sync python - x")
 
 
 def test_uv_run_maps_workspace_and_records_pid_and_exit(tmp_path):
     config = uv_config(tmp_path)
     argv = UvOpenpi(config, tmp_path).run("opic-train c >> /workspace/wandb/e.log 2>&1", name="t-e", detach=True)
-    assert argv[:4] == ["env", "setsid", "-f", "bash"]
+    assert argv[:3] == ["env", "bash", "-c"]
     script = argv[-1]
     run = config.docker_data / "console_run"
-    assert f"echo $$ > {run}/t-e.pid" in script
     assert f">> {config.repo}/wandb/e.log" in script and "/workspace" not in script
-    assert "exec </dev/null >/dev/null 2>&1" in script
     assert f"echo $c > {run}/t-e.exit" in script
     assert "opic-train() {" in script
+
+
+def test_uv_detached_returns_only_after_the_pid_file_holds_the_group(tmp_path):
+    config = uv_config(tmp_path)
+    argv = UvOpenpi(config, tmp_path).run("opic-train c", env={"A": "1"}, name="t-e", detach=True)
+    assert argv[:4] == ["env", "A=1", "bash", "-c"] and len(argv) == 5
+    outer = argv[-1]
+    run = config.docker_data / "console_run"
+    assert outer.startswith(f"mkdir -p {run} && rm -f {run}/t-e.exit {run}/t-e.pid || exit 1; setsid bash -c '")
+    assert outer.endswith(f"' </dev/null >/dev/null 2>&1 & echo $! > {run}/t-e.pid")
+    assert "$$" not in outer and "setsid -f" not in outer
+
+
+def test_uv_setup_failures_stop_the_run(tmp_path):
+    config = uv_config(tmp_path)
+    backend = UvOpenpi(config, tmp_path)
+    plain = backend.run("true")[-1]
+    assert plain.startswith(f"{{ source /w/env.sh && cd {config.repo}; }} || exit 1; ")
+    attached = backend.run("true", name="n")[-1]
+    run = config.docker_data / "console_run"
+    assert attached.startswith(f"mkdir -p {run} && echo $$ > {run}/n.pid && rm -f {run}/n.exit || exit 1; ( ")
+    no_env = UvOpenpi(dataclasses.replace(config, env_file=""), tmp_path).run("true")[-1]
+    assert no_env.startswith(f"{{ cd {config.repo}; }} || exit 1; ")
+
+
+@pytest.mark.skipif(shutil.which("bash") is None, reason="needs bash")
+@pytest.mark.parametrize("env_file", ["", "/nonexistent/env.sh"])
+def test_uv_body_does_not_run_the_command_when_setup_fails(tmp_path, env_file):
+    marker = tmp_path / "ran"
+    config = dataclasses.replace(uv_config(tmp_path), repo=tmp_path / "missing", env_file=env_file)
+    argv = UvOpenpi(config, tmp_path).run(f"touch {marker}")
+    done = subprocess.run(argv, capture_output=True, text=True, check=False)
+    assert done.returncode != 0 and not marker.exists()
+
+
+def test_uv_garbage_exit_file_is_a_failure(tmp_path):
+    runner = FakeRunner().on("cat", stdout="oops\n")
+    with pytest.raises(StepFailed, match="t"):
+        UvOpenpi(uv_config(tmp_path), tmp_path).exit_code(runner, "t")
 
 
 def test_uv_run_attached_waits(tmp_path):

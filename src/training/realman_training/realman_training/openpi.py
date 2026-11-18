@@ -161,8 +161,9 @@ class UvOpenpi:
         return run / f"{name}.pid", run / f"{name}.exit"
 
     def _body(self, command: str) -> str:
+        # The braces make a failed source or cd stop the run (`a && b; c` would still run c).
         source = f"source {shlex.quote(self.config.env_file)} && " if self.config.env_file else ""
-        return (f"{source}cd {shlex.quote(str(self.config.repo))} && {UV_FUNCTIONS}"
+        return (f"{{ {source}cd {shlex.quote(str(self.config.repo))}; }} || exit 1; {UV_FUNCTIONS}"
                 + command.replace("/workspace", str(self.config.repo)))
 
     def run(self, command: str, *, env: dict[str, str] | None = None, name: str | None = None,
@@ -173,12 +174,16 @@ class UvOpenpi:
                 raise ValueError("a detached run needs a name")
             return ["env", *assigns, "bash", "-c", self._body(command)]
         pid, exit_file = (shlex.quote(str(p)) for p in self._files(name))
-        script = (
-            f"mkdir -p {shlex.quote(str(self.config.docker_data / RUN_DIR_NAME))} && echo $$ > {pid} && rm -f {exit_file}; "
-            + ("exec </dev/null >/dev/null 2>&1; " if detach else "")
-            + f"( {self._body(command)} ); c=$?; echo $c > {exit_file}; exit $c"
-        )
-        return ["env", *assigns, "setsid", "-f" if detach else "-w", "bash", "-c", script]
+        run_dir = shlex.quote(str(self.config.docker_data / RUN_DIR_NAME))
+        tail = f"( {self._body(command)} ); c=$?; echo $c > {exit_file}; exit $c"
+        if not detach:
+            script = f"mkdir -p {run_dir} && echo $$ > {pid} && rm -f {exit_file} || exit 1; {tail}"
+            return ["env", *assigns, "setsid", "-w", "bash", "-c", script]
+        # Detached: the outer bash returns only after the pid file holds the run's group id. A background child of a
+        # non-interactive shell is no group leader, so setsid calls setsid() in place and execs bash: $! == pgid.
+        outer = (f"mkdir -p {run_dir} && rm -f {exit_file} {pid} || exit 1; "
+                 f"setsid bash -c {shlex.quote(tail)} </dev/null >/dev/null 2>&1 & echo $! > {pid}")
+        return ["env", *assigns, "bash", "-c", outer]
 
     def exists(self, runner: Runner, name: str) -> bool:
         return runner.run(["test", "-e", str(self._files(name)[0])]).returncode == 0
@@ -200,7 +205,10 @@ class UvOpenpi:
         done = runner.run(["cat", str(exit_file)])
         if done.returncode or not done.stdout.strip():
             raise StepFailed(f"{name} ended without writing {exit_file} (killed from outside?)")
-        return int(done.stdout.strip())
+        try:
+            return int(done.stdout.strip())
+        except ValueError:
+            raise StepFailed(f"{name}: {exit_file} holds {done.stdout.strip()!r}, not an exit code") from None
 
     def remove(self, runner: Runner, name: str) -> None:
         runner.run(["rm", "-f", *map(str, self._files(name))])

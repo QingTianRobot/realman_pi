@@ -55,7 +55,7 @@ def test_the_image_keeps_the_repo_layout_for_config_lookup():
 def test_the_compute_host_layout_comes_from_the_environment():
     environment = _service()["environment"]
     for key in ("REALMAN_COMPUTE_SSH_HOST", "REALMAN_COMPUTE_SSH_CONFIG", "REALMAN_COMPUTE_WORKDIR",
-                "REALMAN_RECORDING_SSH_HOST", "REALMAN_TRAINING_DATA_ROOT"):
+                "REALMAN_RECORDING_SSH_HOST", "REALMAN_TRAINING_DATA_ROOT", "REALMAN_TRAINING_ARM"):
         assert key in environment
     # "-" (not ":-") keeps an explicitly empty value: SJD sets REALMAN_RECORDING_SSH_HOST="" (recorder is local).
     assert environment["REALMAN_RECORDING_SSH_HOST"] == "${REALMAN_RECORDING_SSH_HOST-realman_local}"

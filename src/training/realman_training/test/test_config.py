@@ -253,3 +253,10 @@ def test_compose_passes_empty_values_paths_keep_their_defaults(monkeypatch):
     assert config.openpi.docker_data == OpenpiConfig().docker_data
     assert config.openpi.weights == OpenpiConfig().weights
     assert config.remote.ssh_host == ""  # '-': an explicit empty value = the recorder runs on this host
+
+
+def test_quality_arm_follows_the_environment(monkeypatch):
+    monkeypatch.setenv("REALMAN_TRAINING_ARM", "l")
+    assert load_config(DEFAULT_CONFIG).quality.arm == "l"
+    monkeypatch.setenv("REALMAN_TRAINING_ARM", "")  # compose passes an empty value when unset
+    assert load_config(DEFAULT_CONFIG).quality.arm == "r"

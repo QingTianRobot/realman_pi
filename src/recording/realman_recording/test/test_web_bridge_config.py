@@ -36,3 +36,18 @@ def test_camera_rate_health_configures_the_web_bridge():
     assert bridge["camera_stale_after_sec"] > 0
     assert 0 < bridge["camera_low_fps_ratio"] <= 1
     assert not any(key.startswith("camera_rate") or key.startswith("camera_stale") for key in recorder)
+
+
+def test_pika_recalibrate_is_off_by_default_and_outlasts_the_helper():
+    import json
+
+    bridge, recorder = _bridge_params()
+    assert bridge["pika_helper_url"] == ""
+    assert "pika_helper_url" not in recorder
+    helper = json.loads((ROOT / "config" / "docker" / "pika_helper.json").read_text(encoding="utf-8"))
+    status = helper["status_timeout_sec"]
+    # Worst recalibrate = worst stop (grace + leftover INT/TERM/KILL + status probes)
+    # + worst start (status probes + start + leftover clearing); LEFTOVER_TERM_WAIT_SEC is 1.0.
+    worst_stop = helper["stop_grace_sec"] + helper["leftover_grace_sec"] + 2 * 1.0 + 2 * status
+    worst_start = 2 * status + helper["timeout_sec"] + helper["leftover_grace_sec"] + 2 * 1.0
+    assert worst_stop + worst_start < bridge["pika_helper_timeout_sec"]

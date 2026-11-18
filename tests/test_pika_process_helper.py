@@ -3,8 +3,10 @@
 import importlib.util
 import json
 from pathlib import Path
+import tempfile
 import threading
 import unittest
+from unittest import mock
 from http.server import ThreadingHTTPServer
 from urllib.error import HTTPError
 from urllib.request import Request, urlopen
@@ -385,6 +387,137 @@ class HttpTest(unittest.TestCase):
 
     def test_unknown_path_is_404(self):
         self.assertEqual(self.call("POST", "/restart")[0], 404)
+
+
+def make_recal(tmux, calibration, now=1795000000.0):
+    config = {**CONFIG, "libsurvive_config": str(calibration)}
+    return helper.PikaProcess(config, runner=tmux, sleep=FakeSleep(), home="/home/op", now=lambda: now)
+
+
+class RecalibrateTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        self.dir = Path(self.tmp.name)
+        self.calibration = self.dir / "config.json"
+        self.calibration.write_text('{"lighthouse0": {}}')
+        # 1795000000 = 2026-11-18 ... local; compute the expected stamp the same way the helper does.
+        self.stamp = helper.time.strftime("%Y%m%d-%H%M%S", helper.time.localtime(1795000000.0))
+
+    def tearDown(self):
+        self.tmp.cleanup()
+
+    def test_stop_then_move_then_start(self):
+        tmux = FakeTmux(running=True)
+        result = make_recal(tmux, self.calibration).recalibrate()
+        verbs = [call[1] for call in tmux.calls]
+        self.assertLess(verbs.index("send-keys"), verbs.index("new-session"))
+        backup = self.dir / f"config.json.bak-{self.stamp}"
+        self.assertEqual(result["backup"], str(backup))
+        self.assertTrue(backup.exists())
+        self.assertFalse(self.calibration.exists())
+        self.assertTrue(result["ok"])
+        self.assertEqual(result["action"], "recalibrate")
+        self.assertTrue(tmux.running)
+
+    def test_backup_name_collision_gets_a_suffix(self):
+        (self.dir / f"config.json.bak-{self.stamp}").write_text("older")
+        result = make_recal(FakeTmux(running=False), self.calibration).recalibrate()
+        self.assertEqual(result["backup"], str(self.dir / f"config.json.bak-{self.stamp}-1"))
+        self.assertEqual((self.dir / f"config.json.bak-{self.stamp}").read_text(), "older")
+
+    def test_missing_calibration_still_restarts(self):
+        self.calibration.unlink()
+        tmux = FakeTmux(running=False)
+        result = make_recal(tmux, self.calibration).recalibrate()
+        self.assertIsNone(result["backup"])
+        self.assertIn("new-session", [call[1] for call in tmux.calls])
+        self.assertTrue(any("restarting only" in line for line in result["output_tail"]))
+
+    def test_stack_still_running_after_stop_moves_nothing_and_starts_nothing(self):
+        tmux = FakeTmux(running=True, stops_after=99, kill_survives=True)
+        with self.assertRaises(helper.ActionFailed) as caught:
+            make_recal(tmux, self.calibration).recalibrate()
+        self.assertTrue(self.calibration.exists())
+        self.assertNotIn("new-session", [call[1] for call in tmux.calls])
+        self.assertIn("recalibrate failed", str(caught.exception))
+
+    def test_rename_failure_does_not_start(self):
+        tmux = FakeTmux(running=False)
+        with mock.patch.object(helper.os, "replace", side_effect=OSError("read-only file system")):
+            with self.assertRaises(helper.ActionFailed) as caught:
+                make_recal(tmux, self.calibration).recalibrate()
+        self.assertNotIn("new-session", [call[1] for call in tmux.calls])
+        self.assertTrue(any("read-only" in line for line in caught.exception.output_tail))
+
+    def test_busy_is_refused(self):
+        process = make_recal(FakeTmux(running=False), self.calibration)
+        process._busy = "start"
+        with self.assertRaises(helper.Busy):
+            process.recalibrate()
+        self.assertTrue(self.calibration.exists())
+
+    def test_not_configured(self):
+        with self.assertRaises(helper.NotConfigured):
+            make(FakeTmux(running=False)).recalibrate()
+
+    def test_status_reports_the_backup(self):
+        process = make_recal(FakeTmux(running=False), self.calibration)
+        process.recalibrate()
+        self.assertEqual(process.status()["last"]["backup"], str(self.dir / f"config.json.bak-{self.stamp}"))
+
+    def test_config_path_validation(self):
+        for broken in ("config.json", "~/.config/libsurvive/config.txt", "", 5):
+            with self.assertRaises(ValueError):
+                helper.validate_config({**CONFIG, "libsurvive_config": broken})
+        helper.validate_config({**CONFIG, "libsurvive_config": "~/.config/libsurvive/config.json"})
+        helper.validate_config({**CONFIG, "libsurvive_config": "/home/op/.config/libsurvive/config.json"})
+
+    def test_tilde_is_expanded(self):
+        config = {**CONFIG, "libsurvive_config": "~/.config/libsurvive/config.json"}
+        process = helper.PikaProcess(config, runner=FakeTmux(), sleep=FakeSleep(), home="/home/op")
+        self.assertEqual(str(process.calibration_path), "/home/op/.config/libsurvive/config.json")
+
+    def test_repo_config_enables_recalibrate(self):
+        config = helper.load_config(ROOT / "config/docker/pika_helper.json")
+        self.assertEqual(config["libsurvive_config"], "~/.config/libsurvive/config.json")
+
+
+class RecalibrateHttpTest(unittest.TestCase):
+    def setUp(self):
+        self.tmp = tempfile.TemporaryDirectory()
+        calibration = Path(self.tmp.name) / "config.json"
+        calibration.write_text("{}")
+        self.servers = []
+        self.with_key = self._serve(make_recal(FakeTmux(running=False), calibration))
+        self.without_key = self._serve(make(FakeTmux(running=False)))
+
+    def _serve(self, process):
+        server = ThreadingHTTPServer(("127.0.0.1", 0), helper.make_handler(process))
+        threading.Thread(target=server.serve_forever, daemon=True).start()
+        self.servers.append(server)
+        return f"http://127.0.0.1:{server.server_address[1]}"
+
+    def tearDown(self):
+        for server in self.servers:
+            server.shutdown()
+            server.server_close()
+        self.tmp.cleanup()
+
+    def post(self, base, path):
+        request = Request(base + path, data=b"{}", method="POST")
+        try:
+            with urlopen(request, timeout=5) as response:
+                return response.status, json.loads(response.read())
+        except HTTPError as error:
+            return error.code, json.loads(error.read())
+
+    def test_recalibrate_route(self):
+        status, payload = self.post(self.with_key, "/recalibrate")
+        self.assertEqual((status, payload["ok"], payload["action"]), (200, True, "recalibrate"))
+
+    def test_recalibrate_without_config_is_404(self):
+        status, payload = self.post(self.without_key, "/recalibrate")
+        self.assertEqual((status, payload["error"]), (404, "recalibrate not configured"))
 
 
 if __name__ == "__main__":

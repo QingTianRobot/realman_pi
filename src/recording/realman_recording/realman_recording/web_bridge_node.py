@@ -33,6 +33,7 @@ from .camera_rate import CameraRateTracker, expected_fps_by_camera
 from .camera_workers import LatestFramePreview, PreviewFrame, downscale_jpeg, image_to_jpeg, load_camera_sources
 from .layout_manifest import build_recording_manifest
 from .pika_motion import PikaMotionCache
+from .pika_recalibrate import call_helper, recalibrate, validate_helper_url
 from .quality_events import load_quality_reasons
 from .rerun_adapter import RerunVisualizationAdapter
 from .web_server import RecordingWebServer
@@ -85,6 +86,9 @@ class RecordingWebBridgeNode(Node):
         self.declare_parameter("pika_sides", [""])
         self.declare_parameter("pika_pose_topics", [""])
         self.declare_parameter("pika_command_velocity_topics", [""])
+        # Host pika_process_helper reached over a loopback tunnel; "" hides the :8770 重标定 button.
+        self.declare_parameter("pika_helper_url", "")
+        self.declare_parameter("pika_helper_timeout_sec", 90.0)
         self.declare_parameter("static_root", str(package_share / "static"))
         self.declare_parameter("recording_root", "/data/realman-recordings")
         self.declare_parameter("lerobot_export_dir", "/data/realman-recordings/lerobot")
@@ -181,6 +185,11 @@ class RecordingWebBridgeNode(Node):
             10, callback_group=self._callback_group,
         )
         self._manifest = build_recording_manifest(self.get_parameter("layout_config_file").value)
+        self._pika_helper_url = validate_helper_url(str(self.get_parameter("pika_helper_url").value))
+        self._pika_helper_timeout_sec = float(self.get_parameter("pika_helper_timeout_sec").value)
+        if self._pika_helper_timeout_sec <= 0.0:
+            raise ValueError("pika_helper_timeout_sec must be positive")
+        self._manifest["pika_recalibrate"] = bool(self._pika_helper_url)
         self._recording_client = self.create_client(ManageRecording, "/recording/manage")
         try:
             quality_reasons = load_quality_reasons(str(self.get_parameter("quality_reasons_path").value))
@@ -198,6 +207,8 @@ class RecordingWebBridgeNode(Node):
             logger=self.get_logger(),
             export_all=self._export_all,
             quality_reasons=quality_reasons,
+            pika_recalibrate=self._pika_recalibrate if self._pika_helper_url else None,
+            pika_helper_status=self._pika_helper_status if self._pika_helper_url else None,
         )
         self._server.start()
         if self._preview_worker is not None:
@@ -255,6 +266,16 @@ class RecordingWebBridgeNode(Node):
         except Exception as error:  # noqa: BLE001 - surface a stable web error
             raise RuntimeError(f"batch export failed: {error}") from error
         return {"ok": bool(response.success), "message": response.message, "state": response.state}
+
+    def _pika_recalibrate(self) -> tuple[int, dict[str, Any]]:
+        """Runs on the aiohttp worker thread; blocks only it for up to pika_helper_timeout_sec."""
+        return recalibrate(
+            self._pika_helper_url, self._pika_helper_timeout_sec,
+            self._recording_status.get("state"), self._pika.snapshot(time.monotonic_ns()),
+        )
+
+    def _pika_helper_status(self) -> tuple[int, dict[str, Any]]:
+        return call_helper(self._pika_helper_url, "status", 5.0)
 
     def _create_preview_worker(self) -> LatestFramePreview | None:
         """Build a one-slot ROS-image preview compressor when enabled."""

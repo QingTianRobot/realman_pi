@@ -303,6 +303,28 @@ Replay 部署到 `$HOME/pika_realman_replay`，使用独立 Compose 与生产 RO
 重启生产 driver/control tree。生命周期见 [Pika replay 边界](./behavior-tree-motion#pika-rosbag-replay-边界)，
 driver 侧契约见 [ingress 与坐标桥接](./realman-action-development#pika-rosbag-replay-的-ingress-与坐标桥接)。
 
+## 基站重标定（:8770 一键）
+
+**何时用**：Pika 一直在基站视野内，但 :8770 Pika 卡片显示 STALE / NO DATA，且 Pika 主机上
+`pika_localization_status_<side>` 为 false、追踪器 USB 仍在发数据（`/sys/bus/usb/devices/<port>/urbnum`
+持续增长）。这通常是 libsurvive 把基站位置解错了：`~/.config/libsurvive/config.json` 中某个
+`lighthouseN.pose` 与以前相比位置跳了几十厘米而朝向几乎不变，locator 日志里 `Global solve ... error of`
+比正常大一到两个数量级。2026-11-18 左 Pika 断流即此原因。
+
+**按钮做什么**：:8770「Pika 运动 3D」面板的 **重标定** 调 `POST /api/pika/recalibrate`，经回环隧道转到
+Pika 主机上的 `pika_process_helper` `POST /recalibrate`，在同一把锁里：干净停栈（含残留进程组清理）→
+把 `config.json` 改名为 `config.json.bak-YYYYMMDD-HHMMSS`（同名已存在时依次加 `-1`、`-2`、…；没有
+`config.json` 时跳过改名、只重启栈，页面也就不显示备份提示）→ 启动。libsurvive 随后从头求解基站。页面
+等待左右两侧位姿都回到 LIVE，最多 60 s。
+
+- 录制进行中（倒计时 / 录制 / 收尾）或任一侧 Pika 速度指令在发时拒绝（409），不会打断采集或遥操作。重标定进行中页面不会阻止新的录制：看到「已重新定位」之前不要开始录制。
+- 停栈不干净时不改名、不启动；改名失败不启动。
+- 60 s 内未重新定位：先在 :8765「Pika 速度控制」点 **关闭 Pika** 把栈完全停掉，再 **重新插拔两个 Pika**，然后再点一次重标定（栈已停时它只启动一次）。不要在栈运行时插拔：插拔后重启偶尔会让追踪器卡住（见下方「运行时的陷阱」）。
+- 启用条件：helper 配置 `libsurvive_config`（`config/docker/pika_helper.json`），且 `config/ros/recording.yaml`
+  的 `/recording_web_bridge` 设置 `pika_helper_url`（仓库默认空 = 隐藏按钮）。
+
+**恢复旧标定**：在 Pika 主机上先停栈，再把某个 `config.json.bak-*` 改回 `config.json`，然后启动。
+
 ## 链路与已知问题
 
 以下是 2026-10-08 至 10-10 在生产机上排查 Pika 速度控制时的**现场记录**（实测数据，不是契约）。
@@ -356,6 +378,7 @@ Pika 主机和生产机之间**没有共同的有线网段**，唯一共用的�
 
 - `./rm65 bt control` 默认 `REALMAN_BT_DRY_RUN=true`：dry-run 下 router 接收 Pika 输入但**什么都不发**，手臂"不动"是预期行为。真实运动要加 `REALMAN_BT_DRY_RUN=false`。
 - 放到后台运行的实例**忽略 `SIGINT`**，用 `SIGTERM` 停止。
+- Pika 栈重启后追踪器**偶尔会卡住**：locator 日志有 `Adding tracked object`，但没有 `watchman FW` 行、也没有位姿，追踪器 USB 的 `urbnum` 停在 0 附近。软件无法恢复：先把栈完全停掉，**重新插拔两个 Pika**，再启动一次（不要在栈运行时插拔，也不要反复重启）。
 
 ## 相关页面
 

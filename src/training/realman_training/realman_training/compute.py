@@ -26,6 +26,7 @@ import traceback
 from pathlib import Path
 
 from .config import REPO_ROOT, ConsoleConfig, load_config
+from .episode_tags import FILE_NAME as TAGS_FILE
 from .jobs import STEPS, JobCancelled, StepFailed, StepLog
 from .openpi import RUN_DIR_NAME
 from .runner import CommandFailed, Runner
@@ -374,22 +375,50 @@ def pull_and_push(params: dict, log, runner: Runner | None = None) -> dict:
     target = Path(result["target"])
     try:
         remote = push_dataset(config, runner, log, target)
-    except (CommandFailed, StepFailed, OSError) as error:
-        # never leave a half state: a retry simply pulls again from the recorder
+    except BaseException as error:
+        # never leave a half state (nor a full local copy, videos included, on a tight disk): a retry simply pulls
+        # again from the recorder
         shutil.rmtree(target, ignore_errors=True)
+        if not isinstance(error, (CommandFailed, StepFailed, OSError)):
+            raise  # a cancel stays a cancel
         raise StepFailed(f"pulled {result.get('episodes', '?')} episodes but the copy to {config.compute.ssh_host} "
                          f"failed: {error}; the local copy was removed — run the pull again") from None
     sync_mirror(config, runner, log)
     return {**result, "compute_path": remote}
 
 
+def refresh_tags_and_push(step, params: dict, log, runner: Runner | None = None) -> dict:
+    """tags refresh runs here (it reads the robot's tag index), then its episode_tags.json goes to the same dataset
+    on the compute host: the next mirror sync copies the compute host's data_root over this one."""
+    runner = runner or Runner()
+    config = load_config(params.get("config"))
+    result = step(params, log, runner)
+    root = Path(result["path"]).resolve()
+    data_root = Path(config.data_root).expanduser().resolve()
+    host = config.compute.ssh_host
+    if not root.is_relative_to(data_root):
+        log(f"{root} is outside data_root {data_root}: not copied to {host}")
+        return result
+    remote = remote_path(config, f"{REMOTE_DATA_ROOT}/{root.relative_to(data_root).as_posix()}/{TAGS_FILE}")
+    done = runner.run(["rsync", "-a", RSYNC_IO_TIMEOUT, "-e", shlex.join(ssh_base(config)), str(root / TAGS_FILE),
+                       f"{host}:{remote}"])
+    if done.returncode:
+        raise StepFailed(f"tags written here but not copied to {host}:{remote} "
+                         f"({(done.stderr or done.stdout).strip()[-300:]}); the next mirror sync will undo them — "
+                         "refresh again")
+    log(f"copied to {host}:{remote}")
+    return result
+
+
 def route(kind: str, target: str, step, params: dict):
     """The callable run_job runs: the step itself, or its remote form when this console has a compute host.
     Only the real step targets are rerouted (tests and fakes pass their own)."""
-    if target != STEPS.get(kind) or (kind not in REMOTE_KINDS and kind != "pull"):
+    if target != STEPS.get(kind) or (kind not in REMOTE_KINDS and kind not in ("pull", "tags_refresh")):
         return step
     if not enabled(load_config(params.get("config"))):
         return step
+    if kind == "tags_refresh":
+        return functools.partial(refresh_tags_and_push, step)
     return pull_and_push if kind == "pull" else functools.partial(run_remote, kind)
 
 

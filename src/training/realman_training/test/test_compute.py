@@ -442,3 +442,56 @@ def test_other_steps_keep_going_when_their_ssh_is_gone(monkeypatch, config):
     monkeypatch.setattr(compute, "print", lambda *a, **k: (_ for _ in ()).throw(BrokenPipeError()), raising=False)
     monkeypatch.setattr(compute.os, "_exit", lambda code: pytest.fail("view must not leave"))
     assert compute.remote_step_main("view", "v") == 0
+
+
+def test_tags_refresh_also_updates_the_compute_host(config, monkeypatch):
+    """The mirror sync copies the compute host's data_root over the console's: a refresh made here must reach it."""
+    monkeypatch.setattr(compute, "load_config", lambda path=None: config)
+    dataset = config.data_root / "raw_x" / "ds"
+    dataset.mkdir(parents=True)
+
+    def refresh(params, log, runner=None):
+        (Path(params["path"]) / "episode_tags.json").write_text("{}", encoding="utf-8")
+        return {"path": str(Path(params["path"]).resolve()), "episodes": 3}
+
+    routed = compute.route("tags_refresh", STEPS["tags_refresh"], refresh, {})
+    assert routed is not refresh
+    runner = FakeRunner()
+    result = routed({"path": str(dataset)}, RecordingLog(), runner=runner)
+    assert result["episodes"] == 3
+    push = runner.commands("rsync")
+    assert len(push) == 1 and compute.RSYNC_IO_TIMEOUT in push[0]
+    assert push[0][-2] == str(dataset.resolve() / "episode_tags.json")
+    assert push[0][-1] == "EI:/w/data/realman/raw_x/ds/episode_tags.json"
+
+
+def test_tags_refresh_fails_when_the_compute_host_is_not_updated(config, monkeypatch):
+    monkeypatch.setattr(compute, "load_config", lambda path=None: config)
+    dataset = config.data_root / "raw_x"
+    dataset.mkdir(parents=True)
+    routed = compute.route("tags_refresh", STEPS["tags_refresh"],
+                           lambda params, log, runner=None: {"path": str(dataset.resolve())}, {})
+    with pytest.raises(StepFailed, match="EI"):
+        routed({"path": str(dataset)}, RecordingLog(), runner=FakeRunner().on("rsync", returncode=12, stdout="boom"))
+
+
+def test_tags_refresh_is_local_only_without_a_compute_host(tmp_path, monkeypatch):
+    path = tmp_path / "c.yaml"
+    path.write_text(f"training_console:\n  data_root: {tmp_path}\n", encoding="utf-8")
+    monkeypatch.setattr(compute, "load_config", lambda p=None: load_config(path))
+    real = object()
+    assert compute.route("tags_refresh", STEPS["tags_refresh"], real, {}) is real
+
+
+def test_cancelling_the_push_removes_the_local_copy_and_stays_a_cancel(config, monkeypatch):
+    calls = []
+    _fake_pull(monkeypatch, config, calls)
+    target = config.data_root / "raw_x"
+
+    def cancel(argv, input):
+        raise JobCancelled()
+
+    runner = FakeRunner().on("rsync", action=cancel)
+    with pytest.raises(JobCancelled):
+        compute.pull_and_push({"target": str(target)}, RecordingLog(), runner)
+    assert calls == ["pull"] and not target.exists()

@@ -19,9 +19,11 @@ class EpisodeConfig:
     keyboard_topic: str
     required_mode: str
     keyboard_stale_sec: float
-    release_timeout_sec: float
-    home_velocity_percent: int
-    home_timeout_sec: float
+    # A stop press restarts the BT branch: select restart_off_mode, then required_mode again (its entry
+    # MoveJ homes the arms). Each selection must be ACTIVE within its timeout.
+    restart_off_mode: str = "none"
+    restart_off_timeout_sec: float = 10.0
+    restart_timeout_sec: float = 150.0
     # arm namespace -> gripper device name; homing opens these grippers (an empty mapping opens none).
     home_open_grippers: dict[str, str] = field(default_factory=dict)
 
@@ -59,6 +61,10 @@ def _positive(path: Path, doc: dict, key: str) -> float:
     return float(value)
 
 
+def _optional_positive(path: Path, doc: dict, key: str, default: float) -> float:
+    return default if key not in doc else _positive(path, doc, key)
+
+
 def _grippers(path: Path, doc: dict) -> dict[str, str]:
     key = "home_open_grippers"
     value = doc.get(key)
@@ -77,21 +83,26 @@ def _grippers(path: Path, doc: dict) -> dict[str, str]:
 
 def load_episode_config(path: Path) -> EpisodeConfig:
     doc = _read(path)
-    velocity = doc.get("home_velocity_percent")
-    if isinstance(velocity, bool) or not isinstance(velocity, int) or not 1 <= velocity <= 100:
-        raise ValueError(f"{path}: home_velocity_percent must be an integer in 1..100")
+    # release_timeout_sec / home_velocity_percent / home_timeout_sec belonged to the trigger's own homing
+    # MoveJ; the branch entry MoveJ homes now, so older host files that still carry them load unchanged.
+    off_mode = doc.get("restart_off_mode", "none")
+    if not isinstance(off_mode, str) or not off_mode:
+        raise ValueError(f"{path}: restart_off_mode must be a non-empty string")
+    required_mode = _str(path, doc, "required_mode")
+    if off_mode == required_mode:
+        raise ValueError(f"{path}: restart_off_mode must differ from required_mode")
     return EpisodeConfig(
         enabled=_bool(path, doc, "enabled"),
         task=_str(path, doc, "task", allow_empty=True),
         profile=_str(path, doc, "profile"),
         record_cameras=_bool(path, doc, "record_cameras"),
         keyboard_topic=_str(path, doc, "keyboard_topic"),
-        required_mode=_str(path, doc, "required_mode"),
+        required_mode=required_mode,
         keyboard_stale_sec=_positive(path, doc, "keyboard_stale_sec"),
-        release_timeout_sec=_positive(path, doc, "release_timeout_sec"),
-        home_velocity_percent=velocity,
-        home_timeout_sec=_positive(path, doc, "home_timeout_sec"),
         home_open_grippers=_grippers(path, doc),
+        restart_off_mode=off_mode,
+        restart_off_timeout_sec=_optional_positive(path, doc, "restart_off_timeout_sec", 10.0),
+        restart_timeout_sec=_optional_positive(path, doc, "restart_timeout_sec", 150.0),
     )
 
 

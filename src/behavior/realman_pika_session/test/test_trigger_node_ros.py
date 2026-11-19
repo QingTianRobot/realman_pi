@@ -1,4 +1,4 @@
-"""Isolated-graph test: fake recorder service and fake MoveJ servers drive one full episode."""
+"""Isolated-graph test: a fake recorder service and a fake BT executor mode service drive one full episode."""
 import itertools
 import json
 import os
@@ -8,7 +8,6 @@ import pytest
 
 rclpy = pytest.importorskip("rclpy")
 
-from rclpy.action import ActionServer, get_action_server_names_and_types_by_node  # noqa: E402
 from rclpy.executors import SingleThreadedExecutor  # noqa: E402
 from rclpy.node import Node  # noqa: E402
 from rclpy.qos import DurabilityPolicy, QoSProfile, ReliabilityPolicy  # noqa: E402
@@ -16,22 +15,23 @@ from rclpy.task import Future  # noqa: E402
 from std_msgs.msg import Bool, String  # noqa: E402
 from std_srvs.srv import Trigger  # noqa: E402
 
-from realman_msgs.action import ExecuteMotion  # noqa: E402
 from realman_msgs.msg import InputModeState  # noqa: E402
+from realman_msgs.srv import SelectInputMode  # noqa: E402
 from realman_recording_msgs.msg import RecordingStatus  # noqa: E402
 from realman_recording_msgs.srv import ManageRecording  # noqa: E402
 
 from realman_pika_session.config_loader import EpisodeConfig  # noqa: E402
-from realman_pika_session.episode_machine import Action  # noqa: E402
+from realman_pika_session.branch_restart import Effect  # noqa: E402
 from realman_pika_session.trigger_node import TriggerNode  # noqa: E402
 
 LATCHED = QoSProfile(depth=1, reliability=ReliabilityPolicy.RELIABLE, durability=DurabilityPolicy.TRANSIENT_LOCAL)
 CONFIG = EpisodeConfig(
     enabled=True, task="pick cable", profile="teleop_v1", record_cameras=True,
     keyboard_topic="/foot_pedal/enabled", required_mode="pikavelocity",
-    keyboard_stale_sec=3.0, release_timeout_sec=0.5, home_velocity_percent=30, home_timeout_sec=5.0,
+    keyboard_stale_sec=3.0,
     # gripper_right answers failure (an offline bus) and m is not homed: neither may block the homing.
     home_open_grippers={"l": "gripper_left", "r": "gripper_right", "m": "gripper_middle"},
+    restart_off_mode="none", restart_off_timeout_sec=2.0, restart_timeout_sec=5.0,
 )
 HOME = {"l": (1.0, 2.0, 3.0, 4.0, 5.0, 6.0), "r": (6.0, 5.0, 4.0, 3.0, 2.0, 1.0)}
 # The previous test's world can linger in the next test's graph for a moment after rclpy.shutdown(), so
@@ -49,14 +49,14 @@ class FakeWorld(Node):
     def __init__(self):
         super().__init__(f"fake_world_{os.getpid()}_{os.environ['ROS_DOMAIN_ID']}")
         self.requests = []
-        self.goals = {}
+        self.selections = []  # (mode_id, requester_id)
+        self.next_request_id = 100
         self.states = []
         self.gripper_opens = []
         self.create_service(ManageRecording, "/recording/manage", self._manage)
         for name, ok in (("gripper_left", True), ("gripper_right", False), ("gripper_middle", True)):
             self.create_service(Trigger, f"/{name}/open", self._make_open(name, ok))
-        for arm in ("l", "r", "m"):
-            ActionServer(self, ExecuteMotion, f"/{arm}/execute_motion", self._make_execute(arm))
+        self.create_service(SelectInputMode, "/realman_bt_executor/select_input_mode", self._select)
         self.keyboard = self.create_publisher(Bool, "/foot_pedal/enabled", 10)
         self.mode = self.create_publisher(InputModeState, "/realman_bt_executor/input_mode_state", LATCHED)
         self.status = self.create_publisher(RecordingStatus, "/recording/status", 10)
@@ -77,20 +77,23 @@ class FakeWorld(Node):
             return response
         return handle
 
-    def _make_execute(self, arm):
-        def execute(goal_handle):
-            self.goals[arm] = goal_handle.request
-            goal_handle.succeed()
-            result = ExecuteMotion.Result()
-            result.success = True
-            return result
-        return execute
+    def _select(self, request, response):
+        """Like the executor: a new request id, the mode active at once (the entry MoveJ is instant here)."""
+        self.selections.append((request.mode_id, request.requester_id))
+        self.next_request_id += 1
+        response.accepted = True
+        response.request_id = self.next_request_id
+        response.message = "accepted"
+        self.publish_mode(request.mode_id, self.next_request_id)
+        return response
 
-    def publish_mode(self, mode):
+    def publish_mode(self, mode, request_id=None):
         message = InputModeState()
+        message.requested_mode = mode
         message.active_mode = mode
         message.selected_mode = mode
         message.phase = InputModeState.ACTIVE
+        message.request_id = self.next_request_id if request_id is None else request_id
         self.mode.publish(message)
 
     def stop_mode_publisher(self):
@@ -120,19 +123,13 @@ def graph():
 
 
 def world_discovered(node, world_name):
-    """True once the node sees THIS world's recorder service and MoveJ servers, not a previous test's."""
+    """True once the node sees THIS world's recorder and mode services, not a previous test's."""
     try:
-        servers = {name for name, _ in get_action_server_names_and_types_by_node(node, world_name, "/")}
         services = {name for name, _ in node.get_service_names_and_types_by_node(world_name, "/")}
-        grippers = {"/gripper_left/open", "/gripper_right/open"}
-        publishers = {name for name, _ in node.get_publisher_names_and_types_by_node(world_name, "/")}
     except Exception:  # noqa: BLE001 - the world node itself is not discovered yet
         return False
-    actions = [f"/{arm}/execute_motion" for arm in HOME]
-    # server_is_ready() also needs each action's feedback and status publishers, so wait for this world's.
-    topics = {f"{action}/_action/{topic}" for action in actions for topic in ("feedback", "status")}
-    return (set(actions) <= servers and "/recording/manage" in services and topics <= publishers
-            and grippers <= services and node.interfaces_ready()
+    wanted = {"/recording/manage", "/realman_bt_executor/select_input_mode", "/gripper_left/open", "/gripper_right/open"}
+    return (wanted <= services and node.interfaces_ready()
             and all(client.service_is_ready() for client in node._gripper_open.values()))
 
 
@@ -177,7 +174,7 @@ def start_recording(world, node, executor):
     assert spin_until(executor, lambda: last_state(world) == "recording")
 
 
-def test_one_key_episode_records_and_homes(graph):
+def test_one_key_episode_records_and_restarts_the_branch(graph):
     world, node, executor = graph
     ready_for_keys(world, node, executor, "pikavelocity")
     press(world, executor, False)
@@ -187,16 +184,10 @@ def test_one_key_episode_records_and_homes(graph):
     # The recorder reports our session active, so the STOP is ours to send.
     status_seen(world, node, executor, "sess-1", RecordingStatus.RECORDING)
     press(world, executor, False)
-    assert spin_until(executor, lambda: last_state(world) == "idle" and len(world.goals) == 2)
+    assert spin_until(executor, lambda: last_state(world) == "idle" and len(world.selections) == 2)
     assert world.requests[1] == (ManageRecording.Request.STOP, "", "", "sess-1")
-    assert sorted(world.goals) == ["l", "r"]  # m is not in HOME
-    goal = world.goals["l"]
-    assert goal.command == ExecuteMotion.Goal.MOVEJ
-    assert goal.reference_type == ExecuteMotion.Goal.BASE
-    assert goal.reference_name == "base"  # the driver rejects an empty reference_name
-    assert list(goal.joint_degrees) == list(HOME["l"])
-    assert goal.velocity_percent == 30
-    assert goal.connect is False
+    # Off first (the router cancels the velocity sessions), then back on (the entry MoveJ homes the arms).
+    assert world.selections == [("none", "pika_episode"), ("pikavelocity", "pika_episode")]
     # Homing also releases the grippers of the homed arms; m is not homed, so its gripper is left alone.
     assert spin_until(executor, lambda: len(world.gripper_opens) == 2)
     assert sorted(world.gripper_opens) == ["gripper_left", "gripper_right"]
@@ -232,7 +223,7 @@ def test_bt_stopped_during_recording_stops_and_never_homes(graph):
     assert [r[0] for r in world.requests] == [ManageRecording.Request.START, ManageRecording.Request.STOP]
     assert world.states[-1]["detail"] == "abnormal stop: mode changed to unknown"
     spin_until(executor, lambda: False, timeout=0.5)
-    assert world.goals == {}
+    assert world.selections == []
 
 
 def test_bt_back_after_a_stop_restores_the_mode(graph):
@@ -250,7 +241,7 @@ def test_stop_skipped_when_another_session_is_active(graph):
     start_recording(world, node, executor)
     status_seen(world, node, executor, "other-9", RecordingStatus.RECORDING)  # ours ended, someone else records
     press(world, executor, False)
-    assert spin_until(executor, lambda: last_state(world) == "failed" and len(world.goals) == 2)
+    assert spin_until(executor, lambda: last_state(world) == "failed" and len(world.selections) == 2)
     assert [r[0] for r in world.requests] == [ManageRecording.Request.START]  # no STOP: it would hit other-9
     assert world.states[-1]["detail"] == "stop failed: session already ended externally"
 
@@ -267,18 +258,6 @@ class StubRecordingClient:
         future = Future()
         self.calls.append((request, future))
         return future
-
-
-class StubMoveJClient:
-    def __init__(self):
-        self.goals = []
-
-    def server_is_ready(self):
-        return True
-
-    def send_goal_async(self, goal):
-        self.goals.append(goal)
-        return Future()  # never answers; the test delivers results itself
 
 
 @pytest.fixture
@@ -333,33 +312,6 @@ def test_late_start_failure_after_timeout_sends_nothing(lone_node):
     assert node._machine.snapshot()["state"] == "idle"
 
 
-def test_late_movej_result_from_an_older_episode_is_ignored(lone_node):
-    node = lone_node
-    node._movej = {arm: StubMoveJClient() for arm in HOME}
-    machine = node._machine
-    machine.on_mode("pikavelocity", 0.0)
-    machine.on_keyboard(False, 0.0)
-    machine.on_keyboard(True, 1.0)
-    machine.on_start_result(True, "sess-2", "", 1.0)
-    machine.on_keyboard(False, 2.0)
-    home = machine.on_stop_result(True, "", 2.0)
-    assert home == [Action("home", ("l", "r"))]
-    node._apply(home)  # episode 1: goals stay pending
-    node._apply(home)  # episode 2 (e.g. after a retry) while episode 1's goals are still out
-    assert {arm: entry[0] for arm, entry in node._home_deadlines.items()} == {"l": 2, "r": 2}
-    assert [len(client.goals) for client in node._movej.values()] == [2, 2]
-    node._finish_home("l", 1, True, "")  # late result of episode 1
-    assert node._home_deadlines["l"][0] == 2
-    assert machine.snapshot()["state"] == "homing"
-    node._finish_home("l", 2, True, "")
-    assert "l" not in node._home_deadlines
-    assert machine.snapshot()["state"] == "homing"  # r is still pending
-    node._finish_home("r", 1, True, "")
-    assert machine.snapshot()["state"] == "homing"
-    node._finish_home("r", 2, True, "")
-    assert machine.snapshot()["state"] == "idle"
-
-
 def test_late_start_orphan_not_stopped_when_another_session_is_active(lone_node):
     node = lone_node
     stub = StubRecordingClient()
@@ -403,8 +355,24 @@ def test_outcome_logs_switch_severity_without_raising(lone_node):
     node._service_result("start", True, "s", "accepted")
     node._service_result("start", False, "", "preflight failed")
     for success in (True, False, True):
-        node._home_deadlines["l"] = (7, time.monotonic() + 60.0)
-        node._finish_home("l", 7, success, "")
+        node._run_restart([Effect("done", success=success, message="")])
         future = Future()
         future.set_result(recording_response(success, "s"))
         node._on_orphan_stop_done("s", future)
+
+
+def test_unavailable_mode_service_fails_the_restart(lone_node):
+    node = lone_node
+    stub = StubRecordingClient()
+    node._recording = stub
+    node._on_mode(InputModeState(requested_mode="pikavelocity", active_mode="pikavelocity",
+                                 phase=InputModeState.ACTIVE, request_id=3))
+    node._on_keyboard(Bool(data=False))
+    node._on_keyboard(Bool(data=True))
+    stub.calls[0][1].set_result(recording_response(True, "sess-9"))
+    node._on_keyboard(Bool(data=False))  # stop press: STOP + restart; nothing serves select_input_mode
+    assert node._machine.snapshot()["state"] == "stopping"
+    stub.calls[1][1].set_result(recording_response(True, "sess-9"))
+    snapshot = node._machine.snapshot()
+    assert snapshot["state"] == "failed"
+    assert snapshot["detail"] == "restart failed: none refused: /realman_bt_executor/select_input_mode is not available"

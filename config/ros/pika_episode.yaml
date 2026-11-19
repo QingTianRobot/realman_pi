@@ -1,8 +1,10 @@
 # One-key Pika episode recording (src/behavior/realman_pika_session).
 # The enine W/A/S/D keyboard (pika_foot_pedal node) publishes its start/stop state on
 # keyboard_topic. A press that starts teleop also starts a recording; the next press
-# stops the recording, MoveJs the arms back to pika_default_pose (pika_config.yaml) and
-# opens their grippers (home_open_grippers).
+# stops the recording and restarts the BT's Pika branch: it selects restart_off_mode (the
+# router cancels the velocity sessions at once), then required_mode again, whose entry MoveJ
+# homes the arms to pika_default_pose (pika_config.yaml). The grippers in home_open_grippers
+# open at the same time.
 # Off by default; a robot host turns it on in its own config.
 enabled: false
 # Task label stored in every session (the training prompt). Change it and restart
@@ -15,10 +17,11 @@ keyboard_topic: /foot_pedal/enabled
 required_mode: pikavelocity
 # No keyboard state for this long while recording = link lost: stop, no homing.
 keyboard_stale_sec: 3.0
-# After STOP, wait at most this long for the velocity sessions to end before MoveJ.
-release_timeout_sec: 8.0
-home_velocity_percent: 30
-home_timeout_sec: 120.0
+# Branch restart on a stop press: the off mode must be active within restart_off_timeout_sec,
+# then required_mode (including its entry MoveJ) within restart_timeout_sec.
+restart_off_mode: none
+restart_off_timeout_sec: 10.0
+restart_timeout_sec: 150.0
 # Grippers opened when the arms home (gripper_ros2 /<name>/open, sent with the MoveJ).
 # Only arms that home are used; {} keeps every gripper as the operator left it.
 home_open_grippers:

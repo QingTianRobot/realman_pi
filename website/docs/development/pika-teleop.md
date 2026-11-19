@@ -210,7 +210,9 @@ enine 上的外接 W/A/S/D 小键盘由 `pika_foot_pedal` 节点读取（节点�
 
 1. 在 `:8765` 进入 `pikavelocity`（l、r 先 MoveJ 到 `pika_default_pose`）。用“Pika 速度控制”开关时可以直接进行第 2 步：开关要等按键后 Pika 发出速度才切模式，这次按键先挂起，模式到达时键盘仍为“开”就开始录制（入场 MoveJ 期间的不到 1 s 不在录制内）。
 2. 按一次 W/A/S/D：左右遥操作开始，同时 `/recording/manage` START，任务标签取自配置。
-3. 再按一次：遥操作停止，录制 STOP；等 l、r 的速度会话结束（最多 `release_timeout_sec`），再把 l、r MoveJ 回 `pika_default_pose`，同时松开这两臂的夹爪（`home_open_grippers`）。`skip: true` 的臂不动，夹爪也不动。
+3. 再按一次：遥操作停止，录制 STOP，同时**重启 Pika 分支**：节点以 `requester_id=pika_episode` 先选 `restart_off_mode`（默认 `none`），router 随即取消 l、r 的速度会话；该模式 ACTIVE 后再选回 `pikavelocity`，分支的入场 `ThreeArmMoveJ` 把 l、r 移回 `pika_default_pose`，完成后 router 重新接管。同时松开这两臂的夹爪（`home_open_grippers`）。`skip: true` 的臂不动，夹爪也不动。
+
+   归位不再等 Pika 速度流停下：以前节点自己发 MoveJ，要先等速度会话结束；只要 Pika 还在发速度（例如停止键之后紧跟着又按了一下），会话就一直占着手臂，MoveJ 被驱动以 `arm is busy` 拒绝。现在离开模式由 router 主动取消会话，入场 MoveJ 撞上驱动释放手臂的几毫秒空档时由行为树自己重试。
 4. 录制结束后按录制平台的 `auto_export_on_stop` 自动导出；不要的 episode 在 `:8770` 回放页隐藏或 DISCARD。
 
 节点运行在机器人主机的 bringup 里（domain 65），只消费桥过来的键盘启停状态 `/foot_pedal/enabled`（`std_msgs/Bool`）。enine 的 `pika_domain_bridge.yaml` 必须多转这个话题：
@@ -222,7 +224,7 @@ enine 上的外接 W/A/S/D 小键盘由 `pika_foot_pedal` 节点读取（节点�
 
 改完重启 enine 的 `realman-pika-bridge` 用户单元。
 
-配置在 `config/ros/pika_episode.yaml`，仓库默认 `enabled: false`；机器人主机在自己的配置里打开并填 `task`，换任务或材料时改 `task` 后重启 bringup。归位位姿不单独配置，就是 `pika_config.yaml` 的 `pika_default_pose`；归位时松开的夹爪由 `home_open_grippers`（臂 `l`/`m`/`r` → 夹爪名）指定，这个键必须写。
+配置在 `config/ros/pika_episode.yaml`，仓库默认 `enabled: false`；机器人主机在自己的配置里打开并填 `task`，换任务或材料时改 `task` 后重启 bringup。归位位姿不单独配置，就是 `pika_config.yaml` 的 `pika_default_pose`（分支入场 MoveJ 用的同一组值，速度也由行为树决定）；`restart_off_timeout_sec`（默认 10 s）和 `restart_timeout_sec`（默认 150 s，含入场 MoveJ）分别限定两次选模式各自变为 ACTIVE 的时间，三个 `restart_*` 键都可以不写。旧配置里的 `release_timeout_sec`、`home_velocity_percent`、`home_timeout_sec` 已不再使用，留着也不报错；归位时松开的夹爪由 `home_open_grippers`（臂 `l`/`m`/`r` → 夹爪名）指定，这个键必须写。
 
 `system.launch.py` 的 launch 参数 `start_pika_episode`（默认 `true`）会包含 `pika_episode.launch.py`，但节点仍只在 `pika_episode.yaml` 里 `enabled: true` 时才启动。该 launch 从环境变量 `REALMAN_CONFIG_ROOT` 读取配置根目录（为空或未设置时用包内安装的配置），没有对应的 launch 参数。
 
@@ -230,23 +232,22 @@ enine 上的外接 W/A/S/D 小键盘由 `pika_foot_pedal` 节点读取（节点�
 | --- | --- |
 | 按键时输入模式不是 `pikavelocity` | 先不开录，`detail` 写 `ignored: mode is <x>`；之后模式切到 `pikavelocity` 时，若键盘仍为“开”且键盘状态未过期（`keyboard_stale_sec`），立即开录。按键前就已为“开”（节点启动时的基线）不算 |
 | 已有别人开的录制（例如策略尝试自动录制；录制状态为 SCHEDULED、ARMED、COUNTDOWN、RECORDING 或 FINALIZING） | 按键不开录，`detail` 写 `ignored: recording busy (<session_id>)` |
-| START 被拒（预检不过）或超时 | 遥操作照常，本条不录；这次遥操作结束时也不归位，需手动归位或重新进入 `pikavelocity` |
+| START 被拒（预检不过）或超时 | 遥操作照常，本条不录；这次遥操作结束时仍重启分支归位（在 `pikavelocity` 里松键总会归位） |
 | 开录途中就松键 | START 成功后立即 STOP 并归位 |
 | 开录途中模式被切走 | START 成功后立即按异常停止处理：STOP，进入 FAILED，不归位 |
 | 录制中键盘状态超过 `keyboard_stale_sec`（默认 3 s）没更新（桥断）或模式被切走 | STOP 录制，进入 FAILED，不归位 |
 | STOP 失败 | 仍归位，但最终 FAILED；异常停止时 STOP 也失败则 `detail` 写 `abnormal stop: <原因>; stop failed: <消息>` |
-| 将要归位时模式已离开 `pikavelocity` | 不发 MoveJ；FAILED，`detail` 写 `home skipped: mode changed to <x>` |
+| 重启途中别人选了模式（:8765 或别的请求者，executor 的 `request_id` 变大） | 不再选回 `pikavelocity`；FAILED，`detail` 写 `restart failed: <x> superseded by another input mode request` |
+| 选模式被拒、进入失败或超时（例如入场 MoveJ 失败） | FAILED，`detail` 写 `restart failed: <原因>`；行为树按自己的失败处理回落模式 |
 | 行为树被停止或崩溃（`/realman_bt_executor/input_mode_state` 没有发布者了） | 按离开 `pikavelocity` 处理（模式记为 `unknown`）：录制中则异常停止，任何情况下都不归位；行为树重新启动后它的 latched 状态会恢复模式 |
 | 停止时录制已被外部结束（`/recording/status` 显示别的 session 在录，或自己的 session 已不在 COUNTDOWN/RECORDING） | 不发 STOP（录制端的 STOP 会停掉任何活动 session）；仍归位，最终 FAILED，`detail` 写 `stop failed: session already ended externally` |
-| 归位前又按键把遥操作切回“开” | 不发 MoveJ；FAILED，`detail` 写 `home skipped: teleop re-enabled` |
-| 归位途中模式被切换 | 归位 MoveJ 不会被取消；新模式的进入 MoveJ 在归位结束前可能被驱动拒绝 |
+| 归位途中又按键把遥操作切回“开”（含停止键后的误连按） | 这次按键先不处理（`ignored: busy (...)`），归位照常完成；之后键盘仍为“开”且状态未过期就开始新的一条录制，Pika 速度在模式恢复后接管手臂 |
 | 启动时配置读不到或不合法 | 节点不启动，launch 日志 `pika_episode_trigger NOT started: <原因>`，bringup 其余部分不受影响 |
-| 归位 MoveJ 被拒或失败 | FAILED，不重试 |
 | FAILED 之后 | 键盘下一次切到“开”只清除故障（这次遥操作照常但不录、结束不归位），再按一次关、一次开才开始新的一条；故障发生时键盘若是“开”（桥断、录制中切模式），要先按一次切到“关”（不起作用）。看 `/pika_episode/state` 的 `detail: cleared` 确认 |
 
 如果录制端在节点的 10 s 超时之后才回复 START 且结果为成功，节点记录一条错误日志，并 STOP 这个无人认领的 session；但 `/recording/status` 显示别的 session 正在录时只记日志、不发 STOP。
 
-归位时同时松开夹爪：节点对每条要归位的臂调用 `home_open_grippers` 里对应夹爪的 `/<夹爪名>/open`（`std_srvs/Trigger`，打到配置的开位），和 MoveJ 一起发出、互不等待。仓库默认 `l: gripper_left`、`r: gripper_right`，写 `{}` 则不动夹爪。夹爪服务不在或返回失败（例如总线离线 `Not connected to gripper`）只记一条警告，不影响归位，也不会让这一条进入 FAILED。不会被 Pika 覆盖：enine 的 mapper 只在键盘为“开”时随速度一起发 `/pika/<臂>/gripper_percentage`（约 4 Hz），松键后不再发；下一次按键开始遥操作时夹爪重新跟随 Pika。
+归位时同时松开夹爪：节点对每条要归位的臂调用 `home_open_grippers` 里对应夹爪的 `/<夹爪名>/open`（`std_srvs/Trigger`，打到配置的开位），和分支重启一起发出、互不等待。仓库默认 `l: gripper_left`、`r: gripper_right`，写 `{}` 则不动夹爪。夹爪服务不在或返回失败（例如总线离线 `Not connected to gripper`）只记一条警告，不影响归位，也不会让这一条进入 FAILED。不会被 Pika 覆盖：enine 的 mapper 只在键盘为“开”时随速度一起发 `/pika/<臂>/gripper_percentage`（约 4 Hz），松键后不再发；下一次按键开始遥操作时夹爪重新跟随 Pika。
 
 观察状态（reliable + transient_local，JSON 含 `state`、`session_id`、`task`、`detail`、`stamp_ns`）：
 

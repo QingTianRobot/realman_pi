@@ -23,17 +23,30 @@ def test_repo_episode_config_defaults_to_disabled():
         keyboard_topic="/foot_pedal/enabled",
         required_mode="pikavelocity",
         keyboard_stale_sec=3.0,
-        release_timeout_sec=8.0,
-        home_velocity_percent=30,
-        home_timeout_sec=120.0,
         home_open_grippers={"l": "gripper_left", "r": "gripper_right"},
+        restart_off_mode="none",
+        restart_off_timeout_sec=10.0,
+        restart_timeout_sec=150.0,
     )
+
+
+def test_restart_settings_default_and_old_homing_keys_are_ignored(tmp_path):
+    base = (REPO_CONFIG / "pika_episode.yaml").read_text(encoding="utf-8")
+    lines = [line for line in base.splitlines() if not line.startswith("restart_")]
+    # A host file written before the branch restart still carries the trigger's own homing keys.
+    old = _write(tmp_path, "old.yaml", "\n".join(lines + [
+        "release_timeout_sec: 8.0", "home_velocity_percent: 30", "home_timeout_sec: 120.0"]) + "\n")
+    config = load_episode_config(old)
+    assert (config.restart_off_mode, config.restart_off_timeout_sec, config.restart_timeout_sec) == ("none", 10.0, 150.0)
 
 
 def test_episode_config_rejects_bad_values(tmp_path):
     base = (REPO_CONFIG / "pika_episode.yaml").read_text(encoding="utf-8")
-    bad = _write(tmp_path, "e.yaml", base.replace("home_velocity_percent: 30", "home_velocity_percent: 0"))
-    with pytest.raises(ValueError, match="home_velocity_percent"):
+    bad = _write(tmp_path, "e.yaml", base.replace("restart_timeout_sec: 150.0", "restart_timeout_sec: 0"))
+    with pytest.raises(ValueError, match="restart_timeout_sec"):
+        load_episode_config(bad)
+    bad = _write(tmp_path, "e1.yaml", base.replace("restart_off_mode: none", "restart_off_mode: pikavelocity"))
+    with pytest.raises(ValueError, match="restart_off_mode must differ"):
         load_episode_config(bad)
     bad = _write(tmp_path, "e2.yaml", base.replace("keyboard_stale_sec: 3.0", "keyboard_stale_sec: -1"))
     with pytest.raises(ValueError, match="keyboard_stale_sec"):

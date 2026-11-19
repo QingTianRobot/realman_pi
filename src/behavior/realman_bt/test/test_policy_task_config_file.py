@@ -49,7 +49,7 @@ def test_the_counts_and_the_activation_mode_are_the_reviewed_defaults():
     parameters = _parameters()
     assert parameters["cycles"] == 1
     assert parameters["attempts"] == 3
-    assert parameters["arm"] == "r"
+    assert parameters["arm"] == "l"
     assert parameters["activation"] == "auto"
     assert parameters["command_namespace"] == "/pi05_policy"
     assert parameters["timeout_retry"] == {"attempts": 3, "backoff_sec": 20.0}
@@ -57,9 +57,9 @@ def test_the_counts_and_the_activation_mode_are_the_reviewed_defaults():
 
 def test_the_safety_thresholds_are_the_reviewed_values():
     parameters = _parameters()
-    # p1/p99 of the 130 demonstration episodes, each side widened by 10 degrees, J5 floored at 20.
-    assert parameters["joint_envelope_deg"]["lo"] == [-73.4, 5.0, -16.2, -28.4, 3.5, -125.1]
-    assert parameters["joint_envelope_deg"]["hi"] == [40.1, 107.0, 124.3, 70.8, 108.2, 49.0]
+    # Left arm: p1/p99 of SJDrealman's 87 left demonstrations, each side widened by 10 degrees, J5 floored at 3.5.
+    assert parameters["joint_envelope_deg"]["lo"] == [-37.5, -0.6, -27.0, -168.1, 3.5, -98.5]
+    assert parameters["joint_envelope_deg"]["hi"] == [26.1, 107.1, 138.1, 39.6, 126.9, 136.8]
     assert parameters["max_joint_speed_dps"] == 50
     # Joint currents of 67 traced attempts (2026-10-20..23): normal grasps vs pressing on the table.
     assert parameters["current_guard"] == {
@@ -99,7 +99,7 @@ def test_the_tasks_are_the_two_prompts_of_the_multitask_model():
         "prompt": "pick up the power adapter and put it in the blue bin",
         "completion": "release_over_bin",
     }
-    assert parameters["tasks"]["pick"] == {"prompt": "pick up the power adapter", "completion": "grasp_check"}
+    assert parameters["tasks"]["pick"] == {"prompt": "pick_and_place", "completion": "grasp_check"}
 
 
 def test_the_grasp_check_thresholds_are_the_reviewed_values():

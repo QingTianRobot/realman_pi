@@ -46,7 +46,7 @@
                  regrasps starts. A policy-server timeout is handed from the inner retry to the outer one
                  (timeouts_to_parent), so it waits, goes home and is counted on its own budget as before. A fault
                  ends both at once.
-                 Held: the policy stops, the right arm lifts straight up, goes to the lift pose and turns J1 to the
+                 Held: the policy stops, the left arm lifts straight up, goes to the lift pose and turns J1 to the
                  release side, all inside WhileGraspHeld, so an object that drops on the way stops the carry and
                  fails the attempt. Then the gripper opens over the release side and WhiteObjectsRemain looks at the
                  global camera. Objects left: SUCCESS, the Repeat runs the next cycle. Table clear: it writes
@@ -65,7 +65,7 @@
                                       timeout_attempts="{policy_timeout_attempts}"
                                       timeout_backoff_sec="{policy_timeout_backoff_sec}">
                         <Sequence name="pick_attempt">
-                          <GripperReady arm_id="r" dry_run="{dry_run}"/>
+                          <GripperReady arm_id="l" dry_run="{dry_run}"/>
                           <ThreeArmMoveJ name="policy_rehome" dry_run="{dry_run}"
                                          l_joint_degrees="{pika_l_joint_degrees}"
                                          m_joint_degrees="{pika_m_joint_degrees}"
@@ -82,8 +82,8 @@
                               <Fallback name="pick_regrasp_prepare">
                                 <CheckBool key="pick_regrasp" expected="false"/>
                                 <Sequence name="pick_regrasp_back_off">
-                                  <GripperReady name="pick_regrasp_open" arm_id="r" dry_run="{dry_run}"/>
-                                  <CartesianVelocityForDuration name="pick_regrasp_lift" arm_id="r"
+                                  <GripperReady name="pick_regrasp_open" arm_id="l" dry_run="{dry_run}"/>
+                                  <CartesianVelocityForDuration name="pick_regrasp_lift" arm_id="l"
                                                                 dry_run="{dry_run}"
                                                                 reference="work/pikabase"
                                                                 linear_velocity_mps="0,0,0.02"
@@ -92,37 +92,37 @@
                                 </Sequence>
                               </Fallback>
                               <SetBool key="pick_regrasp" value="true"/>
-                              <PolicyRun arm_id="r" task="pick" dry_run="{dry_run}"/>
+                              <PolicyRun arm_id="l" task="pick" dry_run="{dry_run}"/>
                             </Sequence>
                           </RetryUnlessFault>
                           <!-- The policy stopped with the gripper on the table: 0.03 m/s up for 2 s (~5.5 cm with the
-                               ramps) in the identity work frame (= the upright r base, +Z up) before the joint-space
+                               ramps) in the identity work frame (= the upright l base, +Z up) before the joint-space
                                MoveJ, so the first move cannot sweep the object across the mat. -->
-                          <WhileGraspHeld name="pick_carry" arm_id="r" dry_run="{dry_run}">
+                          <WhileGraspHeld name="pick_carry" arm_id="l" dry_run="{dry_run}">
                             <Sequence name="pick_carry_to_release">
-                              <CartesianVelocityForDuration name="pick_lift_up" arm_id="r" dry_run="{dry_run}"
+                              <CartesianVelocityForDuration name="pick_lift_up" arm_id="l" dry_run="{dry_run}"
                                                             reference="work/pikabase"
                                                             linear_velocity_mps="0,0,0.03"
                                                             angular_velocity_radps="0,0,0"
                                                             duration_sec="2.0"/>
-                              <MoveJ name="pick_lift_pose" arm_id="r" dry_run="{dry_run}"
+                              <MoveJ name="pick_lift_pose" arm_id="l" dry_run="{dry_run}"
                                      joint_degrees="{pick_lift_joint_degrees}"
                                      velocity_percent="10" blend_radius_percent="0" timeout_sec="60"/>
-                              <MoveJointTo name="pick_turn_to_release" arm_id="r" dry_run="{dry_run}"
+                              <MoveJointTo name="pick_turn_to_release" arm_id="l" dry_run="{dry_run}"
                                            joint="{pick_release_joint}" target_degrees="{pick_release_joint_deg}"
                                            velocity_percent="20" timeout_sec="60"/>
                             </Sequence>
                           </WhileGraspHeld>
                         </Sequence>
                       </RetryUnlessFault>
-                      <GripperReady name="pick_release" arm_id="r" dry_run="{dry_run}"/>
+                      <GripperReady name="pick_release" arm_id="l" dry_run="{dry_run}"/>
                       <WhiteObjectsRemain name="objects_remain" dry_run="{dry_run}"
                                           table_clear="{pick_table_clear}"/>
                     </Sequence>
                   </Repeat>
                   <CheckBool key="pick_table_clear" expected="true"/>
                 </Fallback>
-                <!-- The last cycle left the right arm at the release pose; park all three at the start pose so
+                <!-- The last cycle left the left arm at the release pose; park all three at the start pose so
                      the next entry's start-pose MoveJ is short (it runs under the 5 s input-mode switch timeout). -->
                 <ThreeArmMoveJ name="pick_done_home" dry_run="{dry_run}"
                                l_joint_degrees="{pika_l_joint_degrees}"

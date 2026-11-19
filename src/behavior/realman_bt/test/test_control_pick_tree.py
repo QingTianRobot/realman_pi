@@ -69,15 +69,15 @@ def test_policy_branch_picks_carries_while_held_releases_and_checks_the_table():
     assert regrasps.attrib["num_attempts"] == "{pick_regrasp_attempts}"
     assert regrasps.attrib["timeouts_to_parent"] == "true"
     prepare, mark, run = list(regrasps.find("Sequence[@name='pick_try']"))
-    assert run.tag == "PolicyRun" and run.attrib["task"] == "pick" and run.attrib["arm_id"] == "r"
+    assert run.tag == "PolicyRun" and run.attrib["task"] == "pick" and run.attrib["arm_id"] == "l"
     assert mark.tag == "SetBool" and mark.attrib == {"key": "pick_regrasp", "value": "true"}
     # The first run skips the back-off (the flag is still false); every later one opens and lifts first.
     first, back_off = list(prepare)
     assert prepare.tag == "Fallback"
     assert first.tag == "CheckBool" and first.attrib == {"key": "pick_regrasp", "expected": "false"}
     regrasp_open, regrasp_lift = list(back_off)
-    assert regrasp_open.tag == "GripperReady" and regrasp_open.attrib["arm_id"] == "r"
-    assert regrasp_lift.tag == "CartesianVelocityForDuration" and regrasp_lift.attrib["arm_id"] == "r"
+    assert regrasp_open.tag == "GripperReady" and regrasp_open.attrib["arm_id"] == "l"
+    assert regrasp_lift.tag == "CartesianVelocityForDuration" and regrasp_lift.attrib["arm_id"] == "l"
     assert regrasp_lift.attrib["reference"] == "work/pikabase"
     assert regrasp_lift.attrib["angular_velocity_radps"] == "0,0,0"
     vx, vy, vz = (float(value) for value in regrasp_lift.attrib["linear_velocity_mps"].split(","))
@@ -87,9 +87,9 @@ def test_policy_branch_picks_carries_while_held_releases_and_checks_the_table():
     assert 0.03 <= regrasp_rise <= 0.05
 
     carry = attempt.find("WhileGraspHeld")
-    assert carry.attrib["arm_id"] == "r"
+    assert carry.attrib["arm_id"] == "l"
     up, lift, turn = list(carry.find("Sequence[@name='pick_carry_to_release']"))
-    assert up.tag == "CartesianVelocityForDuration" and up.attrib["arm_id"] == "r"
+    assert up.tag == "CartesianVelocityForDuration" and up.attrib["arm_id"] == "l"
     # Straight up in the identity work frame of the upright r base, slowly, a few centimetres.
     assert up.attrib["reference"] == "work/pikabase"
     assert up.attrib["angular_velocity_radps"] == "0,0,0"
@@ -97,14 +97,14 @@ def test_policy_branch_picks_carries_while_held_releases_and_checks_the_table():
     assert vx == vy == 0.0 and 0.0 < vz_carry <= 0.05
     assert 0.03 <= vz_carry * float(up.attrib["duration_sec"]) <= 0.08
     assert regrasp_rise < vz_carry * float(up.attrib["duration_sec"])
-    assert lift.tag == "MoveJ" and lift.attrib["arm_id"] == "r"
+    assert lift.tag == "MoveJ" and lift.attrib["arm_id"] == "l"
     assert lift.attrib["joint_degrees"] == "{pick_lift_joint_degrees}"
-    assert turn.tag == "MoveJointTo" and turn.attrib["arm_id"] == "r"
+    assert turn.tag == "MoveJointTo" and turn.attrib["arm_id"] == "l"
     assert turn.attrib["joint"] == "{pick_release_joint}"
     assert turn.attrib["target_degrees"] == "{pick_release_joint_deg}"
 
     _, release, detect = list(cycle)
-    assert release.attrib["arm_id"] == "r"
+    assert release.attrib["arm_id"] == "l"
     assert detect.attrib["table_clear"] == "{pick_table_clear}"
     for leaf in (carry, up, lift, turn, release, detect, run, regrasp_open, regrasp_lift):
         assert leaf.attrib["dry_run"] == "{dry_run}"
@@ -121,11 +121,16 @@ def test_the_pick_cycle_settings_are_the_reviewed_values():
     policy_task = document["realman_bt_executor"]["ros__parameters"]["policy_task"]
     assert policy_task["tasks"]["pick"]["completion"] == "grasp_check"
     pick_cycle = policy_task["pick_cycle"]
-    # 2026-10-20: the lift pose is the right arm's start pose until a dedicated one is measured.
+    # 2026-11-19: the left arm releases at the pose taught on SJDrealman; the lift pose is that pose with the start
+    # pose's J1, so the J1 turn ends exactly on it and goes the short way (+67.3 deg).
+    assert policy_task["arm"] == "l"
+    release_pose = [79.455, 25.257, 73.104, -7.472, 80.312, 14.449]
     pika = yaml.safe_load((ROOT / "config/ros/pika_config.yaml").read_text(encoding="utf-8"))
-    assert pick_cycle["lift_joint_degrees"] == pika["pika_default_pose"]["right"]["joint_degrees"]
+    start_j1 = pika["pika_default_pose"]["left"]["joint_degrees"][0]
+    assert pick_cycle["lift_joint_degrees"] == [start_j1] + release_pose[1:]
     assert pick_cycle["release_joint"] == 1
-    assert pick_cycle["release_joint_deg"] == -163.0
+    assert pick_cycle["release_joint_deg"] == release_pose[0]
+    assert abs(pick_cycle["release_joint_deg"] - start_j1) < 180.0
     # 2026-11-01: 3 attempts from the start pose, each with up to 3 policy runs (regrasps).
     assert policy_task["attempts"] == 3
     assert pick_cycle["regrasp_attempts"] == 3

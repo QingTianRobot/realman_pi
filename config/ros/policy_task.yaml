@@ -22,7 +22,9 @@ realman_bt_executor:
       timeout_retry:
         attempts: 3
         backoff_sec: 20.0
-      arm: r
+      # The arm the policy drives. l since 2026-11-19: SJDrealman's data and model are left-arm only. The place task's
+      # release / lift wrong-side J1 limits below were measured on the right arm (realman_ts) and do not fit l.
+      arm: l
       # auto: PolicyRun calls /policy/activate itself once the preflight checks pass, so selecting the policy mode is
       #   enough to start a run (the arms first go to the start pose). operator: PolicyRun only waits until a person
       #   has called /policy/activate and supervises from there; every attempt waits again.
@@ -44,20 +46,25 @@ realman_bt_executor:
         place:
           prompt: "pick up the power adapter and put it in the blue bin"
           completion: release_over_bin
+        # The SJD left-arm model (openpi pi05_realman_sjd_left_v1, prompt_from_task) was trained on the task text
+        # "pick_and_place", so that is its prompt. The right-arm models used "pick up the power adapter".
         pick:
-          prompt: "pick up the power adapter"
+          prompt: "pick_and_place"
           completion: grasp_check
       gripper_for_arm:
         l: gripper_left
         m: gripper_mid
         r: gripper_right
 
-      # RealMan degrees. p1 and p99 of every frame of the 130 demonstration episodes, widened by 10 degrees each side
-      # (2026-10-14). J5 follows the same rule (p1 13.5 - 10 = 3.5) and stays above the wrist singularity at 0. It was
-      # 20, then 15 on 2026-10-23: both faulted normal approaches (J5 19.6, 15.0); a stop coasts ~3 deg further.
+      # RealMan degrees, of the driven arm. Left arm (2026-11-19): p1 and p99 of every frame of SJDrealman's 87 left
+      # demonstrations (46516 frames, all starting at the Pika start pose J1 12.17), widened by 10 degrees each side;
+      # J5 is floored at 3.5 (p1 1.3 - 10 would cross the wrist singularity at 0), as for the right arm. Checked only
+      # while PolicyRun runs, so the release turn to J1 79.455 is not judged against it.
+      # Right arm before (130 realman_ts demos 2026-10-14, J5 3.5 since 10-23): lo [-73.4, 5.0, -16.2, -28.4, 3.5, -125.1],
+      # hi [40.1, 107.0, 124.3, 70.8, 108.2, 49.0].
       joint_envelope_deg:
-        lo: [-73.4, 5.0, -16.2, -28.4, 3.5, -125.1]
-        hi: [40.1, 107.0, 124.3, 70.8, 108.2, 49.0]
+        lo: [-37.5, -0.6, -27.0, -168.1, 3.5, -98.5]
+        hi: [26.1, 107.1, 138.1, 39.6, 126.9, 136.8]
       # Between joint_states samples at least ~0.1 s apart. The runs on 2026-10-14 never exceeded this.
       max_joint_speed_dps: 50.0
       # The two arms that are not driven must stay where they were when the attempt started.
@@ -154,7 +161,7 @@ realman_bt_executor:
         dir: /opt/rm65_ws/logs/policy-attempts
         period_sec: 0.1
       # Pick-and-clear cycle of config/behavior-trees/control_pick.xml (the pick task, repeated until the table is
-      # clear). After an attempt lifts the object, the right arm goes to lift_joint_degrees, turns joint release_joint
+      # clear). After an attempt lifts the object, the driven arm (`arm`) goes to lift_joint_degrees, turns joint release_joint
       # (1-based: 1 = J1) to release_joint_deg, opens the gripper there and WhiteObjectsRemain checks the table.
       # lift_joint_degrees is the right arm's start pose (pika_config.yaml) until a dedicated lift pose is measured
       # (decision 2026-10-20). Velocities are the XML's (10%). The turn from the lift pose to J1 -135 (clockwise seen from
@@ -165,9 +172,14 @@ realman_bt_executor:
       # they are used up, or the object drops while carried, the attempt fails and the next one starts from the start
       # pose. 2026-11-01 (user decision): 3 attempts x 3 regrasps.
       pick_cycle:
-        lift_joint_degrees: [-9.89, 18.046, 79.074, 15.505, 79.606, -6.194]
+        # Left arm (2026-11-19): the release pose was taught on SJDrealman as [79.455, 25.257, 73.104, -7.472, 80.312,
+        # 14.449]. The lift pose is that pose with the start pose's J1 (12.172), so the MoveJ only adjusts the wrist
+        # and the J1 turn ends exactly on the taught pose. 12.172 -> 79.455 is the short way round (+67.3 deg,
+        # counterclockwise seen from above); MoveJ interpolates in joint space, so it never takes the long way.
+        # Right arm before: lift = its start pose, J1 -163 (clockwise).
+        lift_joint_degrees: [12.172, 25.257, 73.104, -7.472, 80.312, 14.449]
         release_joint: 1
-        release_joint_deg: -163.0
+        release_joint_deg: 79.455
         regrasp_attempts: 3
       # WhiteObjectsRemain: white blobs on the mat in the global D435 image mean objects are left. roi_xywh is the
       # green mat in the 640x480 image (pixels: x, y, width, height). A pixel is white when its smallest RGB channel is

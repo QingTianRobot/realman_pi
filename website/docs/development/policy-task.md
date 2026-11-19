@@ -124,20 +124,22 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 </Fallback>
 ```
 
+2026-11-19 起抓取清台由**左臂（l）**执行（`policy_task.arm: l`，树中各节点 `arm_id="l"`）：SJDrealman 的示教数据和模型只用左臂。策略桥接同步改为左臂腕部相机 `/camera_left/color/image_raw`、`active_side` 默认 `left`，pick 的 prompt 为左臂模型训练时的任务文本 `pick_and_place`；关节包络取自 SJD 87 条左臂示教。此前在 realman_ts 上由右臂执行（J1 转到 -163° 放置），下文中的历史记录保留了右臂的数值。
+
 每个周期依次执行：
 
 1. **抓取**：`task="pick"`，以 `grasp_check` 判定：策略一闭合夹爪就判断有没有夹牢。夹牢则策略停下，夹爪保持闭合，进入搬运。没有成功时分两级重试（2026-11-01 起，原来只有一级，每次都回位）：
    - **小重试**（内层 `RetryUnlessFault pick_regrasps`，`pick_cycle.regrasp_attempts` 次，含第一次，默认 3）：抓空，或策略因其他可重试的原因停下（电流过大、停滞、超过 `max_attempt_sec`），先张开夹爪，再在 `work/pikabase` 中以 0.02 m/s 竖直抬起 2 s（含加减速约 4 cm，2026-11-01 由约 2 cm 加高），然后不回位，从当前位置继续运行策略。黑板键 `pick_regrasp` 记录这是不是本次大重试中的第一次策略运行：第一次直接从起始位姿开始，不张开、不抬起。
    - **大重试**（外层 `RetryUnlessFault`，`attempts` 次，默认 3）：小重试用完，或搬运途中物体掉落（见第 3 步），张开夹爪、三臂回到起始位姿，再开始新一轮小重试。因此一个周期最多运行 3 × 3 = 9 次策略。
    - 策略服务超时不在原地重试：内层设置了 `timeouts_to_parent="true"`，带着 `policy_timeout` 立即交给外层，由外层按 `timeout_retry` 等待、回位并单独计数，与原来的行为相同。故障（`policy_fault`）使两层都立即放弃。
-2. **竖直抬起**：`CartesianVelocityForDuration` 在恒等工作坐标系 `work/pikabase`（即右臂竖直安装的基座系，+Z 向上）中以 0.03 m/s 向上运动 2 s（含加减速约 5.5 cm）。策略停下时夹爪还贴着桌面，先竖直离开桌面，后面的关节空间 MoveJ 就不会拖着物体扫过垫子。
-3. **搬运全程监测**：第 2–4 步都包在 `WhileGraspHeld` 里，并且和抓取一起位于 `RetryUnlessFault` 之内。每个 tick 先读 `/gripper_right/position`：位置在 `verdict.empty_position_min` 以上持续 `grasp_check.carry_lost_sec`（0.3 s），就是物体掉了，立即 halt 正在执行的运动并返回可重试的失败，外层 `RetryUnlessFault`（大重试）张开夹爪、回位后重新运行策略。掉落消耗一次 `attempts`（此时右臂已离开桌面，不做小重试）。搬运中的运动失败或超过 `gripper_ready.position_stale_sec` 读不到夹爪位置，由 `WhileGraspHeld` 置位 `policy_fault`，不重试，与这些运动放在重试外面时的行为一致。
-4. **抬升到固定位姿**：右臂 `MoveJ` 到 `pick_cycle.lift_joint_degrees`。目前取右臂起始位姿（`pika_config.yaml`），等测出专门的抬升位姿后在配置里修改即可，不用改 XML。
-5. **转到放置侧**：`MoveJointTo` 只把 J1（`pick_cycle.release_joint`）转到 `pick_cycle.release_joint_deg`（-163°），以 20% 速度转动（2026-10-30 起，原为 10%），其余关节保持不动。从上往下看是顺时针转动（J1 角度减小约 153°）。2026-10-20 在真机上空载、以 5% 速度从抬升位姿转到 -135° 再转回，现场确认路径上没有障碍；2026-10-30 起放置角改为 -163°，沿同一方向多转 28°，-135° 到 -163° 这一段还没有空载确认过。
-6. **松开**：`GripperReady` 张开右夹爪，物体落在放置侧。
+2. **竖直抬起**：`CartesianVelocityForDuration` 在恒等工作坐标系 `work/pikabase`（即左臂竖直安装的基座系，+Z 向上）中以 0.03 m/s 向上运动 2 s（含加减速约 5.5 cm）。策略停下时夹爪还贴着桌面，先竖直离开桌面，后面的关节空间 MoveJ 就不会拖着物体扫过垫子。
+3. **搬运全程监测**：第 2–4 步都包在 `WhileGraspHeld` 里，并且和抓取一起位于 `RetryUnlessFault` 之内。每个 tick 先读 `/gripper_left/position`：位置在 `verdict.empty_position_min` 以上持续 `grasp_check.carry_lost_sec`（0.3 s），就是物体掉了，立即 halt 正在执行的运动并返回可重试的失败，外层 `RetryUnlessFault`（大重试）张开夹爪、回位后重新运行策略。掉落消耗一次 `attempts`（此时手臂已离开桌面，不做小重试）。搬运中的运动失败或超过 `gripper_ready.position_stale_sec` 读不到夹爪位置，由 `WhileGraspHeld` 置位 `policy_fault`，不重试，与这些运动放在重试外面时的行为一致。
+4. **抬升到固定位姿**：左臂 `MoveJ` 到 `pick_cycle.lift_joint_degrees` = `[12.172, 25.257, 73.104, -7.472, 80.312, 14.449]`，即放置位姿换成起始位姿的 J1，只调整手腕，下一步只转 J1 就正好到放置位姿。改位姿只改配置，不用改 XML。
+5. **转到放置侧**：`MoveJointTo` 只把 J1（`pick_cycle.release_joint`）从 12.172° 转到 `pick_cycle.release_joint_deg`（79.455°），以 20% 速度转动，其余关节保持不动。放置位姿 `[79.455, 25.257, 73.104, -7.472, 80.312, 14.449]` 于 2026-11-19 在 SJDrealman 上示教。按最小角度转过去：J1 增大约 67.3°，从上往下看是逆时针；MoveJ 在关节空间插值，不会绕远路。这条路径还没有在真机上空载确认过。
+6. **松开**：`GripperReady` 张开左夹爪，物体落在放置侧。
 7. **检测**：`WhiteObjectsRemain` 读一帧全局相机（D435）图像，判断垫子上是否还有白色物体。有物体就返回 `SUCCESS`，`Repeat` 开始下一个周期；没有物体就写入 `pick_table_clear=true` 并返回失败，以此结束 `Repeat`。
 
-`Repeat` 结束后由 `CheckBool` 判断结束原因：如果是桌面已清空，先由 `pick_done_home` 让三臂回到起始位姿，再停在 `PolicyInputStub`（policy 模式空闲，桥接已停止）。回位这一步不能省：进入 policy 模式的第一步回位受输入模式切换超时（`behavior_tree.yaml` 的 `switch_timeout_ms`，5 s）限制，如果右臂停在放置侧（-135° 时回位约需 8 s，-163° 更久），会超时并退回 none（2026-10-20 真机上出现过）。其他原因（尝试次数用完、故障、某个 MoveJ 失败、相机没有图像）都不会写入 `pick_table_clear`，于是经 `FailInputMode` 进入 `FAILED`；这条路径不会自动回位，再次进入前如果右臂不在起始位姿附近，需要先手动回位（见下文操作流程）。抬起、抬升、转动这几步的运动失败由 `WhileGraspHeld` 写入 `policy_failure_reason`（`carrying the object failed in pick_carry_to_release: ...`），`FAILED` 的说明就是它。
+`Repeat` 结束后由 `CheckBool` 判断结束原因：如果是桌面已清空，先由 `pick_done_home` 让三臂回到起始位姿，再停在 `PolicyInputStub`（policy 模式空闲，桥接已停止）。回位这一步不能省：进入 policy 模式的第一步回位受输入模式切换超时（`behavior_tree.yaml` 的 `switch_timeout_ms`，5 s）限制，如果手臂停在放置侧（右臂 -135° 时回位约需 8 s），会超时并退回 none（2026-10-20 真机上出现过）。其他原因（尝试次数用完、故障、某个 MoveJ 失败、相机没有图像）都不会写入 `pick_table_clear`，于是经 `FailInputMode` 进入 `FAILED`；这条路径不会自动回位，再次进入前如果左臂不在起始位姿附近，需要先手动回位（见下文操作流程）。抬起、抬升、转动这几步的运动失败由 `WhileGraspHeld` 写入 `policy_failure_reason`（`carrying the object failed in pick_carry_to_release: ...`），`FAILED` 的说明就是它。
 
 ### 白色物体检测（WhiteObjectsRemain）
 
@@ -156,7 +158,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 - 实时画面中，三个适配器计数为 1709，只剩一个时约 620；抹掉适配器、保留线缆时为 91，判为已清空。
 - 光斑腐蚀后的范围约为 x 388–460、y 176–350，排除区取 `[392, 170, 75, 185]`，与最近的适配器（右边缘 x 391）不重叠。
 
-检测时手臂必须离开垫子区域：右臂停在放置侧（J1=-163°）时应位于画面之外，这一点尚待带物体运行时确认。相机、垫子或灯光挪动后，需要重新标定 ROI 和排除区。
+检测时手臂必须离开垫子区域：左臂停在放置侧（J1=79.455°）时是否在 D435 画面和 ROI 之外，尚未在 SJDrealman 上确认；ROI 和排除区是在 realman_ts 上标定的，换到 SJD 后需要重新标定。相机、垫子或灯光挪动后，需要重新标定 ROI 和排除区。
 
 dry-run 时不读相机，直接报告桌面已清空，因此 dry-run 只跑一个周期就结束。
 
@@ -167,7 +169,7 @@ dry-run 时不读相机，直接报告桌面已清空，因此 dry-run 只跑一
 - 确认机器人栈正常：三条臂的 `joint_states` 都在约 30 Hz，`/l|m|r/execute_motion` 都在线，全局相机 `/camera_global/d435/color/image_raw` 有图像（`rgb8`）。
 - 检查右夹爪：读 `/gripper_right/position` 和 `/gripper_right/alarm`。重建容器后，夹爪常会停在半开的位置（如 900）且报警为 32（0x20），不响应指令。依次调用 `/gripper_right/reset` 和 `/gripper_right/enable` 即可恢复（必要时再调用 `open`）。报警值会一直保持 32，但 policy 链路上的任何环节都不检查它，不影响运行。
 - 布置场景：适配器放在绿色垫子上，避开右侧的反光排除区（`object_detection.exclude_xywh`）；收纳盒放在放置侧；清空工作区；有人手持急停。
-- 确认右臂在起始位姿附近。进入 policy 模式的第一步回位受 5 s 的切换超时限制。正常结束时 `pick_done_home` 会自动回位；如果上一次以 `FAILED` 结束、手臂停在远处（例如 J1 = -163°），需要先在 :8765 的运动面板把右臂移回起始位姿。
+- 确认左臂在起始位姿附近。进入 policy 模式的第一步回位受 5 s 的切换超时限制。正常结束时 `pick_done_home` 会自动回位；如果上一次以 `FAILED` 结束、手臂停在远处（例如 J1 = 79.455°），需要先在 :8765 的运动面板把左臂移回起始位姿。
 
 **2. 先跑一遍 dry-run**
 
@@ -183,7 +185,7 @@ REALMAN_BT_DRY_RUN=true ./rm65 bt control_pick
 REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 ```
 
-在 :8765 上，勾选真实运动后启动也可以。然后选择"Policy / 抓取清台"。`activation: auto` 下，选择即开始运动：三臂回到起始位姿，然后每轮依次执行抓取（约 10–15 s）、抬升、J1 转到 -163°、松爪、检测，有物体就继续下一轮；桌面清空后三臂回到起始位姿，停在 policy 空闲。
+在 :8765 上，勾选真实运动后启动也可以。然后选择"Policy / 抓取清台"。`activation: auto` 下，选择即开始运动：三臂回到起始位姿，然后每轮依次执行抓取（约 10–15 s）、抬升、J1 转到 79.455°、松爪、检测，有物体就继续下一轮；桌面清空后三臂回到起始位姿，停在 policy 空闲。
 
 **4. 结束**
 
@@ -196,7 +198,7 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 | 现象 | 原因与处理 |
 | --- | --- |
 | `input mode switch timed out` | 手臂离起始位姿太远，回位超过 5 s。先手动回位，再选择 policy |
-| 回位被拒（`goal rejected`，驱动日志 `arm r is busy`），尝试次数很快用完 | 策略桥接停在激活状态（`/policy/stats` 的 `allow_publish = 1`），进入 policy 后 router 立刻占用右臂。通常是运行中途重启了容器。调用 `/policy/deactivate`（`std_srvs/SetBool`，`data: true`）后再试 |
+| 回位被拒（`goal rejected`，驱动日志 `arm r is busy`），尝试次数很快用完 | 策略桥接停在激活状态（`/policy/stats` 的 `allow_publish = 1`），进入 policy 后 router 立刻占用被驱动的臂。通常是运行中途重启了容器。调用 `/policy/deactivate`（`std_srvs/SetBool`，`data: true`）后再试 |
 | 重启容器后右夹爪不动、报警 32 | 依次调用 `/gripper_right/reset` 和 `enable` |
 | `wrong_task` | 夹着物体转向收纳盒，策略没有按 pick 的 prompt 执行。核对 prompt 与模型 |
 | 尝试次数用完 | 连续抓空、超时或卡住。检查物体位置是否在训练分布内，必要时调整摆放 |

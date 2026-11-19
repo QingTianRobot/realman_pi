@@ -373,7 +373,7 @@ services:
       - policy_bridge
       - policy_bridge.launch.py
       - config_file:=${POLICY_BRIDGE_CONFIG_FILE:-/opt/rm65_ws/config/ros/policy_bridge.yaml}
-      - active_side:=${POLICY_BRIDGE_ACTIVE_SIDE:-right}
+      - active_side:=${POLICY_BRIDGE_ACTIVE_SIDE:-left}
 
   # Training console (server5090 only, never on the robot): web UI + realman-train jobs on :8780,
   # see website/docs/development/training-console-web.md. Opt-in profile, so no robot command builds or

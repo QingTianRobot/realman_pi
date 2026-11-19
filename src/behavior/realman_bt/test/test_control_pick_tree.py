@@ -137,6 +137,12 @@ def test_the_pick_cycle_settings_are_the_reviewed_values():
     detection = policy_task["object_detection"]
     assert detection["image_topic"] == "/camera_global/d435/color/image_raw"
     assert detection["erode_px"] % 2 == 1
+    # SJDrealman 2026-11-19: black adapters on a teal mat, so chroma alone separates them (empty mat 0, adapter 827);
+    # the exclusion is the right arm's parked gripper over the mat's right edge.
+    assert detection["roi_xywh"] == [178, 122, 372, 236]
+    assert detection["exclude_xywh"] == [462, 208, 90, 92]
+    assert detection["min_channel"] == 0 and detection["max_chroma"] == 35
+    assert detection["min_pixels"] == 150
 
 
 def test_the_tree_is_installed():

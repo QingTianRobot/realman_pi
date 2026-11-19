@@ -137,11 +137,11 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 4. **抬升到固定位姿**：左臂 `MoveJ` 到 `pick_cycle.lift_joint_degrees` = `[12.172, 25.257, 73.104, -7.472, 80.312, 14.449]`，即放置位姿换成起始位姿的 J1，只调整手腕，下一步只转 J1 就正好到放置位姿。改位姿只改配置，不用改 XML。
 5. **转到放置侧**：`MoveJointTo` 只把 J1（`pick_cycle.release_joint`）从 12.172° 转到 `pick_cycle.release_joint_deg`（79.455°），以 20% 速度转动，其余关节保持不动。放置位姿 `[79.455, 25.257, 73.104, -7.472, 80.312, 14.449]` 于 2026-11-19 在 SJDrealman 上示教。按最小角度转过去：J1 增大约 67.3°，从上往下看是逆时针；MoveJ 在关节空间插值，不会绕远路。这条路径还没有在真机上空载确认过。
 6. **松开**：`GripperReady` 张开左夹爪，物体落在放置侧。
-7. **检测**：`WhiteObjectsRemain` 读一帧全局相机（D435）图像，判断垫子上是否还有白色物体。有物体就返回 `SUCCESS`，`Repeat` 开始下一个周期；没有物体就写入 `pick_table_clear=true` 并返回失败，以此结束 `Repeat`。
+7. **检测**：`WhiteObjectsRemain` 读一帧全局相机（D435）图像，判断垫子上是否还有物体（低饱和度色块：SJD 上是黑色适配器，realman_ts 上是白色适配器）。有物体就返回 `SUCCESS`，`Repeat` 开始下一个周期；没有物体就写入 `pick_table_clear=true` 并返回失败，以此结束 `Repeat`。
 
 `Repeat` 结束后由 `CheckBool` 判断结束原因：如果是桌面已清空，先由 `pick_done_home` 让三臂回到起始位姿，再停在 `PolicyInputStub`（policy 模式空闲，桥接已停止）。回位这一步不能省：进入 policy 模式的第一步回位受输入模式切换超时（`behavior_tree.yaml` 的 `switch_timeout_ms`，5 s）限制，如果手臂停在放置侧（右臂 -135° 时回位约需 8 s），会超时并退回 none（2026-10-20 真机上出现过）。其他原因（尝试次数用完、故障、某个 MoveJ 失败、相机没有图像）都不会写入 `pick_table_clear`，于是经 `FailInputMode` 进入 `FAILED`；这条路径不会自动回位，再次进入前如果左臂不在起始位姿附近，需要先手动回位（见下文操作流程）。抬起、抬升、转动这几步的运动失败由 `WhileGraspHeld` 写入 `policy_failure_reason`（`carrying the object failed in pick_carry_to_release: ...`），`FAILED` 的说明就是它。
 
-### 白色物体检测（WhiteObjectsRemain）
+### 桌面物体检测（WhiteObjectsRemain）
 
 检测在 `object_detection.roi_xywh` 所框出的绿色垫子区域内进行，桌外白色的地面和机械臂不计入。`exclude_xywh` 中的矩形（每 4 个数为一组：x、y、宽、高）内的像素一律不算白色，用来去掉顶灯在光面垫子上的反光，因为反光和适配器一样白，亮度上无法区分。落在排除区里的物体看不到，循环可能会在它还没被抓走时就结束。
 
@@ -151,14 +151,23 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 
 图像必须在检测开始 `settle_sec` 之后收到，以确保拍到的是手臂已停在放置侧时的画面；`timeout_sec` 内没有图像则判为失败。
 
-标定（2026-10-20）：
+realman_ts 标定（2026-10-20，白色适配器、深绿色光面垫子；当时取 `roi_xywh` `[235, 125, 250, 230]`、`min_channel` 90、`max_chroma` 40）：
 
 - 录制画面中适配器每个通道约 110–170；重新部署后的实时画面更亮，为 215–250。垫子低于 70。
 - 腐蚀后单个适配器保留 245–650 个像素，一团卷起的线缆最多残留 73 个，因此 `min_pixels` 取 150。
 - 实时画面中，三个适配器计数为 1709，只剩一个时约 620；抹掉适配器、保留线缆时为 91，判为已清空。
 - 光斑腐蚀后的范围约为 x 388–460、y 176–350，排除区取 `[392, 170, 75, 185]`，与最近的适配器（右边缘 x 391）不重叠。
 
-检测时手臂必须离开垫子区域：左臂停在放置侧（J1=79.455°）时是否在 D435 画面和 ROI 之外，尚未在 SJDrealman 上确认；ROI 和排除区是在 realman_ts 上标定的，换到 SJD 后需要重新标定。相机、垫子或灯光挪动后，需要重新标定 ROI 和排除区。
+SJDrealman 标定（2026-11-19，当前配置）：
+
+- 物体是**黑色**电源适配器，垫子是饱和度很高的青绿色，所以 `min_channel` 取 0，只靠饱和度区分：垫子 `max-min` 约 79（ROI 内没有一个像素 ≤45），适配器约 8。`max_chroma` 取 35。节点名仍是 `WhiteObjectsRemain`，但这组参数下黑色和白色物体都能检测到。
+- ROI `[178, 122, 372, 236]` 取在垫子边缘以内（垫子约 x 150–568、y 95–387，略有倾斜）。垫子外是低饱和度的灰墙和白色支架，ROI 不能越过垫子边缘。
+- 检测时右臂停在它的起始位姿，夹爪伸到垫子右边缘上方（约 x 470–570、y 220–290）。不排除的话，空垫子也会计到 150–480，所以排除区取 `[462, 208, 90, 92]`。落在这个区域里的物体看不到。
+- 左臂停在放置位姿（J1=79.455°）时不在 D435 画面里。对照了一帧示教录像：右臂夹爪的位置与实时画面相同，左臂在画面左侧。所以放下的物体不会落回垫子上。
+- 用一帧实时画面验证（左臂停在放置位姿）：空垫子计 0；一个适配器计 827（`max_chroma` 30–40 时为 754–890）；它的线缆被腐蚀去掉，计 0。`min_pixels` 保持 150。
+- 只验证了这一帧的光照。灯光变化后垫子上出现低饱和度的反光，就会被当成物体，循环一直不会结束。这时先抓一帧图像再调排除区或 `max_chroma`。
+
+相机、垫子或灯光挪动后，需要重新标定 ROI 和排除区。
 
 dry-run 时不读相机，直接报告桌面已清空，因此 dry-run 只跑一个周期就结束。
 
@@ -217,7 +226,7 @@ REALMAN_BT_DRY_RUN=false ./rm65 bt control_pick
 | `PolicyRun` | 预检、激活、监督一次尝试，并按固定顺序停止 | 见下表 |
 | `WhileGraspHeld` | 装饰节点：子节点（搬运运动）执行期间持续读 `/gripper_<name>/position`，夹爪合到底（`verdict.empty_position_min` 以上）持续 `grasp_check.carry_lost_sec` 即 halt 子节点 | 物体掉落：可重试的失败，写入 `policy_failure_reason`；子节点失败或读不到夹爪位置：判为故障 |
 | `MoveJointTo` | 读取当前关节角，只把一个关节转到绝对角度，再作为普通 MoveJ 执行（`control_pick.xml` 用它把 J1 转到放置侧） | 读角度失败、MoveJ 失败或超时 |
-| `WhiteObjectsRemain` | 用全局相机检测垫子上是否还有白色物体，结果写入 `table_clear` | 有物体返回 `SUCCESS`；桌面已清空时返回失败并写入 `table_clear=true`；没有图像、编码不支持或 ROI 超出图像范围时返回失败，并写入 `policy_failure_reason` |
+| `WhiteObjectsRemain` | 用全局相机检测垫子上是否还有物体（低饱和度色块），结果写入 `table_clear` | 有物体返回 `SUCCESS`；桌面已清空时返回失败并写入 `table_clear=true`；没有图像、编码不支持或 ROI 超出图像范围时返回失败，并写入 `policy_failure_reason` |
 | `FailInputMode` | 把任务级失败转为输入模式 `FAILED`，原因取自 `policy_failure_reason`；协调器随后切换到 `none` | — |
 | `RetryUnlessFault` | 与 `Retry` 相同，但如果失败的叶节点已置位 `policy_fault`，会立即返回失败，不再消耗剩余次数；置位 `policy_timeout` 的失败按 `timeout_attempts` 单独计数，等待 `timeout_backoff_sec` 后再重试；`timeouts_to_parent="true"` 时改为立即返回这类失败、保留标志，交给外层的 `RetryUnlessFault` | 超时次数耗尽时，在 `policy_failure_reason` 前加上 `policy server timed out N times; last: `；运行开始、每次重试前和成功时清空 `policy_failure_reason`，失败结束时保留最后一次尝试的原因 |
 

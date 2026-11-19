@@ -241,7 +241,8 @@ enine 上的外接 W/A/S/D 小键盘由 `pika_foot_pedal` 节点读取（节点�
 | 归位前又按键把遥操作切回“开” | 不发 MoveJ；FAILED，`detail` 写 `home skipped: teleop re-enabled` |
 | 归位途中模式被切换 | 归位 MoveJ 不会被取消；新模式的进入 MoveJ 在归位结束前可能被驱动拒绝 |
 | 启动时配置读不到或不合法 | 节点不启动，launch 日志 `pika_episode_trigger NOT started: <原因>`，bringup 其余部分不受影响 |
-| 归位 MoveJ 被拒或失败 | FAILED，不重试 |
+| 归位 MoveJ 目标被驱动拒绝 | 每 0.2 s 重发一次，从第一次发出起最多重试 2 s，仍被拒才 FAILED（`MoveJ goal rejected`）。原因：`/<臂>/cartesian_velocity/state` 报会话结束时，驱动可能还要几毫秒才释放这条臂，这期间的 MoveJ 会被拒为 `arm <臂> is busy` |
+| 归位 MoveJ 已接受但执行失败或超时 | FAILED，不重试 |
 | FAILED 之后 | 键盘下一次切到“开”只清除故障（这次遥操作照常但不录、结束不归位），再按一次关、一次开才开始新的一条；故障发生时键盘若是“开”（桥断、录制中切模式），要先按一次切到“关”（不起作用）。看 `/pika_episode/state` 的 `detail: cleared` 确认 |
 
 如果录制端在节点的 10 s 超时之后才回复 START 且结果为成功，节点记录一条错误日志，并 STOP 这个无人认领的 session；但 `/recording/status` 显示别的 session 正在录时只记日志、不发 STOP。

@@ -31,8 +31,9 @@ observation:
   # 上行图像源。至少一路 enabled=true，否则启动校验失败。
   image_topics:
     - name: wrist_image
-      # 右臂腕部相机（训练数据的 orbbec-right）；换臂时同步改 active_side。
-      topic: /camera_right/color/image_raw
+      # 左臂腕部相机（SJD 左臂训练数据的 orbbec-left，2026-11-19 起）；换臂时同步改 active_side
+      # （compose 的 POLICY_BRIDGE_ACTIVE_SIDE）和 policy_task.yaml 的 arm。
+      topic: /camera_left/color/image_raw
       encoding: rgb8
       # [H, W]；留空 = 原样发送。按 openpi 的 resize_with_pad 缩放（保持长宽比、居中、补黑边，PIL 双线性），
       # 与服务端训练/推理时的 ResizeImages(224, 224) 同一算法，服务端那一步因此变成空操作，模型输入不变。

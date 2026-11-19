@@ -60,7 +60,7 @@ realman_bt_executor ── /realman_bt_executor/input_mode_state ──▶ ModeW
 | `mode.mapping` | `inactive_modes` | `[web,pika,none]` | 映射为内部 `inactive` |
 | `stats` | `failure_pause_threshold` | 当前 `5` | 连续失败 `>=N` 暂停，需显式 activate 恢复 |
 
-一期 `arm_names` 固定 `[l, r]`，节点以单个 `active_side`（launch 默认 `left`，Docker `policy` 服务默认 `right`）驱动单臂动作流；双臂独立流为二期扩展。上行 `state[0:6]` 一期取每臂 `joint_states` 前 6 个关节位置占位，`state[6]` 由夹爪 `Float64` 设备单位经 `open/close_position` 换算为 `0..1`。
+一期 `arm_names` 固定 `[l, r]`，节点以单个 `active_side`（launch 默认 `left`，Docker `policy` 服务默认 `left`，2026-11-19 前为 `right`）驱动单臂动作流；双臂独立流为二期扩展。上行 `state[0:6]` 一期取每臂 `joint_states` 前 6 个关节位置占位，`state[6]` 由夹爪 `Float64` 设备单位经 `open/close_position` 换算为 `0..1`。
 
 ## ROS 接口
 
@@ -68,7 +68,7 @@ realman_bt_executor ── /realman_bt_executor/input_mode_state ──▶ ModeW
 
 | 用途 | 默认 topic | 类型 |
 | --- | --- | --- |
-| 腕部图像 | `/camera_right/color/image_raw` | `sensor_msgs/Image` |
+| 腕部图像 | `/camera_left/color/image_raw`（2026-11-19 前为右臂 `/camera_right/...`） | `sensor_msgs/Image` |
 | 全局图像 | `/camera_global/d435/color/image_raw` | `sensor_msgs/Image`（独立 RealSense D435，区别于三路 Orbbec 臂相机） |
 | 关节状态 | `/l/joint_states`、`/r/joint_states` | `sensor_msgs/JointState` |
 | 夹爪位置 | `/gripper_left/position`、`/gripper_right/position` | `std_msgs/Float64` |

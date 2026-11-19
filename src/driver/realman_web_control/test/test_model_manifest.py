@@ -143,7 +143,7 @@ def test_manifest_publishes_the_policy_current_guard_for_the_current_charts():
         "enabled": True,
         "limits_ma": [4000.0, 7000.0, 8000.0, 6000.0, 7500.0, 3000.0],
         "sustain_sec": 0.5,
-        "policy_arm": "r",
+        "policy_arm": "l",
     }
 
 

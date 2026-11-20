@@ -236,6 +236,8 @@ test("loads configured URDF scene and sends MOVEJ, MOVEL, and MOVEP protocol", a
     }) });
   });
   await expect(page.locator("#connection")).toContainText("OFFLINE");
+  // An offline arm's URDF (live model + target shadow) is not drawn at all.
+  await expect(page.locator("#viewer")).toHaveAttribute("data-hidden-arms", "l");
   await expect(page.locator("#recover-motion")).toBeEnabled();
   await page.locator("#recover-motion").click();
   const recoveryRequestId = await page.evaluate(() => {

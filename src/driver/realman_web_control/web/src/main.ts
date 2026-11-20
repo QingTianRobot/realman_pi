@@ -1407,6 +1407,20 @@ function setShadowVisibility(arm: ArmId) {
   selectedShadowArm = arm;
 }
 
+// An arm whose driver reports /<arm>/connected=false is not drawn at all (live
+// model, target shadow and its gripper), so a powered-off arm does not look like
+// a live one frozen at its last pose. WAIT (no report yet) keeps it visible.
+function applyArmVisibility() {
+  const hidden: ArmId[] = [];
+  for (const [arm, robotScene] of Object.entries(robotScenes) as [ArmId, RobotScene][]) {
+    const visible = connectionStates[arm] !== false;
+    if (robotScene.live) robotScene.live.visible = visible;
+    if (robotScene.shadow) robotScene.shadow.visible = visible;
+    if (!visible) hidden.push(arm);
+  }
+  viewer.dataset.hiddenArms = hidden.join(",");
+}
+
 function frameScene(includeSelectedShadow = false) {
   if (!manifest || !camera || !controls || !scene) return;
   const bounds = new THREE.Box3();
@@ -1544,6 +1558,7 @@ async function loadFleet() {
       live.updateMatrixWorld(true);
     });
     updateKeyboardWorkFrames();
+    applyArmVisibility();
     const selectedConfig = robotConfig(selectedArm);
     setShadowVisibility(selectedArm);
     frameScene(false);
@@ -1621,7 +1636,7 @@ function pickArm(event: PointerEvent): { arm: ArmId; link: string } | undefined 
   ), camera);
   let best: { arm: ArmId; link: string; distance: number } | undefined;
   for (const [arm, robotScene] of Object.entries(robotScenes) as [ArmId, RobotScene][]) {
-    if (!robotScene.live) continue;
+    if (!robotScene.live?.visible) continue;
     const hit = raycaster.intersectObject(robotScene.live, true)[0];
     if (!hit || (best && best.distance <= hit.distance)) continue;
     let node: any = hit.object;
@@ -1935,6 +1950,7 @@ function handleMessage(message: Message) {
     }
   } else if (message.type === "connection") {
     connectionStates[message.arm] = Boolean(message.connected);
+    applyArmVisibility();
     renderFleetStrip();
     if (message.arm === selectedArm) setSelectedConnection();
   } else if (message.type === "joint_state") {

@@ -566,8 +566,22 @@ function render(payload: Snapshot) {
   renderLiveRobot(payload);
 }
 
+// Live view: an arm whose driver reports connected=false is not drawn at all, so a
+// powered-off arm does not look like a live one frozen at its last pose. An arm
+// absent from the snapshot stays visible. Replay always draws all three arms.
+function applyArmVisibility(arms: Snapshot["arms"] | null) {
+  const hidden: ArmId[] = [];
+  for (const [arm, urdf] of Object.entries(robotScenes) as [ArmId, any][]) {
+    const visible = !arms || arms[arm]?.connected !== false;
+    urdf.visible = visible;
+    if (!visible) hidden.push(arm);
+  }
+  viewer.dataset.hiddenArms = hidden.join(",");
+}
+
 function renderLiveRobot(payload: Snapshot) {
   const arms = payload.arms ?? {};
+  applyArmVisibility(arms);
   for (const [arm, data] of Object.entries(arms)) {
     const positions = (data as any).positions_rad;
     if (positions?.length) {
@@ -785,6 +799,7 @@ function exitReplay() {
   replayDatasetMeta.textContent = "—";
   poseCount.textContent = "URDF 实时关节";
   gripperCount.textContent = "实时输入";
+  if (latestLiveSnapshot) applyArmVisibility(latestLiveSnapshot.arms ?? {});
 }
 
 function renderReplayFrame(frameIndex: number) {
@@ -797,6 +812,7 @@ function renderReplayFrame(frameIndex: number) {
   jointStamp.textContent = `回放帧 ${frameIndex + 1} · ${new Date(frame.timestamp_ns / 1e6).toISOString()}`;
   poseCount.textContent = "回放关节";
   gripperCount.textContent = "回放";
+  applyArmVisibility(null);
 
   const armIds: ArmId[] = ["l", "m", "r"];
   armsEl.innerHTML = armIds

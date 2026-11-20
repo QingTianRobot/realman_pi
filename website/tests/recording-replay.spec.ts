@@ -40,6 +40,33 @@ test("live workspace presents FK position and direct driver velocity in 2D and 3
   await expect(page.locator("#motion-viewer")).toHaveAttribute("data-end-effector-markers", "active");
 });
 
+test("live 3D view hides the URDF of an arm whose driver reports offline", async ({ page }) => {
+  test.setTimeout(30_000);
+  let sendSnapshot: (middleConnected: boolean) => void = () => {};
+  await page.routeWebSocket("/ws", (socket) => {
+    const snapshot = (middleConnected: boolean) => JSON.stringify({
+      type: "recording_snapshot",
+      recording: { state: 0, detail: "实时观测", elapsed_sec: 0, remaining_sec: 0, dropped_samples: 0 },
+      arms: {
+        l: { connected: true, positions_rad: [0, 0, 0, 0, 0, 0] },
+        m: { connected: middleConnected, positions_rad: [] },
+        r: { connected: true, positions_rad: [0, 0, 0, 0, 0, 0] },
+      },
+      grippers: {},
+      preview_cameras: {},
+    });
+    socket.send(JSON.stringify({ type: "hello", read_only_robot: true }));
+    sendSnapshot = (middleConnected) => socket.send(snapshot(middleConnected));
+    setTimeout(() => sendSnapshot(false), 400);
+  });
+
+  await page.goto("/");
+
+  await expect(page.locator("#viewer")).toHaveAttribute("data-hidden-arms", "m", { timeout: 15_000 });
+  sendSnapshot(true);
+  await expect(page.locator("#viewer")).toHaveAttribute("data-hidden-arms", "", { timeout: 15_000 });
+});
+
 test("replay workspace synchronizes camera tiles and exposes added canonical features", async ({ page }) => {
   await page.route("**/api/lerobot", (route) =>
     route.fulfill({

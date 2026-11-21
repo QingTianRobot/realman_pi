@@ -142,13 +142,15 @@ void testTheShippedYamlLoadsThroughRosAsALaunchFileWouldPassIt() {
   const PolicyTaskConfig loaded = realman_bt::declareAndLoadPolicyTaskConfig(node);
 
   assert(loaded.cycles == 1 && loaded.attempts == 3);
-  assert(loaded.activation == "auto" && loaded.arm == "r");
-  assert(loaded.joint_lo[4] == 3.5 && loaded.joint_hi[4] == 108.2);
+  assert(loaded.activation == "auto" && loaded.arm == "l");  // SJDrealman left arm since 2026-11-19
+  assert(loaded.joint_lo[4] == 3.5 && loaded.joint_hi[4] == 126.9);
   assert(loaded.max_joint_speed_dps == 50.0);
   assert(loaded.release.joint_below_deg == -35.0);
-  assert(loaded.gripper_for_arm.at("r") == "gripper_right");
+  assert(loaded.gripper_for_arm.at("r") == "gripper_right" && loaded.gripper_for_arm.at("l") == "gripper_left");
   assert(loaded.tasks.size() == 2);
-  assert(loaded.task("pick").prompt == "pick up the power adapter");
+  // One training prompt for both tasks (the SJD left model); they differ in completion.
+  assert(loaded.task("pick").prompt == "pick up the power adapter and put it in the blue bin");
+  assert(loaded.task("place").prompt == loaded.task("pick").prompt);
   assert(loaded.task("pick").completion == PolicyTaskConfig::Completion::kGraspCheck);
   assert(loaded.task("place").completion == PolicyTaskConfig::Completion::kReleaseOverBin);
   assert(loaded.grasp_check.confirm_sec == 0.8 && loaded.grasp_check.timeout_sec == 6.0);

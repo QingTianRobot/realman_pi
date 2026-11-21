@@ -399,11 +399,12 @@ std::string pickXml() {
   return readFile(std::filesystem::path(BT_TEST_CONFIG_DIR) / "control_pick.xml");
 }
 
-// The lift after a grasp is a Cartesian velocity in r's work/pikabase frame; control_router.launch.py
+// The lift after a grasp is a Cartesian velocity in l's work/pikabase frame (control_pick.xml drives the left
+// arm since 2026-11-19); control_router.launch.py
 // passes these registries from realman_coordinates.yaml and realman_motion.yaml on the robot.
 std::vector<rclcpp::Parameter> pickParameters() {
-  return {{"coordinate_references", std::vector<std::string>{"r|work/pikabase|1|pikabase|r/work/pikabase"}},
-          {"cartesian_velocity_profiles", std::vector<std::string>{"r|20|100|0.15|0.25|0.1|0.5|10|2"}}};
+  return {{"coordinate_references", std::vector<std::string>{"l|work/pikabase|1|pikabase|l/work/pikabase"}},
+          {"cartesian_velocity_profiles", std::vector<std::string>{"l|20|100|0.15|0.25|0.1|0.5|10|2"}}};
 }
 
 // control_pick.xml in dry run: every leaf of one pick cycle is registered and validates, the
@@ -429,7 +430,7 @@ void testPickTreeDryRunEndsWithAClearTableAndIdles() {
 void testPickTreeFailedCycleIsNotAClearTable() {
   Fixture f;
   auto xml = pickXml();
-  replaceOnce(xml, "<PolicyRun arm_id=\"r\" task=\"pick\" dry_run=\"{dry_run}\"/>",
+  replaceOnce(xml, "<PolicyRun arm_id=\"l\" task=\"pick\" dry_run=\"{dry_run}\"/>",
               "<CheckBool key=\"never_set\"/>");
   f.load(xml, pickParameters());
   f.subscribe();

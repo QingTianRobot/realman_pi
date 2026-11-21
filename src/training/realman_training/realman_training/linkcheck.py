@@ -55,10 +55,12 @@ def _pika(robot: Robot, config: ConsoleConfig) -> list[Check]:
     nodes = robot.ros_probe("nodes")["nodes"]
     pika = [n for n in nodes if n.rsplit("/", 1)[-1].startswith(lc.pika_node_prefix)]
     shown = ", ".join(n.rsplit("/", 1)[-1] for n in pika[:5]) + (" …" if len(pika) > 5 else "")
+    if robot.local:  # the flood is a Wi-Fi problem between hosts; here pika_control_router is part of the bringup
+        return [Check("pika", "pika_nodes", True, f"{len(pika)}" + (f" ({shown})" if pika else ""), "-",
+                      "informational: no Wi-Fi between server and bridge"),
+                Check("pika", "wifi_load", True, "same host", "-", "server and bridge share the robot host")]
     checks = [Check("pika", "pika_nodes", not pika, f"{len(pika)}" + (f" ({shown})" if pika else ""), "0",
                     "stop the Pika stack on the teleop PC before a policy run" if pika else "")]
-    if robot.local:
-        return checks + [Check("pika", "wifi_load", True, "same host", "-", "server and bridge share the robot host")]
     iface = shlex.quote(lc.wifi_interface)
     window = f"{lc.wifi_window_sec:g}"
     command = (

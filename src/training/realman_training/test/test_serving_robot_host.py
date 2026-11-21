@@ -143,6 +143,9 @@ def test_linkcheck_on_one_host_skips_the_network_checks(config):
     fake = chain.runner()
     robot = Robot(config.remote, config.serving, fake)
     checks = {c.name: c for c in linkcheck.run_checks(config, fake, robot=robot, only=("pika", "link"))}
+    chain.nodes.append("/pika_control_router")
+    checks = {c.name: c for c in linkcheck.run_checks(config, chain.runner(), robot=robot, only=("pika", "link"))}
+    assert checks["pika_nodes"].ok and "informational" in checks["pika_nodes"].detail
     for name in ("wifi_load", "bulk_throughput", "ping"):
         assert checks[name].ok and checks[name].value == "same host"
     assert not fake.commands("/sys/class/net") and not fake.commands("ping -q") and not fake.commands("PIPE")

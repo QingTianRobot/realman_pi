@@ -71,7 +71,7 @@ PYTHONPATH=. python -m realman_training cancel <id>
 
 ## 推理服务与链路检测
 
-推理链路两端：server5090 上的 `openpi-serve`（compose 项目 `openpi-serve`，`~/organization/openpi/compose.yaml` + `~/data/realman/compose.serve.yaml`）和 realman_ts 上的 `policy_bridge` 容器。在 server5090 上：
+推理链路两端：控制平台所在主机上的 `openpi-serve`（compose 项目 `openpi-serve`：openpi 检出的 `compose.yaml` + 仓库的 `config/training/openpi-serve.compose.yaml`，后者给出服务命令和 GPU 运行时，可再加一个覆盖文件）和机器人主机上的 `policy_bridge` 容器。原来的布局是 server5090 推理、realman_ts 桥接；2026-11-21 起 SJDrealman 一台机器两端都跑，见[在机器人主机上推理](#在机器人主机上推理-sjdrealman)。命令：
 
 ```bash
 PYTHONPATH=. python -m realman_training serve status
@@ -84,11 +84,12 @@ PYTHONPATH=. python -m realman_training linkcheck [--only pika,link,inference,br
 `serve start`（后台任务，种类 `serve`，与 `stop` 互斥）：
 
 1. 检查：行为树的 `requested/selected/active_mode` 是 `policy` 就拒绝；`openpi-serve` 已在运行、端口已被占用、GPU 显存超过 `openpi.gpu_busy_mib`（2000 MiB）、端口与机器人 `config/ros/policy_bridge.yaml` 的 `network.server_port` 不同（桥接的端口只能在那里改）都拒绝；模型必须有任务 prompt（`model_card.json` 的 `tasks`，否则训练视图的 `contract.json`），`--task` 只能选模型训练过的任务。
-2. 用 `SERVE_CONFIG`/`SERVE_CHECKPOINT`/`SERVE_GPU`/`OPENPI_POLICY_PORT` 执行 `docker compose up -d`（`runtime: nvidia`，不用 `gpus:`），等端口监听（加载 checkpoint，最多 `start_timeout_sec`）。
-3. 在服务容器里发 2 次真实尺寸的推理预热：重启后第一次推理要 JIT 编译约 26 s，会让桥接的 1.5 s 请求超时、连续 5 次失败后暂停。
-4. 在 realman_ts 的 `~/realman_pi` 执行 `POLICY_WS_HOST=<server5090 地址> docker compose up -d --no-deps --no-build policy_bridge`（地址取 realman_ts 看到的 `$SSH_CLIENT`，不写进配置）；不调用 `./rm65`，不碰 bringup、web、录制容器和行为树。
-5. 等 `/policy/stats` 出现，在 `/policy/prompt` 发所选任务的 prompt 并等桥接确认；桥接必须是非激活状态（`allow_publish=0`）。机械臂运动仍然只由行为树和 `/policy/activate` 决定。
-6. 运行链路检测；检测失败不让启动失败，但会在日志里标出来。
+2. 有计算主机时先取 checkpoint：从计算主机刷新这个 run 的元数据，所选步数目录里没有 `.fetched` 标记就用 rsync 把它的 `params/` 和 `assets/`（不含 `train_state/`，约 6 GB）拷到本机 openpi 数据目录，日志里逐个文件显示进度；中断后再点启动会续传。
+3. 用 `SERVE_CONFIG`/`SERVE_CHECKPOINT`/`SERVE_GPU`/`OPENPI_POLICY_PORT` 执行 `docker compose up -d`（默认 `runtime: nvidia`，不用 `gpus:`），等端口监听（加载 checkpoint，最多 `start_timeout_sec`）。
+4. 在服务容器里发 2 次真实尺寸的推理预热：重启后第一次推理要 JIT 编译约 26 s，会让桥接的 1.5 s 请求超时、连续 5 次失败后暂停。
+5. 在机器人检出（`serving.robot_repo`）执行 `POLICY_WS_HOST=<服务地址> docker compose up -d --no-deps --no-build policy_bridge`（两台机器时地址取 realman_ts 看到的 `$SSH_CLIENT`，不写进配置；同一台机器时是 `127.0.0.1`，桥接用主机网络）；不调用 `./rm65`，不碰 bringup、web、录制容器和行为树。
+6. 等 `/policy/stats` 出现，在 `/policy/prompt` 发所选任务的 prompt 并等桥接确认；桥接必须是非激活状态（`allow_publish=0`）。机械臂运动仍然只由行为树和 `/policy/activate` 决定。
+7. 运行链路检测；检测失败不让启动失败，但会在日志里标出来。
 
 启动记录在 `<data_root>/_console/serving.json`（模型、checkpoint、GPU、端口、任务、prompt、预热耗时）。`serve stop`（需要 realman_ts 可达以检查行为树模式）：同样在 `policy` 模式下拒绝，先停桥接（`docker compose stop policy_bridge`），再停并删除 `openpi-serve-openpi-1`。`serve status`：两端容器、镜像、启动时间、GPU 显存、模型、桥接 prompt/paused/allow_publish、行为树模式；realman_ts 不可达时只报告原因。
 
@@ -102,6 +103,26 @@ PYTHONPATH=. python -m realman_training linkcheck [--only pika,link,inference,br
 | `bridge_prompt` / `bridge_paused` / `bridge_errors` | `/policy/stats`：prompt 等于所服务任务的 prompt（没有启动记录时等于配置里任一 prompt）、`paused=0`、没有 error/fail 计数 | 见左 |
 
 每次检测写一份 `<data_root>/_console/linkcheck/<时间>.json`；某项无法执行（如 realman_ts 不可达）时该项判失败并给出原因，其余项照常执行。
+
+### 在机器人主机上推理（SJDrealman）
+
+SJDrealman 上控制平台、机器人和推理用的 RTX 4080 在同一台机器，checkpoint 在计算主机上训练。`remote.ssh_host` 为空（`REALMAN_RECORDING_SSH_HOST=`）时桥接和 ROS 命令直接在本机执行，桥接连 `127.0.0.1:18000`；`wifi_load`、`bulk_throughput`、`ping` 显示 `same host` 并通过。在 **服务** 页选模型、步数、GPU 0、任务，点启动即可：先拷 checkpoint，再起 `openpi-serve`、预热、确认桥接 prompt。之后在 :8765 的行为树里选 `policy` 模式，`PolicyRun`（`activation: auto`）通过预检后自己调用 `/policy/activate`。
+
+SJD 的 docker 没有 nvidia 运行时（没装 nvidia-container-toolkit，也没有 sudo 装），所以服务容器用 `config/training/openpi-serve.devices.compose.yaml`：直接传 `/dev/nvidia*` 设备，把宿主机驱动的用户态库挂到 `openpi:dev` 已在 `LD_LIBRARY_PATH` 里的 `/usr/local/nvidia/lib64`（JAX 自带 CUDA）。驱动升级后要改 `SERVE_DRIVER_VERSION`。
+
+env 文件（仓库外，`--env-file` 传入）里的推理相关值：
+
+| 变量 | SJD 上的值 | 作用 |
+|---|---|---|
+| `REALMAN_SERVE_OPENPI_REPO` | `~/organization/openpi-serve`（QingTianRobot/openpi main 的检出） | 服务容器挂载的 openpi 代码，必须有所服务的训练配置；`~/organization/openpi` 在这台机器上只是控制平台的元数据镜像 |
+| `REALMAN_SERVE_COMPOSE_OVERLAY` | `openpi-serve.devices.compose.yaml` | 第三个 compose 文件；空 = 不加 |
+| `SERVE_RUNTIME` / `SERVE_DRIVER_VERSION` | `runc` / `nvidia-smi` 报的驱动版本 | 没有 nvidia 运行时时用 |
+| `REALMAN_SERVE_MODEL` / `REALMAN_SERVE_GPU` | 默认模型 `<配置>/<实验>`、`0` | 网页设置的默认值 |
+| `REALMAN_ROBOT_REPO` | 机器人检出的绝对路径 | 读 `policy_bridge.yaml` 的端口、`docker compose up policy_bridge` |
+
+控制平台容器另外要挂载（主机自己的 override 文件）：机器人检出（只读，同一路径）、`openpi-serve` 检出（只读）、`/usr/bin/nvidia-smi` + `libnvidia-ml.so.1` 和 `/dev/nvidia0`、`/dev/nvidiactl`（GPU 占用检查和状态卡片用）。计算主机的 ssh 设置按 `Traning_area/SSH连接说明.md`：2026-11-19 起用 robot 自己的 `~/.ssh/id_ed25519`，旧别名指向的私钥文件已删除，所以控制平台用自己的 ssh 配置文件（`REALMAN_COMPUTE_SSH_CONFIG`，同一组选项），不用 `Traning_area/.ssh/config`。
+
+手动启动的训练（不经控制平台）没有 `console_train.json`，`eval`/`register` 会拒绝；补一份同格式的记录（视图、GPU、步数、留出集、起止时间）后再评估和登记，登记后的模型才会出现在服务页的模型列表里。
 
 ## 计算主机（训练在另一台机器上）
 
@@ -188,16 +209,15 @@ rm <workdir>/src/openpi/console_run/<名字>.pid
 - `tags refresh` 在 SJD 上运行（要读录制平台的标签索引），写完后把这个数据集的 `episode_tags.json` 复制到计算主机上的同一数据集；复制失败时任务失败（否则下一次镜像同步会用计算主机上的旧文件覆盖它），重新刷新一次即可；计算主机上没有这个数据集时只更新本地，不算失败。
 - `pull` 先拉到本地再推到计算主机：推完之前 SJD 上要有和这份录制一样大的空闲磁盘。推完后删掉本地视频，只留元数据；推送失败或推送中取消任务时本地这份也删掉，需要重新 `pull`。
 - 计算主机是共用的：训练和评估按剩余显存检查（`openpi.default_share_gpus`，相当于默认加 `--share-gpus`），用哪几张卡要人在网页的 GPU 面板（显示的是计算主机的 GPU）上看过再选。
-- 控制平台跑在 SJD 上时，推理服务状态卡片和链路检测仍按“机器人在另一台主机上”的布局工作，在推理服务也搬到 SJD 之前（集成平台的阶段 ④）会显示错误，可以忽略。
 - 在计算主机上删掉的数据集仍留在镜像里（同步不带 `--delete`），需要时在 SJD 上手动删镜像里的对应目录。
 
 ## 安全规则
 
 - 拉取、清洗、视图都写新目录，目标已存在就拒绝；只会删除本任务自己没写完的 `<目标>.partial`。
 - 只读录制容器（`docker exec … tar/du/cat`），不碰 bringup、web、录制容器的启停和行为树。
-- 训练和评估拒绝被别人占用的 GPU；容器用 `runtime: nvidia` + `NVIDIA_VISIBLE_DEVICES`（服务器上的 CDI 规格过期，`gpus:` 会失败）。
+- 训练和评估拒绝被别人占用的 GPU；容器用 `runtime: nvidia` + `NVIDIA_VISIBLE_DEVICES`（服务器上的 CDI 规格过期，`gpus:` 会失败）；没有 nvidia 运行时的主机用设备覆盖文件。
 - 推理服务：启停都在行为树为 `policy` 模式时拒绝；机器人侧只执行 `docker compose up -d --no-deps --no-build policy_bridge`、`docker compose stop policy_bridge` 和发布 prompt，从不调用 `./rm65`、不改行为树模式、不调用 `/policy/activate`。
-- 配置在 `config/training/training_console.yaml`（`remote`、`openpi`、`serving`、`linkcheck`、`prompts` 段）和 `config/training/openpi-console.compose.yaml`；主机只写 ssh 别名。
+- 配置在 `config/training/training_console.yaml`（`remote`、`openpi`、`serving`、`linkcheck`、`prompts` 段）、`config/training/openpi-console.compose.yaml` 和 `config/training/openpi-serve*.compose.yaml`；主机只写 ssh 别名。
 
 ## 质检规则
 

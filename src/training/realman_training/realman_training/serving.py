@@ -268,14 +268,19 @@ def start(params: dict, log, runner: Runner | None = None, *, port_open=port_ope
     if fetch:
         fetch_checkpoint(config, runner, model, log, clock)
 
+    # openpi's compose.yaml binds these with create_host_path: a missing one is created by the docker daemon as root
+    # and the container user cannot write it (uv: "failed to create directory /home/openpi/.cache/uv").
+    for sub in ("cache", "assets", "data", "checkpoints"):
+        (config.openpi.docker_data / sub).mkdir(parents=True, exist_ok=True)
     try:
         runner.check(up, env=env)
     except CommandFailed as error:
         raise StepFailed(f"openpi-serve did not start: {error}") from None
     deadline = clock() + sc.start_timeout_sec
     while not port_open(port):
-        running = runner.run(["docker", "inspect", "-f", "{{.State.Running}}", container]).stdout.strip()
-        if running != "true":
+        state = runner.run(["docker", "inspect", "-f", "{{.State.Running}} {{.RestartCount}}", container]).stdout.split()
+        running, restarts = (state + ["", "0"])[:2]
+        if running != "true" or (restarts.isdigit() and int(restarts) > 0):  # restart: unless-stopped hides a crash loop
             logs = runner.run(["docker", "logs", "--tail", "30", container])
             raise StepFailed(f"{container} exited while loading: {(logs.stdout or logs.stderr).strip()[-1500:]}")
         if clock() > deadline:

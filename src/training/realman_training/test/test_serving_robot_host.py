@@ -162,3 +162,17 @@ def test_status_without_nvidia_smi_still_reports(config):
     data = serving.status(config, fake)
     assert data["gpu"] == {"index": 0}
     assert "bridge" in data
+
+
+def test_a_crash_looping_serve_container_fails_at_once_with_its_logs(config):
+    chain = FakeChain()
+    chain.serve_restarts = 1
+    chain.serve_logs = "error: failed to create directory `/home/openpi/.cache/uv`"
+    with pytest.raises(StepFailed, match="exited while loading.*failed to create directory"):
+        start(config, chain)
+
+
+def test_start_creates_the_bound_docker_data_dirs_itself(config):
+    start(config)
+    for sub in ("cache", "assets", "data", "checkpoints"):
+        assert (config.openpi.docker_data / sub).is_dir()

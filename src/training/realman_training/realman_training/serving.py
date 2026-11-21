@@ -8,6 +8,11 @@ inference after a restart JIT-compiles ~26 s and would make the bridge time out 
 bringup or the behaviour tree), set the model's task prompt, check the bridge is not publishing, run the link checks.
 stop: refuse while the behaviour tree is in a policy mode; stop the bridge first, then openpi-serve.
 Nothing here activates the bridge: motion still needs the behaviour tree and /policy/activate.
+
+On a console with a compute host (SJDrealman + the campus server) the run's checkpoints live there: start refreshes
+the run's metadata first (so a step trained since the last mirror sync is listed) and then copies the chosen step's
+params + assets into docker_data (rsync, resumable, marker FETCHED when complete) before openpi-serve starts. With
+remote.ssh_host "" the robot is this host: bridge commands run locally and the bridge reaches the server at 127.0.0.1.
 """
 
 from __future__ import annotations
@@ -89,12 +94,67 @@ def resolve_model(config: ConsoleConfig, model: str | None, checkpoint: str | in
     return Model(config_name, exp, step, folder, f"checkpoints/{config_name}/{exp}/{step}", prompts)
 
 
+FETCHED = ".fetched"  # in a step directory: its params were copied from the compute host completely
+FETCH_EXCLUDES = ("train_state/",)  # serving needs params + assets only
+
+
+def _remote_run(config: ConsoleConfig, config_name: str, exp: str) -> str:
+    return compute.remote_path(config, f"{compute.REMOTE_OPENPI}/checkpoints/{config_name}/{exp}")
+
+
+def refresh_run(config: ConsoleConfig, runner: Runner, name: str, log) -> None:
+    """Metadata of one run (step dirs, cards, eval; no params) from the compute host; a failure is only logged."""
+    if name.count("/") != 1:
+        return
+    config_name, exp = name.split("/")
+    check_name("config_name", config_name)
+    check_name("exp", exp)
+    local = run_dir(config.openpi, config_name, exp)
+    try:
+        local.mkdir(parents=True, exist_ok=True)
+    except OSError as error:
+        log(f"cannot create {local} ({error}); serving what the mirror has")
+        return
+    done = runner.run(compute.rsync_from(config, _remote_run(config, config_name, exp), local))
+    if done.returncode:
+        log(f"run metadata not refreshed from {config.compute.ssh_host}: {(done.stderr or done.stdout).strip()[-200:]}")
+
+
+def needs_fetch(config: ConsoleConfig, model: Model) -> bool:
+    return compute.enabled(config) and not (model.run_dir / str(model.step) / FETCHED).is_file()
+
+
+def fetch_checkpoint(config: ConsoleConfig, runner: Runner, model: Model, log, clock=time.monotonic) -> None:
+    """Copy params + assets of the served step from the compute host (several GB; resumable after a failure)."""
+    local = model.run_dir / str(model.step)
+    local.mkdir(parents=True, exist_ok=True)
+    remote = f"{_remote_run(config, model.config_name, model.exp)}/{model.step}"
+    log(f"fetching checkpoint {model.step} from {config.compute.ssh_host} (params + assets, several GB)")
+    argv = compute.rsync_from(config, remote, local, excludes=FETCH_EXCLUDES)
+    argv[1:1] = ["--info=name1", "--outbuf=L"]  # one line per copied file, for the progress text
+    started, files = clock(), [0]
+
+    def on_line(line: str) -> None:
+        if line.strip() and not line.endswith("/"):
+            files[0] += 1
+            log.progress(files[0], None, f"fetching {line.strip()[-80:]}")
+
+    code = runner.stream(argv, on_line)
+    if code:
+        raise StepFailed(f"fetching {remote} from {config.compute.ssh_host} failed (rsync exit {code}); start again to resume")
+    if not (local / "params").is_dir():
+        raise StepFailed(f"{remote} on {config.compute.ssh_host} has no params/ (deleted, or still being written?)")
+    (local / FETCHED).write_text(now() + "\n", encoding="utf-8")
+    size = sum(f.stat().st_size for f in (local / "params").rglob("*") if f.is_file())
+    log(f"checkpoint {model.step} fetched: {files[0]} files, params {size / 2**30:.1f} GiB, {clock() - started:.0f} s")
+
+
 def serve_container(sc: ServingConfig) -> str:
     return f"{sc.project}-{sc.service}-1"
 
 
 def compose_argv(sc: ServingConfig, *args: str) -> list[str]:
-    files = [Path(f).expanduser() for f in sc.compose_files]
+    files = [Path(f).expanduser() for f in sc.compose_files if f]  # "" = an optional overlay left unset
     argv = ["docker", "compose", "-p", sc.project, "--project-directory", str(files[0].parent)]
     for f in files:
         argv += ["-f", str(f)]
@@ -170,6 +230,8 @@ def start(params: dict, log, runner: Runner | None = None, *, port_open=port_ope
     runner = runner or Runner()
     config = load_config(params.get("config"))
     sc = config.serving
+    if compute.enabled(config):
+        refresh_run(config, runner, params.get("model") or sc.model, log)
     model = resolve_model(config, params.get("model"), params.get("checkpoint"))
     gpu = int(params["gpu"]) if params.get("gpu") is not None else sc.gpu
     port = int(params["port"]) if params.get("port") is not None else sc.port
@@ -198,10 +260,13 @@ def start(params: dict, log, runner: Runner | None = None, *, port_open=port_ope
     up = compose_argv(sc, "up", "-d", sc.service)
     bridge_cmd = robot.compose_command("up", "-d", "--no-deps", "--no-build", sc.bridge_service, env={"POLICY_WS_HOST": server})
     log("$ " + " ".join(f"{k}={v}" for k, v in env.items()) + " " + shlex.join(up))
-    log(f"$ ssh {config.remote.ssh_host} {redact(bridge_cmd)}")
+    log(("$ " if robot.local else f"$ ssh {config.remote.ssh_host} ") + redact(bridge_cmd))
+    fetch = needs_fetch(config, model)
     if params.get("dry_run"):
         return {"dry_run": True, "serve_command": up, "serve_env": env, "bridge_command": redact(bridge_cmd),
-                "model": model.name, "step": model.step, "prompt": prompt}
+                "model": model.name, "step": model.step, "prompt": prompt, "fetch": fetch}
+    if fetch:
+        fetch_checkpoint(config, runner, model, log, clock)
 
     try:
         runner.check(up, env=env)
@@ -329,9 +394,12 @@ def status(config: ConsoleConfig, runner: Runner | None = None) -> dict:
     serve = {k: v for k, v in serve.items() if k not in ("env", "args", "ports")}  # never pass its environment on
     gpu_index = record.get("gpu", sc.gpu)
     gpu: dict = {"index": gpu_index}
-    done = runner.run(["nvidia-smi", "-i", str(gpu_index), "--query-gpu=index,memory.used,memory.total",
-                       "--format=csv,noheader,nounits"])
-    if done.returncode == 0 and done.stdout.strip():
+    try:
+        done = runner.run(["nvidia-smi", "-i", str(gpu_index), "--query-gpu=index,memory.used,memory.total",
+                           "--format=csv,noheader,nounits"])
+    except OSError:  # no nvidia-smi in this container: the GPU card shows no memory, the rest still works
+        done = None
+    if done is not None and done.returncode == 0 and done.stdout.strip():
         try:
             _, used, total = (int(x.strip()) for x in done.stdout.strip().splitlines()[0].split(","))
             gpu.update(used_mib=used, total_mib=total)

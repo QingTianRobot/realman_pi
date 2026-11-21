@@ -78,23 +78,29 @@ training_console:
     num_workers: 6
     eval_stride: 10
 
-  # The inference chain (realman-train serve). openpi-serve on server5090 uses the compose files below with
-  # SERVE_CONFIG/SERVE_CHECKPOINT/SERVE_GPU/OPENPI_POLICY_PORT; compose.serve.yaml uses runtime: nvidia (stale CDI
-  # spec). policy_bridge on realman_ts is recreated with `docker compose up -d --no-deps --no-build policy_bridge`
-  # in robot_repo (never ./rm65, never bringup or the behaviour tree) and starts inactive.
+  # The inference chain (realman-train serve). openpi-serve on this host uses the compose files below with
+  # SERVE_CONFIG/SERVE_CHECKPOINT/SERVE_GPU/OPENPI_POLICY_PORT: the openpi checkout's compose.yaml, then
+  # openpi-serve.compose.yaml (relative = next to this file; runtime: nvidia, the server command), then an optional
+  # overlay ("" = none; SJDrealman: openpi-serve.devices.compose.yaml, GPU without the nvidia runtime).
+  # policy_bridge on the robot host is recreated with `docker compose up -d --no-deps --no-build policy_bridge`
+  # in robot_repo (never ./rm65, never bringup or the behaviour tree) and starts inactive. With a compute host the
+  # served step's params are copied from there first. Host values come from the env file.
   serving:
     project: openpi-serve
     service: openpi
-    compose_files: [~/organization/openpi/compose.yaml, ~/data/realman/compose.serve.yaml]
-    model: pi05_realman_multitask_action_only/m_multitask_b16_2gpu   # <openpi config>/<exp>
+    compose_files:
+      - ${REALMAN_SERVE_OPENPI_REPO:-~/organization/openpi}/compose.yaml
+      - openpi-serve.compose.yaml
+      - ${REALMAN_SERVE_COMPOSE_OVERLAY-}
+    model: ${REALMAN_SERVE_MODEL:-pi05_realman_multitask_action_only/m_multitask_b16_2gpu}   # <openpi config>/<exp>
     checkpoint: ""                  # "" = latest numbered checkpoint
-    gpu: 2
+    gpu: ${REALMAN_SERVE_GPU:-2}
     port: 18000                     # = network.server_port in the robot's config/ros/policy_bridge.yaml
     container_port: 8000            # inside the container ("server listening on 0.0.0.0:8000"); 0 = same as port
     start_timeout_sec: 600
     warmup_rounds: 2                # first inference after a restart JIT-compiles ~26 s
     warmup_timeout_sec: 180
-    robot_repo: ~/realman_pi
+    robot_repo: ${REALMAN_ROBOT_REPO:-~/realman_pi}   # on the robot host (realman_ts, or this host when remote.ssh_host is "")
     bridge_service: policy_bridge
     bridge_container: realman_pi-policy_bridge-1
     bridge_config: config/ros/policy_bridge.yaml

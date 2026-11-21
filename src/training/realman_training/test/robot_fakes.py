@@ -76,7 +76,7 @@ class FakeChain:
         fake = FakeRunner()
         if self.unreachable:
             fake.on("ssh ", returncode=255, stdout="ssh: connect to host realman_local port 22: Connection timed out")
-        fake.on("compose.serve.yaml up -d", action=lambda a, i: setattr(self, "serve_running", not self.serve_dies))
+        fake.on("openpi-serve.compose.yaml up -d", action=lambda a, i: setattr(self, "serve_running", not self.serve_dies))
         fake.on("docker logs", stdout=lambda a, i: self.serve_logs)
         fake.on("SSH_CLIENT", stdout=lambda a, i: self.ssh_client + "\n")
         fake.on("policy_bridge.yaml", stdout=lambda a, i: f"network:\n  server_host: x\n  server_port: {self.bridge_port}\n")

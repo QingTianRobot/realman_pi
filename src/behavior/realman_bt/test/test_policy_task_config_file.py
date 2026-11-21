@@ -99,7 +99,9 @@ def test_the_tasks_are_the_two_prompts_of_the_multitask_model():
         "prompt": "pick up the power adapter and put it in the blue bin",
         "completion": "release_over_bin",
     }
-    assert parameters["tasks"]["pick"] == {"prompt": "pick_and_place", "completion": "grasp_check"}
+    # SJD left-arm model: the view's task text (not the task name pick_and_place), ended at the grasp.
+    assert parameters["tasks"]["pick"] == {"prompt": "pick up the power adapter and put it in the blue bin",
+                                           "completion": "grasp_check"}
 
 
 def test_the_grasp_check_thresholds_are_the_reviewed_values():

@@ -7,6 +7,8 @@
 3 inference: real-size requests from inside the policy_bridge container to the address and port it uses.
 4 bridge:    /policy/stats: prompt = the served task's prompt, paused = 0, no error counters.
 An item that cannot run fails with the reason; the others still run. Thresholds: linkcheck section of the config.
+When the console runs on the robot host (remote.ssh_host "", SJDrealman) there is no network between the two ends:
+wifi_load, bulk_throughput and ping pass as "same host" without measuring anything.
 """
 
 from __future__ import annotations
@@ -55,6 +57,8 @@ def _pika(robot: Robot, config: ConsoleConfig) -> list[Check]:
     shown = ", ".join(n.rsplit("/", 1)[-1] for n in pika[:5]) + (" …" if len(pika) > 5 else "")
     checks = [Check("pika", "pika_nodes", not pika, f"{len(pika)}" + (f" ({shown})" if pika else ""), "0",
                     "stop the Pika stack on the teleop PC before a policy run" if pika else "")]
+    if robot.local:
+        return checks + [Check("pika", "wifi_load", True, "same host", "-", "server and bridge share the robot host")]
     iface = shlex.quote(lc.wifi_interface)
     window = f"{lc.wifi_window_sec:g}"
     command = (
@@ -76,6 +80,9 @@ def _pika(robot: Robot, config: ConsoleConfig) -> list[Check]:
 
 def _link(robot: Robot, config: ConsoleConfig, runner: Runner, clock) -> list[Check]:
     lc = config.linkcheck
+    if robot.local:
+        return [Check("link", name, True, "same host", "-", "server and bridge share the robot host")
+                for name in _NAMES["link"]]
     server = robot.server_address()  # first: an unreachable robot fails here, before the transfer
     samples: list[tuple[float, int]] = []
     producer = robot.ssh_argv(f"head -c {lc.bulk_bytes} /dev/urandom")

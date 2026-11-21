@@ -1,0 +1,24 @@
+# GPU for openpi-serve on a host whose docker has no nvidia runtime and no CDI spec (SJDrealman: no
+# nvidia-container-toolkit, no sudo to install it). Passes the device nodes and binds the host driver's user-space
+# libraries into /usr/local/nvidia/lib64, which openpi:dev already has on LD_LIBRARY_PATH; JAX brings its own CUDA.
+# Use with SERVE_RUNTIME=runc. SERVE_DRIVER_VERSION is the host driver (nvidia-smi --query-gpu=driver_version): two
+# libraries exist only under their full version name. The served GPU is /dev/nvidia${SERVE_GPU}.
+# Checked on SJDrealman 2026-11-21 (RTX 4080, driver 595.99.02): jax 0.5.3 sees CudaDevice(id=0).
+x-driver-lib: &lib
+  type: bind
+  read_only: true
+services:
+  openpi:
+    devices:
+      - /dev/nvidia${SERVE_GPU:-0}
+      - /dev/nvidiactl
+      - /dev/nvidia-uvm
+      - /dev/nvidia-uvm-tools
+    volumes:
+      - {<<: *lib, source: "${SERVE_DRIVER_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libcuda.so.1", target: /usr/local/nvidia/lib64/libcuda.so.1}
+      - {<<: *lib, source: "${SERVE_DRIVER_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libnvidia-ml.so.1", target: /usr/local/nvidia/lib64/libnvidia-ml.so.1}
+      - {<<: *lib, source: "${SERVE_DRIVER_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libnvidia-ptxjitcompiler.so.1", target: /usr/local/nvidia/lib64/libnvidia-ptxjitcompiler.so.1}
+      - {<<: *lib, source: "${SERVE_DRIVER_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libnvidia-nvvm.so.4", target: /usr/local/nvidia/lib64/libnvidia-nvvm.so.4}
+      - {<<: *lib, source: "${SERVE_DRIVER_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libcuda.so.${SERVE_DRIVER_VERSION:?set SERVE_DRIVER_VERSION}", target: "/usr/local/nvidia/lib64/libcuda.so.${SERVE_DRIVER_VERSION}"}
+      - {<<: *lib, source: "${SERVE_DRIVER_LIB_DIR:-/usr/lib/x86_64-linux-gnu}/libnvidia-gpucomp.so.${SERVE_DRIVER_VERSION}", target: "/usr/local/nvidia/lib64/libnvidia-gpucomp.so.${SERVE_DRIVER_VERSION}"}
+      - {<<: *lib, source: /usr/bin/nvidia-smi, target: /usr/bin/nvidia-smi}

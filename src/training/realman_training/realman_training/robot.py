@@ -1,5 +1,7 @@
-"""realman_ts as seen from server5090: ssh commands, docker on the robot host, and the ROS probe.
+"""The robot host as seen from the console: ssh commands, docker on the robot host, and the ROS probe.
 
+remote.ssh_host names the robot host (realman_ts from server5090); "" = the console runs on the robot host itself
+(SJDrealman), and the same commands run locally through bash, against the same docker daemon.
 Robot-side writes are limited to the policy_bridge service (compose up/stop) and the bridge's runtime prompt; the
 probe only reads the ROS graph otherwise. Hosts by ssh alias only.
 """
@@ -61,9 +63,25 @@ def container_facts(inspect: dict) -> dict:
     }
 
 
+# The address the bridge uses for a server on its own host: policy_bridge runs with host networking.
+LOCAL_SERVER = "127.0.0.1"
+
+
 class Robot:
     def __init__(self, remote: RemoteConfig, serving: ServingConfig, runner: Runner):
         self.remote, self.serving, self.runner = remote, serving, runner
+
+    @property
+    def local(self) -> bool:
+        """The console runs on the robot host (remote.ssh_host ""): no ssh, no network between the two ends."""
+        return not self.remote.ssh_host
+
+    @property
+    def label(self) -> str:
+        return "the robot host (this host)" if self.local else f"realman_ts ({self.remote.ssh_host})"
+
+    def argv(self, command: str) -> list[str]:
+        return ["bash", "-c", command] if self.local else self.ssh_argv(command)
 
     def ssh_argv(self, command: str) -> list[str]:
         return [
@@ -78,19 +96,19 @@ class Robot:
 
     def run(self, command: str, *, input: str | None = None, timeout: float | None = None) -> Completed:
         try:
-            done = self.runner.run(self.ssh_argv(command), input=input, timeout=timeout)
+            done = self.runner.run(self.argv(command), input=input, timeout=timeout)
         except subprocess.TimeoutExpired:
-            raise StepFailed(f"realman_ts ({self.remote.ssh_host}): {redact(command[:120])} timed out after {timeout:g} s") from None
-        if done.returncode == 255:
+            raise StepFailed(f"{self.label}: {redact(command[:120])} timed out after {timeout:g} s") from None
+        if done.returncode == 255 and not self.local:
             tail = (done.stderr or done.stdout).strip().splitlines()[-1:] or [""]
-            raise StepFailed(f"realman_ts ({self.remote.ssh_host}) unreachable: {redact(tail[0])}")
+            raise StepFailed(f"{self.label} unreachable: {redact(tail[0])}")
         return done
 
     def check(self, command: str, *, input: str | None = None, timeout: float | None = None) -> str:
         done = self.run(command, input=input, timeout=timeout)
         if done.returncode:
             tail = "\n".join((done.stderr or done.stdout).strip().splitlines()[-10:])
-            raise StepFailed(f"realman_ts ({self.remote.ssh_host}): {redact(command[:120])} exited {done.returncode}: {redact(tail)}")
+            raise StepFailed(f"{self.label}: {redact(command[:120])} exited {done.returncode}: {redact(tail)}")
         return done.stdout
 
     def container(self, name: str) -> dict | None:
@@ -103,6 +121,8 @@ class Robot:
     def server_address(self) -> str:
         if self.serving.server_host:
             return self.serving.server_host
+        if self.local:
+            return LOCAL_SERVER
         parts = self.check('echo "$SSH_CLIENT"').split()
         if not parts:
             raise StepFailed("realman_ts did not report $SSH_CLIENT; set serving.server_host")

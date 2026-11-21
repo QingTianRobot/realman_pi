@@ -94,7 +94,7 @@ def test_start_runs_the_chain_in_order(config):
     chain = FakeChain()
     result, fake, log = start(config, chain)
     mode = index(fake, "mode=")
-    up = index(fake, "compose.serve.yaml up -d openpi")
+    up = index(fake, "openpi-serve.compose.yaml up -d openpi")
     running = index(fake, "{{.State.Running}}")
     warm = index(fake, "uv run --no-sync python - ")
     bridge = index(fake, "docker compose up -d --no-deps --no-build policy_bridge")

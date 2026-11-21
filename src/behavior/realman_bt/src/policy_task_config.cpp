@@ -99,9 +99,11 @@ void PolicyTaskConfig::validate() const {
   for (const auto& [name, task] : tasks) {
     require(!name.empty(), "policy_task.task_names must not contain an empty name");
     require(!task.prompt.empty(), "policy_task.tasks." + name + ".prompt must not be empty");
+    // A single-task model (SJDrealman's left arm, one training prompt) serves several tasks that differ only in
+    // how an attempt ends; the same prompt under the same completion would be a copy-paste mistake.
     for (const auto& [other_name, other] : tasks) {
-      require(other_name == name || other.prompt != task.prompt,
-              "policy_task.tasks." + name + ".prompt is the same as tasks." + other_name + ".prompt");
+      require(other_name == name || other.prompt != task.prompt || other.completion != task.completion,
+              "policy_task.tasks." + name + " has the same prompt and completion as tasks." + other_name);
     }
   }
   require(positive(trace.period_sec), "policy_task.trace.period_sec must be positive");

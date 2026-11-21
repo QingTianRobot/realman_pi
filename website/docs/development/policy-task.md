@@ -124,7 +124,7 @@ description: 行为树中的 policy 任务：回位、激活、监督、判定�
 </Fallback>
 ```
 
-2026-11-19 起抓取清台由**左臂（l）**执行（`policy_task.arm: l`，树中各节点 `arm_id="l"`）：SJDrealman 的示教数据和模型只用左臂。策略桥接同步改为左臂腕部相机 `/camera_left/color/image_raw`、`active_side` 默认 `left`，pick 的 prompt 为左臂模型训练时的任务文本 `pick_and_place`；关节包络取自 SJD 87 条左臂示教。此前在 realman_ts 上由右臂执行（J1 转到 -163° 放置），下文中的历史记录保留了右臂的数值。
+2026-11-19 起抓取清台由**左臂（l）**执行（`policy_task.arm: l`，树中各节点 `arm_id="l"`）：SJDrealman 的示教数据和模型只用左臂。策略桥接同步改为左臂腕部相机 `/camera_left/color/image_raw`、`active_side` 默认 `left`，pick 的 prompt 为左臂模型训练视图 `sjd_left_v1_view` 的任务文本 `pick up the power adapter and put it in the blue bin`（`meta/tasks.parquet`；11-19 误写成任务名 `pick_and_place`，模型从没见过这个 prompt，2026-11-21 改正）。这个模型只有一个训练 prompt，`pick` 和 `place` 因此共用同一段文本，只是结束方式不同（`grasp_check` / `release_over_bin`）；执行器只拒绝 prompt 和结束方式都相同的两个任务；关节包络取自 SJD 87 条左臂示教。此前在 realman_ts 上由右臂执行（J1 转到 -163° 放置），下文中的历史记录保留了右臂的数值。
 
 每个周期依次执行：
 

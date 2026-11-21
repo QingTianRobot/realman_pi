@@ -121,14 +121,32 @@ def test_openpi_values_from_the_file(tmp_path):
 
 def test_the_shipped_serving_and_linkcheck_sections_equal_the_defaults():
     config = load_config(DEFAULT_CONFIG)
-    assert config.serving == ServingConfig()
+    assert dataclasses.replace(config.serving, compose_files=()) == dataclasses.replace(ServingConfig(), compose_files=())
     assert config.linkcheck == LinkcheckConfig()
+    # The serve overlay is resolved next to the shipped config; the third file is an optional overlay ("" = none).
+    assert config.serving.compose_files == (
+        "~/organization/openpi/compose.yaml", str(DEFAULT_CONFIG.resolve().parent / "openpi-serve.compose.yaml"), "")
+    assert (DEFAULT_CONFIG.parent / "openpi-serve.compose.yaml").is_file()
+    assert (DEFAULT_CONFIG.parent / "openpi-serve.devices.compose.yaml").is_file()
+
+
+def test_serving_host_values_come_from_the_environment(monkeypatch):
+    monkeypatch.setenv("REALMAN_SERVE_OPENPI_REPO", "/srv/openpi-serve")
+    monkeypatch.setenv("REALMAN_SERVE_COMPOSE_OVERLAY", "openpi-serve.devices.compose.yaml")
+    monkeypatch.setenv("REALMAN_SERVE_MODEL", "cfg/exp")
+    monkeypatch.setenv("REALMAN_SERVE_GPU", "0")
+    monkeypatch.setenv("REALMAN_ROBOT_REPO", "/srv/robot")
+    s = load_config(DEFAULT_CONFIG).serving
+    here = DEFAULT_CONFIG.resolve().parent
+    assert s.compose_files == ("/srv/openpi-serve/compose.yaml", str(here / "openpi-serve.compose.yaml"),
+                               str(here / "openpi-serve.devices.compose.yaml"))
+    assert (s.model, s.gpu, s.robot_repo) == ("cfg/exp", 0, "/srv/robot")
 
 
 def test_serving_defaults_are_the_deployed_chain():
     s = ServingConfig()
     assert (s.project, s.service, s.gpu, s.port) == ("openpi-serve", "openpi", 2, 18000)
-    assert s.compose_files == ("~/organization/openpi/compose.yaml", "~/data/realman/compose.serve.yaml")
+    assert s.compose_files == ("~/organization/openpi/compose.yaml", "openpi-serve.compose.yaml")
     assert s.model == "pi05_realman_multitask_action_only/m_multitask_b16_2gpu"
     assert s.bridge_container == "realman_pi-policy_bridge-1" and s.bridge_service == "policy_bridge"
     assert s.policy_modes == ("policy",)

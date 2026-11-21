@@ -96,7 +96,8 @@ class ServingConfig:
 
     project: str = "openpi-serve"
     service: str = "openpi"  # container <project>-<service>-1
-    compose_files: tuple[str, ...] = ("~/organization/openpi/compose.yaml", "~/data/realman/compose.serve.yaml")
+    # openpi's compose.yaml first (its folder is the compose project directory); relative = next to the config file.
+    compose_files: tuple[str, ...] = ("~/organization/openpi/compose.yaml", "openpi-serve.compose.yaml")
     model: str = "pi05_realman_multitask_action_only/m_multitask_b16_2gpu"  # <openpi config>/<exp>
     checkpoint: str = ""  # "" = the latest numbered checkpoint of the run
     gpu: int = 2
@@ -236,6 +237,9 @@ def load_config(path: str | Path | None = None) -> ConsoleConfig:
     compute = _parse(ComputeConfig, section.get("compute") or {}, source, "compute")
     _validate_compute(compute, openpi, source)
     serving = _parse(ServingConfig, section.get("serving") or {}, source, "serving")
+    # A relative compose file lies next to this config file (openpi-serve.compose.yaml); "" = an unset overlay.
+    serving = dataclasses.replace(serving, compose_files=tuple(
+        str(source.parent / f) if f and not f.startswith(("/", "~")) else f for f in serving.compose_files))
     linkcheck = _parse(LinkcheckConfig, section.get("linkcheck") or {}, source, "linkcheck")
     _validate_serving(serving, linkcheck, source)
     web = _parse(WebConfig, section.get("web") or {}, source, "web")
@@ -349,7 +353,7 @@ def _validate_serving(s: ServingConfig, lc: LinkcheckConfig, source: Path) -> No
         fail("serving.warmup_rounds", "must be at least 1")
     if s.model.count("/") != 1:
         fail("serving.model", "must be <openpi config>/<exp>")
-    if not s.compose_files:
+    if not any(s.compose_files):
         fail("serving.compose_files", "must list at least one compose file")
     for key in ("wifi_window_sec", "wifi_max_kb_per_sec", "bulk_min_mb_per_sec", "infer_max_ms", "stats_timeout_sec"):
         if getattr(lc, key) <= 0:

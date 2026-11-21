@@ -46,10 +46,12 @@ realman_bt_executor:
         place:
           prompt: "pick up the power adapter and put it in the blue bin"
           completion: release_over_bin
-        # The SJD left-arm model (openpi pi05_realman_sjd_left_v1, prompt_from_task) was trained on the task text
-        # "pick_and_place", so that is its prompt. The right-arm models used "pick up the power adapter".
+        # The SJD left-arm model (openpi pi05_realman_sjd_left_v1_action_only, prompt_from_task) was trained on the
+        # view sjd_left_v1_view, whose meta/tasks.parquet holds this text for its one task pick_and_place (checked
+        # 2026-11-21; the 11-19 value "pick_and_place" was the task NAME, not its text). grasp_check ends the attempt
+        # at the grasp; the right-arm pick-only models used "pick up the power adapter".
         pick:
-          prompt: "pick_and_place"
+          prompt: "pick up the power adapter and put it in the blue bin"
           completion: grasp_check
       gripper_for_arm:
         l: gripper_left

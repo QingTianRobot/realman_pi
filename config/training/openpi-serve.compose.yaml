@@ -1,0 +1,21 @@
+# openpi-serve: the policy server the training console's 服务 page starts (realman_training/serving.py), as an overlay
+# on the openpi repo's compose.yaml (which mounts the checkout at /workspace, docker data at /workspace/checkpoints
+# and publishes ${OPENPI_POLICY_PORT}:8000). The console sets SERVE_CONFIG, SERVE_CHECKPOINT, SERVE_GPU and
+# OPENPI_POLICY_PORT. GPUs via the legacy nvidia runtime (`gpus:` failed on server5090's stale CDI spec); a host whose
+# docker has no nvidia runtime (SJDrealman) sets SERVE_RUNTIME=runc and adds openpi-serve.devices.compose.yaml.
+services:
+  openpi:
+    runtime: ${SERVE_RUNTIME:-nvidia}
+    restart: unless-stopped
+    shm_size: 2gb
+    environment:
+      NVIDIA_VISIBLE_DEVICES: "${SERVE_GPU:-0}"
+      NVIDIA_DRIVER_CAPABILITIES: compute,utility
+    # serving.record_from_container reads --policy.dir=checkpoints/<config>/<exp>/<step> back from these args.
+    command:
+      - zsh
+      - -lc
+      - >-
+        source /usr/local/share/openpi/functions.zsh && cd /workspace &&
+        exec uv run --no-sync scripts/serve_policy.py --port 8000 policy:checkpoint
+        --policy.config=${SERVE_CONFIG:?set SERVE_CONFIG} --policy.dir=${SERVE_CHECKPOINT:?set SERVE_CHECKPOINT}

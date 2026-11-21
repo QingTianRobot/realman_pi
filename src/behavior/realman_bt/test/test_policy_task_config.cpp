@@ -206,8 +206,17 @@ void testCompletionNamesRoundTrip() {
 void testTasksNeedDistinctNonEmptyPrompts() {
   assertRejected([](PolicyTaskConfig& c) { c.tasks.clear(); }, "policy_task.tasks");
   assertRejected([](PolicyTaskConfig& c) { c.tasks["pick"].prompt = ""; }, "tasks.pick.prompt");
-  // Two tasks with one prompt would run the same policy behaviour under two completions.
-  assertRejected([](PolicyTaskConfig& c) { c.tasks["pick"].prompt = c.tasks["place"].prompt; }, "is the same as");
+  // One prompt may serve two tasks that end differently (a single-task model), never the same task twice.
+  {
+    PolicyTaskConfig shared = PolicyTaskConfig{};
+    shared.tasks["pick"].prompt = shared.tasks["place"].prompt;
+    shared.tasks["pick"].completion = PolicyTaskConfig::Completion::kGraspCheck;
+    shared.validate();
+  }
+  assertRejected([](PolicyTaskConfig& c) {
+    c.tasks["pick"].prompt = c.tasks["place"].prompt;
+    c.tasks["pick"].completion = c.tasks["place"].completion;
+  }, "same prompt and completion");
   assertRejected([](PolicyTaskConfig& c) { c.prompt_topic = "policy/prompt"; }, "prompt_topic");
 }
 

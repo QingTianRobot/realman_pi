@@ -413,6 +413,16 @@ services:
       REALMAN_RECORDING_SSH_HOST: ${REALMAN_RECORDING_SSH_HOST-realman_local}
       REALMAN_TRAINING_DATA_ROOT: ${REALMAN_TRAINING_DATA_ROOT-}
       REALMAN_TRAINING_ARM: ${REALMAN_TRAINING_ARM:-}
+      # The inference chain on this host (training_console.yaml serving; unset = the server5090 layout). On a host
+      # whose docker has no nvidia runtime: SERVE_RUNTIME=runc, the devices overlay and the driver version.
+      REALMAN_SERVE_OPENPI_REPO: ${REALMAN_SERVE_OPENPI_REPO:-}
+      REALMAN_SERVE_COMPOSE_OVERLAY: ${REALMAN_SERVE_COMPOSE_OVERLAY:-}
+      REALMAN_SERVE_MODEL: ${REALMAN_SERVE_MODEL:-}
+      REALMAN_SERVE_GPU: ${REALMAN_SERVE_GPU:-}
+      REALMAN_ROBOT_REPO: ${REALMAN_ROBOT_REPO:-}
+      SERVE_RUNTIME: ${SERVE_RUNTIME:-}
+      SERVE_DRIVER_VERSION: ${SERVE_DRIVER_VERSION:-}
+      SERVE_DRIVER_LIB_DIR: ${SERVE_DRIVER_LIB_DIR:-}
     extra_hosts: ["host.docker.internal:host-gateway"]
     ports:
       - "${TRAINING_BIND:-0.0.0.0}:8780:8780"

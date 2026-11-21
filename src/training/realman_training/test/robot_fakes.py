@@ -42,6 +42,7 @@ class FakeChain:
         self.infer_ms = [900.0, 95.0, 101.0, 99.0, 120.0, 97.0]  # answers take the first ROUNDS of these
         self.serve_dies = False  # the serve container exits while loading
         self.serve_logs = ""
+        self.serve_restarts = 0  # > 0: the container crash-loops under restart: unless-stopped
         self.unreachable = False
         # If set, the BT mode switches to this dict after the first warm-up probe runs
         self.mode_after_warmup: dict | None = None
@@ -76,14 +77,15 @@ class FakeChain:
         fake = FakeRunner()
         if self.unreachable:
             fake.on("ssh ", returncode=255, stdout="ssh: connect to host realman_local port 22: Connection timed out")
-        fake.on("compose.serve.yaml up -d", action=lambda a, i: setattr(self, "serve_running", not self.serve_dies))
+        fake.on("openpi-serve.compose.yaml up -d", action=lambda a, i: setattr(self, "serve_running", not self.serve_dies))
         fake.on("docker logs", stdout=lambda a, i: self.serve_logs)
         fake.on("SSH_CLIENT", stdout=lambda a, i: self.ssh_client + "\n")
         fake.on("policy_bridge.yaml", stdout=lambda a, i: f"network:\n  server_host: x\n  server_port: {self.bridge_port}\n")
         fake.on("python3 - ", stdout=lambda a, i: self._probe(a, i))
         fake.on("uv run --no-sync python - ", stdout=lambda a, i: self._probe(a, i))
         fake.on(f"docker inspect {BRIDGE_CONTAINER}", stdout=lambda a, i: inspect_json(self.bridge_running, {"POLICY_WS_HOST": SERVER_ADDR}))
-        fake.on(f"-f {{{{.State.Running}}}} {SERVE_CONTAINER}", stdout=lambda a, i: "true\n" if self.serve_running else "false\n")
+        fake.on(f"-f {{{{.State.Running}}}} {{{{.RestartCount}}}} {SERVE_CONTAINER}",
+                stdout=lambda a, i: f"{'true' if self.serve_running else 'false'} {self.serve_restarts}\n")
         fake.on(f"docker inspect {SERVE_CONTAINER}", stdout=lambda a, i: inspect_json(True, {"SERVE_GPU": "2"}) if self.serve_running else "",
                 returncode=0)
         fake.on("/sys/class/net", stdout=lambda a, i: self.wifi + "\n")
